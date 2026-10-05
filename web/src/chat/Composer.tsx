@@ -19,6 +19,8 @@ const PASTE_CHIP_LINES = 30
 
 export interface ComposerHandle {
   addFiles: (files: File[] | FileList) => void
+  /** An upload that already exists (Search's "Add to chat"). */
+  addAttachment: (a: Attachment) => void
   focus: () => void
 }
 
@@ -109,7 +111,14 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     for (const f of Array.from(files)) upload(f, f.name || (f.type.startsWith('image/') ? 'image.png' : 'file'))
   }, [upload])
 
-  useImperativeHandle(ref, () => ({ addFiles, focus: () => ta.current?.focus() }), [addFiles])
+  const addAttachment = useCallback((a: Attachment) => {
+    setDrafts((d) => d.some((x) => x.uploaded?.id === a.id) ? d : [...d, {
+      key: `ctx-${a.id}`, name: a.name, mime: a.mime, size: a.size, kind: a.kind,
+      textPreview: a.preview, status: 'ready', uploaded: a,
+    }])
+  }, [])
+
+  useImperativeHandle(ref, () => ({ addFiles, addAttachment, focus: () => ta.current?.focus() }), [addFiles, addAttachment])
 
   function removeDraft(key: string) {
     setDrafts((d) => {

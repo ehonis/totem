@@ -13,7 +13,7 @@
     "start": "node scripts/start.mjs",
     "build": "npm --prefix web run build",
     "postinstall": "npm --prefix web install --no-audit --no-fund",
-    "test": "node --test auth/*.test.mjs ai/*.test.mjs providers/*.test.mjs ai-usage/*.test.mjs jobs/*.test.mjs notify/*.test.mjs skills/*.test.mjs terminal/*.test.mjs logs/*.test.mjs whoop/*.test.mjs strava/*.test.mjs camera/*.test.mjs todos/*.test.mjs todos/connectors/*.test.mjs goals/*.test.mjs lists/*.test.mjs journal/*.test.mjs chat/*.test.mjs totems/*.test.mjs browser/*.test.mjs scripts/*.test.mjs",
+    "test": "node --test auth/*.test.mjs ai/*.test.mjs providers/*.test.mjs ai-usage/*.test.mjs jobs/*.test.mjs notify/*.test.mjs skills/*.test.mjs terminal/*.test.mjs logs/*.test.mjs whoop/*.test.mjs strava/*.test.mjs camera/*.test.mjs todos/*.test.mjs todos/connectors/*.test.mjs goals/*.test.mjs lists/*.test.mjs journal/*.test.mjs chat/*.test.mjs totems/*.test.mjs browser/*.test.mjs search/*.test.mjs scripts/*.test.mjs",
     "test:watch": "node --test --watch jobs/*.test.mjs skills/*.test.mjs terminal/*.test.mjs",
     "service:start": "systemctl --user start assistant-bridge",
     "service:stop": "systemctl --user stop assistant-bridge",

@@ -9,9 +9,11 @@ const radius = (n: any) => 4 + (n.val || 3) * 0.9
 
 interface BrainViewProps {
   onAuthError: () => void
+  /** A note to open on arrival (`/brain#personal/watches.md`, from Search). */
+  openPath?: string
 }
 
-export default function BrainView({ onAuthError }: BrainViewProps) {
+export default function BrainView({ onAuthError, openPath }: BrainViewProps) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sim = useRef<any>({ nodes: [], links: [], view: { x: 0, y: 0, scale: 1 }, hover: null })
@@ -31,6 +33,8 @@ export default function BrainView({ onAuthError }: BrainViewProps) {
       setNote({ path, markdown: `Could not load note: ${e.message}` })
     }
   }, [onAuthError])
+
+  useEffect(() => { if (openPath && /\.md$/i.test(openPath)) openNote(openPath) }, [openPath, openNote])
 
   // Load graph data.
   useEffect(() => {

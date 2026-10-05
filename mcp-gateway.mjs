@@ -51,7 +51,8 @@ const PROTOCOL_VERSION = '2025-06-18'
 // aggregated surface. Bumped so a client that cached the old tool list re-reads it.
 // 1.2.1: goal tools explicitly advertise weekly, monthly, quarterly, and yearly periods.
 // 1.3.0 adds the in-process lists__* surface.
-const GATEWAY_INFO = { name: 'totem-gateway', version: '1.3.0' }
+// 1.4.0 adds search__everything and search__read.
+const GATEWAY_INFO = { name: 'totem-gateway', version: '1.4.0' }
 export const NS = '__' // namespace separator: <serverId>__<toolName>
 
 // stderr only — stdout is the JSON-RPC channel and must stay clean.
@@ -355,6 +356,9 @@ const BUILTIN_SERVERS = {
   goals: { description: "Totem weekly goals and their metrics, in process" },
   lists: { description: 'Totem checklists and their related tasks, in process' },
   strava: { filter: /^totem_strava_/, strip: 'totem_strava_', description: 'Strava, via the Totem bridge' },
+  // search__everything / search__read: the bridge's keyword index over notes,
+  // journal, chats, tasks, goals, lists and project/totem memory. No model involved.
+  search: { filter: /^totem_search_(everything|read)$/, strip: 'totem_search_', description: 'Totem search across memory, chats, journal, tasks, goals and lists, via the Totem bridge' },
   // The chat's browser (bridge /agent-mcp). Only inside a chat run: the bridge
   // hands each run a token in TOTEM_BROWSER_TOKEN, which binds the tools to that
   // chat's browser. Claude and Codex get /agent-mcp directly; this is how Cursor

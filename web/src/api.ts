@@ -90,6 +90,23 @@ export const removeCalendarAccount = (label: string) => sendJSON('/api/calendar/
 export const startCalendarAccountAuth = (label: string) => sendJSON('/api/calendar/accounts/auth', 'POST', { label })
 
 export const getBrain = () => getJSON('/api/brain')
+
+// Search across notes, journal, chats, tasks, goals, lists and project/totem memory.
+export interface SearchHit {
+  id: string
+  kind: string
+  title: string
+  titleMarked?: string
+  snippet?: string
+  date: string | null
+  target: Record<string, any> | null
+}
+export interface SearchResponse { query: string; results: SearchHit[]; counts: Record<string, number>; total: number; loose: boolean; tookMs: number }
+export const searchEverything = (q: string, kinds: string[] = [], limit = 40) =>
+  getJSON<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}${kinds.length ? `&kinds=${kinds.join(',')}` : ''}`)
+export const getSearchDoc = (id: string) => getJSON<SearchHit & { body: string; location: string }>(`/api/search/doc?id=${encodeURIComponent(id)}`)
+/** A result saved as a text attachment, ready for the chat composer. */
+export const searchResultAsContext = (id: string) => sendJSON('/api/search/context', 'POST', { id })
 export const getUsage = () => getJSON('/api/usage')
 export const getConnections = () => getJSON('/api/connections')
 
