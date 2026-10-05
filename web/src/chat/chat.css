@@ -596,6 +596,8 @@
 .vc-picker, .vc-effort { position: relative; min-width: 0; }
 
 /* --- model picker (after T3 Code) ------------------------------------------------ */
+/* Where it opens (up or down, and how tall) is measured in ModelPicker
+   (usePopoverPlacement); these are the defaults until it is. */
 .vc-picker-pop {
   position: absolute; left: -46px; bottom: calc(100% + 10px); z-index: 45;
   display: grid; grid-template-columns: 64px minmax(0, 1fr);
@@ -681,7 +683,6 @@
 .vc-effort-list small { color: var(--vc-faint); font-size: 12px; }
 
 @media (max-width: 720px) {
-  .vc-picker-pop { position: fixed; left: 8px; right: 8px; width: auto; bottom: calc(var(--dock-clear) + 110px); height: min(460px, 62vh); }
   .vc-effort-pop { position: fixed; left: 50%; right: auto; transform: translateX(-50%); bottom: calc(var(--dock-clear) + 110px); }
   .vc-chip { max-width: 150px; padding: 0 8px; }
   .vc-effort .vc-chip-label { display: none; }
@@ -691,10 +692,9 @@
 /* The empty chat's composer sits mid-page inside the scroller: popovers that open
    upward would be clipped by it, so there they open downward, unclipped. */
 .vc-scroll:has(.vc-empty) { overflow: visible; }
-.vc-empty .vc-picker-pop, .vc-empty .vc-effort-pop, .vc-empty .vc-plus-menu, .vc-empty .vc-cmd-menu {
+.vc-empty .vc-effort-pop, .vc-empty .vc-plus-menu, .vc-empty .vc-cmd-menu {
   bottom: auto; top: calc(100% + 10px);
 }
-.vc-empty .vc-picker-pop { height: min(440px, calc(100vh - 520px)); min-height: 280px; }
 .vc-voice-engine { color: var(--vc-faint); font-size: 12px; text-align: center; margin-top: 4px; }
 
 /* --- file cards & the canvas panel ------------------------------------------- */

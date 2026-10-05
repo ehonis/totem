@@ -13,7 +13,7 @@
 
 import { opendir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isEntry } from '../scripts/is-entry.mjs'
 import { VOLUME_ROOTS } from './paths.mjs'
 
 // A hung volume must not hang the scan. An unreachable SMB share or a sleeping
@@ -99,7 +99,7 @@ export async function findCameraVolumes(roots = VOLUME_ROOTS) {
 // script that launchd starts on mount. Nothing is printed when there's no
 // camera, which is the overwhelmingly common case — a disk image, a Time
 // Machine drive, someone's USB stick.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntry(import.meta.url)) {
   const volumes = await findCameraVolumes()
   for (const v of volumes) console.log(v.path)
 }

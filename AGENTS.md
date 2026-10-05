@@ -172,6 +172,10 @@ row counts, ids and foreign keys, and run it twice.
   what Heroicons lacks. Confirm a name exists
   (`ls node_modules/@tabler/icons-react/dist/esm/icons | grep -i <term>`) and import it deep and
   per-icon as a default export so the package tree-shakes. See `web/src/goals/sportIcons.tsx`.
+- **Entry checks compare real paths.** Node resolves symlinks in `import.meta.url` but not in
+  `process.argv[1]`, so a script launched through a symlinked checkout must use
+  `isEntry(import.meta.url)` from `scripts/is-entry.mjs`. Otherwise it loads, decides it was
+  imported, and exits 0 silently (an MCP client reports the gateway as "connection closed").
 - **The bridge has dependencies.** After pulling changes to `package.json`, run `npm install` at
   the root or the service will not boot. `node-pty` is optional (it needs a C++ toolchain) and
   only the web terminal uses it.

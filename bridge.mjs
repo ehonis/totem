@@ -8594,13 +8594,30 @@ const IMAGE_RULES = `IMAGES: When you recommend, compare or describe things that
 // rendered, HTML in a sandboxed frame), the way ChatGPT shows a canvas. The agent
 // is told where to save them; after the turn, anything new in that folder — and
 // any document its file tools wrote elsewhere — is snapshotted into the chat.
+// Files are the exception: answer in the chat unless a file was asked for or is
+// plainly the better deliverable. A plan, summary or explanation is a reply.
 function filesRule(dir) {
-  return 'FILES: When the owner asks for a document, report, write-up, plan, page, table or anything he would want as a file, '
-    + `save it as a file in ${dir} (create the folder if it is missing): Markdown (.md) for documents, one self-contained `
-    + '.html (inline CSS and JS, nothing external it needs to load) for anything visual or interactive, .csv for tables. '
-    + 'He sees each file as a card he can open, preview and download, so in your reply say what you made in a sentence or '
-    + 'two instead of pasting the whole thing.'
+  return 'FILES: Answer in the chat itself by default. Plans, summaries, explanations, lists, comparisons and notes are replies, '
+    + 'not files, however long. Do not create a file (Markdown or otherwise) unless the owner asks for one ("make a doc", '
+    + '"save it as a file", "give me an HTML page", "export a CSV"), or the deliverable only works as a file: something '
+    + 'visual or interactive, a spreadsheet-sized table he will download, or a long document he clearly means to keep and '
+    + `reuse outside the chat. When you do make one, save it in ${dir} (create the folder if it is missing): Markdown (.md) for `
+    + 'documents, one self-contained .html (inline CSS and JS, nothing external it needs to load) for anything visual or '
+    + 'interactive, .csv for tables. He sees each file as a card he can open, preview and download, so in your reply say what '
+    + 'you made in a sentence or two instead of pasting the whole thing. Memory notes (below) are not files in this sense.'
 }
+
+// Chats watch for things worth remembering without being told to. Sent on every
+// turn, resumed or not, so a long chat keeps doing it.
+const CHAT_MEMORY_RULES =
+  `MEMORY UPDATES: keep the owner's memory (${MEMORY_ROOT}) current on your own, without waiting to be asked. Whenever this `
+  + 'turn reveals something durable about the owner (a preference, a fact about his life, home, health, gear, people, work '
+  + 'or routines, a decision he made, something he finished, a correction to what memory already says), check memory for '
+  + 'an existing entry and add or fix a short dated note in the fitting file. If this chat is in a project, notes that '
+  + 'only matter to that project go in the project memory instead. Skip passing chatter, one-off questions, things only '
+  + 'true for this conversation, and anything already recorded. Never store secrets. Memory notes are not tasks: still ask '
+  + 'before creating tasks, events or goals he did not request. When you saved something, end your reply with one short '
+  + 'line saying what (e.g. "Noted in memory: you ride a 54 cm Domane.") so he can correct it.'
 
 const ARTIFACT_EXT = /\.(md|markdown|html?|csv|tsv|txt|json|ya?ml|svg|pdf|xml|ics)$/i
 const ARTIFACT_MIME = { md: 'text/markdown', markdown: 'text/markdown', html: 'text/html', htm: 'text/html', csv: 'text/csv', tsv: 'text/tab-separated-values', txt: 'text/plain', json: 'application/json', yml: 'text/yaml', yaml: 'text/yaml', svg: 'image/svg+xml', pdf: 'application/pdf', xml: 'application/xml', ics: 'text/calendar' }
@@ -8757,7 +8774,7 @@ async function chatProjectContext(projectId) {
 
 function chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser = false, project = '' }) {
   const plan = fresh ? { resumeId: null, replay: thread.messages.slice(0, userIndex) } : planHistory(thread, provider, userIndex)
-  const extras = [!voice && filesRule(join(CHAT_OUTPUTS_DIR, thread.id)), mode === 'task' && TASK_RULES, mode === 'computer' && COMPUTER_RULES, browser && BROWSER_RULES, !voice && IMAGE_RULES, voice && VOICE_RULES].filter(Boolean)
+  const extras = [!voice && filesRule(join(CHAT_OUTPUTS_DIR, thread.id)), CHAT_MEMORY_RULES, mode === 'task' && TASK_RULES, mode === 'computer' && COMPUTER_RULES, browser && BROWSER_RULES, !voice && IMAGE_RULES, voice && VOICE_RULES].filter(Boolean)
   const extraBlock = extras.length ? `${extras.join('\n\n')}\n\n` : ''
   const att = attachmentBlock(files)
   const request = text || '(The owner sent only the attachments above. Look at them and respond.)'
@@ -9083,8 +9100,9 @@ async function handleChatSend(req, res) {
               images: files.filter((f) => f.kind === 'image'),
               features: mode === 'computer' ? ['computer_use'] : [],
               browser: browserAccess,
-              // Where the prompt tells it to write: this chat's documents, and its project's memory.
-              allowWrite: [join(CHAT_OUTPUTS_DIR, threadId), shareWithProject && projectStore.memoryPath(projectId), totemJob && totemMemoryPath(totemId)].filter(Boolean),
+              // Where the prompt tells it to write: this chat's documents, the owner's memory
+              // (CHAT_MEMORY_RULES), and its project's memory.
+              allowWrite: [join(CHAT_OUTPUTS_DIR, threadId), MEMORY_ROOT, shareWithProject && projectStore.memoryPath(projectId), totemJob && totemMemoryPath(totemId)].filter(Boolean),
               timeoutMs: mode === 'chat' ? CHAT_TIMEOUT_MS : CHAT_TASK_TIMEOUT_MS,
               onText: (delta) => forward({ type: 'delta', text: delta }, { live: streamLive }),
               onActivity: (a) => push({ type: 'activity', text: a }),

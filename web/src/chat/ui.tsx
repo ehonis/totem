@@ -96,3 +96,66 @@ export function useDismiss(open: boolean, ref: React.RefObject<HTMLElement>, onC
     }
   }, [open, ref, onClose])
 }
+
+// --dock-clear (the phone's bottom tab bar plus its gap) in pixels; it is a calc().
+function dockClear(): number {
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:fixed;visibility:hidden;height:var(--dock-clear,0px)'
+  document.body.appendChild(probe)
+  const h = probe.getBoundingClientRect().height
+  probe.remove()
+  return h
+}
+
+// What a position:fixed descendant of `el` is laid out against: the viewport,
+// unless an ancestor has a transform, filter or will-change: transform (the
+// phone shell's sliding .main does) — then that ancestor's box.
+function fixedFrame(el: HTMLElement): { left: number; top: number; bottom: number } {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const cs = getComputedStyle(p)
+    if (cs.transform !== 'none' || cs.filter !== 'none' || /transform|filter/.test(cs.willChange)) {
+      const b = p.getBoundingClientRect()
+      return { left: b.left, top: b.top, bottom: b.bottom }
+    }
+  }
+  return { left: 0, top: 0, bottom: window.innerHeight }
+}
+
+/**
+ * Where a popover anchored to `anchor` fits on screen. It opens upward, as the
+ * composer's menus always have, unless the room above is short of `height` and
+ * there is more below; either way it shrinks to the room it has. Fixed
+ * positioning, so no scrolling ancestor clips it (measured against fixedFrame). Narrow screens get the full
+ * width less `edge` on each side. Recomputed on resize and scroll.
+ */
+export function usePopoverPlacement(open: boolean, anchor: React.RefObject<HTMLElement>, {
+  width, height, gap = 10, edge = 8, offsetX = 0, narrow = 720,
+}: { width: number; height: number; gap?: number; edge?: number; offsetX?: number; narrow?: number }): React.CSSProperties | undefined {
+  const [style, setStyle] = React.useState<React.CSSProperties>()
+  React.useLayoutEffect(() => {
+    if (!open) { setStyle(undefined); return }
+    const place = () => {
+      const el = anchor.current
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      const vw = window.innerWidth
+      const vh = window.visualViewport?.height || window.innerHeight
+      const above = r.top - gap - edge
+      const below = vh - dockClear() - r.bottom - gap
+      const up = above >= height || above >= below
+      const h = Math.max(160, Math.min(height, up ? above : below))
+      const w = vw <= narrow ? vw - edge * 2 : Math.min(width, vw - 24)
+      const left = vw <= narrow ? edge : Math.min(Math.max(12, r.left + offsetX), vw - w - 12)
+      const f = fixedFrame(el)
+      setStyle({
+        position: 'fixed', left: left - f.left, right: 'auto', width: w, height: h,
+        ...(up ? { top: 'auto', bottom: f.bottom - r.top + gap } : { bottom: 'auto', top: r.bottom + gap - f.top }),
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true) }
+  }, [open, anchor, width, height, gap, edge, offsetX, narrow])
+  return style
+}
