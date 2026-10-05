@@ -236,6 +236,11 @@ row counts, ids and foreign keys, and run it twice.
 - **A message part type the thread store does not know is dropped on save.** `normalizePart` in `chat/store.mjs` lists them; a new part type goes there as well as in both `applyEvent`s.
 - **`claude -p` cannot ask for permission.** A write the prompt asks for is refused unless the bridge allows that path (`allowWrite` → `--allowedTools Edit(…)`), and a small model may still tell the owner it saved. Any new "keep this file updated" rule needs its path added there.
 - **Codex's sandbox has no network.** `workspace-write` blocks it, so a Codex run that must fetch the web (a totem watching a page) needs `network: true` on `runAgent`, which adds `sandbox_workspace_write.network_access=true`. Without it the run reports a DNS failure rather than erroring.
+- **`codex exec` refuses MCP writes.** Its approval policy is `never`, so any tool without
+  `readOnlyHint` fails with "requires approval". `spawnCodexStream` adds
+  `default_tools_approval_mode="approve"` for the gateway (`codexGatewayApprovalArgs`), but only
+  when `config.toml` defines it and the run is not read-only, because a `-c` override on an
+  undefined server stops Codex starting with "invalid transport".
 - **The address bar is normalised on boot.** `buildPath` keeps only the query params it knows (`?thread=`/`?project=` on chat, `?totem=` on totems, `?q=` on search). A new deep-link param must be added there, or anything that reads it after sign-in finds it gone; read one-time params at module load (see `AuthGate.tsx`).
 - **`INVOCATION_ID` does not mean "I am the service".** A process started from a shell inside
   any systemd unit (T3 Code's, for one) inherits it. A test bridge that trusted it restarted
