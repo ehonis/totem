@@ -14,7 +14,7 @@ import {
   sendChat, attachRun, stopChat, steerChat, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
   deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
 } from './api'
-import { defaultSettingsFor, normalizeModelSettings, visibleModels, wireModel } from './models'
+import { defaultSettingsFor, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
 import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, StreamEvent } from './types'
 
 const CACHE_KEY = 'chat_threads_v2'
@@ -256,11 +256,18 @@ export function threadChoice(thread: ChatThread | null, draft: { provider?: stri
     ? stored
     : draft.provider && providerById(draft.provider) ? draft.provider : state.defaultProvider
   const row = providerById(provider)
+  // A chat that never saved settings (one started through the API, or an older
+  // chat) carries on with the model that last answered it, not the defaults a
+  // brand-new chat would get: reopening it must not quietly switch models.
+  const lastModel = thread && !thread.modelSettings
+    ? [...thread.messages].reverse().find((m) => m.role === 'assistant' && m.provider === provider && m.model)?.model
+    : undefined
   // Temporary chats used to be pinned to the default model; with Auto/Instant/
   // Thinking they choose like any other chat, and only a hand-picked model is
   // held to the default account.
   let settings = normalizeModelSettings(
-    (thread ? thread.modelSettings : draft.modelSettings) || {
+    (thread ? thread.modelSettings : draft.modelSettings) ||
+    (lastModel ? { ...parseModelSpec(lastModel), preset: 'manual', level: String(state.prefs.defaultLevel || 2) } : null) || {
       ...defaultSettingsFor(row, state.defaultProvider, state.defaultModel),
       // A brand-new chat starts on Settings → Chat's default.
       preset: state.prefs.defaultPreset, level: String(state.prefs.defaultLevel || 2),
