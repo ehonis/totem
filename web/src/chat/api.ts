@@ -86,6 +86,10 @@ export function attachRun(threadId: string, since: number, onEvent: (e: StreamEv
 export const stopChat = (threadId: string) =>
   api('/api/chat/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId }) })
 
+/** Send a message to a chat that is still answering: it steers that run. */
+export const steerChat = (threadId: string, text: string) =>
+  api<{ ok: boolean; steer: { id: string; via: 'live' | 'restart' } }>('/api/chat/steer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, text }) })
+
 export const getRuns = () => api<{ runs: { threadId: string; status: string; mode: string; startedAt: number }[] }>('/api/chat/runs')
 
 export const getCapabilities = () => api<ChatCapabilities>('/api/chat/capabilities')

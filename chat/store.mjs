@@ -57,6 +57,11 @@ export function normalizePart(p, i = 0) {
     if (p.totemName) out.totemName = str(p.totemName, 80)
     return out
   }
+  // Something the owner sent while the reply was running (chat/steer.mjs).
+  if (p.type === 'steer') {
+    if (typeof p.text !== 'string' || !p.text.trim()) return null
+    return { type: 'steer', id: str(p.id, 64) || `s${i}`, text: str(p.text, 20_000), via: p.via === 'restart' ? 'restart' : 'live', createdAt: num(p.createdAt) }
+  }
   if (p.type !== 'tool') return null
   const out = {
     type: 'tool',

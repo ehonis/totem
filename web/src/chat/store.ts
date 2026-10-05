@@ -11,7 +11,7 @@ import { getThreads, putThread, deleteThread as apiDeleteThread, getChatModels, 
 import { pushError } from '../toast'
 import { applyEvent } from './reduce'
 import {
-  sendChat, attachRun, stopChat, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
+  sendChat, attachRun, stopChat, steerChat, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
   deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
 } from './api'
 import { defaultSettingsFor, normalizeModelSettings, visibleModels, wireModel } from './models'
@@ -655,6 +655,7 @@ function handleEvent(threadId: string, e: StreamEvent) {
         return { ...t, messages: msgs, ...ms, ...(!t.provider || t.modelSettings?.preset === 'manual' ? { provider: e.provider } : {}) }
       })
       break
+    case 'steer':
     case 'delta':
     case 'tool':
     case 'image':
@@ -834,6 +835,22 @@ function startRun(threadId: string, args: SendArgs) {
 
 export function stop(threadId: string) {
   stopChat(threadId).catch(fail)
+}
+
+/**
+ * Talk to a chat while it is answering. The steer shows up through the run's
+ * own stream, so nothing is added here. False when the run had already finished
+ * (or was a skill, which cannot take one): the caller keeps the text.
+ */
+export async function steer(threadId: string, text: string): Promise<boolean> {
+  if (!state.runs[threadId] || !text.trim()) return false
+  try {
+    await steerChat(threadId, text)
+    return true
+  } catch (e: any) {
+    if (!fail(e)) pushError(e?.status === 409 ? 'That reply had already finished. Your message is still in the box.' : `Couldn't send that: ${e.message}`)
+    return false
+  }
 }
 
 export function regenerate(threadId: string, override?: { provider?: string; modelSettings?: Partial<ModelSettings> }) {

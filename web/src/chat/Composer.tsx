@@ -9,7 +9,7 @@ import type { Attachment, ChatMode, DraftAttachment } from './types'
 import { TI, useDismiss } from './ui'
 import {
   IconArrowUp, IconPlayerStopFilled, IconPlus, IconPaperclip, IconPhoto, IconMicrophone, IconWaveSine, IconBolt,
-  IconDeviceDesktop, IconSparkles, IconX, IconCheck, IconLoader2, IconBrain, IconWorld,
+  IconDeviceDesktop, IconSparkles, IconX, IconCheck, IconLoader2, IconBrain, IconWorld, IconCornerUpRight,
 } from './icons'
 
 // A paste this long becomes a chip instead of filling the box. The text is sent
@@ -29,6 +29,12 @@ export interface ComposerProps {
   onChange: (v: string) => void
   onSend: (payload: { text: string; attachments: Attachment[]; mode: ChatMode; browser?: boolean }) => void
   onStop: () => void
+  /**
+   * A message while the reply is still running steers it (T3 Code's follow-up):
+   * the agent takes it in mid-turn. Resolves false when it could not be sent, and
+   * the text goes back in the box.
+   */
+  onSteer?: (text: string) => Promise<boolean> | boolean
   onVoice?: () => void
   busy: boolean
   placeholder?: string
@@ -56,7 +62,7 @@ function commandQuery(value: string) {
 let pasteCount = 0
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onSend, onStop, onVoice, busy, placeholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, computerUse, maxUploadBytes = 25 * 1024 * 1024, leftSlot, rightSlot, onThinkLonger } = props
+  const { value, onChange, onSend, onStop, onSteer, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, computerUse, maxUploadBytes = 25 * 1024 * 1024, leftSlot, rightSlot, onThinkLonger } = props
   const ta = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const photoInput = useRef<HTMLInputElement>(null)
@@ -148,6 +154,21 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   const uploading = drafts.some((d) => d.status === 'uploading')
   const ready = drafts.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
   const canSend = !busy && !uploading && (value.trim().length > 0 || ready.length > 0)
+  // Steering is words only; files wait in the box for the next message.
+  const steerable = busy && !!onSteer
+  const canSteer = steerable && value.trim().length > 0 && !drafts.length
+  const placeholder = steerable ? 'Steer this reply: add context or change course' : idlePlaceholder
+  const valueRef = useRef(value)
+  valueRef.current = value
+
+  async function steerNow() {
+    if (!canSteer || !onSteer) return
+    const text = value.trim()
+    onChange('')
+    const ok = await onSteer(text)
+    // Not sent: give the words back, unless he has started typing something else.
+    if (!ok && !valueRef.current.trim()) onChange(text)
+  }
 
   function send() {
     if (!canSend) return
@@ -184,7 +205,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     }
     // On a phone, Return is a newline and the button sends — the way every
     // messaging app on it behaves.
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !coarse()) { e.preventDefault(); send() }
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !coarse()) { e.preventDefault(); if (busy) steerNow(); else send() }
   }
 
   // --- dictation -------------------------------------------------------------
@@ -371,12 +392,19 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
             ) : (
               <>
                 {rightSlot}
-                {!busy && (
+                {(!busy || steerable) && (
                   <button type="button" className="vc-icon-btn" onClick={startDictation} aria-label="Dictate" title="Dictate">
                     <TI icon={IconMicrophone} size={19} />
                   </button>
                 )}
-                {busy ? (
+                {busy && steerable && value.trim() ? (
+                  <>
+                    <button type="button" className="vc-icon-btn" onClick={onStop} aria-label="Stop" title="Stop the reply"><TI icon={IconPlayerStopFilled} size={14} /></button>
+                    <button type="button" className="vc-send" onClick={steerNow} disabled={!canSteer} aria-label="Steer" title={drafts.length ? 'Files go with the next message, once this reply finishes' : 'Steer: send this into the running reply'}>
+                      <TI icon={IconCornerUpRight} size={18} stroke={2.25} />
+                    </button>
+                  </>
+                ) : busy ? (
                   <button type="button" className="vc-send stop" onClick={onStop} aria-label="Stop" title="Stop"><TI icon={IconPlayerStopFilled} size={14} /></button>
                 ) : showVoice ? (
                   <button type="button" className="vc-send voice" onClick={onVoice} aria-label="Start voice mode" title="Voice mode"><TI icon={IconWaveSine} size={19} stroke={2} /></button>

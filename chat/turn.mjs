@@ -32,13 +32,20 @@ function describeAttachments(m) {
   return ` [attached: ${m.attachments.map((a) => a.name).join(', ')}]`
 }
 
+// A reply the owner steered reads in order: what Totem said, what the owner
+// added mid-reply, what Totem said after. Null when there was no steer.
+function steeredText(m) {
+  if (m?.role !== 'assistant' || !m.parts?.some((p) => p.type === 'steer')) return null
+  return m.parts.map((p) => (p.type === 'text' ? p.text : p.type === 'steer' ? `\n\n[${OWNER_LABEL}, mid-reply: ${p.text}]\n\n` : '')).join('')
+}
+
 export function renderTranscript(messages, { budget = 16_000, heading = 'Conversation so far:' } = {}) {
   if (!Array.isArray(messages) || !messages.length) return ''
   const lines = []
   let left = budget
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
-    const content = (m?.content || '').trim()
+    const content = (steeredText(m) ?? m?.content ?? '').trim()
     if (!content && !m?.attachments?.length) continue
     // A reply that failed carries no useful text; saying so beats replaying an
     // apology the model will then try to continue.
@@ -183,6 +190,15 @@ export function applyEvent(msg, event, now = Date.now()) {
     case 'file':
       if (event.file?.uploadId) msg.parts.push({ type: 'file', ...event.file })
       break
+    case 'steer': {
+      // The owner's words mid-reply, kept where they landed among the steps.
+      const st = event.steer || {}
+      if (!st.text || msg.parts.some((p) => p.type === 'steer' && p.id === st.id)) break
+      msg.parts.push({ type: 'steer', id: st.id || `s${msg.parts.length}`, text: st.text, via: st.via || 'live', createdAt: st.createdAt || now })
+      // What it says after the steer is a new paragraph in the copyable text too.
+      if (msg.content) msg.content = msg.content.replace(/\s*$/, '\n\n')
+      break
+    }
     default:
       break
   }

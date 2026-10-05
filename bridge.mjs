@@ -49,6 +49,8 @@ import { createThreadStore, validThreadId } from './chat/store.mjs'
 import { createUploadStore, validUploadId } from './chat/uploads.mjs'
 import { createProjectStore, moveMemoryEntries, validProjectId } from './chat/projects.mjs'
 import { createChatRuns } from './chat/runs.mjs'
+import { killTree } from './scripts/kill-tree.mjs'
+import { createSteering, progressNote, steerPrompt } from './chat/steer.mjs'
 import { planHistory, renderTranscript, attachmentBlock, projectBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer } from './chat/turn.mjs'
 import { describeMcpCall, describeCommand, humanizeTool, stringifyInput, resultText } from './chat/tools.mjs'
 import { pickRoute, PRESETS } from './chat/route.mjs'
@@ -3076,7 +3078,12 @@ function spawnCapture(cmd, args, { input, label = 'request', env, timeoutMs = TI
       clearTimeout(timer)
       resolve({ code, stdout, stderr, timedOut, stopped })
     })
-    if (input != null) child.stdin.end(input)
+    // An agent that exits while a steer is being written must not crash the bridge.
+    child.stdin.on('error', (e) => log(`${label}: stdin closed early`, e?.code || e?.message || e))
+    if (keepStdin) {
+      if (input != null) child.stdin.write(input)
+      onSpawn?.(child)
+    } else if (input != null) child.stdin.end(input)
     else child.stdin.end()
   })
 }
@@ -3233,13 +3240,13 @@ function spawnCursorStream(text, { label = 'request', onActivity, onTool, onText
     activeRun = { id, child, cmd: account.cli, label, startedAt: Date.now(), stopped: false }
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGKILL')
+      killTree(child)
     }, timeoutMs)
     // If the caller goes away (an explicit stop), kill the child so we don't
     // leave orphaned cursor-agent processes running.
     if (signal) {
-      if (signal.aborted) child.kill('SIGKILL')
-      else signal.addEventListener('abort', () => { stopped = true; child.kill('SIGKILL') }, { once: true })
+      if (signal.aborted) killTree(child)
+      else signal.addEventListener('abort', () => { stopped = true; killTree(child) }, { once: true })
     }
 
     const rl = createInterface({ input: child.stdout })
@@ -3306,7 +3313,10 @@ function spawnCursorStream(text, { label = 'request', onActivity, onTool, onText
 // reply string is accumulated by the caller (closure over onEvent) and merged
 // into the resolved result. Non-JSON lines (e.g. stray CLI log output) are
 // ignored so a single bad line can't break the stream.
-function spawnJsonStream(cmd, args, { input, label = 'request', signal, onEvent, env, timeoutMs = TIMEOUT } = {}) {
+//
+// `keepStdin` leaves stdin open after `input` and hands the child to `onSpawn`, for
+// a CLI that takes more input mid-run (Claude Code steering); the caller ends it.
+function spawnJsonStream(cmd, args, { input, label = 'request', signal, onEvent, onSpawn, keepStdin = false, env, timeoutMs = TIMEOUT } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { cwd: AGENT_CWD, ...(env ? { env } : {}) })
     let stdout = '', stderr = ''
@@ -3316,11 +3326,11 @@ function spawnJsonStream(cmd, args, { input, label = 'request', signal, onEvent,
     activeRun = { id, child, cmd, label, startedAt: Date.now(), stopped: false }
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGKILL')
+      killTree(child)
     }, timeoutMs)
     if (signal) {
-      if (signal.aborted) { stopped = true; child.kill('SIGKILL') }
-      else signal.addEventListener('abort', () => { stopped = true; child.kill('SIGKILL') }, { once: true })
+      if (signal.aborted) { stopped = true; killTree(child) }
+      else signal.addEventListener('abort', () => { stopped = true; killTree(child) }, { once: true })
     }
     const rl = createInterface({ input: child.stdout })
     rl.on('line', (line) => {
@@ -3342,7 +3352,12 @@ function spawnJsonStream(cmd, args, { input, label = 'request', signal, onEvent,
       clearTimeout(timer)
       resolve({ code, stdout, stderr, timedOut, stopped })
     })
-    if (input != null) child.stdin.end(input)
+    // An agent that exits while a steer is being written must not crash the bridge.
+    child.stdin.on('error', (e) => log(`${label}: stdin closed early`, e?.code || e?.message || e))
+    if (keepStdin) {
+      if (input != null) child.stdin.write(input)
+      onSpawn?.(child)
+    } else if (input != null) child.stdin.end(input)
     else child.stdin.end()
   })
 }
@@ -3425,7 +3440,14 @@ async function claudeStdinMessage(text, images) {
 
 const CLAUDE_NATIVE_IMAGE = /^image\/(png|jpe?g|gif|webp)$/i
 
-async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, signal, model, effort, readOnly, instance, resume, images = [], browser = null, allowWrite = [], timeoutMs = TIMEOUT } = {}) {
+// Steering (chat/steer.mjs): with `steering`, the prompt goes in on stdin as
+// stream-json and stdin stays open for the whole run, so a message the owner sends
+// mid-reply is written straight into the running turn. `priority: "now"` makes
+// Claude Code cut off the tool in flight and read it at once; the turn it cuts
+// short ends with an `aborted_*` result that is not the end of the run.
+// `--replay-user-messages` echoes each message once Claude has taken it in, so
+// stdin is closed only after the last result with nothing still unread.
+async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, signal, model, effort, readOnly, instance, resume, images = [], browser = null, allowWrite = [], steering = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('claude')
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
   const m = bareModelId(model) || CLAUDE_MODEL
@@ -3445,8 +3467,9 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
   args.push(...browserCli.args)
   const native = images.filter((i) => CLAUDE_NATIVE_IMAGE.test(i.mime || ''))
   let input = null
-  if (native.length) {
+  if (native.length || steering) {
     args.push('--input-format', 'stream-json')
+    if (steering) args.push('--replay-user-messages')
     input = await claudeStdinMessage(text, native)
   } else {
     // `--` before the prompt is not optional. --disallowedTools is variadic, so
@@ -3459,14 +3482,50 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
   let sessionId = ''
   const seenTools = new Set()
   const toolNames = new Map() // tool_use id → name, to tell a browser snapshot from any other image
+  let child = null
+  let written = 1 // the prompt itself is echoed too
+  let echoed = 0
+  let lastEvent = 0
+  let detach = () => {}
+  const finishInput = () => { detach(); if (child && !child.stdin.writableEnded) child.stdin.end() }
   return spawnJsonStream(account.cli, args, {
     input, label, signal, timeoutMs, env: { ...instanceEnvironment(account), ...browserCli.env },
+    keepStdin: !!steering,
+    onSpawn: (c) => {
+      child = c
+      detach = steering.attachLive((steer) => {
+        if (!child || child.stdin.writableEnded || child.exitCode != null) return false
+        written += 1
+        child.stdin.write(`${JSON.stringify({ type: 'user', priority: 'now', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'text', text: steer.text }] } })}\n`)
+        return true
+      })
+      c.on('close', detach)
+    },
     onEvent: (event) => {
+      lastEvent += 1
       if (event.session_id && event.session_id !== sessionId) {
         sessionId = event.session_id
         emitSafe(onSession, sessionId, 'session')
       }
-      if (event.type === 'result' && typeof event.result === 'string') { result = event.result; return }
+      if (event.type === 'result' && typeof event.result === 'string') {
+        if (!steering) { result = event.result; return }
+        // A turn a steer cut short: the run goes on with the steer.
+        if (/^aborted/.test(String(event.terminal_reason || ''))) return
+        if (event.result) result = event.result
+        if (echoed >= written) finishInput()
+        // A steer still unread starts its own turn; if nothing at all follows, the
+        // count was off and waiting would hold the run open until its timeout.
+        else {
+          const at = lastEvent
+          setTimeout(() => { if (lastEvent === at) finishInput() }, 20_000).unref?.()
+        }
+        return
+      }
+      // The echo of a message from stdin (not a tool result): Claude has read it.
+      if (steering && event.type === 'user' && Array.isArray(event.message?.content) && !event.message.content.some((b) => b?.type === 'tool_result')) {
+        echoed += 1
+        return
+      }
       if (event.type === 'stream_event') {
         const ev = event.event
         if (onText && ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) onText(ev.delta.text)
@@ -9065,6 +9124,7 @@ async function handleChatSend(req, res) {
       let finalText = ''
       let sessionId = ''
       let browserAccess = null
+      const steering = createSteering()
       try {
         // A skill command ($morning, /journal, …) runs the skill rather than chatting.
         const matchedSkill = !body.regenerate && !files.length ? await lookupSkillCommand(text.toLowerCase(), text) : null
@@ -9085,13 +9145,47 @@ async function handleChatSend(req, res) {
         // the browser", or in so many words), or this chat already has one open
         // from an earlier ask. Never by default; voice turns never.
         if (!voice && wantsBrowser({ body, text, threadId })) browserAccess = grantBrowserAccess(threadId, push)
-        const runOnce = async ({ fresh }) => {
-          const { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser: !!browserAccess, project: contextBlock })
-          return {
+        // Steering (chat/steer.mjs): Claude Code takes the owner's words into the
+        // running turn; every other CLI is interrupted and resumed with them.
+        const liveSteer = driver === 'claude'
+        run.steer = (steerText) => {
+          const steer = { id: randomUUID(), text: steerText, createdAt: Date.now() }
+          const via = steering.send(steer)
+          if (!via) return null
+          forward({ type: 'steer', steer: { ...steer, via } })
+          log(`web chat [${provider}] steered (${via}):`, steerText.slice(0, 100))
+          return { ...steer, via }
+        }
+        let attempts = 0
+        const runOnce = async ({ fresh, steers = null }) => {
+          // Codex numbers its items per process (item_0, item_1…), so a resumed
+          // attempt would reuse the ids of cards already in this reply.
+          const tag = attempts++ ? `~${attempts}` : ''
+          let { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser: !!browserAccess, project: contextBlock })
+          if (steers) {
+            const note = steerPrompt(steers, { owner: OWNER_NAME || 'Owner', progress: progressNote(assistant) })
+            // The session this run started, resumed with the owner's words; without
+            // one (or when it is lost), the whole request again with them added.
+            if (sessionId && !fresh) {
+              prompt = `${temporalContext()}\n\n${note}`
+              resumeId = sessionId
+            } else {
+              ({ prompt } = chatPrompt({ thread, userIndex, provider, text: `${text}\n\n${note}`, files, mode, voice, fresh: true, browser: !!browserAccess, project: contextBlock }))
+              resumeId = null
+            }
+          }
+          // Each attempt has its own signal: a steer ends the attempt, Stop ends the run.
+          const attempt = new AbortController()
+          const end = () => attempt.abort()
+          signal.addEventListener('abort', end, { once: true })
+          const detach = liveSteer ? () => {} : steering.attachInterrupt(end)
+          try {
+            return {
             resumeId,
             r: await streamFn(prompt, {
               label: 'web chat',
-              signal,
+              signal: attempt.signal,
+              steering: liveSteer ? steering : null,
               instance: instanceFor(provider),
               cursorModel: choice.cursorModel,
               model: choice.model,
@@ -9106,7 +9200,7 @@ async function handleChatSend(req, res) {
               timeoutMs: mode === 'chat' ? CHAT_TIMEOUT_MS : CHAT_TASK_TIMEOUT_MS,
               onText: (delta) => forward({ type: 'delta', text: delta }, { live: streamLive }),
               onActivity: (a) => push({ type: 'activity', text: a }),
-              onTool: (tool) => forward({ type: 'tool', tool }),
+              onTool: (tool) => forward({ type: 'tool', tool: tag && tool.id ? { ...tool, id: `${tool.id}${tag}` } : tool }),
               onSession: (id) => { sessionId = id },
               onImage: async ({ buffer, mime }) => {
                 const ext = (mime.split('/')[1] || 'png').replace('jpeg', 'jpg')
@@ -9114,16 +9208,35 @@ async function handleChatSend(req, res) {
                 forward({ type: 'image', uploadId: up.id, url: up.url })
               },
             }),
+            }
+          } finally {
+            detach()
+            signal.removeEventListener('abort', end)
           }
         }
         let { r, resumeId } = await runOnce({ fresh: false })
         // A session the CLI no longer has (cleared history, a different account
         // home) fails fast with nothing said. Start over once with the transcript.
-        if (resumeId && !r.stopped && !(r.result || '').trim() && !assistant.content.trim()) {
+        if (resumeId && !r.stopped && !steering.waiting && !(r.result || '').trim() && !assistant.content.trim()) {
           log(`chat: resume of ${provider} session ${resumeId} produced nothing; retrying fresh`)
           sessionId = ''
           ;({ r } = await runOnce({ fresh: true }))
         }
+        // Steers that cut the attempt short, or came too late for it, are the next one.
+        while (!signal.aborted && steering.waiting) {
+          const steers = steering.take()
+          // Whatever the interrupted attempt was in the middle of did not finish.
+          for (const p of assistant.parts) {
+            if (p.type === 'tool' && p.status === 'running') forward({ type: 'tool', tool: { id: p.id, phase: 'end', status: 'error', output: 'Cut off when you steered the reply.' } })
+          }
+          const before = assistant.content.length
+          ;({ r } = await runOnce({ fresh: false, steers }))
+          if (!signal.aborted && !r.stopped && !steering.waiting && !(r.result || '').trim() && assistant.content.length === before && sessionId) {
+            log(`chat: steered resume of ${provider} produced nothing; retrying fresh`)
+            ;({ r } = await runOnce({ fresh: true, steers }))
+          }
+        }
+        steering.close()
         finalText = (r.result || '').trim()
         if (!streamLive && finalText) {
           // Streaming switched off for this provider: the deltas were held back.
@@ -9142,6 +9255,8 @@ async function handleChatSend(req, res) {
         status = signal.aborted ? 'stopped' : 'error'
         error = status === 'error' ? String(e?.message || e) : ''
       } finally {
+        steering.close()
+        delete run.steer
         if (pending) { clearTimeout(pending); pending = null }
         browserAccess?.revoke()
         // Screenshots the agent chose to show (![…](/path.png)) become attachments.
@@ -9358,6 +9473,15 @@ async function handleChatApi(req, res, path) {
   if (req.method === 'POST' && path === '/api/chat/stop') {
     const { threadId } = await readJsonBody(req)
     return send(res, 200, { ok: chatRuns.stop(threadId) })
+  }
+  // A message for a chat that is still answering: it steers that run (chat/steer.mjs).
+  if (req.method === 'POST' && path === '/api/chat/steer') {
+    const { threadId, text } = await readJsonBody(req)
+    const words = typeof text === 'string' ? text.trim().slice(0, 20_000) : ''
+    if (!validThreadId(threadId) || !words) return send(res, 400, { error: 'missing threadId or text' })
+    const steer = chatRuns.active(threadId)?.steer?.(words)
+    if (!steer) return send(res, 409, { error: 'this chat is not answering anything it can take a message for' })
+    return send(res, 200, { ok: true, steer })
   }
   if (req.method === 'POST' && path === '/api/chat/uploads') {
     const q = new URL(req.url, 'http://x').searchParams

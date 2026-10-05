@@ -4,7 +4,7 @@ import { useCommand } from '../useShortcuts'
 import { getSkills, AuthError } from '../api'
 import { setChatCommands } from '../studio'
 import {
-  useChat, initChat, send, stop, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
+  useChat, initChat, send, stop, steer, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
   openProject, threadProject, projectById, setProjectContext,
 } from '../chat/store'
@@ -314,6 +314,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
       onChange={setInput}
       onSend={onSend}
       onStop={() => activeId && stop(activeId)}
+      onSteer={(text) => (activeId ? steer(activeId, text) : false)}
       onVoice={() => setVoice(true)}
       busy={busy}
       autoFocus={visible}
