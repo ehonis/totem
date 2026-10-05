@@ -47,7 +47,7 @@ import { createJournalStore } from './journal/store.mjs'
 import { createTranscriber } from './journal/transcribe.mjs'
 import { createThreadStore, validThreadId } from './chat/store.mjs'
 import { createUploadStore, validUploadId } from './chat/uploads.mjs'
-import { createProjectStore, validProjectId } from './chat/projects.mjs'
+import { createProjectStore, moveMemoryEntries, validProjectId } from './chat/projects.mjs'
 import { createChatRuns } from './chat/runs.mjs'
 import { planHistory, renderTranscript, attachmentBlock, projectBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer } from './chat/turn.mjs'
 import { describeMcpCall, describeCommand, humanizeTool, stringifyInput, resultText } from './chat/tools.mjs'
@@ -8734,15 +8734,23 @@ async function loadChatFiles(attachments) {
 
 // A project chat's shared context (projectBlock in chat/turn.mjs), read fresh
 // each turn: the memory and the file list change between turns.
+// A folder's chat also reads its parent project's, read-only.
 async function chatProjectContext(projectId) {
   const project = validProjectId(projectId) ? await projectStore.get(projectId) : null
   if (!project) return ''
-  const files = []
-  for (const f of project.files) {
-    const meta = await chatUploads.meta(f.id)
-    if (meta) files.push({ ...f, path: meta.path })
+  const withPaths = async (list) => {
+    const files = []
+    for (const f of list) {
+      const meta = await chatUploads.meta(f.id)
+      if (meta) files.push({ ...f, path: meta.path })
+    }
+    return files
   }
-  return projectBlock(project, { memory: await projectStore.readMemory(project.id), memoryPath: projectStore.memoryPath(project.id), files })
+  const parentProject = project.parentId ? await projectStore.get(project.parentId) : null
+  const parent = parentProject
+    ? { project: parentProject, memory: await projectStore.readMemory(parentProject.id), files: await withPaths(parentProject.files) }
+    : null
+  return projectBlock(project, { memory: await projectStore.readMemory(project.id), memoryPath: projectStore.memoryPath(project.id), files: await withPaths(project.files), parent })
 }
 
 function chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser = false, project = '' }) {
@@ -8908,6 +8916,9 @@ async function handleChatSend(req, res) {
   const projectId = existing ? (existing.projectId || null)
     : (validProjectId(body.projectId) && await projectStore.get(body.projectId) ? body.projectId : null)
   const kind = projectId ? 'regular' : existing?.kind || (body.kind === 'temporary' ? 'temporary' : 'regular')
+  // A project chat can leave the project's context out, from its first turn or any later one.
+  const contextOff = !!projectId && (existing ? !!existing.projectContextOff : body.projectContextOff === true)
+  const shareWithProject = projectId && !contextOff
   const mode = CHAT_MODES.has(body.mode) ? body.mode : 'chat'
   const voice = body.voice === true
   let text = typeof body.text === 'string' ? body.text.trim() : ''
@@ -8969,16 +8980,18 @@ async function handleChatSend(req, res) {
     // Auto's first pick becomes the chat's power until he moves the dial.
     if (route?.power) t.modelSettings = { ...(t.modelSettings || {}), preset: 'auto', power: String(route.power) }
     if (!t.title) t.title = fallbackTitle(text) || (metas[0]?.name ?? '')
+    // He answered: the chat no longer waits on him.
+    delete t.needsReply
     t.updatedAt = now
-  }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(projectId ? { projectId } : {}), ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
+  }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
 
   const files = await loadChatFiles(userMessage.attachments)
   // What he attaches in a project chat is shared with the whole project.
-  if (projectId && userMessage.attachments?.length) {
+  if (shareWithProject && userMessage.attachments?.length) {
     await projectStore.addFiles(projectId, userMessage.attachments.map((a) => ({ ...a, source: 'chat', threadId })))
       .catch((e) => log('chat: project file add failed', e?.message || e))
   }
-  const projectCtx = projectId ? await chatProjectContext(projectId).catch(() => '') : ''
+  const projectCtx = shareWithProject ? await chatProjectContext(projectId).catch(() => '') : ''
   // A totem's own chat knows the totem; every chat knows which totems exist, so
   // it can propose a change to one (totems/core.mjs).
   const totemId = thread.totemId || null
@@ -9069,7 +9082,7 @@ async function handleChatSend(req, res) {
               features: mode === 'computer' ? ['computer_use'] : [],
               browser: browserAccess,
               // Where the prompt tells it to write: this chat's documents, and its project's memory.
-              allowWrite: [join(CHAT_OUTPUTS_DIR, threadId), projectId && projectStore.memoryPath(projectId), totemJob && totemMemoryPath(totemId)].filter(Boolean),
+              allowWrite: [join(CHAT_OUTPUTS_DIR, threadId), shareWithProject && projectStore.memoryPath(projectId), totemJob && totemMemoryPath(totemId)].filter(Boolean),
               timeoutMs: mode === 'chat' ? CHAT_TIMEOUT_MS : CHAT_TASK_TIMEOUT_MS,
               onText: (delta) => forward({ type: 'delta', text: delta }, { live: streamLive }),
               onActivity: (a) => push({ type: 'activity', text: a }),
@@ -9125,7 +9138,7 @@ async function handleChatSend(req, res) {
           const made = await collectArtifacts({ threadId, since: t0, parts: assistant.parts }).catch(() => [])
           for (const file of made) forward({ type: 'file', file })
           // Documents made in a project chat join the project's files.
-          if (projectId && made.length) {
+          if (shareWithProject && made.length) {
             await projectStore.addFiles(projectId, made.map((f) => ({ id: f.uploadId, name: f.name, mime: f.mime, size: f.size, kind: 'file', source: 'agent', threadId })))
               .catch((e) => log('chat: project artifact add failed', e?.message || e))
           }
@@ -9149,6 +9162,9 @@ async function handleChatSend(req, res) {
           if (sessionId && status !== 'error') {
             t.sessions = { ...(t.sessions || {}), [provider]: { id: sessionId, through: t.messages.length } }
           }
+          // Finished (or failed) and now waiting on him, until he replies or marks it done.
+          // A totem's chat posts on a schedule, so it never waits.
+          if (status !== 'stopped' && !t.totemId) t.needsReply = true
         })
         push({ type: 'done', message: signMessage(structuredClone(assistant)) })
         noteAiUsage(provider)
@@ -9555,11 +9571,17 @@ async function handleChatProjectsApi(req, res, path) {
     if (req.method === 'POST') {
       const body = await readJsonBody(req)
       if (!String(body.name || '').trim()) return send(res, 400, { error: 'a project needs a name' })
+      // A folder goes one level deep: its parent must be a top-level project.
+      if (body.parentId != null) {
+        const parent = validProjectId(body.parentId) ? await projectStore.get(body.parentId) : null
+        if (!parent) return send(res, 404, { error: 'parent project not found' })
+        if (parent.parentId) return send(res, 400, { error: 'a folder cannot hold folders' })
+      }
       const project = await projectStore.create(body)
       return send(res, 201, { project: { ...projectSummary(project, []), files: [], memory: '' } })
     }
   }
-  const m = /^\/api\/chat\/projects\/([A-Za-z0-9_-]{1,64})(\/files(?:\/([A-Za-z0-9_-]{8,64}))?|\/memory)?$/.exec(path)
+  const m = /^\/api\/chat\/projects\/([A-Za-z0-9_-]{1,64})(\/files\/move|\/files(?:\/([A-Za-z0-9_-]{8,64}))?|\/memory(?:\/move)?)?$/.exec(path)
   if (!m) return false
   const [, id, sub, fileId] = m
   const full = async () => {
@@ -9580,19 +9602,45 @@ async function handleChatProjectsApi(req, res, path) {
       return send(res, 200, { project: await full() })
     }
     if (req.method === 'DELETE') {
-      // Its chats move to Home rather than vanishing with it; its files go,
-      // except ones a chat message still shows.
+      // Its chats move rather than vanishing with it: a folder's up to its
+      // project, a project's (and its folders') to Home. Its files go, except
+      // ones a chat message still shows.
       const project = await projectStore.remove(id)
       if (!project) return send(res, 404, { error: 'project not found' })
+      const folders = project.parentId ? [] : (await projectStore.list()).filter((p) => p.parentId === id)
+      for (const f of folders) await projectStore.remove(f.id)
+      const gone = new Set([id, ...folders.map((f) => f.id)])
       let moved = 0
       for (const t of await threadStore.list()) {
-        if (t.projectId !== id) continue
-        await threadStore.update(t.id, (x) => { delete x.projectId })
+        if (!gone.has(t.projectId)) continue
+        await threadStore.update(t.id, (x) => { if (project.parentId) x.projectId = project.parentId; else delete x.projectId })
         moved++
       }
-      await dropUnusedUploads(project.files.map((f) => f.id))
-      return send(res, 200, { ok: true, movedChats: moved })
+      await dropUnusedUploads([project, ...folders].flatMap((p) => p.files.map((f) => f.id)))
+      return send(res, 200, { ok: true, movedChats: moved, removedFolders: folders.length })
     }
+  }
+  // A folder's entries or files, moved up into its parent project.
+  if ((sub === '/memory/move' || sub === '/files/move') && req.method === 'POST') {
+    const folder = await projectStore.get(id)
+    if (!folder) return send(res, 404, { error: 'project not found' })
+    if (!folder.parentId || !(await projectStore.get(folder.parentId))) return send(res, 400, { error: 'only a folder can move things up to its project' })
+    const body = await readJsonBody(req)
+    if (sub === '/memory/move') {
+      const entries = (Array.isArray(body.entries) ? body.entries : []).filter((e) => typeof e === 'string').slice(0, 500)
+      const r = moveMemoryEntries(await projectStore.readMemory(id), await projectStore.readMemory(folder.parentId), entries)
+      if (r.moved) {
+        // The parent first: a failure part-way leaves a copy, never a loss.
+        await projectStore.writeMemory(folder.parentId, r.to)
+        await projectStore.writeMemory(id, r.from)
+      }
+      return send(res, 200, { moved: r.moved, project: await full() })
+    }
+    const ids = (Array.isArray(body.ids) ? body.ids : []).filter(validUploadId)
+    const picked = folder.files.filter((f) => ids.includes(f.id))
+    await projectStore.addFiles(folder.parentId, picked)
+    await projectStore.removeFiles(id, picked.map((f) => f.id))
+    return send(res, 200, { moved: picked.length, project: await full() })
   }
   if (sub === '/memory' && req.method === 'PUT') {
     const { memory } = await readJsonBody(req)
@@ -13250,7 +13298,7 @@ const server = http.createServer(async (req, res) => {
           const before = 'projectId' in body ? await threadStore.get(id) : null
           const thread = await writeThread(id, body)
           // A chat moved into a project brings its files with it.
-          if (thread.projectId && before && before.projectId !== thread.projectId && await projectStore.get(thread.projectId)) {
+          if (thread.projectId && !thread.projectContextOff && before && before.projectId !== thread.projectId && await projectStore.get(thread.projectId)) {
             const files = []
             for (const m of thread.messages) {
               for (const a of m.attachments || []) files.push({ ...a, source: 'chat', threadId: id })

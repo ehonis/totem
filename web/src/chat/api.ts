@@ -13,6 +13,8 @@ export interface SendArgs {
   kind?: 'regular' | 'temporary'
   /** A new chat started inside a project. */
   projectId?: string
+  /** A new project chat that leaves the project's context out. */
+  projectContextOff?: boolean
   modelSettings?: any
   mode?: ChatMode
   /** The owner asked for the browser on this message (off unless asked). */
@@ -136,7 +138,9 @@ export const listProjects = () => api<{ projects: Project[] }>('/api/chat/projec
 export const getProject = (id: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`)
 export const createProjectApi = (body: Partial<Project>) => api<{ project: Project }>('/api/chat/projects', json('POST', body))
 export const patchProjectApi = (id: string, body: Record<string, unknown>) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('PATCH', body))
-export const deleteProjectApi = (id: string) => api<{ ok: boolean; movedChats: number }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('DELETE'))
+export const deleteProjectApi = (id: string) => api<{ ok: boolean; movedChats: number; removedFolders?: number }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('DELETE'))
 export const putProjectMemory = (id: string, memory: string) => api<{ memory: string }>(`/api/chat/projects/${encodeURIComponent(id)}/memory`, json('PUT', { memory }))
 export const addProjectFilesApi = (id: string, uploadIds: string[]) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/files`, json('POST', { uploadIds }))
+export const moveProjectMemoryApi = (id: string, entries: string[]) => api<{ moved: number; project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/memory/move`, json('POST', { entries }))
+export const moveProjectFilesApi = (id: string, ids: string[]) => api<{ moved: number; project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/files/move`, json('POST', { ids }))
 export const removeProjectFilesApi = (id: string, ids: string[]) => api<{ removed: number; project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/files`, json('DELETE', { ids }))

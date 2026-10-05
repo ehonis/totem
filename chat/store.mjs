@@ -135,7 +135,7 @@ function normalizeSessions(raw) {
   return Object.keys(out).length ? out : null
 }
 
-const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId']
+const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'projectContextOff', 'needsReply']
 
 function applyMetadata(thread, body, now) {
   if (body.kind === 'temporary' || body.kind === 'regular') thread.kind = body.kind
@@ -177,6 +177,17 @@ function applyMetadata(thread, body, now) {
   if ('pinned' in body) {
     if (body.pinned) thread.pinned = true
     else delete thread.pinned
+  }
+  // A project chat that reads none of the project's instructions, memory or
+  // files, and adds nothing to them. Can be switched either way at any time.
+  if ('projectContextOff' in body) {
+    if (body.projectContextOff) thread.projectContextOff = true
+    else delete thread.projectContextOff
+  }
+  // A finished reply the owner hasn't answered or marked done yet.
+  if ('needsReply' in body) {
+    if (body.needsReply) thread.needsReply = true
+    else delete thread.needsReply
   }
   if (thread.kind === 'temporary') thread.expiresAt = num(body.expiresAt) || thread.expiresAt || now
   else delete thread.expiresAt

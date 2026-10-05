@@ -88,6 +88,7 @@
 .vc-menu > button:hover:not(:disabled), .vc-model-list > button:hover { background: var(--vc-raise); }
 .vc-menu > button:disabled { opacity: .5; cursor: default; }
 .vc-menu > button.muted { color: var(--vc-soft); }
+.vc-menu > button.vc-menu-indent { padding-left: 26px; }
 .vc-menu > button.danger { color: #ff7a8f; }
 .vc-menu .ti { color: var(--vc-soft); }
 .vc-menu > button.danger .ti { color: inherit; }
@@ -400,6 +401,13 @@
 .vc-thread-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vc-thread-ghost { color: var(--muted); }
 .vc-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; animation: vc-breathe 1.4s ease-in-out infinite; }
+/* A finished reply waiting on the owner: steady where the live dot breathes. */
+.vc-reply-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.vc-thread.waiting .vc-thread-title { color: var(--text); font-weight: 600; }
+.vc-thread[draggable=true] { cursor: default; }
+.vc-thread.drop-over, .vc-folder.drop-over > .vc-thread, .vc-proj-title.drop-over, .vc-icon-btn.drop-over {
+  background: color-mix(in srgb, var(--accent) 18%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
 .vc-thread-more {
   display: grid; place-items: center; width: 28px; height: 28px; margin-right: 3px; border-radius: 7px; flex: none;
   background: none; border: 0; color: var(--muted); opacity: 0;
@@ -1060,3 +1068,29 @@
 .vc-totem-prop-actions { display: flex; gap: 6px; margin-top: 10px; }
 .vc-totem-prop-done { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 12.5px; color: var(--vc-faint); }
 .vc-totem-prop.accepted { border-color: color-mix(in srgb, #4fd18b 30%, var(--vc-line)); }
+
+/* --- folders (projects inside a project) ------------------------------------- */
+.vc-folder { border-radius: 9px; }
+.vc-folder-fold {
+  display: grid; place-items: center; width: 20px; height: 34px; margin-left: 2px; flex: none;
+  background: none; border: 0; color: var(--vc-faint); border-radius: 6px;
+}
+.vc-folder-fold:hover { color: var(--text); }
+.vc-folder-main { padding-left: 2px; }
+.vc-folder-chats { padding-left: 14px; }
+.vc-folder-empty { padding: 6px 12px 8px; font-size: 12.5px; color: var(--vc-faint); }
+.vc-proj-crumb {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 2px 6px 2px 2px; border-radius: 7px;
+  background: none; border: 0; color: var(--vc-soft); font-size: 13.5px;
+}
+.vc-proj-crumb:hover { color: var(--text); background: var(--vc-raise); }
+.vc-proj-sub { margin: -12px 0 18px; color: var(--vc-soft); font-size: 13.5px; line-height: 1.5; }
+.vc-top-project.context-off span { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text) 40%, transparent); }
+.vc-mem-pick { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow: auto; padding: 2px; }
+.vc-mem-entry {
+  display: flex; align-items: flex-start; gap: 10px; padding: 7px 10px; border-radius: 8px; cursor: pointer;
+  font-size: 14px; line-height: 1.5; color: var(--text); white-space: pre-wrap;
+}
+.vc-mem-entry:hover { background: var(--vc-raise); }
+.vc-mem-entry.picked { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.vc-mem-entry input { margin-top: 4px; accent-color: var(--accent); }
