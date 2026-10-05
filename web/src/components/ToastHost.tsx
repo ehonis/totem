@@ -5,16 +5,13 @@ import { Hi, XMarkIcon, ArrowUturnLeftIcon, ExclamationTriangleIcon, CheckCircle
 // Glyph per toast kind; errors default.
 const ICONS: Record<string, any> = { error: ExclamationTriangleIcon, success: CheckCircleIcon, info: InformationCircleIcon }
 
-// Left accent border + icon tint per kind; falls back to the error/red treatment.
-const ACCENT: Record<string, string> = {
-  error: 'border-l-red',
-  success: 'border-l-green',
-  info: 'border-l-accent',
-}
-const ICON_TINT: Record<string, string> = {
-  error: 'text-red',
-  success: 'text-green',
-  info: 'text-accent',
+// The whole toast is one colour that says what kind it is, with white text on
+// top. Deeper shades of the theme's red, green and accent: white on these is
+// about 5.4:1, where the theme's own shades fall under 3.5:1. Errors default.
+const FILL: Record<string, string> = {
+  error: 'bg-[#c42d4c]',
+  success: 'bg-[#1f7a34]',
+  info: 'bg-[#3463d6]',
 }
 
 // Renders the live toast stack in the bottom-left. Mounted once at the app root,
@@ -33,23 +30,23 @@ export default function ToastHost() {
       {toasts.map((t) => (
         <div
           key={t.id}
-          className={`pointer-events-auto flex items-start gap-2.5 pt-[11px] pr-3 pb-[11px] pl-[13px] bg-bg-3 border border-solid border-line border-l-[3px] ${ACCENT[t.kind] || ACCENT.error} rounded-[10px] shadow-[0_8px_28px_rgba(0,0,0,0.45)] text-text text-[13px] leading-[1.45] animate-toast-in`}
+          className={`pointer-events-auto flex items-start gap-2.5 pt-[11px] pr-3 pb-[11px] pl-[13px] ${FILL[t.kind] || FILL.error} rounded-[10px] shadow-[0_8px_28px_rgba(0,0,0,0.45)] text-white text-[13px] leading-[1.45] animate-toast-in`}
           role="alert"
         >
-          <span className={`flex-none mt-px ${ICON_TINT[t.kind] || ICON_TINT.error}`}>
+          <span className="flex-none mt-px">
             <Hi icon={ICONS[t.kind] || ICONS.error} size={16} />
           </span>
           <span className="flex-1 min-w-0 [overflow-wrap:anywhere]">{t.text}</span>
           {t.action && (
             <button
-              className="flex-none inline-flex items-center gap-1 self-center px-2.5 py-1.5 min-h-[32px] bg-bg-2 border border-solid border-line rounded-lg text-text text-[12px] font-semibold cursor-pointer hover:border-accent hover:text-accent"
+              className="flex-none inline-flex items-center gap-1 self-center px-2.5 py-1.5 min-h-[32px] bg-white/15 border-0 rounded-lg text-white text-[12px] font-semibold cursor-pointer hover:bg-white/25"
               onClick={() => { const run = t.action!.onClick; dismissToast(t.id); run() }}
             >
               <Hi icon={ArrowUturnLeftIcon} size={13} /> {t.action.label}
             </button>
           )}
           <button
-            className="flex-none bg-transparent border-0 text-muted p-0.5 -mt-0.5 -mr-0.5 rounded-md leading-[0] hover:text-text hover:bg-bg-2"
+            className="flex-none bg-transparent border-0 text-white/75 p-0.5 -mt-0.5 -mr-0.5 rounded-md leading-[0] hover:text-white hover:bg-white/15"
             onClick={() => dismissToast(t.id)}
             aria-label="Dismiss notification"
           >
