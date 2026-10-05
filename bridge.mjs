@@ -54,7 +54,7 @@ import { killTree } from './scripts/kill-tree.mjs'
 import { createSteering, progressNote, steerPrompt } from './chat/steer.mjs'
 import { planHistory, renderTranscript, attachmentBlock, projectBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer } from './chat/turn.mjs'
 import { describeMcpCall, describeCommand, humanizeTool, stringifyInput, resultText } from './chat/tools.mjs'
-import { pickRoute, PRESETS } from './chat/route.mjs'
+import { pickRoute, PRESETS, manualModelFor } from './chat/route.mjs'
 import { THREAD_ICONS, parseTitleReply, cleanIcon } from './chat/thread-icons.mjs'
 import { createBrowserManager } from './browser/manager.mjs'
 import { callBrowserTool, browserToolDescriptors, BROWSER_TOOLS } from './browser/tools.mjs'
@@ -9019,11 +9019,14 @@ async function handleChatSend(req, res) {
     text: lastUser ? lastUser.content : text,
     attachments: lastUser ? (lastUser.attachments || []).length : attachments.length,
   })
-  const provider = chooseChatProvider(config, route ? route.provider : normalizeProviderId(body.provider, ''), { kind, mode, routed: !!route })
+  const requested = normalizeProviderId(body.provider, '')
+  const provider = chooseChatProvider(config, route ? route.provider : requested, { kind, mode, routed: !!route })
   const driver = driverOf(provider)
+  // A hand-picked model only means something on the account it was picked on.
+  const picked = manualModelFor({ requested, provider, model: body.model, effort: body.effort })
   const choice = route && provider === route.provider
     ? await resolveChatModel(provider, route.cursorModel || route.model, route.effort, config)
-    : await resolveChatModel(provider, body.model, body.effort, config)
+    : await resolveChatModel(provider, picked.model, picked.effort, config)
   const now = Date.now()
   const assistantId = randomUUID()
   let userIndex = -1

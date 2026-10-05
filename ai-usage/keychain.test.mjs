@@ -13,15 +13,17 @@ async function onFakeMac(items, fn) {
   const home = await mkdtemp(join(tmpdir(), 'usage-kc-'));
   const saved = { home: process.env.HOME, user: process.env.USER, platform: process.platform, fetch: globalThis.fetch };
   const calls = [];
-  const prev = setKeychainRunner(async (args) => {
-    calls.push(args);
+  const prev = setKeychainRunner(async (args, input) => {
+    calls.push({ args, input });
     const service = args[args.indexOf('-s') + 1];
     if (args[0] === 'find-generic-password') {
       if (!(service in items)) throw Object.assign(new Error('not found'), { code: 44 });
       return `${items[service]}\n`;
     }
     if (args[0] === 'add-generic-password') {
-      items[service] = args[args.indexOf('-w') + 1];
+      const [first, second] = String(input).split('\n');
+      assert.equal(first, second, 'security asks for the value twice');
+      items[service] = first;
       return '';
     }
     throw new Error(`unexpected security call ${args[0]}`);
@@ -64,10 +66,12 @@ test('Claude: a refreshed Keychain login is written back to the Keychain', async
     assert.equal(result.status, 'ok');
     assert.equal(result.tokenRefreshed, true);
     assert.equal(result.sourceFile, `Keychain: ${CLAUDE_SERVICE}`);
-    const write = calls.find((a) => a[0] === 'add-generic-password');
+    const write = calls.find((c) => c.args[0] === 'add-generic-password');
     assert.ok(write, 'the refreshed login must be saved');
-    assert.ok(write.includes('-U'), 'it replaces the existing item');
-    assert.equal(write[write.indexOf('-a') + 1], 'owner');
+    assert.ok(write.args.includes('-U'), 'it replaces the existing item');
+    assert.equal(write.args[write.args.indexOf('-a') + 1], 'owner');
+    assert.equal(write.args.at(-1), '-w', 'the value goes on stdin, never on the command line');
+    assert.ok(!write.args.join(' ').includes('r-new'), 'no token in the arguments');
     const stored = JSON.parse(items[CLAUDE_SERVICE]);
     assert.equal(stored.claudeAiOauth.refreshToken, 'r-new');
     assert.equal(stored.claudeAiOauth.accessToken, 'new');
@@ -98,4 +102,28 @@ test('nothing is read from a Keychain off macOS', async () => {
     assert.deepEqual(await cursor.discover(), []);
     assert.equal(calls.length, 0);
   });
+});
+
+test('a failing security call reports no secret', async () => {
+  // The real runner, against a stand-in `security` that always fails: Node's
+  // default error text would repeat the arguments, and stderr could echo input.
+  const { mkdtemp, writeFile, chmod } = await import('node:fs/promises');
+  const { writeKeychain } = await import('./keychain.mjs');
+  const bin = await mkdtemp(join(tmpdir(), 'fake-security-'));
+  await writeFile(join(bin, 'security'), '#!/bin/sh\ncat >/dev/null\necho "boom $*" >&2\nexit 51\n');
+  await chmod(join(bin, 'security'), 0o755);
+  const saved = { path: process.env.PATH, platform: process.platform };
+  process.env.PATH = `${bin}:${saved.path}`;
+  Object.defineProperty(process, 'platform', { value: 'darwin' });
+  try {
+    await assert.rejects(writeKeychain('svc', 'SECRET-TOKEN', 'acct'), (err) => {
+      assert.match(err.message, /security add-generic-password failed \(exit 51\)/);
+      assert.ok(!err.message.includes('SECRET-TOKEN'));
+      return true;
+    });
+  } finally {
+    process.env.PATH = saved.path;
+    Object.defineProperty(process, 'platform', { value: saved.platform });
+    await rm(bin, { recursive: true, force: true });
+  }
 });
