@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { useChat, send, stop, keepThread, setActive, threadTitle, providerById } from './store'
+import { useChat, send, stop, steer, keepThread, setActive, threadTitle, providerById } from './store'
 import Composer from './Composer'
 import { UserMessage, AssistantMessage } from './Message'
 import { TI } from './ui'
@@ -75,6 +75,7 @@ export default function QuickChat({ onOpenChat }: { onOpenChat: () => void }) {
             setInput('')
           }}
           onStop={() => id && stop(id)}
+          onSteer={(text) => (id ? steer(id, text) : false)}
           busy={busy}
           compact
           autoFocus

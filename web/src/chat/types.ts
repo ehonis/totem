@@ -42,7 +42,9 @@ export interface TotemProposalPart {
   instructions?: string
   status: 'pending' | 'accepted' | 'dismissed'
 }
-export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart
+/** Something the owner sent while the reply was still running. `live`: taken into the running turn; `restart`: the agent was interrupted and resumed with it. */
+export interface SteerPart { type: 'steer'; id: string; text: string; via: 'live' | 'restart'; createdAt: number }
+export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | SteerPart
 
 export type ChatMode = 'chat' | 'task' | 'computer'
 
@@ -200,6 +202,7 @@ export type StreamEvent =
   | { type: 'image'; uploadId: string; alt?: string; url?: string; seq: number }
   | ({ type: 'browser'; seq: number } & BrowserFrame)
   | { type: 'file'; file: FilePart; seq: number }
+  | { type: 'steer'; steer: Omit<SteerPart, 'type'>; seq: number }
   | { type: 'activity'; text: string; seq: number }
   | { type: 'title'; title: string; icon?: string; seq: number }
   | { type: 'done'; message: ChatMessage; seq: number }

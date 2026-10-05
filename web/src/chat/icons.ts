@@ -4,6 +4,7 @@
 // marks like Strava, which is why the chat uses Tabler throughout: one stroke
 // language for the whole surface rather than two mixed in one toolbar.
 export { default as IconArrowUp } from '@tabler/icons-react/dist/esm/icons/IconArrowUp.mjs'
+export { default as IconCornerUpRight } from '@tabler/icons-react/dist/esm/icons/IconCornerUpRight.mjs'
 export { default as IconArrowDown } from '@tabler/icons-react/dist/esm/icons/IconArrowDown.mjs'
 export { default as IconPlayerStopFilled } from '@tabler/icons-react/dist/esm/icons/IconPlayerStopFilled.mjs'
 export { default as IconPaperclip } from '@tabler/icons-react/dist/esm/icons/IconPaperclip.mjs'

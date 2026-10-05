@@ -29,6 +29,7 @@ turn starts, then takes the bridge's copy: `start` carries the real message ids,
 | `GET /api/chat/runs` | | `{runs: [{threadId, status, mode, startedAt, …}]}` — what to re-attach to after a reload. |
 | `GET /api/chat/runs/:threadId/stream?since=N` | | SSE: every event after `seq` N, then live ones. |
 | `POST /api/chat/stop` | `{threadId}` | `{ok}`. The only way to end a run early. |
+| `POST /api/chat/steer` | `{threadId, text}` | `{ok, steer: {id, text, via: 'live'\|'restart'}}`. A message for the running reply (see Steering). 409 if nothing is running, the run is wrapping up, or it is a skill command. |
 | `POST /api/chat/uploads?name=&mime=[&kind=text]` | raw bytes, ≤ `CHAT_MAX_UPLOAD_MB` | `{id, name, mime, size, kind, url, preview?}` |
 | `GET /api/chat/uploads/:id?sig=` | | The file. Authorised by `sig` (HMAC of the id) **or** the bearer header. |
 | `DELETE /api/chat/uploads/:id` | | Removes an attachment nobody has sent yet. |
@@ -49,6 +50,7 @@ Every event has a `seq`. Viewers replay with `since`.
 | `delta` | `text` | Reply text. |
 | `tool` | `tool: {id, phase: 'start'\|'end', kind, title, detail, server?, tool?, input?, status?, output?}` | A card opens on `start` and settles on `end`. |
 | `image` | `uploadId`, `url` | A screenshot from a tool result. |
+| `steer` | `steer: {id, text, via, createdAt}` | The owner wrote mid-reply. Becomes a `steer` part where it landed. |
 | `activity` | `text` | The current step, one line. Not persisted. |
 | `browser` | `tabId`, `url`, `title`, `image` (JPEG data URL), `at` | What the chat's browser shows after a page change. Not persisted; `GET /api/chat/browser?threadId=` returns the latest. |
 | `title` | `title`, `icon?` | The AI title (and icon) for a new chat. |
@@ -75,7 +77,8 @@ Every event has a `seq`. Viewers replay with `since`.
      "parts": [{"type": "text", "text": "…"},
                {"type": "tool", "id": "…", "kind": "mcp", "title": "Looked up tasks", "server": "tasks",
                 "status": "done", "output": "…", "startedAt": 0, "endedAt": 0},
-               {"type": "image", "uploadId": "…"}]}
+               {"type": "image", "uploadId": "…"},
+               {"type": "steer", "id": "…", "text": "use the other repo", "via": "live", "createdAt": 0}]}
   ]
 }
 ```
@@ -101,6 +104,31 @@ produces nothing is retried once fresh.
 | claude | `--resume <session_id>` | base64 block via `--input-format stream-json`, plus path |
 | codex | `exec resume <thread_id> -c sandbox_mode=…` | `--image=<path>`, plus path |
 | opencode | `--session <id>` | `--file <path>`, plus path |
+
+## Steering
+
+Copied from T3 Code: while a reply is running, typing in the composer steers it.
+Enter (or the corner-arrow button, with Stop beside it) sends the text into the
+run, rather than waiting for a next turn. Files can't go with a steer; they wait
+in the box. The message shows inside the reply where it landed, as the owner's
+bubble marked "Steered".
+
+`run.steer(text)` in `handleChatSend` hands it to `chat/steer.mjs`:
+
+| Provider | How | What it costs |
+|---|---|---|
+| claude | **live**: stdin stays open (`--input-format stream-json --replay-user-messages`) and the steer is written as a `priority: "now"` user line | Nothing. Claude cuts off what it's streaming or the tool in flight and reads it. A command Claude Code won't interrupt finishes first. The cut-short turn's `result` has `terminal_reason: aborted_*` and is skipped; stdin closes after a result once every message written has been echoed back. |
+| codex, cursor, opencode | **restart**: the attempt is killed (the whole process tree, `scripts/kill-tree.mjs`) and the same session is resumed with the steer | Any tool card that was running is settled as cut off. The resumed prompt (`steerPrompt`) says it was interrupted, lists the steps and text so far (`progressNote`), and gives the owner's words. If that produces nothing, it is retried fresh with the whole request. |
+
+A steer that arrives as a live attempt is finishing (stdin already closed) waits
+and becomes the next attempt, so none are dropped. Each attempt gets its own
+abort signal: a steer ends the attempt, Stop ends the run. Tool ids from attempts
+after the first get a `~n` suffix because Codex numbers items per process.
+Transcripts replay a steered reply in order, with `[Owner, mid-reply: …]` between
+the text before and after it.
+
+T3 Code also queues follow-ups (send after the run ends) and steers Codex live
+through `codex app-server`'s `turn/steer`; Totem does neither yet.
 
 ## Power (Auto)
 

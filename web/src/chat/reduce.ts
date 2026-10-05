@@ -48,6 +48,15 @@ export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): Chat
       if (!event.file?.uploadId) return msg
       parts.push({ type: 'file', ...event.file })
       return next
+    case 'steer': {
+      // The owner's words mid-reply, kept where they landed among the steps.
+      const st = event.steer || {}
+      if (!st.text || parts.some((p) => p.type === 'steer' && p.id === st.id)) return msg
+      parts.push({ type: 'steer', id: st.id || `s${parts.length}`, text: st.text, via: st.via || 'live', createdAt: st.createdAt || now })
+      // What it says after the steer is a new paragraph in the copyable text too.
+      if (msg.content) next.content = msg.content.replace(/\s*$/, '\n\n')
+      return next
+    }
     default:
       return msg
   }

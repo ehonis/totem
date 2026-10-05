@@ -3,11 +3,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from '../components/Markdown'
 import TotemProposal from './TotemProposal'
 import WorkLog from './WorkLog'
-import type { Attachment, ChatMessage, Part, ProviderRow, ToolPart } from './types'
+import type { Attachment, ChatMessage, Part, ProviderRow, SteerPart, ToolPart } from './types'
 import { TI, ProviderLogo, formatBytes, formatDuration } from './ui'
 import { IconAlertCircle,
   IconCopy, IconCheck, IconRefresh, IconVolume, IconPencil, IconFileText, IconFileTypePdf, IconClipboardText,
-  IconPlayerPause, IconBolt, IconDeviceDesktop, IconMicrophone, IconX,
+  IconPlayerPause, IconBolt, IconDeviceDesktop, IconMicrophone, IconX, IconCornerUpRight,
 } from './icons'
 import { readMessageAloud, speechSupported } from './speech'
 import { FileCard, ARTIFACT_PREVIEWABLE } from './ArtifactPanel'
@@ -151,7 +151,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
 
 // --- assistant -------------------------------------------------------------------
 
-type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string }
+type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'steer'; part: SteerPart; key: string }
 
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
@@ -168,6 +168,7 @@ function blocks(parts: Part[]): Block[] {
     } else if (p.type === 'image') out.push({ kind: 'image', part: p, key: `i${i}` })
     else if (p.type === 'file') out.push({ kind: 'file', part: p, key: `f${i}` })
     else if (p.type === 'totem-proposal') out.push({ kind: 'proposal', part: p, key: `p${i}` })
+    else if (p.type === 'steer') out.push({ kind: 'steer', part: p, key: `s${i}` })
     else if (p.text) {
       const last = out[out.length - 1]
       // Two text parts with no tool between them are one paragraph run.
@@ -177,6 +178,19 @@ function blocks(parts: Part[]): Block[] {
   }
   for (const b of out) if (b.kind === 'text') b.text = b.text.replace(PROPOSAL_FENCE, '')
   return out
+}
+
+/** What the owner sent mid-reply, where it landed: his bubble, marked as a steer. */
+function SteerNote({ part }: { part: SteerPart }) {
+  const how = part.via === 'restart' ? 'Interrupted the reply and carried on with this' : 'Taken into the running reply'
+  return (
+    <div className="vc-steer" title={how}>
+      <div className="vc-bubble">
+        <span className="vc-bubble-badge"><TI icon={IconCornerUpRight} size={13} />Steered</span>
+        {part.text}
+      </div>
+    </div>
+  )
 }
 
 /** True once `signature` has stopped changing for QUIET_MS while `live`. */
@@ -231,6 +245,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
         {list.map((b, i) => {
           if (b.kind === 'tools') return <WorkLog key={b.key} tools={b.tools} live={live && i === list.length - 1} />
           if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
+          if (b.kind === 'steer') return <SteerNote key={b.key} part={b.part} />
           if (b.kind === 'file') return <FileCard key={b.key} file={b.part} onOpen={() => openArtifact(b.part)} />
           if (b.kind === 'image') {
             const src = b.part.url || `/api/chat/uploads/${b.part.uploadId}`
