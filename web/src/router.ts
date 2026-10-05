@@ -26,7 +26,7 @@ export interface Route {
 export type NavTarget = string | Partial<Route>
 
 export const TAB_IDS = [
-  'overview', 'chat', 'productivity', 'totems', 'code', 'inbox', 'logs', 'brain', 'settings',
+  'overview', 'search', 'chat', 'productivity', 'totems', 'code', 'inbox', 'logs', 'brain', 'settings',
 ]
 
 // Todos/Calendar/Habits are apps *inside* Productivity, but their ids still turn
@@ -106,8 +106,14 @@ export function buildPath(route: Route, search = ''): string {
   const parts = [route.tab]
   if (route.tab === 'productivity' && route.app) parts.push(route.app)
   if (route.sub) parts.push(route.sub)
-  const query = route.tab === 'chat' ? threadQuery(search) : route.tab === 'totems' ? totemQuery(search) : ''
+  const query = route.tab === 'chat' ? threadQuery(search) : route.tab === 'totems' ? totemQuery(search) : route.tab === 'search' ? searchQuery(search) : ''
   return `/${parts.join('/')}${query}${route.hash ? `#${route.hash}` : ''}`
+}
+
+/** On /search, ?q= is the search. */
+function searchQuery(search: string): string {
+  const q = new URLSearchParams(search).get('q')
+  return q ? `?q=${encodeURIComponent(q)}` : ''
 }
 
 /** On /totems, ?totem=<id> opens that totem. */

@@ -11,6 +11,7 @@ import InboxView from './components/InboxView'
 import LogsView from './components/LogsView'
 import ProductivityView from './components/ProductivityView'
 import BrainView from './components/BrainView'
+import SearchView from './components/SearchView'
 import GithubView from './components/GithubView'
 import ChatView from './components/ChatView'
 import { Rail, SidePanel, MobileBar, MobileDrawer, NewChatFab, usePanelOpen, useEdgeSwipe } from './components/Shell'
@@ -34,6 +35,7 @@ import {
   Cog6ToothIcon,
   InboxArrowDownIcon,
   CodeBracketIcon,
+  MagnifyingGlassIcon,
   ChevronDownIcon,
   EllipsisHorizontalIcon,
 } from './icons'
@@ -47,6 +49,7 @@ interface TabDef {
 // Primary sidebar tabs — the ones the owner reaches for most often.
 const PRIMARY_TABS: TabDef[] = [
   { id: 'overview', label: 'Overview', icon: Squares2X2Icon },
+  { id: 'search', label: 'Search', icon: MagnifyingGlassIcon },
   { id: 'totems', label: 'Totems', icon: TotemsIcon },
   { id: 'chat', label: 'Chat', icon: ChatBubbleLeftRightIcon },
   { id: 'productivity', label: 'Productivity', icon: CalendarDaysIcon },
@@ -83,6 +86,8 @@ function useNarrow() {
   }, [])
   return narrow
 }
+
+const safeDecode = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
 
 // The terminal panel is app chrome rather than a tab, so its open state is
 // remembered here instead of in the route.
@@ -280,7 +285,8 @@ export default function App() {
         {tab === 'productivity' && (
           <ProductivityView app={route.app || ''} onApp={selectApp} onAuthError={onAuthError} />
         )}
-        {tab === 'brain' && <BrainView onAuthError={onAuthError} />}
+        {tab === 'search' && <SearchView onAuthError={onAuthError} onNavigate={navigate} />}
+        {tab === 'brain' && <BrainView onAuthError={onAuthError} openPath={route.hash ? safeDecode(route.hash) : undefined} />}
         {tab === 'code' && <GithubView onAuthError={onAuthError} />}
         {tab === 'totems' && <TotemsView onAuthError={onAuthError} onOpenChat={openChat} />}
         {tab === SETTINGS_TAB && (

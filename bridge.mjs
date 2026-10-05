@@ -120,6 +120,8 @@ import {
   configPath as aiUsageConfigPath,
   BACKEND_NAMES as AI_USAGE_BACKENDS,
 } from './ai-usage/registry.mjs'
+import { createSearchIndex, plainMarks } from './search/index.mjs'
+import { KINDS as SEARCH_KINDS, noteSource, journalSource, chatSource, taskSource, goalSource, listSource, projectSource, totemSource } from './search/sources.mjs'
 
 const HERE = import.meta.dirname
 // Judged before this process writes anything: did this install already have data?
@@ -11437,6 +11439,46 @@ const MCP_TOOLS = [
     handler: async (args) => ({ activity: await strava.activity(String(args.id), { laps: !!args.laps, zones: !!args.zones, efforts: !!args.efforts, streams: args.streams || null, comments: !!args.comments, kudos: !!args.kudos }) }),
   },
   {
+    name: 'totem_search_everything',
+    description:
+      'Keyword search across everything Totem holds: the owner\'s memory notes (the brain), voice journal, '
+      + 'past chats, tasks, goals, lists, chat-project memory and totem memory. Ranked (BM25, stemmed, prefix '
+      + 'matching), no model involved, so it is the cheap first step for "where did I mention X" or "what do I know '
+      + 'about X". Returns snippets with the matched words in [brackets]; read a hit in full with totem_search_read.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Plain words. Every word must match; if none has them all, any word does and `loose` is true.' },
+        kinds: { type: 'array', items: { type: 'string', enum: SEARCH_KINDS }, description: 'Only these kinds. "note" is the memory notes. Omit for everything.' },
+        limit: { type: 'number', description: 'Max results, 1-50. Default 10.' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const res = await searchIndex.search(String(args.query || ''), { kinds: Array.isArray(args.kinds) ? args.kinds.filter((k) => SEARCH_KINDS.includes(k)) : [], limit: Math.min(Number(args.limit) || 10, 50) })
+      return {
+        query: res.query, total: res.total, loose: res.loose, counts: res.counts,
+        results: res.results.map((r) => ({ id: r.id, kind: r.kind, title: plainMarks(r.titleMarked || r.title), snippet: plainMarks(r.snippet), date: r.date, location: searchDocLocation(r) })),
+      }
+    },
+  },
+  {
+    name: 'totem_search_read',
+    description: 'One totem_search_everything result in full (a note section, a journal transcript, a chat message, a task with its notes, a list with its items), by the id totem_search_everything returned.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'A result id from totem_search_everything, e.g. "note:personal/watches.md#5".' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const doc = await searchIndex.get(String(args.id || ''))
+      if (!doc) throw new Error(`no search result with id ${args.id}`)
+      return { id: doc.id, kind: doc.kind, title: doc.title, date: doc.date, location: searchDocLocation(doc), body: doc.body }
+    },
+  },
+  {
     name: 'totem_strava_get_gear',
     description:
       'The owner\'s bikes and shoes with brand, model, weight and the odometer Strava keeps for each (miles and km). '
@@ -11957,6 +11999,25 @@ const MCP_TOOL_META = {
     outputSchema: out({
       activity: { ...S_OBJ, description: 'Detail: every list field plus description, calories, gear, splitsMetric/Standard, laps, bestEfforts, segmentEfforts, and zones/streams/comments/kudos when requested.' },
     }, { required: ['fetchedAt', 'activity'] }),
+  },
+  totem_search_everything: {
+    title: 'Search everything', annotations: ANN.readLocal,
+    outputSchema: out({
+      query: S_STR,
+      total: { ...S_NUM, description: 'Matches across every kind (results is capped by limit).' },
+      loose: { type: 'boolean', description: 'True when no result had every word, so these match any of them.' },
+      counts: { ...S_OBJ, description: 'Matches per kind.' },
+      results: S_LIST('id (pass to totem_search_read), kind, title, snippet with matches in [brackets], date, location.'),
+    }, { required: ['fetchedAt', 'query', 'results', 'total'] }),
+  },
+  totem_search_read: {
+    title: 'Read a search result', annotations: ANN.readLocal,
+    outputSchema: out({
+      id: S_STR, kind: S_STR, title: S_STR,
+      date: { type: ['string', 'null'] },
+      location: { ...S_STR, description: 'Where it lives, e.g. "brain/personal/watches.md, line 5".' },
+      body: { ...S_STR, description: 'The full text.' },
+    }, { required: ['fetchedAt', 'id', 'kind', 'body'] }),
   },
   totem_strava_get_gear: {
     title: 'Read bikes and shoes', annotations: ANN.readRemote,
@@ -13161,6 +13222,27 @@ const server = http.createServer(async (req, res) => {
         const provider = new URL(req.url, 'http://x').searchParams.get('provider')
         return send(res, 200, await listChatModels(provider))
       }
+      if (req.method === 'GET' && path === '/api/search') {
+        const q = new URL(req.url, 'http://x').searchParams
+        return send(res, 200, await searchIndex.search(q.get('q') || '', { kinds: searchKindsParam(q.get('kinds')), limit: q.get('limit') }))
+      }
+      if (req.method === 'GET' && path === '/api/search/doc') {
+        const doc = await searchIndex.get(new URL(req.url, 'http://x').searchParams.get('id'))
+        return doc ? send(res, 200, { ...doc, location: searchDocLocation(doc) }) : send(res, 404, { error: 'not found' })
+      }
+      if (req.method === 'GET' && path === '/api/search/status') {
+        return send(res, 200, await searchIndex.status())
+      }
+      // "Add to chat": the result in full, saved as a text attachment the composer
+      // sends like any pasted text. Every agent CLI already reads those.
+      if (req.method === 'POST' && path === '/api/search/context') {
+        const { id } = await readJsonBody(req)
+        const doc = await searchIndex.get(id)
+        if (!doc) return send(res, 404, { error: 'not found' })
+        const slug = String(doc.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || doc.kind
+        const attachment = await chatUploads.save({ buffer: Buffer.from(searchDocMarkdown(doc), 'utf8'), name: `${slug}.md`, mime: 'text/markdown', kind: 'text' })
+        return send(res, 201, { attachment })
+      }
       if (req.method === 'GET' && path === '/api/brain/note') {
         const rel = new URL(req.url, 'http://x').searchParams.get('path') || ''
         return send(res, 200, await readBrainNote(rel))
@@ -13921,6 +14003,44 @@ pushHttpHandler = createPushHttpHandler({
 // ---------------------------------------------------------------------------
 const JOURNAL_ROOT = JOURNAL_DIR || join(HERE, 'data', 'journal')
 const journalStore = createJournalStore({ dir: JOURNAL_ROOT, log })
+
+// ---------------------------------------------------------------------------
+// Search: one keyword index over notes, journal, chats, tasks, goals, lists,
+// project and totem memory (search/). No model involved; the Search tab, the
+// totem_search_* MCP tools and "add to chat" all read it. Rebuilt lazily when a
+// search arrives more than 30 seconds after the last build.
+// ---------------------------------------------------------------------------
+const searchIndex = createSearchIndex({
+  log,
+  sources: [
+    noteSource({ root: MEMORY_ROOT, include: isBrainGraphNote }),
+    journalSource({ store: journalStore }),
+    chatSource({ threads: threadStore }),
+    taskSource({ db: todoDatabase }),
+    goalSource({ db: todoDatabase }),
+    listSource({ db: todoDatabase }),
+    projectSource({ projects: projectStore }),
+    totemSource({ jobs: jobStore, memoryPath: (id) => totemMemoryPath(id) }),
+  ],
+})
+
+const SEARCH_KIND_LABELS = { note: 'Memory', journal: 'Journal', chat: 'Chat', task: 'Task', goal: 'Goal', list: 'List', project: 'Project', totem: 'Totem' }
+
+/** Where a search doc lives, in words: "brain/personal/watches.md, line 5". */
+function searchDocLocation(doc) {
+  const t = doc.target || {}
+  if (doc.kind === 'note') return `brain/${t.path}${t.line > 1 ? `, line ${t.line}` : ''}`
+  if (doc.kind === 'chat') return `chat ${t.thread}`
+  return `${SEARCH_KIND_LABELS[doc.kind] || doc.kind} ${String(doc.id).split(':').slice(1).join(':')}`
+}
+
+/** A search doc as Markdown, the way it is handed to a chat as context. */
+function searchDocMarkdown(doc) {
+  const meta = [SEARCH_KIND_LABELS[doc.kind] || doc.kind, doc.date, searchDocLocation(doc)].filter(Boolean).join(' · ')
+  return `# ${doc.title}\n\n_${meta}_\n\n${doc.body}\n`
+}
+
+const searchKindsParam = (v) => String(v || '').split(',').map((k) => k.trim()).filter((k) => SEARCH_KINDS.includes(k))
 const journalTranscriber = createTranscriber({
   whisperBin: JOURNAL_WHISPER_BIN,
   modelFile: JOURNAL_WHISPER_MODEL,

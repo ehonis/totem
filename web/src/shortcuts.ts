@@ -55,6 +55,7 @@ export const ACTIONS: ShortcutAction[] = [
   // --- Navigation ---
   { id: 'nav.overview', label: 'Overview', group: 'Go to', nav: { tab: 'overview' }, chainable: true },
   { id: 'nav.chat', label: 'Chat', group: 'Go to', nav: { tab: 'chat' }, chainable: true },
+  { id: 'nav.search', label: 'Search', group: 'Go to', nav: { tab: 'search' }, chainable: true },
   { id: 'nav.todos', label: 'Todos', group: 'Go to', nav: { tab: 'productivity', app: 'todos' }, chainable: true },
   { id: 'nav.calendar', label: 'Calendar', group: 'Go to', nav: { tab: 'productivity', app: 'calendar' }, chainable: true },
   { id: 'nav.habits', label: 'Habits', group: 'Go to', nav: { tab: 'productivity', app: 'habits' }, chainable: true },
@@ -105,6 +106,7 @@ export const ACTION_GROUPS = ['Go to', 'Create', 'Quick panels', 'Utilities']
 export const DEFAULT_BINDINGS: Record<string, string> = {
   'nav.overview': 'o',
   'nav.chat': 'c',
+  'nav.search': 'f',
   'nav.todos': 't',
   'nav.calendar': 'a',
   'nav.habits': 'h',

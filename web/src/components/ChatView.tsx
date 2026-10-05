@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { COMMANDS } from '../shortcuts'
 import { useCommand } from '../useShortcuts'
 import { getSkills, AuthError } from '../api'
@@ -23,6 +23,7 @@ import BrowserPanel, { BrowserChip } from '../chat/BrowserPanel'
 import UsageChips from '../chat/UsageChips'
 import ThreadIcon from '../chat/ThreadIcon'
 import { useChatPresence } from '../chat/presence'
+import { contextVersion, subscribeContext, takeContext } from '../chat/pendingContext'
 import { TI } from '../chat/ui'
 import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconPaperclip, IconLayoutSidebar, IconSparkles, IconFolder, IconFolderOff } from '../chat/icons'
 import type { Attachment, ChatMode, ModelSettings } from '../chat/types'
@@ -118,6 +119,19 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   useEffect(() => {
     if (visible && takeVoiceRequest()) { setDraftKind('regular'); setVoice(true) }
   }, [visible])
+
+  // Search's "Add to chat": results waiting for the composer, as attachment chips.
+  const pendingContext = useSyncExternalStore(subscribeContext, contextVersion, contextVersion)
+  useEffect(() => {
+    if (!visible) return
+    const items = takeContext()
+    if (!items.length) return
+    // The composer mounts with the tab; wait a frame for its ref.
+    requestAnimationFrame(() => {
+      items.forEach((a) => composer.current?.addAttachment(a))
+      composer.current?.focus()
+    })
+  }, [visible, pendingContext])
 
   // Coming back to the tab: the Providers tab may have changed what's enabled.
   const wasVisible = useRef(visible)
