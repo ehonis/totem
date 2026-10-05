@@ -1,0 +1,47 @@
+/*
+ * Tailwind v4 entry. We import the theme + utilities layers explicitly (instead of
+ * the all-in-one `@import "tailwindcss"`) so Tailwind's Preflight base reset is NOT
+ * pulled in. That keeps the hand-written styles.css fully intact while we migrate
+ * components to utilities incrementally. Once everything is on utilities, switch to
+ * `@import "tailwindcss";` to re-enable Preflight and drop styles.css.
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Design tokens mirrored from styles.css :root, exposed to Tailwind as theme
+   values so utilities resolve (bg-bg-2, text-muted, border-line, text-accent,
+   rounded, font-sans, …). Keep these in sync with the :root block in styles.css
+   until that block is retired. */
+@theme {
+  --color-bg: #0f1115;
+  --color-bg-2: #161922;
+  --color-bg-3: #1d212c;
+  --color-line: #262b38;
+  --color-text: #e6e8ee;
+  --color-muted: #8a91a3;
+  --color-accent: #5b8cff;
+  --color-accent-2: #7c5cff;
+  --color-green: #3fb950;
+  --color-red: #f0506e;
+  --color-amber: #e3b341;
+
+  --radius-DEFAULT: 12px;
+
+  --font-sans: "Inter Variable", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+
+  /* Toast slide-in, migrated from the old @keyframes toast-in. Exposed as the
+     `animate-toast-in` utility. */
+  --animate-toast-in: toast-in 0.18s ease-out;
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateX(-12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+}

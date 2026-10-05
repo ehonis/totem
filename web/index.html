@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f1115" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- iOS ignores the manifest for these; without them the Home Screen app gets
+         a screenshot for an icon and a Safari chrome bar. -->
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- `black`, not `black-translucent`, and no viewport-fit=cover with it.
+         Full-bleed mode sizes the web view to screenHeight minus the status bar
+         but still draws it from y=0, so the UI sits under the clock AND leaves a
+         dead band of the same height at the bottom. CSS can pad the top back
+         down but can't lengthen a viewport that's already short, so the band
+         stays. This hands the bars back to iOS: it reserves the status bar and
+         the home indicator and gives us the exact space in between. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Totem" />
+    <title>Totem</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

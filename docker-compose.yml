@@ -1,0 +1,19 @@
+# docker compose up -d --build, then: docker compose logs totem | grep setup
+services:
+  totem:
+    build: .
+    ports:
+      - "8787:8787"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - totem-data:/app/data          # tasks, goals, settings, sign-in, skills, jobs
+      - totem-secrets:/app/secrets    # OAuth tokens (WHOOP, Strava) and key files
+      - totem-home:/home/node         # agent CLI logins (~/.claude, ~/.codex)
+    restart: unless-stopped
+
+volumes:
+  totem-data:
+  totem-secrets:
+  totem-home:

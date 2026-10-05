@@ -1,0 +1,47 @@
+# One card pull. %i is the kernel device name — sdb1, mmcblk0p1.
+# Started by 99-totem-camera.rules, never enabled directly.
+#
+# __TOKENS__ are substituted by camera/install.sh; edit the template in the repo
+# and re-run the installer rather than editing the copy in /etc.
+[Unit]
+Description=Totem camera sync from /dev/%i
+Documentation=file://__REPO__/docs/camera-sync.md
+
+# Tie the run to the device. If the cable is pulled mid-copy the unit is stopped
+# rather than left reading a block device that no longer exists — the ledger's
+# periodic checkpoint is what makes that safe to resume.
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/totem-camera
+ExecStart=/usr/local/lib/totem-camera/run-sync.sh %i
+
+# A full 32GB card over USB 2.0 is roughly 20 minutes. The timeout is generous
+# because being killed at 90% is worse than taking a while.
+TimeoutStartSec=2400
+
+# Background work kicked off by a physical action. It must never make the desktop
+# stutter, so it yields both CPU and disk to everything else.
+Nice=10
+IOSchedulingClass=idle
+
+# It needs root to mount and nothing else, so it gets a private /tmp to mount
+# into, no network at all, and write access to exactly two directories.
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectHome=read-only
+ReadWritePaths=__STAGING__ __STATE__
+NoNewPrivileges=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+# Deliberately NOT set, both having been tried and reverted:
+#   ProtectSystem=strict   — makes /run read-only, and libmount writes
+#                            /run/mount/utab on every mount.
+#   ProtectKernelModules   — blocks autoloading exfat, which is what any card
+#                            larger than 32GB is formatted as.
+
+[Install]
+WantedBy=multi-user.target

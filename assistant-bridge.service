@@ -1,0 +1,31 @@
+# systemd *user* service — keeps the bridge running 24/7 and restarts on crash/reboot.
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp assistant-bridge.service ~/.config/systemd/user/
+#   # edit the copy: WorkingDirectory (your checkout) and PATH (your node bin dir)
+#   loginctl enable-linger "$USER"        # start at boot without an active login session
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now assistant-bridge
+# Logs:  journalctl --user -u assistant-bridge -f
+#
+# %h is systemd's specifier for the user's home directory.
+# NOTE: if node comes from nvm, PATH must name the exact version's bin dir, e.g.
+# %h/.nvm/versions/node/v24.16.0/bin — update it when you change node versions.
+
+[Unit]
+Description=Totem personal assistant bridge
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/totem
+# The bridge spawns the agent (cursor-agent/codex) and npx by name; they live in
+# ~/.local/bin and the nvm bin dir, which are NOT on systemd's default PATH.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node --env-file=.env bridge.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

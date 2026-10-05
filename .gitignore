@@ -1,0 +1,33 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+secrets/
+*.secret
+credentials.json
+token.json
+*.session
+
+# node
+node_modules/
+npm-debug.log*
+.worktrees/
+.superpowers/
+
+# runtime
+*.log
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+# data/ holds all runtime state, including data/brain — the private second brain
+# (its own nested local git repo). brain.example/ is the committed starter template.
+data/
+
+# python
+__pycache__/
+*.pyc
+
+# Owner-only agent notes (deployment-specific, never published)
+AGENTS.local.md
+CLAUDE.local.md

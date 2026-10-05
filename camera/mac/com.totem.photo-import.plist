@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Collect staged camera photos and put them into Apple Photos.
+  Installed to ~/Library/LaunchAgents/ by install-mac.sh. __TOKENS__ substituted there.
+
+  A LaunchAgent, not a LaunchDaemon: it has to run as the owner, in his GUI session,
+  because it drives Photos over AppleScript and Photos is a per-user app holding
+  a per-user iCloud login. A daemon has no session to talk to and would fail
+  every time.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.totem.photo-import</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__SCRIPT__</string>
+  </array>
+
+  <!-- Every 15 minutes while awake. launchd does not bank runs missed while the
+       lid was shut; it fires once on wake, which is exactly what's wanted. -->
+  <key>StartInterval</key>
+  <integer>900</integer>
+
+  <!-- And once at login, so opening the lid after a weekend away doesn't wait. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Never let a photo import fight the foreground for disk or CPU. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+</dict>
+</plist>

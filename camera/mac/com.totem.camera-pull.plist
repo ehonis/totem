@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Pull a camera card plugged into the MacBook itself.
+  Installed to ~/Library/LaunchAgents/ by install-mac.sh. __TOKENS__ substituted there.
+
+  StartOnMount is the macOS equivalent of the Linux udev rule, and it is just as
+  indiscriminate: it fires on *every* volume mount — disk images, Time Machine,
+  network shares, USB sticks. The script's first job is to decide that a camera
+  is what appeared, which it does the same way the Linux side does, by looking
+  for a DCIM folder.
+
+  A LaunchAgent rather than a LaunchDaemon, because the whole point is to reach
+  Photos, which is a per-user app holding a per-user iCloud login.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.totem.camera-pull</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__SCRIPT__</string>
+  </array>
+
+  <key>StartOnMount</key>
+  <true/>
+
+  <!-- Deliberately no RunAtLoad: a card left in a reader across a reboot is
+       already handled by the importer's own tick, and running on every login
+       would scan every mounted volume for no reason. -->
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+</dict>
+</plist>

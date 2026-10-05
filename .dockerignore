@@ -1,0 +1,14 @@
+.git
+node_modules
+web/node_modules
+web/dist
+# Runtime state, secrets and the owner's private notes never go into an image.
+data/
+secrets/
+.env
+.env*
+!.env.example
+AGENTS.local.md
+CLAUDE.local.md
+*.log
+# Note: logs/ is NOT excluded — it is source (action log, approvals), not log files.

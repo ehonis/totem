@@ -1,0 +1,22 @@
+# Totem camera sync — plug the camera in, photos come off it. See docs/camera-sync.md.
+#
+# This matches any USB volume with a filesystem on it, not just the XZ-1, and
+# that is deliberate. Two reasons:
+#
+#   1. Nobody knows what USB id an XZ-1 presents in Storage mode until one is
+#      plugged into this exact box, and a rule matching the wrong id fails by
+#      doing nothing at all — the worst failure for something whose whole promise
+#      is "you don't have to think about it".
+#   2. It picks up an SD card in a reader for free, which is the same photos by
+#      another route.
+#
+# The cost of matching broadly is that plugging in a memory stick starts a unit
+# that finds no DCIM folder and exits. That is a few milliseconds and no output.
+# sync.mjs enforces the real check, and logs every device's vendor id so
+# CAMERA_ALLOW_VENDORS in /etc/default/totem-camera can be narrowed to exactly
+# one camera later.
+#
+# ID_FS_USAGE=="filesystem" keeps this off unformatted devices and off the
+# whole-disk node when the card is partitioned, so a single card fires once.
+
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", TAG+="systemd", ENV{SYSTEMD_WANTS}+="totem-camera-sync@%k.service"
