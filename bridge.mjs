@@ -3636,6 +3636,7 @@ async function spawnCodexStream(text, { label = 'request', onActivity, onTool, o
   for (const img of images) args.push(`--image=${img.path}`)
   args.push(...extraArgs)
   args.push(...splitLaunchArgs(account.config.launchArgs))
+  if (mode !== 'read-only') args.push(...await codexGatewayApprovalArgs(account))
   const browserCli = browserArgs('codex', browser)
   args.push(...browserCli.args)
   args.push('-')
@@ -7950,6 +7951,22 @@ function instanceMcpSource(instance) {
   const def = PROVIDER_DEFS[instance.driver]
   if (instance.driver === 'codex') return join(codexHomeLayout(instance).sharedHomePath, 'config.toml')
   return def.mcpSource
+}
+
+/**
+ * `codex exec` runs with approval_policy "never", so it refuses every MCP tool
+ * that is not marked read-only ("MCP tool call requires approval, but approval
+ * policy is never"): a chat could read Krakatoa but not log a meal. Approve the
+ * gateway's tools for Totem's own runs, leaving the owner's interactive Codex
+ * prompting as before. Only for a gateway config.toml actually defines: an
+ * override on an undefined server stops Codex starting ("invalid transport").
+ */
+async function codexGatewayApprovalArgs(instance) {
+  let servers
+  try { servers = parseCodexMcpConfig(await readFile(instanceMcpSource(instance), 'utf8')) } catch { return [] }
+  return [GATEWAY_ID, ...LEGACY_GATEWAY_IDS]
+    .filter((id) => servers[id]?.command || servers[id]?.url)
+    .flatMap((id) => ['-c', `mcp_servers.${id}.default_tools_approval_mode="approve"`])
 }
 
 async function readMcpConnections(providerId) {
