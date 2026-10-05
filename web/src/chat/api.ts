@@ -1,7 +1,7 @@
 // Chat's bridge calls. Streaming endpoints are read as Server-Sent Events over
 // fetch (EventSource cannot send the bearer header).
 import { authHeaders, AuthError, api } from '../api'
-import type { Attachment, ChatCapabilities, ChatMode, StreamEvent } from './types'
+import type { Attachment, ChatCapabilities, ChatMode, Project, StreamEvent } from './types'
 
 export interface SendArgs {
   threadId: string
@@ -11,6 +11,8 @@ export interface SendArgs {
   model?: string | null
   effort?: string | null
   kind?: 'regular' | 'temporary'
+  /** A new chat started inside a project. */
+  projectId?: string
   modelSettings?: any
   mode?: ChatMode
   /** The owner asked for the browser on this message (off unless asked). */
@@ -126,3 +128,15 @@ export async function transcribe(audio: Blob): Promise<string> {
 }
 
 export const uploadUrl = (id: string, att?: { url?: string }) => att?.url || `/api/chat/uploads/${id}`
+
+// --- projects -------------------------------------------------------------------
+const json = (method: string, body?: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
+
+export const listProjects = () => api<{ projects: Project[] }>('/api/chat/projects')
+export const getProject = (id: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`)
+export const createProjectApi = (body: Partial<Project>) => api<{ project: Project }>('/api/chat/projects', json('POST', body))
+export const patchProjectApi = (id: string, body: Record<string, unknown>) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('PATCH', body))
+export const deleteProjectApi = (id: string) => api<{ ok: boolean; movedChats: number }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('DELETE'))
+export const putProjectMemory = (id: string, memory: string) => api<{ memory: string }>(`/api/chat/projects/${encodeURIComponent(id)}/memory`, json('PUT', { memory }))
+export const addProjectFilesApi = (id: string, uploadIds: string[]) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/files`, json('POST', { uploadIds }))
+export const removeProjectFilesApi = (id: string, ids: string[]) => api<{ removed: number; project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/files`, json('DELETE', { ids }))

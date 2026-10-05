@@ -96,7 +96,7 @@ export function resolveTarget(
   return withDefaults(toRoute({ ...carried, ...wanted }), landing)
 }
 
-/** The URL for a route: /tab[/app|/sub][#hash], preserving ?thread= on chat. */
+/** The URL for a route: /tab[/app|/sub][#hash], preserving ?project= and ?thread= on chat. */
 export function buildPath(route: Route, search = ''): string {
   const parts = [route.tab]
   if (route.tab === 'productivity' && route.app) parts.push(route.app)
@@ -105,10 +105,13 @@ export function buildPath(route: Route, search = ''): string {
   return `/${parts.join('/')}${query}${route.hash ? `#${route.hash}` : ''}`
 }
 
-/** Keep only ?thread= — the one query param that still means something. */
+/** Keep only ?project= and ?thread= — the query params that still mean something. */
 function threadQuery(search: string): string {
-  const thread = new URLSearchParams(search).get('thread')
-  return thread ? `?thread=${encodeURIComponent(thread)}` : ''
+  const params = new URLSearchParams(search)
+  const out = new URLSearchParams()
+  for (const key of ['project', 'thread']) { const v = params.get(key); if (v) out.set(key, v) }
+  const q = out.toString()
+  return q ? `?${q}` : ''
 }
 
 /**
@@ -132,7 +135,7 @@ export function parseLocation(loc: Location, landing?: string): Route {
   // Legacy query form, or a bare "/" — fall back to ?tab=, then the landing pref.
   const legacyTab = params.get('tab')
   const target = legacyTab
-    || (params.get('thread') ? 'chat' : null)
+    || (params.get('thread') || params.get('project') ? 'chat' : null)
     || landing
     || 'overview'
   return withDefaults(

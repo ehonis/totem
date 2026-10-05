@@ -936,3 +936,116 @@
 .vc-unsent { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 6px; font-size: 12.5px; color: #f0cd72; }
 .vc-unsent span { color: var(--vc-soft); }
 .vc-unsent .ti { color: #f0cd72; }
+
+/* --- projects ------------------------------------------------------------------ */
+.vc-btn.danger { color: #ff7a8f; }
+.vc-btn.danger:hover { background: #ff7a8f1a; }
+.vc-proj-icon { flex: none; color: color-mix(in srgb, var(--text) 70%, transparent); }
+.vc-proj-count { margin-left: auto; padding: 0 6px; font-size: 11.5px; color: var(--vc-faint); font-variant-numeric: tabular-nums; }
+.vc-proj-section { padding-bottom: 4px; }
+.vc-proj-fold { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; color: inherit; font: inherit; }
+.vc-proj-fold:hover { color: var(--text); }
+.vc-proj-empty {
+  display: flex; align-items: center; gap: 7px; width: 100%; height: 34px; padding: 0 12px; border-radius: 9px;
+  background: none; border: 0; color: var(--vc-soft); font-size: 13.5px; text-align: left;
+}
+.vc-proj-empty:hover { background: var(--bg-3); color: var(--text); }
+.vc-proj-head { display: flex; align-items: center; gap: 2px; padding: 8px 4px 2px 4px; }
+.vc-proj-title {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 36px; padding: 0 8px; border-radius: 9px;
+  background: none; border: 0; color: var(--text); font-size: 14.5px; font-weight: 600; text-align: left;
+}
+.vc-proj-title span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-proj-title:hover, .vc-proj-title.on { background: var(--bg-3); }
+
+.vc-top-project {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 40%; height: 30px; padding: 0 8px; border-radius: 8px;
+  background: none; border: 0; color: var(--vc-soft); font-size: 14px; font-weight: 500;
+}
+.vc-top-project span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-top-project:hover { background: var(--vc-raise); color: var(--text); }
+.vc-top-sep { color: var(--vc-faint); padding: 0 2px; }
+
+.vc-proj-page { max-width: var(--vc-col); margin: 0 auto; padding: 6vh 24px 40px; }
+.vc-proj-hero h1 { display: flex; align-items: center; gap: 12px; margin: 0 0 20px; font-size: 28px; font-weight: 500; letter-spacing: -.01em; color: var(--text); }
+.vc-proj-hero h1 .vc-proj-icon { color: var(--vc-soft); }
+.vc-proj-composer .vc-composer { max-width: none; }
+.vc-proj-tabs { display: flex; gap: 2px; margin: 26px 0 0; border-bottom: 1px solid var(--vc-line); overflow-x: auto; scrollbar-width: none; }
+.vc-proj-tabs button {
+  display: inline-flex; align-items: center; gap: 2px; height: 38px; padding: 0 12px; flex: none;
+  background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--vc-soft); font-size: 14px;
+}
+.vc-proj-tabs button:hover { color: var(--text); }
+.vc-proj-tabs button.on { color: var(--text); border-bottom-color: var(--text); }
+.vc-proj-tabs .vc-proj-count { margin-left: 2px; padding: 0 0 0 4px; }
+.vc-proj-body { padding-top: 14px; }
+.vc-proj-blank { color: var(--vc-soft); font-size: 14px; line-height: 1.55; padding: 10px 2px; }
+.vc-proj-spacer { flex: 1; }
+
+.vc-proj-group { padding: 12px 4px 4px; font-size: 12px; color: var(--vc-faint); }
+.vc-proj-chat {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px; border-radius: 10px;
+  background: none; border: 0; color: var(--vc-text); text-align: left;
+}
+.vc-proj-chat:hover { background: var(--vc-raise); }
+.vc-proj-chat-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vc-proj-chat-title { display: flex; align-items: center; gap: 8px; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-proj-chat-sub { font-size: 13px; color: var(--vc-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-proj-chat-when { flex: none; font-size: 12.5px; color: var(--vc-faint); }
+
+.vc-proj-files { position: relative; min-height: 160px; }
+.vc-proj-files-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.vc-proj-files-bar .vc-seg { margin: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.vc-proj-files-bar .vc-seg button:disabled { opacity: .4; }
+.vc-proj-pickall { display: flex; align-items: center; gap: 10px; padding: 6px 10px; font-size: 12.5px; color: var(--vc-faint); }
+.vc-proj-file { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 10px; border-radius: 10px; }
+.vc-proj-file:hover, .vc-proj-file.picked { background: var(--vc-raise); }
+.vc-proj-file.uploading { padding: 10px 14px; color: var(--vc-soft); gap: 12px; }
+.vc-proj-file input[type=checkbox], .vc-proj-pickall input { width: 15px; height: 15px; accent-color: var(--text); flex: none; }
+.vc-proj-file-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px 4px; background: none; border: 0; color: var(--vc-text); text-align: left; }
+.vc-proj-file-main .ti { color: var(--vc-soft); flex: none; }
+.vc-proj-file-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vc-proj-file-name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-proj-file-sub { font-size: 12.5px; color: var(--vc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-proj-file-sub a { color: var(--vc-soft); text-decoration: none; }
+.vc-proj-file-sub a:hover { color: var(--text); text-decoration: underline; }
+.vc-proj-file .vc-icon-btn { opacity: 0; }
+.vc-proj-file:hover .vc-icon-btn, .vc-proj-file.picked .vc-icon-btn { opacity: 1; }
+@media (hover: none) { .vc-proj-file .vc-icon-btn { opacity: 1; } }
+.vc-proj-drop {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; padding: 34px 20px; border-radius: 14px;
+  background: none; border: 1px dashed var(--vc-line); color: var(--vc-soft); font-size: 13.5px; line-height: 1.5; text-align: center;
+}
+.vc-proj-drop strong { color: var(--text); font-weight: 500; font-size: 14.5px; }
+.vc-proj-drop span { max-width: 440px; }
+.vc-proj-drop:hover { border-color: #3a4152; color: var(--text); }
+.vc-proj-dropping {
+  position: absolute; inset: 0; display: grid; place-items: center; border-radius: 14px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent); border: 2px dashed var(--vc-soft); color: var(--text); font-size: 15px; pointer-events: none;
+}
+
+.vc-proj-intro { margin: 0 0 10px; color: var(--vc-soft); font-size: 13.5px; line-height: 1.55; }
+.vc-proj-text textarea, .vc-proj-field input {
+  width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 12px; resize: vertical;
+  background: var(--vc-surface); border: 1px solid var(--vc-line); color: var(--text); font: inherit; font-size: 14px; line-height: 1.55; outline: none;
+}
+.vc-proj-text textarea:focus, .vc-proj-field input:focus { border-color: #3a4152; }
+.vc-proj-text-bar { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+
+.vc-proj-settings { display: flex; flex-direction: column; gap: 22px; padding-top: 4px; }
+.vc-proj-field { display: flex; flex-direction: column; gap: 8px; }
+.vc-proj-field > span { font-size: 13px; font-weight: 600; color: var(--vc-text); }
+.vc-proj-field input { height: 40px; padding: 0 12px; max-width: 420px; }
+.vc-proj-hint { margin: -4px 0 2px; color: var(--vc-faint); font-size: 12.5px; line-height: 1.5; }
+.vc-proj-icons { display: flex; flex-wrap: wrap; gap: 4px; }
+.vc-proj-icons button { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: none; border: 1px solid transparent; color: var(--vc-soft); }
+.vc-proj-icons button:hover { background: var(--vc-raise); color: var(--text); }
+.vc-proj-icons button.on { background: var(--vc-raise); border-color: var(--vc-line); color: var(--text); }
+.vc-proj-model { display: flex; }
+.vc-proj-model .vc-model-trigger { border: 1px solid var(--vc-line); }
+
+@media (max-width: 720px) {
+  .vc-proj-page { padding: 18px 16px 30px; }
+  .vc-proj-hero h1 { font-size: 23px; margin-bottom: 14px; }
+  .vc-top-project { max-width: 50%; }
+}

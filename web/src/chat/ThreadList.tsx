@@ -1,14 +1,45 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react'
-import { useChat, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle } from './store'
+import { useChat, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread } from './store'
 import type { ChatThread } from './types'
 import { TI, useDismiss } from './ui'
-import { IconDots, IconGhost2, IconPinned, IconPencil, IconTrash, IconSearch, IconX, IconCheck, IconSparkles } from './icons'
+import { IconDots, IconPinned, IconPencil, IconTrash, IconSearch, IconX, IconCheck, IconSparkles, IconFolder, IconHome, IconChevronLeft } from './icons'
+import ProjectIcon from './ProjectIcon'
 import { pushToast } from '../toast'
 import ThreadIcon from './ThreadIcon'
 
+function MoveMenu({ t, onBack, onClose }: { t: ChatThread; onBack: () => void; onClose: () => void }) {
+  const projects = useChat((s) => s.projects)
+  const inProject = !!(t.projectId && projects.some((p) => p.id === t.projectId))
+  return (
+    <>
+      <button type="button" role="menuitem" className="muted" onClick={onBack}><TI icon={IconChevronLeft} size={16} /><span>Move to project</span></button>
+      <div className="vc-menu-sep" />
+      {inProject && (
+        <button type="button" role="menuitem" onClick={() => { onClose(); moveThread(t.id, null); pushToast(`Moved “${threadTitle(t)}” to Home`, 'info') }}>
+          <TI icon={IconHome} size={16} /><span>Home (no project)</span>
+        </button>
+      )}
+      {projects.filter((p) => p.id !== t.projectId).map((p) => (
+        <button key={p.id} type="button" role="menuitem" onClick={() => { onClose(); moveThread(t.id, p.id); pushToast(`Moved “${threadTitle(t)}” to ${p.name}`, 'info') }}>
+          <ProjectIcon p={p} size={16} /><span>{p.name}</span>
+        </button>
+      ))}
+      {!projects.length && <div className="vc-menu-label">No projects yet. Make one from the Projects list.</div>}
+    </>
+  )
+}
+
 function ThreadMenu({ t, onRename, onClose }: { t: ChatThread; onRename: () => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
+  const [moving, setMoving] = useState(false)
   useDismiss(true, ref, onClose)
+  if (moving) {
+    return (
+      <div className="vc-menu vc-thread-menu" ref={ref} role="menu" onClick={(e) => e.stopPropagation()}>
+        <MoveMenu t={t} onBack={() => setMoving(false)} onClose={onClose} />
+      </div>
+    )
+  }
   return (
     <div className="vc-menu vc-thread-menu" ref={ref} role="menu" onClick={(e) => e.stopPropagation()}>
       <button type="button" role="menuitem" onClick={() => { onClose(); onRename() }}><TI icon={IconPencil} size={16} /><span>Rename</span></button>
@@ -16,6 +47,7 @@ function ThreadMenu({ t, onRename, onClose }: { t: ChatThread; onRename: () => v
         <button type="button" role="menuitem" onClick={() => { onClose(); regenerateTitle(t.id) }}><TI icon={IconSparkles} size={16} /><span>Regenerate title and icon</span></button>
       )}
       <button type="button" role="menuitem" onClick={() => { onClose(); setPinned(t.id, !t.pinned) }}><TI icon={IconPinned} size={16} /><span>{t.pinned ? 'Unpin' : 'Pin'}</span></button>
+      <button type="button" role="menuitem" onClick={() => setMoving(true)}><TI icon={IconFolder} size={16} /><span>Move to project</span></button>
       {t.kind === 'temporary' && (
         <button type="button" role="menuitem" onClick={() => { onClose(); keepThread(t.id) }}><TI icon={IconCheck} size={16} /><span>Keep this chat</span></button>
       )}
@@ -75,15 +107,24 @@ function ThreadItem({ t, active, live, onOpen }: { t: ChatThread; active: boolea
   )
 }
 
-export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents', searchSignal = 0 }: {
+export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents', searchSignal = 0, projectId = null, before }: {
   activeId: string | null
   onOpen: (id: string) => void
   limit?: number
   heading?: string
   /** Bump to open and focus the search box (the panel's magnifier). */
   searchSignal?: number
+  /** Show this project's chats; null shows Home (chats in no project that still exists). */
+  projectId?: string | null
+  /** Rendered at the top of the scrolling list (Home's project list). */
+  before?: React.ReactNode
 }) {
-  const threads = useChat((s) => s.threads)
+  const allThreads = useChat((s) => s.threads)
+  const projects = useChat((s) => s.projects)
+  const threads = useMemo(() => {
+    const known = new Set(projects.map((p) => p.id))
+    return allThreads.filter((t) => (projectId ? t.projectId === projectId : !(t.projectId && known.has(t.projectId))))
+  }, [allThreads, projects, projectId])
   const runs = useChat((s) => s.runs)
   const loaded = useChat((s) => s.loaded)
   const [q, setQ] = useState('')
@@ -99,8 +140,8 @@ export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents
   }, [threads, q, activeId, runs])
   const groups = useMemo(() => groupThreads(limit && !q ? filtered.slice(0, limit) : filtered), [filtered, limit, q])
 
-  return (
-    <div className="vc-threads">
+  const head = (
+    <>
       <div className="vc-threads-head">
         <span>{heading}</span>
         <button type="button" className="vc-icon-btn sm" onClick={() => { setSearching((s) => !s); setQ('') }} aria-label="Search chats" title="Search chats">
@@ -110,8 +151,18 @@ export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents
       {searching && (
         <input className="vc-threads-search" autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search chats" aria-label="Search chats" />
       )}
+    </>
+  )
+
+  // With something above the chats (Home's projects), the heading scrolls with
+  // the list so it sits between the two rather than above both.
+  return (
+    <div className="vc-threads">
+      {!before && head}
       <div className="vc-threads-list">
-        {loaded && !threads.length && <div className="vc-threads-empty">Your chats will show up here.</div>}
+        {before}
+        {before && head}
+        {loaded && !threads.length && <div className="vc-threads-empty">{projectId ? 'Chats in this project will show up here.' : 'Your chats will show up here.'}</div>}
         {q && !filtered.length && <div className="vc-threads-empty">No chats match “{q}”.</div>}
         {groups.map((g) => (
           <div key={g.label} className="vc-thread-group">

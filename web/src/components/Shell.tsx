@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { Hi } from '../icons'
 import totemLogo from '../assets/totem-logo.png'
-import ThreadList from '../chat/ThreadList'
-import { useChat, setActive } from '../chat/store'
+import { ChatsNav } from '../chat/ProjectNav'
+import { setActive } from '../chat/store'
 import { TI } from '../chat/ui'
 import { IconBell, IconEdit, IconWaveSine, IconMenu, IconSearch, IconLayoutSidebar, IconLayoutSidebarLeftCollapse, IconX } from '../chat/icons'
 
@@ -146,7 +146,6 @@ export function SidePanel({ onOpenChat, onNotifications, unread, onCollapse }: {
   unread: number
   onCollapse: () => void
 }) {
-  const activeId = useChat((s) => s.activeId)
   const [search, setSearch] = useState(0)
   return (
     <aside className="sh-panel" aria-label="Chats">
@@ -168,7 +167,7 @@ export function SidePanel({ onOpenChat, onNotifications, unread, onCollapse }: {
       <button type="button" className="sh-new" onClick={() => { setActive(null); onOpenChat() }}>
         <TI icon={IconEdit} size={18} />New chat
       </button>
-      <ThreadList activeId={activeId} onOpen={(id) => { setActive(id); onOpenChat() }} searchSignal={search} />
+      <ChatsNav onOpenChat={onOpenChat} searchSignal={search} />
     </aside>
   )
 }
@@ -214,7 +213,6 @@ export function MobileDrawer({ open, onClose, tabs, active, onSelect, onOpenChat
   onNotifications: () => void
   unread: number
 }) {
-  const activeId = useChat((s) => s.activeId)
   const [search, setSearch] = useState(0)
   useEffect(() => {
     if (!open) return
@@ -251,7 +249,7 @@ export function MobileDrawer({ open, onClose, tabs, active, onSelect, onOpenChat
               </button>
             ))}
           </div>
-          <ThreadList activeId={activeId} onOpen={(id) => { setActive(id); onOpenChat(); onClose() }} searchSignal={search} />
+          <ChatsNav onOpenChat={() => { onOpenChat(); onClose() }} searchSignal={search} />
         </div>
       </aside>
     </>

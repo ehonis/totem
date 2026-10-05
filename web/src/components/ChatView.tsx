@@ -6,7 +6,10 @@ import { setChatCommands } from '../studio'
 import {
   useChat, initChat, send, stop, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
+  openProject, threadProject,
 } from '../chat/store'
+import ProjectHome from '../chat/ProjectHome'
+import ProjectIcon from '../chat/ProjectIcon'
 import Composer, { type ComposerHandle } from '../chat/Composer'
 import { UserMessage, AssistantMessage } from '../chat/Message'
 import ModelPicker from '../chat/ModelPicker'
@@ -85,6 +88,9 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   const models = useChat((s) => s.models)
   const [draftKind, setDraftKind] = useState<'regular' | 'temporary'>('regular')
   const [draftModel, setDraftModel] = useState<{ provider?: string; modelSettings?: ModelSettings }>({})
+  // The project the panel is showing. A new chat here starts in it, on its default model.
+  const scopeId = useChat((s) => s.projectId)
+  const scopeProject = useChat((s) => s.projects.find((p) => p.id === s.projectId))
   const [drafts, setDrafts] = useState<Record<string, string>>(readDrafts)
   const [voice, setVoice] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -131,25 +137,38 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   useEffect(() => {
     if (!visible) return
     const url = new URL(window.location.href)
+    if (scopeId) url.searchParams.set('project', scopeId)
+    else url.searchParams.delete('project')
     if (activeId) url.searchParams.set('thread', activeId)
     else url.searchParams.delete('thread')
     const next = url.pathname + url.search + url.hash
     if (next !== window.location.pathname + window.location.search + window.location.hash) window.history.replaceState(window.history.state, '', next)
-  }, [activeId, visible])
+  }, [activeId, scopeId, visible])
   useEffect(() => {
-    const onPop = () => setActive(new URLSearchParams(window.location.search).get('thread'))
+    const onPop = () => {
+      const q = new URLSearchParams(window.location.search)
+      const thread = q.get('thread')
+      if (thread) setActive(thread)
+      else openProject(q.get('project'))
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
   const busy = activeId ? !!runs[activeId] : false
   const run = activeId ? runs[activeId] : undefined
-  const kind = active?.kind || draftKind
+  // The chat's project (or, for a new chat, the one the panel is in).
+  const project = active ? threadProject(active) : scopeProject
+  const kind = project ? 'regular' : active?.kind || draftKind
   const temporary = kind === 'temporary'
-  const choice = threadChoice(active, draftModel)
+  // A new project chat starts on the project's model until he picks another.
+  const draft = !active && project && !draftModel.provider && project.provider
+    ? { provider: project.provider, modelSettings: project.modelSettings as ModelSettings | undefined }
+    : draftModel
+  const choice = threadChoice(active, draft)
   const messages = active?.messages || []
   const empty = messages.length === 0
-  const draftKey = activeId || `new:${kind}`
+  const draftKey = activeId || (project ? `new:project:${project.id}` : `new:${kind}`)
   const input = drafts[draftKey] || ''
   useEffect(() => { ensureModels(choice.provider) }, [choice.provider])
 
@@ -181,6 +200,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
 
   // --- actions -----------------------------------------------------------------
   function newChat(k: 'regular' | 'temporary' = 'regular') {
+    // Leaving a chat for a new one keeps the panel's project: the new chat is in it.
     setActive(null)
     setDraftKind(k)
     setDraftModel({})
@@ -189,10 +209,10 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   useCommand(COMMANDS.chatNew, () => newChat('regular'))
 
   function onSend({ text, attachments, mode, browser }: { text: string; attachments: Attachment[]; mode: ChatMode; browser?: boolean }) {
-    const id = send({ threadId: activeId, text, attachments, mode, browser, kind, provider: draftModel.provider, modelSettings: draftModel.modelSettings })
+    const id = send({ threadId: activeId, text, attachments, mode, browser, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id })
     setInput('')
     if (id !== activeId) {
-      setDrafts((d) => { const n = { ...d }; delete n[`new:${kind}`]; return n })
+      setDrafts((d) => { const n = { ...d }; delete n[draftKey]; return n })
       setActive(id)
     }
     setAtBottom(true)
@@ -278,7 +298,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
       onVoice={() => setVoice(true)}
       busy={busy}
       autoFocus={visible}
-      placeholder={temporary ? 'Temporary chat — gone at midnight' : 'Ask Totem anything'}
+      placeholder={temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
       allowCommands={!temporary}
       computerUse={computerAny}
       maxUploadBytes={caps?.maxUploadBytes}
@@ -311,8 +331,15 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
           </>
         )}
         <div className="vc-top-title-wrap">
+          {project && (
+            <button type="button" className="vc-top-project" onClick={() => openProject(project.id)} title={`Open ${project.name}`}>
+              <ProjectIcon p={project} size={16} />
+              <span>{project.name}</span>
+            </button>
+          )}
+          {project && active && !empty && <span className="vc-top-sep" aria-hidden>/</span>}
           {active && !empty && <ThreadIcon t={active} size={17} busy={retitling} />}
-          <div className={`vc-top-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{active && !empty ? threadTitle(active) : temporary ? 'Temporary chat' : 'New chat'}</div>
+          {(!project || (active && !empty)) && <div className={`vc-top-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{active && !empty ? threadTitle(active) : temporary ? 'Temporary chat' : 'New chat'}</div>}
           {active && !empty && (
             <button type="button" className="vc-retitle" onClick={() => regenerateTitle(active.id)} disabled={retitling} aria-label="Regenerate title and icon" title="Regenerate title and icon from the whole chat">
               <TI icon={IconSparkles} size={15} className={retitling ? 'vc-retitle-spin' : ''} />
@@ -325,7 +352,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
           {temporary && active && (
             <button type="button" className="vc-btn sm" onClick={() => keepThread(active.id)} title="Keep this chat after midnight">Keep</button>
           )}
-          {(!active || empty) && (
+          {(!active || empty) && !project && (
             <button
               type="button"
               className={`vc-icon-btn ${temporary ? 'on' : ''}`}
@@ -343,7 +370,9 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
       </header>
 
       <div className="vc-scroll" ref={scrollRef} onScroll={onScroll}>
-        {empty ? (
+        {empty && project ? (
+          <ProjectHome projectId={project.id} composer={composerEl} maxUploadBytes={caps?.maxUploadBytes} />
+        ) : empty ? (
           <div className="vc-empty">
             <h1 className="vc-greet">{temporary ? 'Temporary chat' : greeting(ownerName)}</h1>
             {temporary && <p className="vc-empty-note">This chat won’t be kept after midnight.</p>}
@@ -394,7 +423,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
       {!empty && !atBottom && (
         <button type="button" className="vc-jump" onClick={() => scrollToBottom()} aria-label="Scroll to the latest message"><TI icon={IconArrowDown} size={18} /></button>
       )}
-      {(!empty || narrow) && <div className="vc-dock">{composerEl}</div>}
+      {(!empty || (narrow && !project)) && <div className="vc-dock">{composerEl}</div>}
 
       {dragging && (
         <div className="vc-drop">

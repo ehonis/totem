@@ -83,10 +83,43 @@ export interface ChatThread {
   provider?: string
   modelSettings?: Partial<ModelSettings>
   pinned?: boolean
+  /** The project this chat belongs to; none = Home. */
+  projectId?: string
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
   expiresAt?: number
+}
+
+/** A file a project shares with every chat in it (an upload id). */
+export interface ProjectFile {
+  id: string
+  name: string
+  mime: string
+  size: number
+  kind: 'image' | 'file' | 'text'
+  /** Uploaded on the Files tab, attached in one of its chats, or made by the agent. */
+  source: 'upload' | 'chat' | 'agent'
+  addedAt: number
+  threadId?: string
+  url?: string
+}
+
+/** A chat project (chat/projects.mjs): shared default model, instructions, memory and files. */
+export interface Project {
+  id: string
+  name: string
+  icon?: string
+  instructions: string
+  provider?: string
+  modelSettings?: Partial<ModelSettings>
+  fileCount: number
+  chatCount: number
+  createdAt: number
+  updatedAt: number
+  /** Only on a project fetched on its own. */
+  files?: ProjectFile[]
+  memory?: string
 }
 
 export interface ProviderRow {
