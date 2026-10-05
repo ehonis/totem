@@ -10,9 +10,12 @@ import { useSyncExternalStore } from 'react'
 import { getThreads, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, api } from '../api'
 import { pushError } from '../toast'
 import { applyEvent } from './reduce'
-import { sendChat, attachRun, stopChat, getRuns, getCapabilities, probeCapabilities, type SendArgs, type StreamHandle } from './api'
+import {
+  sendChat, attachRun, stopChat, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
+  deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, type SendArgs, type StreamHandle,
+} from './api'
 import { defaultSettingsFor, normalizeModelSettings, visibleModels, wireModel } from './models'
-import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, ProviderRow, StreamEvent } from './types'
+import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, StreamEvent } from './types'
 
 const CACHE_KEY = 'chat_threads_v2'
 const OUTBOX_KEY = 'chat_outbox_v1' // see "outbox" below; up here because the initial state reads it
@@ -48,6 +51,12 @@ export interface ChatState {
   browser: Record<string, BrowserFrame & { live: boolean }>
   /** The browser panel is open beside the active chat. */
   browserOpen: boolean
+  /** Chat projects, without their files and memory. */
+  projects: Project[]
+  /** Projects fetched on their own (files and memory included), by id. */
+  projectDetail: Record<string, Project>
+  /** The project the chats panel is showing, or null for Home. */
+  projectId: string | null
 }
 
 export interface ChatPrefs {
@@ -75,6 +84,9 @@ let state: ChatState = {
   browser: {},
   browserOpen: false,
   retitling: {},
+  projects: [],
+  projectDetail: {},
+  projectId: new URLSearchParams(window.location.search).get('project'),
   prefs: { defaultPreset: 'auto', defaultLevel: 2, instant: { provider: '', model: '', effort: '' }, thinking: { provider: '', model: '' }, titles: { provider: '', model: '', effort: '', off: false } },
 }
 
@@ -265,8 +277,120 @@ export function threadChoice(thread: ChatThread | null, draft: { provider?: stri
 
 export function setActive(id: string | null) {
   if (state.activeId === id) return
-  set({ activeId: id, artifact: null, browserOpen: false })
+  // The panel follows the chat: opening a project's chat shows that project.
+  const t = id ? state.threads.find((x) => x.id === id) : null
+  const scope = t ? (t.projectId && state.projects.some((p) => p.id === t.projectId) ? t.projectId : null) : state.projectId
+  set({ activeId: id, artifact: null, browserOpen: false, projectId: scope })
   if (id && !state.browser[id]) loadBrowser(id)
+}
+
+// --- projects -----------------------------------------------------------------
+// A project groups chats that share a default model, instructions, a memory the
+// agent keeps, and files (chat/projects.mjs). The chats panel shows one scope at
+// a time: Home (chats in no project, plus the project list) or one project.
+
+/** Show a project's page (or Home with null) with no chat open. */
+export function openProject(id: string | null) {
+  set({ projectId: id, activeId: null, artifact: null, browserOpen: false })
+  if (id) loadProject(id)
+}
+
+export const projectById = (id?: string | null) => (id ? state.projects.find((p) => p.id === id) : undefined)
+
+/** A chat's project, if it still exists (a chat in a deleted project shows in Home). */
+export function threadProject(t: Pick<ChatThread, 'projectId'> | null | undefined) {
+  return t?.projectId ? projectById(t.projectId) : undefined
+}
+
+export async function loadProjects() {
+  try {
+    const { projects } = await listProjects()
+    set((s) => ({ projects, projectId: s.projectId && !projects.some((p) => p.id === s.projectId) ? null : s.projectId }))
+  } catch (e) { fail(e) }
+}
+
+function takeProject(project: Project) {
+  const { files: _f, memory: _m, ...summary } = project
+  set((s) => ({
+    projectDetail: { ...s.projectDetail, [project.id]: project },
+    projects: s.projects.some((p) => p.id === project.id)
+      ? s.projects.map((p) => (p.id === project.id ? { ...p, ...summary } : p))
+      : [...s.projects, summary as Project].sort((a, b) => a.name.localeCompare(b.name)),
+  }))
+  return project
+}
+
+export async function loadProject(id: string) {
+  try { return takeProject((await getProject(id)).project) } catch (e: any) {
+    if (!fail(e) && e?.status === 404) set((s) => ({ projects: s.projects.filter((p) => p.id !== id), projectId: s.projectId === id ? null : s.projectId }))
+    return null
+  }
+}
+
+export async function createProject(body: { name: string; icon?: string; instructions?: string }) {
+  // A new project starts on whatever a new chat would use right now.
+  const { provider, settings } = threadChoice(null)
+  const { project } = await createProjectApi({ ...body, provider, modelSettings: settings })
+  takeProject(project)
+  openProject(project.id)
+  return project
+}
+
+export async function updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'icon' | 'instructions' | 'provider' | 'modelSettings'>>) {
+  const before = state.projectDetail[id]
+  if (before) set((s) => ({ projectDetail: { ...s.projectDetail, [id]: { ...before, ...patch } } }))
+  try { return takeProject((await patchProjectApi(id, patch)).project) } catch (e: any) {
+    if (!fail(e)) pushError(`Couldn't save the project: ${e.message}`)
+    if (before) set((s) => ({ projectDetail: { ...s.projectDetail, [id]: before } }))
+    return null
+  }
+}
+
+export async function saveProjectMemory(id: string, memory: string) {
+  const r = await putProjectMemory(id, memory)
+  const p = state.projectDetail[id]
+  if (p) set((s) => ({ projectDetail: { ...s.projectDetail, [id]: { ...p, memory: r.memory } } }))
+  return r.memory
+}
+
+export async function addProjectFiles(id: string, uploadIds: string[]) {
+  if (!uploadIds.length) return
+  try { takeProject((await addProjectFilesApi(id, uploadIds)).project) } catch (e: any) { if (!fail(e)) pushError(`Couldn't add the files: ${e.message}`) }
+}
+
+export async function removeProjectFiles(id: string, ids: string[]) {
+  const p = state.projectDetail[id]
+  if (p?.files) set((s) => ({ projectDetail: { ...s.projectDetail, [id]: { ...p, files: p.files!.filter((f) => !ids.includes(f.id)), fileCount: p.fileCount - ids.length } } }))
+  try { takeProject((await removeProjectFilesApi(id, ids)).project) } catch (e: any) {
+    if (!fail(e)) pushError(`Couldn't remove the files: ${e.message}`)
+    loadProject(id)
+  }
+}
+
+/** Delete a project. Its chats move to Home; returns how many did. */
+export async function deleteProject(id: string) {
+  const { movedChats } = await deleteProjectApi(id)
+  set((s) => {
+    const detail = { ...s.projectDetail }
+    delete detail[id]
+    return {
+      projects: s.projects.filter((p) => p.id !== id),
+      projectDetail: detail,
+      projectId: s.projectId === id ? null : s.projectId,
+      threads: s.threads.map((t) => (t.projectId === id ? { ...t, projectId: undefined } : t)),
+    }
+  })
+  return movedChats
+}
+
+/** Move a chat into a project, or back to Home with null. Its files come with it. */
+export async function moveThread(threadId: string, projectId: string | null) {
+  patchThread(threadId, (t) => ({ ...t, projectId: projectId || undefined, ...(projectId ? { kind: 'regular' as const, expiresAt: undefined } : {}) }))
+  try {
+    await putThread({ id: threadId, projectId })
+    if (projectId) loadProject(projectId)
+    loadProjects()
+  } catch (e) { fail(e) }
 }
 
 // --- the chat's browser -------------------------------------------------------
@@ -353,10 +477,16 @@ export function initChat(authError: () => void) {
   if (started) return
   started = true
   syncThreads().then(resumeRuns)
+  loadProjects()
   loadProviders()
   loadCapabilities()
   loadPrefs()
-  const refresh = () => { if (!Object.keys(state.runs).length) syncThreads() }
+  const refresh = () => {
+    if (!Object.keys(state.runs).length) syncThreads()
+    loadProjects()
+    // The agent edits the memory and adds files while it works; keep the open project's page current.
+    if (state.projectId) loadProject(state.projectId)
+  }
   window.addEventListener('focus', refresh)
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { refresh(); resumeRuns() } })
   setInterval(refresh, 30_000)
@@ -485,11 +615,14 @@ function handleEvent(threadId: string, e: StreamEvent) {
     case 'error':
       patchAssistant(threadId, (m) => ({ ...m, status: 'error', error: e.text }))
       break
-    case 'end':
+    case 'end': {
       setRun(threadId, null)
+      const pid = state.threads.find((t) => t.id === threadId)?.projectId
+      if (pid && state.projectDetail[pid]) loadProject(pid)
       browserDismissed.delete(threadId)
       if (state.browser[threadId]) set((s) => ({ browser: { ...s.browser, [threadId]: { ...s.browser[threadId], live: false } } }))
       break
+    }
   }
 }
 
@@ -520,6 +653,8 @@ export interface SendInput {
   mode?: ChatMode
   voice?: boolean
   browser?: boolean
+  /** Start a new chat inside this project. */
+  projectId?: string | null
 }
 
 /** Start a turn. Returns the thread id (new chats get one here). */
@@ -527,7 +662,8 @@ export function send(input: SendInput): string {
   const threadId = input.threadId || newId()
   if (state.runs[threadId]) return threadId
   let thread = state.threads.find((t) => t.id === threadId) || null
-  const kind = thread?.kind || input.kind || 'regular'
+  const projectId = thread ? thread.projectId : (input.projectId || undefined)
+  const kind = projectId ? 'regular' : thread?.kind || input.kind || 'regular'
   const { provider, row, settings } = threadChoice(thread, { provider: input.provider, modelSettings: input.modelSettings })
   const wire = wireModel(row?.driver || 'cursor', settings)
   const t0 = now()
@@ -541,7 +677,7 @@ export function send(input: SendInput): string {
   if (!thread) {
     thread = {
       id: threadId, kind, provider: kind === 'regular' ? provider : undefined, modelSettings: settings,
-      messages: [], createdAt: t0, updatedAt: t0, ...(kind === 'temporary' ? { expiresAt: endOfToday() } : {}),
+      ...(projectId ? { projectId } : {}), messages: [], createdAt: t0, updatedAt: t0, ...(kind === 'temporary' ? { expiresAt: endOfToday() } : {}),
     }
   }
   upsertThread({ ...thread, messages: [...thread.messages, userMessage, assistant], updatedAt: t0 })
@@ -551,6 +687,8 @@ export function send(input: SendInput): string {
     modelSettings: settings, mode: input.mode || 'chat', voice: input.voice, preset: wire.preset, level: wire.level,
     ...(wire.power ? { power: wire.power } : {}),
     ...(input.browser ? { browser: true } : {}),
+    // Only read for a chat the bridge hasn't seen; an existing one keeps its project.
+    ...(projectId ? { projectId } : {}),
   }
   const { messages: _m, ...meta } = thread
   outboxPut(threadId, { args, message: userMessage, thread: { ...meta, updatedAt: t0 }, at: t0 })

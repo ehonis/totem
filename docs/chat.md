@@ -217,12 +217,57 @@ Totem runs on the Mac mini:
 The probe asks Codex for its desktop tool names and treats "NONE" as unavailable;
 it never guesses from the platform.
 
+## Projects
+
+A project groups chats that share four things, the way Claude and ChatGPT projects
+do (`chat/projects.mjs`, `web/src/chat/Project*.tsx`):
+
+| Shared | Where | Who writes it |
+|---|---|---|
+| Default account and model | `project.json` → `provider`, `modelSettings` | The owner (Settings tab). A new chat in the project starts on it; any one chat can still pick another. |
+| Instructions | `project.json` → `instructions` | The owner. |
+| Memory | `<CHAT_PROJECTS_DIR>/<id>/memory.md` | The agent, with its own file tools; the owner can edit it on the Memory tab. |
+| Files | `project.json` → `files` (upload ids) | Uploaded on the Files tab, attached in any of the project's chats, or made by the agent in one (`source`: `upload`, `chat`, `agent`). |
+
+Every turn of a project chat, resumed or not, carries `projectBlock` (`chat/turn.mjs`):
+the instructions, the memory text with its path and the rule for keeping it, and every
+file's path. Chats never read each other's transcripts; the memory is how one chat's
+conclusions reach the next.
+
+- **The panel is scoped.** Home shows the project list and chats in no project. Opening
+  a project (or one of its chats) swaps the panel to that project's chats. The URL
+  carries `?project=<id>` alongside `?thread=`.
+- **A project chat is never temporary.** `projectId` is fixed when the chat is created
+  (`POST /api/chat` with `projectId`); afterwards only `PUT /api/threads/:id {projectId}`
+  moves it, and a chat moved in brings its attachments and documents into the files.
+- **Claude needs explicit write paths.** A `claude -p` run cannot ask for permission, so
+  the chat passes `--allowedTools Edit(…)/Write(…)` for exactly the chat's outputs folder
+  and the project's `memory.md` (`allowWrite` in `spawnClaudeStream`). Without it the
+  memory write is refused and Haiku still tells the owner it saved the note.
+- **Removing a file** drops it from the project; the bytes go only when no chat message
+  still shows it. **Deleting a project** deletes its files, instructions and memory and
+  moves its chats to Home. Thread deletion and the orphan sweep leave project files alone.
+
+| Route | Body | Returns |
+|---|---|---|
+| `GET /api/chat/projects` | | `{projects}` with `fileCount`, `chatCount` (no files or memory) |
+| `POST /api/chat/projects` | `{name, icon?, instructions?, provider?, modelSettings?}` | `{project}` |
+| `GET /api/chat/projects/:id` | | `{project}` with signed `files` and `memory` |
+| `PATCH /api/chat/projects/:id` | any of the create fields (`null` clears) | `{project}` |
+| `DELETE /api/chat/projects/:id` | | `{ok, movedChats}` |
+| `PUT /api/chat/projects/:id/memory` | `{memory}` | `{memory}` |
+| `POST /api/chat/projects/:id/files` | `{uploadIds}` (uploaded via `/api/chat/uploads` first) | `{added, project}` |
+| `DELETE /api/chat/projects/:id/files[/:uploadId]` | `{ids}` without a path id | `{removed, project}` |
+
 ## Testing
 
 ```bash
-node --test chat/chat.test.mjs
-# A throwaway bridge that won't run jobs or touch real threads:
-BRIDGE_PORT=8797 BRIDGE_NO_SCHEDULER=1 THREADS_DIR=/tmp/t CHAT_UPLOADS_DIR=/tmp/u \
+node --test chat/chat.test.mjs chat/projects.test.mjs
+# A throwaway bridge that won't run jobs or touch real threads. Data dirs outside
+# the checkout are outside the agent's working directory, so Claude can't read
+# uploads or write project memory there; test those with the checkout's own data/
+# in a worktree instead.
+BRIDGE_PORT=8797 BRIDGE_NO_SCHEDULER=1 THREADS_DIR=/tmp/t CHAT_UPLOADS_DIR=/tmp/u CHAT_PROJECTS_DIR=/tmp/p \
   WEB_DIR=/tmp/dist node --env-file=.env bridge.mjs
 ```
 

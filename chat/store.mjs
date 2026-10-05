@@ -123,10 +123,18 @@ function normalizeSessions(raw) {
   return Object.keys(out).length ? out : null
 }
 
-const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt']
+const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId']
 
 function applyMetadata(thread, body, now) {
   if (body.kind === 'temporary' || body.kind === 'regular') thread.kind = body.kind
+  // The project this chat belongs to (chat/projects.mjs); none = Home.
+  if ('projectId' in body) {
+    const p = str(body.projectId, 64)
+    if (/^[A-Za-z0-9_-]{1,64}$/.test(p)) thread.projectId = p
+    else delete thread.projectId
+  }
+  // A project chat is always kept: temporary chats live outside projects.
+  if (thread.projectId) thread.kind = 'regular'
   if ('title' in body) {
     const title = str(body.title, 120).trim()
     if (title) thread.title = title

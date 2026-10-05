@@ -46,8 +46,9 @@ import { createJournalStore } from './journal/store.mjs'
 import { createTranscriber } from './journal/transcribe.mjs'
 import { createThreadStore, validThreadId } from './chat/store.mjs'
 import { createUploadStore, validUploadId } from './chat/uploads.mjs'
+import { createProjectStore, validProjectId } from './chat/projects.mjs'
 import { createChatRuns } from './chat/runs.mjs'
-import { planHistory, renderTranscript, attachmentBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer } from './chat/turn.mjs'
+import { planHistory, renderTranscript, attachmentBlock, projectBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer } from './chat/turn.mjs'
 import { describeMcpCall, describeCommand, humanizeTool, stringifyInput, resultText } from './chat/tools.mjs'
 import { pickRoute, PRESETS } from './chat/route.mjs'
 import { THREAD_ICONS, parseTitleReply, cleanIcon } from './chat/thread-icons.mjs'
@@ -3395,6 +3396,16 @@ function describeClaudeTool(block) {
 // withholding the tools that change things. Read and search stay available.
 const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'NotebookEdit']
 
+// Claude Code permission rules for writing to exact paths. An absolute path is
+// written with a leading `//`; a folder covers everything under it.
+function claudeWriteRules(paths) {
+  return paths.filter(Boolean).flatMap((path) => {
+    const abs = `/${String(path).replace(/\/+$/, '')}`
+    const target = /\.[a-z0-9]{1,8}$/i.test(abs) ? abs : `${abs}/**`
+    return ['Edit', 'Write'].map((tool) => `${tool}(${target})`)
+  })
+}
+
 // Images go in natively: with `images`, the prompt is sent as one stream-json
 // user message whose content is the text plus a base64 block per image, which is
 // the same thing the Claude Code TUI sends for a pasted screenshot.
@@ -3411,7 +3422,7 @@ async function claudeStdinMessage(text, images) {
 
 const CLAUDE_NATIVE_IMAGE = /^image\/(png|jpe?g|gif|webp)$/i
 
-async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, signal, model, effort, readOnly, instance, resume, images = [], browser = null, timeoutMs = TIMEOUT } = {}) {
+async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, signal, model, effort, readOnly, instance, resume, images = [], browser = null, allowWrite = [], timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('claude')
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
   const m = bareModelId(model) || CLAUDE_MODEL
@@ -3422,6 +3433,10 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
   // data/auth.json would let an agent mint a dashboard cookie). Read-only runs
   // also lose every tool that can write.
   args.push('--disallowedTools', ...(readOnly ? CLAUDE_WRITE_TOOLS : []), ...claudeSecretDenyRules(HERE))
+  // A print-mode run cannot ask for permission, so a write the prompt asks for
+  // (a chat's documents folder, a project's memory file) is allowed by path here
+  // or it is refused. Deny rules above still win over these.
+  if (!readOnly && allowWrite.length) args.push('--allowedTools', ...claudeWriteRules(allowWrite))
   args.push(...splitLaunchArgs(account.config.launchArgs))
   const browserCli = browserArgs('claude', browser)
   args.push(...browserCli.args)
@@ -8041,14 +8056,20 @@ const chatUploads = createUploadStore({
   maxBytes: Math.max(1, Number(process.env.CHAT_MAX_UPLOAD_MB) || 25) * 1024 * 1024,
   log,
 })
+// Chat projects (chat/projects.mjs): shared instructions, memory and files.
+const CHAT_PROJECTS_DIR = process.env.CHAT_PROJECTS_DIR || join(HERE, 'data', 'chat-projects')
+const projectStore = createProjectStore({ dir: CHAT_PROJECTS_DIR })
 const threadStore = createThreadStore({
   dir: THREADS_DIR,
   log,
-  // A deleted thread takes its attachments with it; nothing else references them.
+  // A deleted thread takes its attachments with it, except those a project
+  // keeps: a file shared into a project outlives the chat it arrived in.
   onDelete: async (thread) => {
+    const kept = await projectStore.fileIds().catch(() => new Set())
+    const drop = (id) => (kept.has(id) ? null : chatUploads.remove(id))
     for (const m of thread.messages || []) {
-      for (const a of m.attachments || []) await chatUploads.remove(a.id)
-      for (const p of m.parts || []) if (p.type === 'image' || p.type === 'file') await chatUploads.remove(p.uploadId)
+      for (const a of m.attachments || []) await drop(a.id)
+      for (const p of m.parts || []) if (p.type === 'image' || p.type === 'file') await drop(p.uploadId)
     }
     await rm(join(CHAT_OUTPUTS_DIR, thread.id), { recursive: true, force: true }).catch(() => {})
     await browserManager.closeSession(thread.id).catch(() => {})
@@ -8600,7 +8621,7 @@ async function collectArtifacts({ threadId, since, parts }) {
   for (const path of candidates) {
     if (out.length >= 8 || !ARTIFACT_EXT.test(path)) continue
     // Memory and Totem's own state are not deliverables.
-    if ((path.startsWith(dataDir) && !path.startsWith(CHAT_OUTPUTS_DIR)) || path.startsWith(MEMORY_ROOT)) continue
+    if ((path.startsWith(dataDir) && !path.startsWith(CHAT_OUTPUTS_DIR)) || path.startsWith(MEMORY_ROOT) || path.startsWith(CHAT_PROJECTS_DIR)) continue
     try {
       const st = await stat(path)
       if (!st.isFile() || st.mtimeMs < since - 1000 || st.size > 10 * 1024 * 1024) continue
@@ -8710,7 +8731,20 @@ async function loadChatFiles(attachments) {
   return out
 }
 
-function chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser = false }) {
+// A project chat's shared context (projectBlock in chat/turn.mjs), read fresh
+// each turn: the memory and the file list change between turns.
+async function chatProjectContext(projectId) {
+  const project = validProjectId(projectId) ? await projectStore.get(projectId) : null
+  if (!project) return ''
+  const files = []
+  for (const f of project.files) {
+    const meta = await chatUploads.meta(f.id)
+    if (meta) files.push({ ...f, path: meta.path })
+  }
+  return projectBlock(project, { memory: await projectStore.readMemory(project.id), memoryPath: projectStore.memoryPath(project.id), files })
+}
+
+function chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser = false, project = '' }) {
   const plan = fresh ? { resumeId: null, replay: thread.messages.slice(0, userIndex) } : planHistory(thread, provider, userIndex)
   const extras = [!voice && filesRule(join(CHAT_OUTPUTS_DIR, thread.id)), mode === 'task' && TASK_RULES, mode === 'computer' && COMPUTER_RULES, browser && BROWSER_RULES, !voice && IMAGE_RULES, voice && VOICE_RULES].filter(Boolean)
   const extraBlock = extras.length ? `${extras.join('\n\n')}\n\n` : ''
@@ -8718,11 +8752,11 @@ function chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fre
   const request = text || '(The owner sent only the attachments above. Look at them and respond.)'
   if (plan.resumeId) {
     const missed = renderTranscript(plan.replay, { heading: 'Earlier in this chat, answered while you were away:' })
-    return { resumeId: plan.resumeId, prompt: `${temporalContext()}\n\n${extraBlock}${missed}${att}${OWNER_NAME || 'Owner'}: ${request}` }
+    return { resumeId: plan.resumeId, prompt: `${temporalContext()}\n\n${extraBlock}${project}${missed}${att}${OWNER_NAME || 'Owner'}: ${request}` }
   }
   const prompt =
     `${IDENTITY}\n\n${WEB_RULES}\n\n${MEMORY_RULES}\n\n${INBOX_RULES}\n\n${HABIT_RULES}\n\n${GOAL_RULES}` +
-    `${stravaRule()}${appToolsRule()}\n\n${extraBlock}${temporalContext()}\n\n` +
+    `${stravaRule()}${appToolsRule()}\n\n${extraBlock}${project}${temporalContext()}\n\n` +
     `${renderTranscript(plan.replay)}${att}User request:\n${request}`
   return { resumeId: null, prompt }
 }
@@ -8869,7 +8903,10 @@ async function handleChatSend(req, res) {
 
   const config = await readProviderConfig()
   const existing = await threadStore.get(threadId)
-  const kind = existing?.kind || (body.kind === 'temporary' ? 'temporary' : 'regular')
+  // A new chat may start inside a project; an existing one stays where it is.
+  const projectId = existing ? (existing.projectId || null)
+    : (validProjectId(body.projectId) && await projectStore.get(body.projectId) ? body.projectId : null)
+  const kind = projectId ? 'regular' : existing?.kind || (body.kind === 'temporary' ? 'temporary' : 'regular')
   const mode = CHAT_MODES.has(body.mode) ? body.mode : 'chat'
   const voice = body.voice === true
   let text = typeof body.text === 'string' ? body.text.trim() : ''
@@ -8932,9 +8969,15 @@ async function handleChatSend(req, res) {
     if (route?.power) t.modelSettings = { ...(t.modelSettings || {}), preset: 'auto', power: String(route.power) }
     if (!t.title) t.title = fallbackTitle(text) || (metas[0]?.name ?? '')
     t.updatedAt = now
-  }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
+  }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(projectId ? { projectId } : {}), ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
 
   const files = await loadChatFiles(userMessage.attachments)
+  // What he attaches in a project chat is shared with the whole project.
+  if (projectId && userMessage.attachments?.length) {
+    await projectStore.addFiles(projectId, userMessage.attachments.map((a) => ({ ...a, source: 'chat', threadId })))
+      .catch((e) => log('chat: project file add failed', e?.message || e))
+  }
+  const projectCtx = projectId ? await chatProjectContext(projectId).catch(() => '') : ''
   const needsTitle = !existing?.title || userIndex === 0
   const streamLive = streamingEnabled(provider, config)
   log(`WEB chat [${provider}${route ? ` ${route.route}${route.power ? ` p${route.power}` : ''}${route.level ? `:${route.level}` : ''} (${route.reason})` : ''}${mode !== 'chat' ? `/${mode}` : ''}${voice ? '/voice' : ''}]:`, text.slice(0, 100))
@@ -8998,7 +9041,7 @@ async function handleChatSend(req, res) {
         // from an earlier ask. Never by default; voice turns never.
         if (!voice && wantsBrowser({ body, text, threadId })) browserAccess = grantBrowserAccess(threadId, push)
         const runOnce = async ({ fresh }) => {
-          const { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser: !!browserAccess })
+          const { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser: !!browserAccess, project: projectCtx })
           return {
             resumeId,
             r: await streamFn(prompt, {
@@ -9012,6 +9055,8 @@ async function handleChatSend(req, res) {
               images: files.filter((f) => f.kind === 'image'),
               features: mode === 'computer' ? ['computer_use'] : [],
               browser: browserAccess,
+              // Where the prompt tells it to write: this chat's documents, and its project's memory.
+              allowWrite: [join(CHAT_OUTPUTS_DIR, threadId), projectId && projectStore.memoryPath(projectId)].filter(Boolean),
               timeoutMs: mode === 'chat' ? CHAT_TIMEOUT_MS : CHAT_TASK_TIMEOUT_MS,
               onText: (delta) => forward({ type: 'delta', text: delta }, { live: streamLive }),
               onActivity: (a) => push({ type: 'activity', text: a }),
@@ -9064,7 +9109,13 @@ async function handleChatSend(req, res) {
           finalText = await embed(finalText)
         }
         if (status !== 'stopped') {
-          for (const file of await collectArtifacts({ threadId, since: t0, parts: assistant.parts }).catch(() => [])) forward({ type: 'file', file })
+          const made = await collectArtifacts({ threadId, since: t0, parts: assistant.parts }).catch(() => [])
+          for (const file of made) forward({ type: 'file', file })
+          // Documents made in a project chat join the project's files.
+          if (projectId && made.length) {
+            await projectStore.addFiles(projectId, made.map((f) => ({ id: f.uploadId, name: f.name, mime: f.mime, size: f.size, kind: 'file', source: 'agent', threadId })))
+              .catch((e) => log('chat: project artifact add failed', e?.message || e))
+          }
         }
         finalizeMessage(assistant, { status, error, finalText, startedAt: t0 })
         await save((t) => {
@@ -9179,6 +9230,7 @@ function someoneViewing(threadId) {
 
 async function handleChatApi(req, res, path) {
   if (req.method === 'POST' && path === '/api/chat') return handleChatSend(req, res)
+  if (path.startsWith('/api/chat/projects')) return handleChatProjectsApi(req, res, path)
   if (req.method === 'GET' && path === '/api/chat/runs') return send(res, 200, { runs: chatRuns.list() })
   const runMatch = /^\/api\/chat\/runs\/([A-Za-z0-9_-]{1,128})\/stream$/.exec(path)
   if (req.method === 'GET' && runMatch) {
@@ -9252,9 +9304,9 @@ async function handleChatApi(req, res, path) {
   }
   if (req.method === 'DELETE' && path.startsWith('/api/chat/uploads/')) {
     const id = path.slice('/api/chat/uploads/'.length)
-    // Only an attachment nobody sent yet: a sent one belongs to its thread.
-    const threads = await threadStore.list()
-    const used = threads.some((t) => t.messages.some((m) => (m.attachments || []).some((a) => a.id === id)))
+    // Only an attachment nobody sent yet: a sent one belongs to its thread, and
+    // a project's file to its project.
+    const used = (await threadUploadIds()).has(id) || (await projectStore.fileIds()).has(id)
     if (!used) await chatUploads.remove(id)
     return send(res, 200, { ok: !used })
   }
@@ -9443,16 +9495,109 @@ async function handleVoiceApi(req, res, path) {
   return false
 }
 
+// Every upload a chat message points at (attachments, screenshots, documents).
+async function threadUploadIds() {
+  const ids = new Set()
+  for (const t of await threadStore.list()) {
+    for (const m of t.messages) {
+      for (const a of m.attachments || []) ids.add(a.id)
+      for (const p of m.parts || []) if (p.type === 'image' || p.type === 'file') ids.add(p.uploadId)
+    }
+  }
+  return ids
+}
+
+// Chat projects. A project's files are uploads; removing one from the project
+// deletes the bytes only when no chat message still shows it.
+const signProjectFile = (f) => ({ ...f, url: chatUploads.urlFor(f.id) })
+const projectSummary = (p, threads) => ({ ...p, files: undefined, fileCount: p.files.length, chatCount: threads.filter((t) => t.projectId === p.id).length })
+
+async function dropUnusedUploads(ids) {
+  if (!ids.length) return
+  const used = await threadUploadIds()
+  const kept = await projectStore.fileIds()
+  for (const id of ids) if (!used.has(id) && !kept.has(id)) await chatUploads.remove(id)
+}
+
+async function handleChatProjectsApi(req, res, path) {
+  if (path === '/api/chat/projects') {
+    if (req.method === 'GET') {
+      const threads = await threadStore.list()
+      return send(res, 200, { projects: (await projectStore.list()).map((p) => projectSummary(p, threads)) })
+    }
+    if (req.method === 'POST') {
+      const body = await readJsonBody(req)
+      if (!String(body.name || '').trim()) return send(res, 400, { error: 'a project needs a name' })
+      const project = await projectStore.create(body)
+      return send(res, 201, { project: { ...projectSummary(project, []), files: [], memory: '' } })
+    }
+  }
+  const m = /^\/api\/chat\/projects\/([A-Za-z0-9_-]{1,64})(\/files(?:\/([A-Za-z0-9_-]{8,64}))?|\/memory)?$/.exec(path)
+  if (!m) return false
+  const [, id, sub, fileId] = m
+  const full = async () => {
+    const project = await projectStore.get(id)
+    if (!project) return null
+    const threads = await threadStore.list()
+    return { ...projectSummary(project, threads), files: project.files.map(signProjectFile), memory: await projectStore.readMemory(id) }
+  }
+  if (!sub) {
+    if (req.method === 'GET') {
+      const project = await full()
+      return project ? send(res, 200, { project }) : send(res, 404, { error: 'project not found' })
+    }
+    if (req.method === 'PATCH') {
+      const body = await readJsonBody(req)
+      if ('name' in body && !String(body.name || '').trim()) return send(res, 400, { error: 'a project needs a name' })
+      await projectStore.patch(id, body)
+      return send(res, 200, { project: await full() })
+    }
+    if (req.method === 'DELETE') {
+      // Its chats move to Home rather than vanishing with it; its files go,
+      // except ones a chat message still shows.
+      const project = await projectStore.remove(id)
+      if (!project) return send(res, 404, { error: 'project not found' })
+      let moved = 0
+      for (const t of await threadStore.list()) {
+        if (t.projectId !== id) continue
+        await threadStore.update(t.id, (x) => { delete x.projectId })
+        moved++
+      }
+      await dropUnusedUploads(project.files.map((f) => f.id))
+      return send(res, 200, { ok: true, movedChats: moved })
+    }
+  }
+  if (sub === '/memory' && req.method === 'PUT') {
+    const { memory } = await readJsonBody(req)
+    await projectStore.writeMemory(id, typeof memory === 'string' ? memory : '')
+    return send(res, 200, { memory: await projectStore.readMemory(id) })
+  }
+  if (sub === '/files' && req.method === 'POST') {
+    // Uploaded through /api/chat/uploads first, then added here by id.
+    const { uploadIds } = await readJsonBody(req)
+    const metas = []
+    for (const uid of (Array.isArray(uploadIds) ? uploadIds : []).filter(validUploadId).slice(0, 50)) {
+      const meta = await chatUploads.meta(uid)
+      if (meta) metas.push({ id: meta.id, name: meta.name, mime: meta.mime, size: meta.size, kind: meta.kind, source: 'upload' })
+    }
+    const added = await projectStore.addFiles(id, metas)
+    return send(res, 200, { added: added.map(signProjectFile), project: await full() })
+  }
+  if (sub?.startsWith('/files') && req.method === 'DELETE') {
+    // One file by path, or several: {ids: [...]}.
+    const ids = fileId ? [fileId] : ((await readJsonBody(req)).ids || []).filter(validUploadId)
+    const removed = await projectStore.removeFiles(id, ids)
+    await dropUnusedUploads(removed.map((f) => f.id))
+    return send(res, 200, { removed: removed.length, project: await full() })
+  }
+  return send(res, 405, { error: 'method not allowed' })
+}
+
 // Unattached drafts' files, swept daily.
 setInterval(async () => {
   try {
-    const referenced = new Set()
-    for (const t of await threadStore.list()) {
-      for (const m of t.messages) {
-        for (const a of m.attachments || []) referenced.add(a.id)
-        for (const p of m.parts || []) if (p.type === 'image' || p.type === 'file') referenced.add(p.uploadId)
-      }
-    }
+    const referenced = await threadUploadIds()
+    for (const id of await projectStore.fileIds()) referenced.add(id)
     await chatUploads.sweepOrphans({ referenced })
   } catch (e) { log('chat upload sweep failed', e?.message || e) }
 }, 6 * 60 * 60_000).unref?.()
@@ -13067,7 +13212,19 @@ const server = http.createServer(async (req, res) => {
           return t ? send(res, 200, t) : send(res, 404, { error: 'not found' })
         }
         if (req.method === 'PUT') {
-          return send(res, 200, await writeThread(id, await readJsonBody(req)))
+          const body = await readJsonBody(req)
+          const before = 'projectId' in body ? await threadStore.get(id) : null
+          const thread = await writeThread(id, body)
+          // A chat moved into a project brings its files with it.
+          if (thread.projectId && before && before.projectId !== thread.projectId && await projectStore.get(thread.projectId)) {
+            const files = []
+            for (const m of thread.messages) {
+              for (const a of m.attachments || []) files.push({ ...a, source: 'chat', threadId: id })
+              for (const p of m.parts || []) if (p.type === 'file') files.push({ id: p.uploadId, name: p.name, mime: p.mime, size: p.size, kind: 'file', source: 'agent', threadId: id })
+            }
+            if (files.length) await projectStore.addFiles(thread.projectId, files).catch((e) => log('chat: project file add failed', e?.message || e))
+          }
+          return send(res, 200, thread)
         }
         if (req.method === 'DELETE') {
           await deleteThread(id)

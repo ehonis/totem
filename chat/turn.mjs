@@ -8,6 +8,7 @@
 //                      resumed session did not see is replayed, never dropped.
 //   renderTranscript — prior turns as plain text, newest-first under a budget.
 //   attachmentBlock  — where each attached file is, plus pasted text inline.
+//   projectBlock     — a project chat's shared instructions, memory and files.
 //   applyEvent       — fold one stream event into the assistant message. The
 //                      browser has a TypeScript twin (web/src/chat/reduce.ts);
 //                      keep the two in step.
@@ -80,6 +81,39 @@ export function attachmentBlock(files) {
   }
   if (pasted.length) out += `PASTED / TEXT FILES:\n${pasted.join('\n\n')}\n\n`
   return out
+}
+
+const PROJECT_MEMORY_PROMPT_LIMIT = 12_000
+const PROJECT_FILES_LISTED = 80
+
+/**
+ * What a chat in a project knows about the project: its instructions, its
+ * memory (and where to keep it), and every shared file with its path. Sent on
+ * every turn, resumed or not, because files and memory change between turns.
+ * `files` carry `path` resolved; ones whose upload has gone are left out.
+ */
+export function projectBlock(project, { memory = '', memoryPath = '', files = [] } = {}) {
+  if (!project) return ''
+  const out = [`PROJECT: This chat is part of the owner's project "${project.name}". The other chats in it share these instructions, this memory and these files.`]
+  const instructions = String(project.instructions || '').trim()
+  if (instructions) out.push(`Project instructions from the owner (follow them in this chat):\n${instructions}`)
+  const mem = String(memory || '').trim()
+  const memText = mem.length > PROJECT_MEMORY_PROMPT_LIMIT ? `${mem.slice(0, PROJECT_MEMORY_PROMPT_LIMIT)}\n…(truncated; the full file is at the path below)` : mem
+  out.push(
+    `Project memory (${memoryPath}):\n${memText || '(empty so far)'}\n` +
+    'Keep that file current with your file tools: when this chat settles a decision, learns a fact or preference the other chats in the project will need, or finishes something worth remembering, add a short dated bullet under a fitting heading, and correct anything that is no longer true. Keep it short; it is notes for the next chat, not a transcript. Do not tell the owner each time you update it.',
+  )
+  const listed = files.filter((f) => f?.path).slice(-PROJECT_FILES_LISTED)
+  if (listed.length) {
+    const lines = listed.map((f) => {
+      const kb = Math.max(1, Math.round((f.size || 0) / 1024))
+      const what = f.kind === 'image' ? 'image' : f.mime
+      return `- ${f.name} (${what}, ${kb} KB${f.source === 'agent' ? ', made by you in an earlier chat' : ''}): ${f.path}`
+    })
+    const more = files.length > listed.length ? `\n(${files.length - listed.length} older files not listed.)` : ''
+    out.push(`Project files, saved on this machine. Open the ones that matter to the request with your file tools; do not ask the owner to upload them again:\n${lines.join('\n')}${more}`)
+  }
+  return `${out.join('\n\n')}\n\n`
 }
 
 // --- Reply accumulation ----------------------------------------------------
