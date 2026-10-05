@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Hi, Cog6ToothIcon, AdjustmentsHorizontalIcon, ArrowRightOnRectangleIcon, CommandLineIcon, BellAlertIcon, SparklesIcon, LinkIcon, CheckCircleIcon } from '../icons'
+import { Hi, Cog6ToothIcon, AdjustmentsHorizontalIcon, ArrowRightOnRectangleIcon, CommandLineIcon, BellAlertIcon, MicrophoneIcon, ChatBubbleLeftRightIcon, SparklesIcon, BoltIcon, CircleStackIcon, ShieldCheckIcon, LinkIcon, CheckCircleIcon } from '../icons'
 import { ApiError, changePassword, clearSecret, getAuthStatus, logout } from '../api'
 import type { AuthStatus } from '../api'
 import AiSettings from './AiSettings'
@@ -9,17 +9,30 @@ import { useSettings, setSetting } from '../settings'
 import ProvidersView from './ProvidersView'
 import ShortcutsSettings from './ShortcutsSettings'
 import NotificationsSettings from './NotificationsSettings'
+import VoiceSettings from './VoiceSettings'
+import ChatSettings from './ChatSettings'
+import SkillsView from './SkillsView'
+import JobsView from './JobsView'
+import McpSettingsView from './McpSettingsView'
+import LogsView from './LogsView'
 
 // Connections (MCP) moved to the Studio tab - Settings now covers app
 // preferences and AI providers only.
 const SUB_TABS = [
   { id: 'general', label: 'General', icon: Cog6ToothIcon },
+  { id: 'chat', label: 'Chat', icon: ChatBubbleLeftRightIcon },
   { id: 'ai', label: 'AI', icon: SparklesIcon },
   { id: 'integrations', label: 'Integrations', icon: LinkIcon },
   { id: 'tasks', label: 'Tasks', icon: CheckCircleIcon },
   { id: 'providers', label: 'Providers', icon: AdjustmentsHorizontalIcon },
   { id: 'shortcuts', label: 'Shortcuts', icon: CommandLineIcon },
   { id: 'notifications', label: 'Notifications', icon: BellAlertIcon },
+  { id: 'voice', label: 'Voice', icon: MicrophoneIcon },
+  // The AI workshop, formerly Studio and Logs in the side nav.
+  { id: 'skills', label: 'Skills', icon: SparklesIcon },
+  { id: 'jobs', label: 'Jobs', icon: BoltIcon },
+  { id: 'connections', label: 'Connections', icon: CircleStackIcon },
+  { id: 'logs', label: 'Logs', icon: ShieldCheckIcon },
 ]
 
 interface ToggleProps {
@@ -225,6 +238,12 @@ export default function SettingsView({ onAuthError, subTab, onSubTab, scrollTo }
           {sub === 'providers' && <ProvidersView onAuthError={onAuthError} scrollTo={scrollTo} />}
           {sub === 'shortcuts' && <ShortcutsSettings />}
           {sub === 'notifications' && <NotificationsSettings />}
+          {sub === 'voice' && <VoiceSettings />}
+          {sub === 'chat' && <ChatSettings />}
+          {sub === 'skills' && <SkillsView onAuthError={onAuthError} />}
+          {sub === 'jobs' && <JobsView onAuthError={onAuthError} />}
+          {sub === 'connections' && <McpSettingsView onAuthError={onAuthError} />}
+          {sub === 'logs' && <LogsView onAuthError={onAuthError} />}
         </div>
       </div>
     </div>

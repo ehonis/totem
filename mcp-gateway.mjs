@@ -355,6 +355,11 @@ const BUILTIN_SERVERS = {
   goals: { description: "Totem weekly goals and their metrics, in process" },
   lists: { description: 'Totem checklists and their related tasks, in process' },
   strava: { filter: /^totem_strava_/, strip: 'totem_strava_', description: 'Strava, via the Totem bridge' },
+  // The chat's browser (bridge /agent-mcp). Only inside a chat run: the bridge
+  // hands each run a token in TOTEM_BROWSER_TOKEN, which binds the tools to that
+  // chat's browser. Claude and Codex get /agent-mcp directly; this is how Cursor
+  // and OpenCode, which take no per-run MCP flag, reach the same browser.
+  browser: { filter: /^preview_/, strip: '', description: "The chat's browser, via the Totem bridge" },
 }
 
 function unavailableConnector(name) {
@@ -544,6 +549,14 @@ export class Gateway {
             client: this.listClient,
             description: def.description,
           }]]
+        }
+        if (id === 'browser') {
+          // A literal ${env:…} means the client didn't interpolate: no run, no browser.
+          const token = process.env.TOTEM_BROWSER_TOKEN
+          if (!token || token.includes('${')) return []
+          const given = process.env.TOTEM_BROWSER_URL || ''
+          const url = /^http:\/\/127\.0\.0\.1:\d+\/agent-mcp$/.test(given) ? given : `http://127.0.0.1:${creds?.port || process.env.BRIDGE_PORT || '8787'}/agent-mcp`
+          return [[id, { builtin: true, transport: 'http', url, headers: { authorization: `Bearer ${token}` }, description: def.description }]]
         }
         if (!creds) return []
         return [[id, { builtin: true, transport: 'http', url: creds.url, headers: { authorization: `Bearer ${creds.secret}` }, description: def.description }]]

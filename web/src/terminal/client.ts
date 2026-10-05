@@ -95,7 +95,7 @@ class TerminalClient {
     this.setState('connecting', '')
     let socket: WebSocket
     try {
-      socket = new WebSocket(socketUrl(), [SUBPROTOCOL, bearerProtocol(secret)])
+      socket = new WebSocket(socketUrl(), secret ? [SUBPROTOCOL, bearerProtocol(secret)] : [SUBPROTOCOL])
     } catch (e) {
       this.setState('closed', e instanceof Error ? e.message : String(e))
       this.scheduleReconnect()

@@ -17,8 +17,11 @@ export const getSecret = () => localStorage.getItem(KEY) || ''
 export const setSecret = (s: string) => localStorage.setItem(KEY, s)
 export const clearSecret = () => localStorage.removeItem(KEY)
 
-function authHeaders(extra: Record<string, string> = {}) {
-  return { Authorization: `Bearer ${getSecret()}`, ...extra }
+// The signed-in browser carries a session cookie, so there is usually no header.
+// The secret only exists for a browser that unlocked with BRIDGE_SECRET instead.
+export function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const secret = getSecret()
+  return secret ? { Authorization: `Bearer ${secret}`, ...extra } : { ...extra }
 }
 
 export class ApiError extends Error {

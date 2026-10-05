@@ -35,7 +35,8 @@ export const PRODUCTIVITY_APPS = ['todos', 'calendar', 'habits', 'goals', 'lists
 export const DEFAULT_PRODUCTIVITY_APP = 'calendar'
 
 const SUB_TABS: Record<string, string[]> = {
-  settings: ['general', 'ai', 'integrations', 'tasks', 'providers', 'shortcuts', 'notifications'],
+  // Keep in step with SUB_TABS in components/SettingsView.tsx.
+  settings: ['general', 'chat', 'ai', 'integrations', 'tasks', 'providers', 'shortcuts', 'notifications', 'voice', 'skills', 'jobs', 'connections', 'logs'],
   studio: ['skills', 'workflows', 'connections'],
 }
 

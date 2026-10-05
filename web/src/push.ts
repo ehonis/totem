@@ -9,7 +9,7 @@
 //   * Permission is requested once, from a user gesture. A denial sticks until the
 //     app is removed from the Home Screen and re-added — there is no second prompt.
 //   * Removing the web app destroys the subscription and its storage silently.
-import { getSecret } from './api'
+import { authHeaders as bridgeHeaders } from './api'
 
 export type PushState = {
   supported: boolean
@@ -20,10 +20,7 @@ export type PushState = {
   blocker: string | null
 }
 
-const authHeaders = () => ({
-  Authorization: `Bearer ${getSecret()}`,
-  'content-type': 'application/json',
-})
+const authHeaders = () => bridgeHeaders({ 'content-type': 'application/json' })
 
 // iOS reports an installed web app through a non-standard navigator flag; every
 // other platform uses the display-mode media query.

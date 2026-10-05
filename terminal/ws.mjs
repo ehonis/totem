@@ -97,6 +97,8 @@ function originAllowed(origin, host) {
  * @param {object}   options.sessions   Manager from `terminal/sessions.mjs`.
  * @param {string}   options.path       Endpoint path (e.g. '/api/terminal/ws').
  * @param {string}   options.secret     BRIDGE_SECRET.
+ * @param {Function} [options.authorize] async (req) => boolean — another way in
+ *   when the subprotocol carries no secret (a verified Cloudflare Access identity).
  * @param {number}   options.maxSessions
  * @param {Function} [options.log]
  * @returns {{ close: Function }}
@@ -104,7 +106,7 @@ function originAllowed(origin, host) {
 export function attachTerminalWebSocket(server, { sessions, path, secret, authorize = null, maxSessions, log = () => {} }) {
   const wss = new WebSocketServer({ noServer: true, handleProtocols: () => SUBPROTOCOL })
 
-  server.on('upgrade', (req, socket, head) => {
+  server.on('upgrade', async (req, socket, head) => {
     // Other upgrade listeners may own other paths; leave their sockets alone.
     if ((req.url || '').split('?')[0] !== path) return
 
