@@ -11,7 +11,7 @@ when a vendor tightens a screw.
 
 ## Where to manage it
 
-- **Studio → Connections → Wearables** — status, granted scopes, the redirect URI,
+- **Settings → Connections → Wearables** — status, granted scopes, the redirect URI,
   and Reconnect. This is the home for it.
 - **Productivity → Habits**, on the sleep chart — Reconnect sits next to Sync, with
   a one-line health note when the grant needs attention.
@@ -85,7 +85,7 @@ percentage alongside its colored trend line.
    WHOOP's consent screen and lands back on `/whoop-oauth/callback`, which stores
    the token pair in `secrets/whoop-oauth.json`. Click it again any time WHOOP
    invalidates the session.
-5. **Turn the job on** in Studio → Jobs → *WHOOP sleep sync*. `WHOOP_SLEEP_INGEST_ENABLED=true`
+5. **Turn the job on** in Totems → *WHOOP sleep sync*. `WHOOP_SLEEP_INGEST_ENABLED=true`
    only seeds the default on first boot — after that `data/jobs.json` is authoritative,
    so the toggle in the UI is the one that decides. See `docs/jobs.md`.
 

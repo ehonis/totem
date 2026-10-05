@@ -19,6 +19,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createInterface } from 'node:readline'
 import { Poller as AiUsagePoller } from './ai-usage/poller.mjs'
 import { createJobStore } from './jobs/store.mjs'
+import { totemRunPrompt, parseRunReply, totemChatBlock, totemsRule, parseProposals, appendMemoryNote, builderPrompt, parseBuilderReply, costTier } from './totems/core.mjs'
 import { dueState } from './jobs/schedule.mjs'
 import { createSkillStore } from './skills/store.mjs'
 import { Gateway as McpGateway, loadManifest as loadMcpManifest, NS as MCP_NS } from './mcp-gateway.mjs'
@@ -3696,7 +3697,7 @@ function spawnOpenCodeStream(text, { label = 'request', onActivity, onTool, onTe
 // catches (inbox, jobs, web chat) or should surface it.
 async function runCodex(text, options = {}) {
   const budget = agentBudget(options)
-  const res = await spawnCodexStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, effort: options.effort, instance: options.instance, sandbox: options.readOnly ? 'read-only' : null, timeoutMs: budget })
+  const res = await spawnCodexStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, effort: options.effort, instance: options.instance, sandbox: options.readOnly ? 'read-only' : null, browser: options.browser || null, extraArgs: options.network && !options.readOnly ? ['-c', 'sandbox_workspace_write.network_access=true'] : [], timeoutMs: budget })
   if (res.stopped) return 'Stopped the running request.'
   const reply = res.result.trim()
   if (reply) return reply
@@ -3706,7 +3707,7 @@ async function runCodex(text, options = {}) {
 
 async function runCursor(text, options = {}) {
   const budget = agentBudget(options)
-  const res = await spawnCursorStream(text, { label: 'agent request', onActivity: options.onActivity, onText: options.onText, cursorModel: options.cursorModel, instance: options.instance, timeoutMs: budget })
+  const res = await spawnCursorStream(text, { label: 'agent request', onActivity: options.onActivity, onText: options.onText, cursorModel: options.cursorModel, instance: options.instance, browser: options.browser || null, timeoutMs: budget })
   if (res.stopped) return 'Stopped the running request.'
   // A killed run that produced *some* stdout used to fall through to the generic
   // "finished without a final response" line below, which reads like a shrug and
@@ -3720,7 +3721,7 @@ async function runCursor(text, options = {}) {
 
 async function runClaude(text, options = {}) {
   const budget = agentBudget(options)
-  const res = await spawnClaudeStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, effort: options.effort, readOnly: options.readOnly, instance: options.instance, timeoutMs: budget })
+  const res = await spawnClaudeStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, effort: options.effort, readOnly: options.readOnly, instance: options.instance, browser: options.browser || null, allowWrite: options.allowWrite || [], timeoutMs: budget })
   if (res.stopped) return 'Stopped the running request.'
   const reply = res.result.trim()
   if (reply) return reply
@@ -3730,7 +3731,7 @@ async function runClaude(text, options = {}) {
 
 async function runOpenCode(text, options = {}) {
   const budget = agentBudget(options)
-  const res = await spawnOpenCodeStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, instance: options.instance, timeoutMs: budget })
+  const res = await spawnOpenCodeStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, instance: options.instance, browser: options.browser || null, timeoutMs: budget })
   if (res.stopped) return 'Stopped the running request.'
   if (res.timedOut && !res.result.trim() && !res.stderr.trim()) {
     return `Agent timed out after ${Math.round(budget / 1000)} seconds. Try a narrower request.`
@@ -8978,6 +8979,18 @@ async function handleChatSend(req, res) {
       .catch((e) => log('chat: project file add failed', e?.message || e))
   }
   const projectCtx = projectId ? await chatProjectContext(projectId).catch(() => '') : ''
+  // A totem's own chat knows the totem; every chat knows which totems exist, so
+  // it can propose a change to one (totems/core.mjs).
+  const totemId = thread.totemId || null
+  // Only agent totems (an inline prompt) take proposals: a built-in or skill job
+  // reads neither a totem memory nor inline instructions, so a change would do nothing.
+  const totemList = voice ? [] : (await jobStore.list().catch(() => [])).filter((j) => !j.runner && !j.skillId && String(j.prompt || '').trim())
+  const totemJob = totemId ? totemList.find((j) => j.id === totemId) || await jobStore.get(totemId).catch(() => null) : null
+  const totemCtx = totemJob
+    ? totemChatBlock({ totem: totemJob, memory: await readTotemMemory(totemId), memoryPath: totemMemoryPath(totemId), recentRuns: (await jobStore.runs({ jobId: totemId, limit: 5 })).reverse() })
+    : ''
+  const totemRule = totemList.length ? `${totemsRule(totemList)}\n\n` : ''
+  const contextBlock = `${projectCtx}${totemCtx}${totemRule}`
   const needsTitle = !existing?.title || userIndex === 0
   const streamLive = streamingEnabled(provider, config)
   log(`WEB chat [${provider}${route ? ` ${route.route}${route.power ? ` p${route.power}` : ''}${route.level ? `:${route.level}` : ''} (${route.reason})` : ''}${mode !== 'chat' ? `/${mode}` : ''}${voice ? '/voice' : ''}]:`, text.slice(0, 100))
@@ -9041,7 +9054,7 @@ async function handleChatSend(req, res) {
         // from an earlier ask. Never by default; voice turns never.
         if (!voice && wantsBrowser({ body, text, threadId })) browserAccess = grantBrowserAccess(threadId, push)
         const runOnce = async ({ fresh }) => {
-          const { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser: !!browserAccess, project: projectCtx })
+          const { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser: !!browserAccess, project: contextBlock })
           return {
             resumeId,
             r: await streamFn(prompt, {
@@ -9056,7 +9069,7 @@ async function handleChatSend(req, res) {
               features: mode === 'computer' ? ['computer_use'] : [],
               browser: browserAccess,
               // Where the prompt tells it to write: this chat's documents, and its project's memory.
-              allowWrite: [join(CHAT_OUTPUTS_DIR, threadId), projectId && projectStore.memoryPath(projectId)].filter(Boolean),
+              allowWrite: [join(CHAT_OUTPUTS_DIR, threadId), projectId && projectStore.memoryPath(projectId), totemJob && totemMemoryPath(totemId)].filter(Boolean),
               timeoutMs: mode === 'chat' ? CHAT_TIMEOUT_MS : CHAT_TASK_TIMEOUT_MS,
               onText: (delta) => forward({ type: 'delta', text: delta }, { live: streamLive }),
               onActivity: (a) => push({ type: 'activity', text: a }),
@@ -9118,6 +9131,20 @@ async function handleChatSend(req, res) {
           }
         }
         finalizeMessage(assistant, { status, error, finalText, startedAt: t0 })
+        // Proposed totem changes leave the text and become cards with Accept.
+        if (totemList.length && /```totem-proposal/.test(assistant.content || '')) {
+          const known = new Map(totemList.map((j) => [j.id, j]))
+          const found = []
+          for (const part of assistant.parts || []) {
+            if (part.type !== 'text') continue
+            const r = parseProposals(part.text, new Set(known.keys()))
+            part.text = r.text
+            found.push(...r.proposals)
+          }
+          assistant.content = parseProposals(assistant.content).text
+          assistant.parts = (assistant.parts || []).filter((p) => p.type !== 'text' || p.text)
+          for (const p of found) assistant.parts.push({ type: 'totem-proposal', id: randomUUID().slice(0, 12), status: 'pending', totemName: known.get(p.totemId)?.name, ...p })
+        }
         await save((t) => {
           if (sessionId && status !== 'error') {
             t.sessions = { ...(t.sessions || {}), [provider]: { id: sessionId, through: t.messages.length } }
@@ -12622,6 +12649,10 @@ const server = http.createServer(async (req, res) => {
       // Scheduled work, system and user-authored. Every mutation returns the full
       // refreshed payload, so the UI can never end up showing a toggle state the
       // server disagrees with — the failure that started all this.
+      if (path.startsWith('/api/totems')) {
+        const handled = await handleTotemsApi(req, res, path)
+        if (handled !== false) return
+      }
       if (req.method === 'GET' && path === '/api/jobs') {
         const force = new URL(req.url, 'http://x').searchParams.get('recheck') === '1'
         return send(res, 200, await buildJobsPayload({ force }))
@@ -12654,6 +12685,9 @@ const server = http.createServer(async (req, res) => {
         if (!id) return send(res, 400, { error: 'missing id' })
         const result = await jobStore.remove(id)
         if (!result.ok) return send(res, 400, result)
+        // A totem goes with its memory and its chat.
+        await rm(dirname(totemMemoryPath(id)), { recursive: true, force: true }).catch(() => {})
+        await threadStore.remove(totemThreadId(id)).catch(() => {})
         return send(res, 200, { ...result, ...(await buildJobsPayload()) })
       }
       // Put back a default you deleted. The counterpart to DELETE now that
@@ -13817,7 +13851,8 @@ const jobStore = createJobStore({
     title,
     body,
     category: category || 'job.failed',
-    url: url || '/studio/jobs',
+    // A failure opens the totem it came from.
+    url: url || (jobId ? `/totems?totem=${encodeURIComponent(jobId)}` : '/totems'),
     tag: jobId ? `job:${jobId}` : null,
   }),
 })
@@ -14446,6 +14481,7 @@ async function preflightJobProvider(job) {
         agentOptions.model = bareModelId(job.model)
       }
     }
+    if (job.effort) agentOptions.effort = job.effort
     agentOptions.provider = providerId
     return { ok: true, providerId, agentOptions }
   }
@@ -14516,9 +14552,10 @@ async function runJobOnce(job, { trigger = 'schedule', late = false } = {}) {
       result = { status: 'ok', output: reply, provider: providerId, startedAt, trigger, late }
       recordUse('job', { text: `${claimed.name} (${trigger})`, startedAt, provider: providerId })
     } else if (String(claimed.prompt || '').trim()) {
-      // An inline prompt typed straight into the job.
-      const reply = await runAgent(claimed.prompt, 'job', agentOptions)
-      result = { status: 'ok', output: reply, provider: providerId, startedAt, trigger, late }
+      // An inline prompt is an agent totem: it runs with its memory and recent
+      // runs, keeps its memory itself, and decides whether to notify.
+      const out = await runAgentTotem(claimed, agentOptions)
+      result = { status: out.status, output: out.report, provider: providerId, startedAt, trigger, late, totemNotify: out.notify }
       recordUse('job', { text: `${claimed.name} (${trigger})`, startedAt, provider: providerId })
     } else {
       result = { status: 'error', error: 'this job has no skill or prompt, so there is nothing to run', errorKind: 'empty-prompt', startedAt, trigger, late }
@@ -14540,15 +14577,24 @@ async function runJobOnce(job, { trigger = 'schedule', late = false } = {}) {
     }
   }
 
+  const totemNotify = result.totemNotify || null
+  delete result.totemNotify
   const { job: updated, record } = await jobStore.finish(job.id, result)
-  await maybeNotifyJobRun(updated || claimed, record)
+  await maybeNotifyJobRun(updated || claimed, record, totemNotify)
+  await postTotemRun(updated || claimed, record, totemNotify).catch((e) => log(`totem ${job.id}: posting the run to its chat failed`, e?.message || e))
   log(`job ${job.id}: ${record.status}${record.ms != null ? ` in ${record.ms}ms` : ''}`)
   return record
 }
 
-async function maybeNotifyJobRun(job, record) {
+async function maybeNotifyJobRun(job, record, totemNotify = null) {
   const mode = job?.notify || 'errors'
   if (mode === 'never') return
+  // A totem's own call: it said NOTIFY, so the phone hears about it, and the
+  // tap opens the totem's chat.
+  if (totemNotify && record.status !== 'error' && mode !== 'errors') {
+    await jobStore.notify({ level: 'info', title: totemNotify.title, body: totemNotify.body || record.preview || '', jobId: job.id, category: 'totem.notify', url: webThreadUrl(totemThreadId(job.id)) })
+    return
+  }
   if (record.status === 'error') {
     const streak = job?.consecutiveFailures > 1 ? ` (${job.consecutiveFailures} runs in a row)` : ''
     await jobStore.notify({
@@ -14567,6 +14613,186 @@ async function maybeNotifyJobRun(job, record) {
       jobId: job.id,
     })
   }
+}
+
+// ---- Totems ---------------------------------------------------------------------
+// Every job is a totem (totems/core.mjs). Each has a memory file under
+// data/totems/<id>/ and a chat thread `totem-<id>` its runs are posted to and the
+// owner talks to it in. The thread is made the first time something needs it.
+const TOTEMS_DIR = process.env.TOTEMS_DIR || join(HERE, 'data', 'totems')
+const totemThreadId = (jobId) => `totem-${jobId}`.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 128)
+const totemMemoryPath = (jobId) => join(TOTEMS_DIR, String(jobId).replace(/[^A-Za-z0-9_-]/g, '_'), 'memory.md')
+const TOTEM_MEMORY_MAX = 40_000
+
+async function readTotemMemory(jobId) {
+  try { return (await readFile(totemMemoryPath(jobId), 'utf8')).slice(0, TOTEM_MEMORY_MAX) } catch { return '' }
+}
+async function writeTotemMemory(jobId, text) {
+  await mkdir(dirname(totemMemoryPath(jobId)), { recursive: true })
+  await writeFile(totemMemoryPath(jobId), String(text || '').slice(0, TOTEM_MEMORY_MAX))
+}
+
+async function ensureTotemThread(job) {
+  const id = totemThreadId(job.id)
+  const existing = await threadStore.get(id)
+  if (existing) return existing
+  const now = Date.now()
+  return threadStore.put(id, { id, kind: 'regular', title: job.name, totemId: job.id, messages: [], createdAt: now, updatedAt: now })
+}
+
+// A run's report becomes a message in the totem's chat, so its chat is its
+// timeline. Polls that found nothing (skipped, or an agent totem saying QUIET
+// with nothing to report) stay out of it; the run history still has them.
+async function postTotemRun(job, record, notify) {
+  if (!job || record.status === 'skipped') return
+  const text = String(record.output || record.preview || '').trim()
+  if (record.status !== 'error' && !text && !notify) return
+  await ensureTotemThread(job)
+  const when = new Date(record.startedAt || Date.now())
+  const head = record.status === 'error' ? `**Run failed.** ${record.error || ''}` : notify ? `**${notify.title}**${notify.body ? ` · ${notify.body}` : ''}` : ''
+  const content = [head, record.status === 'error' ? '' : text].filter(Boolean).join('\n\n')
+  await threadStore.update(totemThreadId(job.id), (t) => {
+    t.messages.push({
+      id: randomUUID(), role: 'assistant', content, status: record.status === 'error' ? 'error' : 'done', createdAt: when.getTime(),
+      provider: record.provider || undefined, parts: [{ type: 'text', text: content }], run: { trigger: record.trigger || 'schedule', status: record.status, notified: !!notify },
+    })
+    t.title = t.title || job.name
+    t.updatedAt = Date.now()
+  })
+}
+
+async function runAgentTotem(job, agentOptions) {
+  const memoryPath = totemMemoryPath(job.id)
+  await mkdir(dirname(memoryPath), { recursive: true })
+  const recentRuns = (await jobStore.runs({ jobId: job.id, limit: 6 })).reverse()
+  const browser = job.browser ? grantBrowserAccess(totemThreadId(job.id), () => {}) : null
+  try {
+    const reply = await runAgent(
+      totemRunPrompt({ totem: job, memory: await readTotemMemory(job.id), memoryPath, recentRuns, browser: !!browser }),
+      'job',
+      // A totem's run gets a long budget (a watcher may browse) and may write only its own memory.
+      // `network`: Codex's sandbox blocks the network by default, and a totem that
+      // watches the web has to be able to fetch it.
+      { ...agentOptions, allowWrite: [memoryPath], browser, network: true, timeoutMs: 15 * 60_000 },
+    )
+    const { report, notify, quiet } = parseRunReply(reply)
+    // QUIET is "checked, nothing new": recorded as skipped, so a watcher's
+    // hundred uneventful polls don't fill its chat or count as failures.
+    return { status: quiet && !notify ? 'skipped' : 'ok', report, notify }
+  } finally {
+    browser?.revoke()
+    if (browser) await browserManager.closeSession(totemThreadId(job.id)).catch(() => {})
+  }
+}
+
+// What every enabled account can run, for the builder to recommend from.
+async function totemModelCatalog() {
+  const config = await readProviderConfig()
+  const out = []
+  for (const provider of config.enabledProviders) {
+    // Only accounts a scheduled run would actually get past preflight with.
+    const health = await providerHealth(provider).catch(() => ({ state: 'unknown' }))
+    if (health.state !== 'ready' && health.state !== 'unknown') continue
+    const info = await listChatModels(provider).catch(() => null)
+    const row = info?.providers?.find((p) => p.id === provider)
+    out.push({
+      provider, driver: driverOf(provider), name: row?.name || providerLabel(provider),
+      models: (info?.models || []).filter((m) => !m.hidden).map((m) => ({ id: m.id, name: m.name || m.id })),
+    })
+  }
+  return out
+}
+
+// The builder: one read-only run of the default account turns a description into
+// a totem draft with model recommendations, cheapest first. Nothing is created
+// until the owner says so.
+async function buildTotemDraft(description) {
+  const catalog = await totemModelCatalog()
+  const reply = await runAgent(builderPrompt({ description, catalog, timezone: MORNING_BRIEFING_TZ }), 'revise', { readOnly: true, noFallback: true, timeoutMs: 4 * 60_000 })
+  const draft = parseBuilderReply(reply, { catalog, description })
+  draft.icon = cleanIcon(draft.icon) || 'sparkles'
+  return draft
+}
+
+async function handleTotemsApi(req, res, path) {
+  if (req.method === 'POST' && path === '/api/totems/build') {
+    const { description } = await readJsonBody(req)
+    if (String(description || '').trim().length < 8) return send(res, 400, { error: 'describe what the totem should do' })
+    try { return send(res, 200, { draft: await buildTotemDraft(String(description)) }) } catch (e) {
+      log('totem builder failed', e?.message || e)
+      return send(res, 502, { error: `The builder could not draft this totem: ${e?.message || e}` })
+    }
+  }
+  if (req.method === 'POST' && path === '/api/totems') {
+    const body = await readJsonBody(req)
+    const d = body.draft || {}
+    if (!String(d.name || '').trim() || !String(d.instructions || '').trim()) return send(res, 400, { error: 'a totem needs a name and instructions' })
+    const pick = (d.recommendations || [])[Number(body.recommendation) || 0] || null
+    const job = await jobStore.create({
+      name: d.name, description: String(d.summary || String(d.instructions).split(/(?<=[.!?])\s/)[0]).slice(0, 300), iconName: cleanIcon(d.icon) || 'sparkles',
+      enabled: body.enabled !== false, schedule: d.schedule, notify: ['agent', 'always', 'errors', 'never'].includes(d.notify) ? d.notify : 'agent',
+      prompt: d.instructions, provider: pick?.provider || 'default', model: pick?.model || null, effort: pick?.effort || null,
+      taskType: d.taskType, browser: d.browser === true, recommendations: d.recommendations, threadId: null,
+    })
+    await writeTotemMemory(job.id, '')
+    await ensureTotemThread(job)
+    const intro = `I'm **${job.name}**. ${job.scheduleLabel ? `I run ${job.scheduleLabel.charAt(0).toLowerCase()}${job.scheduleLabel.slice(1)}` : 'I run on my schedule'}${pick ? ` on ${pick.label}` : ''}.`
+      + `${job.notify === 'agent' ? ' I only notify you when something is worth it.' : ''} Tell me here if anything should change, or what else to keep an eye on.`
+    await threadStore.update(totemThreadId(job.id), (t) => {
+      t.messages.push({ id: randomUUID(), role: 'assistant', content: intro, status: 'done', createdAt: Date.now(), parts: [{ type: 'text', text: intro }] })
+    })
+    const updated = await jobStore.update(job.id, { threadId: totemThreadId(job.id) })
+    log(`totem created: ${job.id} (${job.name}) — ${job.scheduleLabel}`)
+    // Its first run happens now, so he sees it work instead of waiting for the schedule.
+    if (body.runNow !== false && updated.enabled) runJobOnce(updated, { trigger: 'manual' }).catch((e) => log(`totem ${job.id} first run failed`, e?.message || e))
+    return send(res, 200, { job: updated, threadId: totemThreadId(job.id) })
+  }
+  if (req.method === 'POST' && path === '/api/totems/proposal') {
+    const { threadId, messageId, partId, action } = await readJsonBody(req)
+    if (!validThreadId(threadId)) return send(res, 400, { error: 'missing threadId' })
+    let target = null
+    await threadStore.update(threadId, (t) => {
+      const part = t.messages.find((m) => m.id === messageId)?.parts?.find((p) => p.type === 'totem-proposal' && p.id === partId)
+      if (part && part.status === 'pending') { target = { ...part }; part.status = action === 'accept' ? 'accepted' : 'dismissed' }
+    })
+    if (!target) return send(res, 409, { error: 'that proposal was already handled' })
+    if (action === 'accept') {
+      const job = await jobStore.get(target.totemId)
+      if (!job) return send(res, 404, { error: 'that totem no longer exists' })
+      if (target.memoryNote) await writeTotemMemory(job.id, appendMemoryNote(await readTotemMemory(job.id), target.memoryNote))
+      if (target.instructions) await jobStore.update(job.id, { prompt: target.instructions })
+      log(`totem ${job.id}: accepted a proposal from chat ${threadId}`)
+    }
+    return send(res, 200, { ok: true, status: action === 'accept' ? 'accepted' : 'dismissed' })
+  }
+  const m = /^\/api\/totems\/([A-Za-z0-9_-]{1,64})\/(memory|thread|recommend)$/.exec(path)
+  if (!m) return false
+  const job = await jobStore.get(m[1])
+  if (!job) return send(res, 404, { error: 'no such totem' })
+  if (m[2] === 'memory') {
+    if (req.method === 'GET') return send(res, 200, { memory: await readTotemMemory(job.id), path: totemMemoryPath(job.id) })
+    if (req.method === 'PUT') {
+      const { memory } = await readJsonBody(req)
+      await writeTotemMemory(job.id, typeof memory === 'string' ? memory : '')
+      return send(res, 200, { memory: await readTotemMemory(job.id) })
+    }
+  }
+  if (m[2] === 'recommend' && req.method === 'POST') {
+    // Ask the builder again which models fit this totem's job, cheapest first.
+    const brief = String(job.prompt || job.description || job.name)
+    try {
+      const draft = await buildTotemDraft(`Recommend models for this existing totem. Keep everything else as it is.\n\nName: ${job.name}\nSchedule: ${job.scheduleLabel}\nInstructions:\n${brief}`)
+      const updated = await jobStore.update(job.id, { recommendations: draft.recommendations, taskType: job.taskType || draft.taskType })
+      return send(res, 200, { job: updated })
+    } catch (e) { return send(res, 502, { error: `Could not get recommendations: ${e?.message || e}` }) }
+  }
+  if (m[2] === 'thread' && req.method === 'POST') {
+    // Built-in totems get their chat the first time he opens it.
+    await ensureTotemThread(job)
+    if (job.threadId !== totemThreadId(job.id)) await jobStore.update(job.id, { threadId: totemThreadId(job.id) })
+    return send(res, 200, { threadId: totemThreadId(job.id) })
+  }
+  return send(res, 405, { error: 'method not allowed' })
 }
 
 // One tick for every job. Runs are started concurrently but each job is guarded by

@@ -68,6 +68,7 @@ open-ended work. The default provider and model come from Settings → AI (store
 | Lists | `lists/` | Simple checklists with optional links to tasks. |
 | Voice journal | `journal/`, `web/src/journal/` | Record in the browser, transcribe on the box with whisper.cpp, digest into the notes repo after a grace period. `docs/journal.md`. |
 | Notifications | `notify/`, `web/public/sw.js` | Web Push (RFC 8291/8292 on `node:crypto`), a due-queue drained on the job tick, digests, feed scan, quota nudges. `docs/notifications.md`. |
+| Totems | `totems/`, the "Totems" block in `bridge.mjs`, `web/src/components/TotemsView.tsx` | Standing agents over the job store: every job is a totem (no second scheduler). Agent totems keep `data/totems/<id>/memory.md`, end runs with `NOTIFY:`/`QUIET`, post runs to their chat `totem-<id>`, and get cheapest-first model recommendations from the builder. Any chat can propose a change (Accept card). Replaced Studio. `docs/totems.md`. |
 | Jobs | `jobs/` | Timezone-aware schedules (`daily`, `weekly`, `interval`, `window`) and `data/jobs.json`. One 30-second tick in `bridge.mjs` runs jobs and drains notifications. `docs/jobs.md`. |
 | Skills | `skills/` | Every prompt as an editable `SKILL.md` with `{{variables}}`. Generic seeds in `skills/seeds/` are copied into `data/skills/` once. `docs/skills.md`. |
 | Examples | `examples/` | Optional personalised skills, never installed automatically. |
@@ -147,7 +148,7 @@ Useful focused commands:
 - `curl -s localhost:8787/health`
 
 ### Adding or syncing MCP servers
-1. Prefer Studio → Connections. "Import from Cursor" seeds the manifest from an existing Cursor
+1. Prefer Settings → Connections. "Import from Cursor" seeds the manifest from an existing Cursor
    config.
 2. The manifest is `data/mcp-manifest.json` (gitignored; env values can hold tokens). Local servers
    are `{ "transport": "stdio", "command", "args", "env" }`, remote ones
@@ -224,5 +225,7 @@ row counts, ids and foreign keys, and run it twice.
   safe until the bridge sends `start`; `web/src/chat/store.ts` keeps an outbox in localStorage
   for sends that never reached it.
 - **`claude -p` cannot ask for permission.** A write the prompt asks for is refused unless the bridge allows that path (`allowWrite` → `--allowedTools Edit(…)`), and a small model may still tell the owner it saved. Any new "keep this file updated" rule needs its path added there.
+- **Codex's sandbox has no network.** `workspace-write` blocks it, so a Codex run that must fetch the web (a totem watching a page) needs `network: true` on `runAgent`, which adds `sandbox_workspace_write.network_access=true`. Without it the run reports a DNS failure rather than erroring.
+- **The address bar is normalised on boot.** `buildPath` keeps only the query params it knows (`?thread=`/`?project=` on chat, `?totem=` on totems). A new deep-link param must be added there, or anything that reads it after sign-in finds it gone; read one-time params at module load (see `AuthGate.tsx`).
 - **Google OAuth apps in Testing mode** only admit listed test users and their refresh tokens
   expire; publish the app once setup is stable.

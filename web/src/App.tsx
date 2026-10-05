@@ -15,7 +15,8 @@ import GithubView from './components/GithubView'
 import ChatView from './components/ChatView'
 import { Rail, SidePanel, MobileBar, MobileDrawer, NewChatFab, usePanelOpen, useEdgeSwipe } from './components/Shell'
 import { setActive, requestVoice } from './chat/store'
-import StudioView from './components/StudioView'
+import TotemsView from './components/TotemsView'
+import TotemsIcon from './components/TotemsIcon'
 import SettingsView from './components/SettingsView'
 import TerminalPanel from './components/TerminalPanel'
 import UsageQuickPanels from './components/UsageQuickPanels'
@@ -32,7 +33,6 @@ import {
   ShieldCheckIcon,
   Cog6ToothIcon,
   InboxArrowDownIcon,
-  SparklesIcon,
   CodeBracketIcon,
   ChevronDownIcon,
   EllipsisHorizontalIcon,
@@ -47,6 +47,7 @@ interface TabDef {
 // Primary sidebar tabs — the ones the owner reaches for most often.
 const PRIMARY_TABS: TabDef[] = [
   { id: 'overview', label: 'Overview', icon: Squares2X2Icon },
+  { id: 'totems', label: 'Totems', icon: TotemsIcon },
   { id: 'chat', label: 'Chat', icon: ChatBubbleLeftRightIcon },
   { id: 'productivity', label: 'Productivity', icon: CalendarDaysIcon },
   { id: 'inbox', label: 'Inbox', icon: InboxArrowDownIcon },
@@ -281,9 +282,7 @@ export default function App() {
         )}
         {tab === 'brain' && <BrainView onAuthError={onAuthError} />}
         {tab === 'code' && <GithubView onAuthError={onAuthError} />}
-        {tab === 'studio' && (
-          <StudioView onAuthError={onAuthError} subTab={route.sub || undefined} onSubTab={selectSubTab} />
-        )}
+        {tab === 'totems' && <TotemsView onAuthError={onAuthError} onOpenChat={openChat} />}
         {tab === SETTINGS_TAB && (
           <SettingsView
             onAuthError={onAuthError}

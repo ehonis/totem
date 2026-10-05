@@ -34,8 +34,10 @@ or an auth proxy in front of it, and its defaults reflect that. Formerly named V
   each CLI's config. An inbound MCP server (`POST /mcp`) lets ChatGPT or Claude read Totem and
   stage work, authenticated by bearer token or a Cloudflare Access JWT, with time-boxed
   approval sessions.
-- **Studio.** Editable prompt skills, a scheduler for jobs (morning brief, digests, ingests,
-  syncs; all off until enabled), and the MCP connection manager.
+- **Totems.** Standing agents on a schedule: describe one and the builder designs it and
+  recommends the cheapest model that can do the job. Each remembers what it has seen, has its
+  own chat, and notifies you only when something matters. The built-in jobs (morning brief,
+  digests, ingests, syncs; all off until enabled) are totems too.
 - **Integrations.** WHOOP (sleep and recovery), Strava (activities, gear, mileage), Plaud
   (voice recorder, via its MCP server), GitHub (App or `gh` CLI), Google Calendar, web push
   notifications, Open-Meteo weather and Google News headlines, and a plug-in-the-camera photo
@@ -117,9 +119,9 @@ Codex, Claude Code, OpenCode or Cursor CLIs on the same machine, signed in or gi
 5. Optional, in any order:
    - **Settings -> Integrations**: set the public URL, add WHOOP or Strava app credentials,
      copy the redirect URI it shows into the provider's console, and press Connect.
-   - **Studio -> Connections**: add MCP servers (Google Calendar, Plaud, GitHub, ...) and sync
+   - **Settings -> Connections**: add MCP servers (Google Calendar, Plaud, GitHub, ...) and sync
      them into each CLI.
-   - **Studio -> Jobs**: switch on the scheduled jobs you want. A fresh install has none
+   - **Totems**: switch on the built-in jobs you want, or build your own. A fresh install has none
      running except local task housekeeping.
    - The iOS Shortcut, Tailscale and the other out-of-browser steps: [SETUP.md](SETUP.md).
 

@@ -2,7 +2,7 @@
 
 There are no built-in prompts. The daily brief, both Plaud ingests, and every
 `/command` in chat are Markdown files under
-`data/skills/`. You can edit them in **Studio → Skills**, in vim, or by asking
+`data/skills/`. You can edit them in **Settings → Skills**, in vim, or by asking
 Totem to edit them.
 
 ## Why this exists
@@ -55,7 +55,7 @@ near-impossible to edit outside the app.
 |---|---|
 | `name` | Display name. Renaming does **not** change the id, so jobs keep working |
 | `description` | One line, shown on the card and in the chat menu |
-| `icon` | Any key from the Studio icon set |
+| `icon` | Any key from the dashboard icon set |
 | `command` | Chat command. `/` and `$` are both accepted for any skill |
 | `mode` | `send` (default) runs it; `fill` puts the text in the composer to finish |
 | `requires` | Connections it needs, e.g. `[plaud]` |

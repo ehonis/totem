@@ -123,7 +123,8 @@ export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents
   const projects = useChat((s) => s.projects)
   const threads = useMemo(() => {
     const known = new Set(projects.map((p) => p.id))
-    return allThreads.filter((t) => (projectId ? t.projectId === projectId : !(t.projectId && known.has(t.projectId))))
+    // A totem's chat lives on its totem, not in Recents.
+    return allThreads.filter((t) => !t.totemId && (projectId ? t.projectId === projectId : !(t.projectId && known.has(t.projectId))))
   }, [allThreads, projects, projectId])
   const runs = useChat((s) => s.runs)
   const loaded = useChat((s) => s.loaded)

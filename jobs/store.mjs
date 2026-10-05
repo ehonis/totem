@@ -33,7 +33,9 @@ import { dirname } from 'node:path'
 import { mkdir, readFile, rename, writeFile, stat, appendFile } from 'node:fs/promises'
 import { normalizeSchedule, nextRunAfter, describeSchedule } from './schedule.mjs'
 
-export const NOTIFY_MODES = ['always', 'errors', 'never']
+// 'agent' is a totem's own judgement: it notifies when its run says NOTIFY (and
+// on errors). See totems/core.mjs.
+export const NOTIFY_MODES = ['always', 'agent', 'errors', 'never']
 export const RUN_STATUSES = ['ok', 'error', 'skipped', 'running']
 const MAX_NOTIFICATIONS = 100
 const MAX_RUNS_BYTES = 2 * 1024 * 1024 // trim the history file past ~2MB
@@ -96,6 +98,12 @@ function hydrate(id, saved, def, tz, runners = {}) {
     prompt: String(saved?.prompt || ''),
     requires: saved?.requires ?? def?.requires ?? [],
     action: saved?.action ?? def?.action ?? '',
+    // Totem fields (totems/core.mjs). Every job is a totem; these say how it
+    // thinks and where it talks.
+    taskType: typeof saved?.taskType === 'string' ? saved.taskType.slice(0, 20) : '',
+    browser: saved?.browser === true,
+    threadId: typeof saved?.threadId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(saved.threadId) ? saved.threadId : null,
+    recommendations: cleanRecommendations(saved?.recommendations),
   }
   // A job pointing at a runner the bridge no longer defines would otherwise fail
   // at 07:00 with a confusing message. Flag it so the UI can say so up front.
@@ -113,8 +121,19 @@ function hydrate(id, saved, def, tz, runners = {}) {
   if (!job.agentless && !job.fixedProvider) {
     job.provider = saved?.provider || 'default'
     job.model = saved?.model || null
+    job.effort = ['low', 'medium', 'high'].includes(saved?.effort) ? saved.effort : null
   }
   return job
+}
+
+// The builder's model suggestions, kept so the totem's settings can offer them again.
+function cleanRecommendations(list) {
+  if (!Array.isArray(list)) return []
+  return list.slice(0, 4).filter((r) => r && typeof r.provider === 'string').map((r) => ({
+    provider: r.provider.slice(0, 60), model: String(r.model || '').slice(0, 120), effort: String(r.effort || '').slice(0, 10),
+    label: String(r.label || '').slice(0, 120), account: String(r.account || '').slice(0, 80), driver: String(r.driver || '').slice(0, 20),
+    cost: Math.min(3, Math.max(1, Math.round(Number(r.cost) || 2))), why: String(r.why || '').slice(0, 240),
+  }))
 }
 
 // Only these fields are ever persisted for a job; anything else the client sends
@@ -138,10 +157,15 @@ function persistable(job) {
     prompt: job.prompt,
     requires: job.requires,
     action: job.action,
+    taskType: job.taskType,
+    browser: job.browser,
+    threadId: job.threadId,
+    recommendations: job.recommendations,
   }
   if (!job.agentless && !job.fixedProvider) {
     out.provider = job.provider
     out.model = job.model
+    out.effort = job.effort
   }
   return out
 }
@@ -314,6 +338,11 @@ export function createJobStore({
         prompt: String(input?.prompt || '').slice(0, 8000),
         provider: input?.provider || 'default',
         model: input?.model || null,
+        effort: input?.effort || null,
+        taskType: input?.taskType,
+        browser: input?.browser === true,
+        threadId: input?.threadId,
+        recommendations: input?.recommendations,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }, null, tz, runners)
@@ -354,7 +383,12 @@ export function createJobStore({
       if (!before.agentless && !before.fixedProvider) {
         if (patch.provider !== undefined) next.provider = String(patch.provider || 'default').slice(0, 40)
         if (patch.model !== undefined) next.model = patch.model ? String(patch.model).slice(0, 120) : null
+        if (patch.effort !== undefined) next.effort = patch.effort || null
       }
+      if (typeof patch.browser === 'boolean') next.browser = patch.browser
+      if (patch.taskType !== undefined) next.taskType = String(patch.taskType || '').slice(0, 20)
+      if (patch.threadId !== undefined) next.threadId = patch.threadId || null
+      if (patch.recommendations !== undefined) next.recommendations = patch.recommendations
       next.updatedAt = new Date().toISOString()
 
       const after = hydrateJob(id, next)

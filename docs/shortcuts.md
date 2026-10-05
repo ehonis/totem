@@ -105,8 +105,8 @@ it.
 
 | | Sequence | | Sequence |
 |---|---|---|---|
-| Overview | `g o` | Studio · Skills | `g s k` |
-| Chat | `g c` | Studio · Connections | `g s n` |
+| Overview | `g o` | Settings · Skills | `g s k` |
+| Chat | `g c` | Settings · Connections | `g s n` |
 | Todos | `g t` | Settings | `g ,` |
 | Calendar | `g a` | Settings · Providers | `g , p` |
 | Habits | `g h` | Settings · Shortcuts | `g , s` |
@@ -114,7 +114,7 @@ it.
 | Inbox | `g i` | New chat | `g c c` |
 | Logs | `g l` | AI usage limits | `g u` |
 | Brain | `g b` | Totem usage | `g u a` |
-| Studio | `g s` | Repositories | `g u r` |
+| Totems | `g s` | Repositories | `g u r` |
 | Toggle terminal | `g k` | Show all shortcuts | `g ?` |
 
 Code is `e`, not `g`, so the default set has no sequence whose first key is also

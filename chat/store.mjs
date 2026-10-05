@@ -47,6 +47,16 @@ export function normalizePart(p, i = 0) {
     if (!validThreadId(p.uploadId)) return null
     return { type: 'file', uploadId: p.uploadId, name: str(p.name, 200) || 'file', mime: str(p.mime, 120) || 'application/octet-stream', size: num(p.size), ...(p.path ? { path: str(p.path, 600) } : {}) }
   }
+  // A change to a totem the agent proposed (totems/core.mjs); the owner accepts or dismisses it.
+  if (p.type === 'totem-proposal') {
+    const totemId = str(p.totemId, 64)
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(totemId)) return null
+    const out = { type: 'totem-proposal', id: str(p.id, 64) || `p${i}`, totemId, summary: str(p.summary, 200), status: ['pending', 'accepted', 'dismissed'].includes(p.status) ? p.status : 'pending' }
+    if (p.memoryNote) out.memoryNote = str(p.memoryNote, 1000)
+    if (p.instructions) out.instructions = str(p.instructions, 8000)
+    if (p.totemName) out.totemName = str(p.totemName, 80)
+    return out
+  }
   if (p.type !== 'tool') return null
   const out = {
     type: 'tool',
@@ -94,6 +104,8 @@ export function normalizeMessage(m, i = 0) {
     if (num(m.level)) out.level = Math.min(5, Math.round(num(m.level)))
     if (num(m.power)) out.power = Math.min(5, Math.round(num(m.power)))
   }
+  // A totem's scheduled run, posted to its chat.
+  if (m.run && typeof m.run === 'object') out.run = { trigger: str(m.run.trigger, 20), status: str(m.run.status, 20), notified: m.run.notified === true }
   if (m.mode && m.mode !== 'chat') out.mode = str(m.mode, 20)
   if (m.voice) out.voice = true
   return out
@@ -123,7 +135,7 @@ function normalizeSessions(raw) {
   return Object.keys(out).length ? out : null
 }
 
-const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId']
+const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId']
 
 function applyMetadata(thread, body, now) {
   if (body.kind === 'temporary' || body.kind === 'regular') thread.kind = body.kind
@@ -133,8 +145,14 @@ function applyMetadata(thread, body, now) {
     if (/^[A-Za-z0-9_-]{1,64}$/.test(p)) thread.projectId = p
     else delete thread.projectId
   }
-  // A project chat is always kept: temporary chats live outside projects.
-  if (thread.projectId) thread.kind = 'regular'
+  // The totem (a job id) whose chat this is; set once, when the thread is made.
+  if ('totemId' in body) {
+    const t = str(body.totemId, 64)
+    if (/^[A-Za-z0-9_-]{1,64}$/.test(t)) thread.totemId = t
+    else delete thread.totemId
+  }
+  // A project or totem chat is always kept: temporary chats live outside them.
+  if (thread.projectId || thread.totemId) thread.kind = 'regular'
   if ('title' in body) {
     const title = str(body.title, 120).trim()
     if (title) thread.title = title

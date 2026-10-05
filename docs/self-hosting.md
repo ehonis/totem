@@ -52,9 +52,9 @@ docker compose) always wins and is shown as read-only.
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CURSOR_API_KEY` | Settings -> AI | `data/ai-settings.json` |
 | `PUBLIC_URL`, WHOOP and Strava client ID/secret, task sheet ID/tab/assignees | Settings -> Integrations | `data/integrations.json` |
 | Venture tags | Settings -> Tasks | `data/todos.db` (`todo_preferences`) |
-| MCP servers | Studio -> Connections | `data/mcp-manifest.json` |
-| Scheduled jobs | Studio -> Jobs | `data/jobs.json` |
-| Prompt skills | Studio -> Skills | `data/skills/` |
+| MCP servers | Settings -> Connections | `data/mcp-manifest.json` |
+| Scheduled jobs | Totems | `data/jobs.json` |
+| Prompt skills | Settings -> Skills | `data/skills/` |
 
 Two exceptions to "env wins": `AGENT_BACKEND` and `AGENT_MODEL` are first-run defaults for the
 provider config, and the `*_ENABLED` / `*_TIME` job variables seed `data/jobs.json` once. After

@@ -31,7 +31,18 @@ export interface ToolPart {
   endedAt?: number
 }
 export interface FilePart { type: 'file'; uploadId: string; name: string; mime: string; size?: number; path?: string; url?: string }
-export type Part = TextPart | ImagePart | ToolPart | FilePart
+/** A change to a totem the agent proposed; applied only when the owner accepts. */
+export interface TotemProposalPart {
+  type: 'totem-proposal'
+  id: string
+  totemId: string
+  totemName?: string
+  summary: string
+  memoryNote?: string
+  instructions?: string
+  status: 'pending' | 'accepted' | 'dismissed'
+}
+export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart
 
 export type ChatMode = 'chat' | 'task' | 'computer'
 
@@ -54,6 +65,8 @@ export interface ChatMessage {
   level?: number
   /** The Auto power it ran at, 1..5. */
   power?: number
+  /** A totem's scheduled run, posted to its chat. */
+  run?: { trigger: string; status: string; notified: boolean }
   /** A message the bridge never received (offline, dropped connection). Kept locally with Retry. */
   unsent?: boolean
   sendError?: string
@@ -85,6 +98,8 @@ export interface ChatThread {
   pinned?: boolean
   /** The project this chat belongs to; none = Home. */
   projectId?: string
+  /** This is a totem's own chat (its job id). Kept out of Recents. */
+  totemId?: string
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
