@@ -99,3 +99,20 @@
   .tm-row-fields { grid-template-columns: 1fr; }
   .tm-card-desc { -webkit-line-clamp: 2; }
 }
+
+/* Any model: the chat picker inside a recommendation-shaped row. */
+.tm-rec-own { flex-wrap: wrap; cursor: default; }
+.tm-model-pick { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tm-effort { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.tm-effort select { height: 30px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg-2); color: var(--text); font: inherit; font-size: 13px; }
+
+/* Schedule or watch. */
+.tm-mode { margin-bottom: 4px; }
+.tm-watch { display: flex; flex-direction: column; gap: 10px; }
+.tm-watch-fields { display: grid; grid-template-columns: 1fr 160px; gap: 10px 12px; }
+.tm-watch-fields .tm-full { grid-column: 1 / -1; }
+.tm-watch-fields .tm-input { padding: 8px 11px; font-size: 14px; }
+.tm-watch .sched-time input[type="number"] { width: 76px; }
+@media (max-width: 640px) {
+  .tm-watch-fields { grid-template-columns: 1fr; }
+}

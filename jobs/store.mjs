@@ -27,11 +27,16 @@
 //   2. `skillId` — renders an editable skill file from data/skills/ and runs it.
 //                  This is how the daily brief and both ingests work.
 //   3. `prompt`  — an inline prompt typed straight into the job.
+//
+// When it runs is its `schedule`, unless it carries a `trigger` (jobs/triggers.mjs):
+// a watch that wakes it when something changes. A watch job has no nextRunAt at
+// all; the tick checks its watch instead, and `watch` holds what the last check saw.
 
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { mkdir, readFile, rename, writeFile, stat, appendFile } from 'node:fs/promises'
 import { normalizeSchedule, nextRunAfter, describeSchedule } from './schedule.mjs'
+import { normalizeTrigger, describeTrigger } from './triggers.mjs'
 
 // 'agent' is a totem's own judgement: it notifies when its run says NOTIFY (and
 // on errors). See totems/core.mjs.
@@ -70,8 +75,25 @@ function cleanText(value, max) {
 const savedOr = (saved, def, key) =>
   saved && Object.prototype.hasOwnProperty.call(saved, key) ? saved[key] : (def?.[key] ?? null)
 
+// A watch job never has a clock-based next run; its watch decides.
+const nextFor = (job, from, tz, last) => (job.trigger ? null : nextRunAfter(job.schedule, from, tz, last))
+
+function cleanWatchState(w) {
+  if (!w || typeof w !== 'object') return null
+  const num = (v) => (Number.isFinite(v) ? v : null)
+  return {
+    fingerprint: typeof w.fingerprint === 'string' ? w.fingerprint.slice(0, 80) : null,
+    label: typeof w.label === 'string' ? w.label.slice(0, 200) : '',
+    checkedAt: num(w.checkedAt),
+    changedAt: num(w.changedAt),
+    error: typeof w.error === 'string' && w.error ? w.error.slice(0, 300) : null,
+    failures: Number(w.failures) || 0,
+  }
+}
+
 function hydrate(id, saved, def, tz, runners = {}) {
   const schedule = normalizeSchedule(saved?.schedule ?? def?.schedule, def?.schedule?.time)
+  const trigger = normalizeTrigger(savedOr(saved, def, 'trigger'))
   const runner = savedOr(saved, def, 'runner')
   const runnerDef = runner ? runners[runner] : null
   const job = {
@@ -81,11 +103,13 @@ function hydrate(id, saved, def, tz, runners = {}) {
     kind: def ? 'seeded' : 'user',
     name: saved?.name || def?.name || id,
     description: saved?.description ?? def?.description ?? '',
-    iconName: saved?.iconName || def?.iconName || (schedule.type === 'interval' || schedule.type === 'window' ? 'bolt' : 'clock'),
+    iconName: saved?.iconName || def?.iconName || (trigger ? 'eye' : schedule.type === 'interval' || schedule.type === 'window' ? 'bolt' : 'clock'),
     enabled: typeof saved?.enabled === 'boolean' ? saved.enabled : Boolean(def?.enabled),
     schedule,
-    scheduleLabel: describeSchedule(schedule),
-    notify: normalizeNotify(saved?.notify, 'errors'),
+    trigger,
+    watch: trigger ? cleanWatchState(saved?.watch) : null,
+    scheduleLabel: trigger ? describeTrigger(trigger) : describeSchedule(schedule),
+    notify: normalizeNotify(saved?.notify, def?.notify || 'errors'),
     catchUpMinutes: clampCatchUp(saved?.catchUpMinutes ?? def?.catchUpMinutes),
     nextRunAt: Number.isFinite(saved?.nextRunAt) ? saved.nextRunAt : null,
     lastRun: saved?.lastRun || null,
@@ -144,6 +168,8 @@ function persistable(job) {
     description: job.description,
     enabled: job.enabled,
     schedule: job.schedule,
+    trigger: job.trigger,
+    watch: job.watch,
     notify: job.notify,
     catchUpMinutes: job.catchUpMinutes,
     nextRunAt: job.nextRunAt,
@@ -303,7 +329,7 @@ export function createJobStore({
       let changed = false
       for (const [id, saved] of Object.entries(raw.jobs)) {
         const job = hydrateJob(id, saved)
-        if (!job.enabled) {
+        if (!job.enabled || job.trigger) {
           if (saved.nextRunAt != null) { saved.nextRunAt = null; changed = true }
           continue
         }
@@ -329,6 +355,7 @@ export function createJobStore({
         iconName: input?.iconName,
         enabled: input?.enabled !== false,
         schedule,
+        trigger: normalizeTrigger(input?.trigger),
         notify: input?.notify,
         catchUpMinutes: input?.catchUpMinutes,
         // A new job runs either a skill or an inline prompt. Both are accepted so
@@ -346,7 +373,7 @@ export function createJobStore({
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }, null, tz, runners)
-      job.nextRunAt = job.enabled ? nextRunAfter(job.schedule, nowMs(), tz, null) : null
+      job.nextRunAt = job.enabled ? nextFor(job, nowMs(), tz, null) : null
       raw.jobs[id] = persistable(job)
       await writeRaw(raw)
       return hydrateJob(id, raw.jobs[id])
@@ -365,6 +392,12 @@ export function createJobStore({
       // `|| .from` so editing a window's step without resending its times keeps
       // the window where it was, rather than defaulting the hour to 08:00.
       if (patch.schedule !== undefined) next.schedule = normalizeSchedule(patch.schedule, before.schedule.time || before.schedule.from)
+      // `trigger: null` goes back to the schedule. A different watch starts from a
+      // fresh baseline, so switching what it watches can't fire on the switch itself.
+      if (patch.trigger !== undefined) {
+        next.trigger = normalizeTrigger(patch.trigger)
+        if (JSON.stringify(next.trigger?.source ?? null) !== JSON.stringify(before.trigger?.source ?? null)) next.watch = null
+      }
       if (patch.notify !== undefined) next.notify = normalizeNotify(patch.notify, before.notify)
       if (patch.catchUpMinutes !== undefined) next.catchUpMinutes = clampCatchUp(patch.catchUpMinutes)
       if (patch.iconName !== undefined) next.iconName = String(patch.iconName || '').slice(0, 40)
@@ -394,9 +427,10 @@ export function createJobStore({
       const after = hydrateJob(id, next)
       // Any change to when or whether it runs invalidates the computed next run.
       const scheduleChanged = JSON.stringify(before.schedule) !== JSON.stringify(after.schedule)
+        || JSON.stringify(before.trigger) !== JSON.stringify(after.trigger)
       if (!after.enabled) after.nextRunAt = null
       else if (scheduleChanged || !before.enabled || after.nextRunAt == null) {
-        after.nextRunAt = nextRunAfter(after.schedule, nowMs(), tz, after.lastRun?.startedAt ?? null)
+        after.nextRunAt = nextFor(after, nowMs(), tz, after.lastRun?.startedAt ?? null)
       }
       raw.jobs[id] = persistable(after)
       await writeRaw(raw)
@@ -477,6 +511,8 @@ export function createJobStore({
       errorKind: result.errorKind || null,
       preview: result.output ? cleanText(result.output, 400) : null,
       late: Boolean(result.late),
+      // What a watch saw change, for runs it woke.
+      ...(result.event ? { event: cleanText(result.event, 400) } : {}),
     }
     await appendRun(record)
     const job = await withLock(async () => {
@@ -494,12 +530,43 @@ export function createJobStore({
       // job that silently stops firing.
       const hydrated = hydrateJob(id, saved)
       if (hydrated.enabled && saved.nextRunAt == null) {
-        saved.nextRunAt = nextRunAfter(hydrated.schedule, nowMs(), tz, null)
+        saved.nextRunAt = nextFor(hydrated, nowMs(), tz, null)
       }
       await writeRaw(raw)
       return hydrateJob(id, saved)
     })
     return { job, record }
+  }
+
+  // Save what a watch check saw. Not an edit, so updatedAt stays put. Ignored if
+  // the job stopped being a watch while the check was in flight.
+  async function recordWatch(id, state) {
+    return withLock(async () => {
+      const raw = await ensureStore()
+      const saved = raw.jobs[id]
+      if (!saved || !normalizeTrigger(saved.trigger)) return null
+      saved.watch = cleanWatchState({ ...(saved.watch || {}), ...state })
+      await writeRaw(raw)
+      return hydrateJob(id, saved)
+    })
+  }
+
+  // A run still marked running at boot was cut off by the restart (a deploy, a
+  // crash). Left alone it blocks every later claim of that job for good, so it is
+  // recorded as failed. Call once at startup, before the first tick.
+  async function recoverInterrupted({ now = nowMs() } = {}) {
+    const raw = await withLock(ensureStore)
+    const stuck = Object.entries(raw.jobs).filter(([, saved]) => saved?.lastRun?.status === 'running')
+    for (const [id, saved] of stuck) {
+      await finish(id, {
+        status: 'error',
+        startedAt: saved.lastRun.startedAt ?? now,
+        trigger: saved.lastRun.trigger || 'schedule',
+        error: 'interrupted: the bridge restarted while this was running',
+        errorKind: 'interrupted',
+      })
+    }
+    return stuck.map(([id]) => id)
   }
 
   // ---- run history --------------------------------------------------------
@@ -629,7 +696,7 @@ export function createJobStore({
   return {
     file, runsFile, notificationsFile,
     list, get, create, update, remove, restore,
-    reschedule, claim, finish,
+    reschedule, claim, finish, recordWatch, recoverInterrupted,
     runs, notify, notifications, markNotificationsRead,
   }
 }

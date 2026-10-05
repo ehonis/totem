@@ -5,21 +5,31 @@ import { Hi } from '../icons'
 import { iconFor } from '../studio'
 import { THREAD_ICONS } from '../chat/threadIcons.gen'
 import { TI } from '../chat/ui'
-import { syncThreads, setActive } from '../chat/store'
+import { syncThreads, setActive, useChat, loadProviders, ensureModels } from '../chat/store'
+import { normalizeModelSettings, modelLabel } from '../chat/models'
+import ModelPicker from '../chat/ModelPicker'
 import { IconArrowLeft, IconMessage, IconPlus, IconSparkles, IconLoader2, IconTrash, IconRefresh } from '../chat/icons'
 import { ScheduleBuilder, RunHistory, Switch, NOTIFY_CHOICES, relativeTime } from './JobsView'
 import './totems.css'
 
-// Totems: standing agents that wake on a schedule, remember between runs, and
-// tell the owner only what matters (totems/core.mjs on the bridge). Every
-// scheduled job is one; the builder makes new ones from a description and
-// recommends the cheapest model that can do the job.
+// Totems: standing agents that wake on a schedule or when something they watch
+// changes, remember between runs, and tell the owner only what matters
+// (totems/core.mjs and jobs/triggers.mjs on the bridge). Every scheduled job is
+// one; the builder makes new ones from a description and recommends the
+// cheapest model that can do the job, and any model can be picked instead.
 
 interface Rec { provider: string; model: string; effort: string; label: string; account: string; driver: string; cost: number; why: string }
+interface Watch {
+  type: 'watch'; everyMinutes: number
+  source: { kind: 'git'; repo: string; ref: string } | { kind: 'url'; url: string; contains?: string }
+}
 interface Draft {
-  name: string; summary?: string; icon: string; taskType: string; instructions: string; schedule: any; browser: boolean
+  name: string; summary?: string; icon: string; taskType: string; instructions: string; schedule: any; trigger: Watch | null; browser: boolean
   notify: string; recommendations: Rec[]; questions: string[]
 }
+/** Which model runs it. `provider: 'default'` is the default account's default model. */
+interface Choice { provider: string; model: string; effort: string }
+
 
 const COST = { 1: 'Low cost', 2: 'Medium cost', 3: 'High cost' } as Record<number, string>
 const TYPE_LABEL: Record<string, string> = {
@@ -46,6 +56,12 @@ const kindOf = (job: any) => (job.runner ? 'Built-in' : job.skillId ? 'Skill' : 
 function statusLine(job: any) {
   if (job.lastRun?.status === 'running') return 'Running now…'
   if (!job.enabled) return 'Paused'
+  if (job.trigger) {
+    const w = job.watch
+    if (w?.error) return `Can’t check: ${w.error}`
+    if (!w?.checkedAt) return 'First check within a minute'
+    return `Checked ${relativeTime(w.checkedAt)}${w.changedAt ? ` · last change ${relativeTime(w.changedAt)}` : ''}${job.lastRun?.status === 'error' ? ' · last run failed' : ''}`
+  }
   const next = job.nextRunAt ? `Next ${relativeTime(job.nextRunAt)}` : 'Not scheduled'
   if (job.lastRun?.status === 'error') return `Last run failed · ${next}`
   return next
@@ -81,18 +97,126 @@ function Recommendations({ recs, value, onChange }: { recs: Rec[]; value: number
   )
 }
 
+// Any model on any account, through the same picker chats use (minus Auto,
+// Instant and Thinking: a scheduled run has nobody to route for).
+function ModelChoice({ value, onChange }: { value: Choice; onChange: (c: Choice) => void }) {
+  const providers = useChat((s) => s.providers)
+  const defaultProvider = useChat((s) => s.defaultProvider)
+  useEffect(() => { if (!providers.length) loadProviders() }, [providers.length])
+  const provider = !value.provider || value.provider === 'default' ? defaultProvider : value.provider
+  useEffect(() => { if (provider) ensureModels(provider) }, [provider, providers.length])
+  const settings = { ...normalizeModelSettings(), preset: 'manual' as const, modelId: value.model || '' }
+  return (
+    <span className="tm-model-pick">
+      <ModelPicker modelsOnly provider={provider} settings={settings} onChange={({ provider: p, modelSettings }) => onChange({ provider: p, model: modelSettings.modelId || '', effort: value.effort })} />
+      <label className="tm-effort">
+        <span>Effort</span>
+        <select value={value.effort || ''} onChange={(e) => onChange({ ...value, effort: e.target.value })} aria-label="Effort">
+          <option value="">Default</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </label>
+    </span>
+  )
+}
+
+// The builder's picks, cheapest first, then any model at all.
+function ModelSection({ recs, value, onChange }: { recs: Rec[]; value: Choice; onChange: (c: Choice) => void }) {
+  const picked = recs.findIndex((r) => r.provider === value.provider && (r.model || '') === (value.model || ''))
+  return (
+    <>
+      {recs.length > 0 && (
+        <Recommendations recs={recs} value={picked} onChange={(i) => onChange({ provider: recs[i].provider, model: recs[i].model || '', effort: recs[i].effort || '' })} />
+      )}
+      <div className={`tm-rec tm-rec-own ${picked < 0 ? 'on' : ''}`}>
+        <span className="tm-rec-main">
+          <span className="tm-rec-title">{recs.length ? 'Or choose any model' : 'Model'}</span>
+          <span className="tm-rec-why">{!recs.length ? 'Any model on any account, the same list chats use.' : picked < 0 ? 'Your pick. It runs on this instead of the suggestions.' : 'Pick from every account, the same list chats use.'}</span>
+        </span>
+        <ModelChoice value={value} onChange={onChange} />
+      </div>
+    </>
+  )
+}
+
+const NEW_WATCH: Watch = { type: 'watch', everyMinutes: 5, source: { kind: 'git', repo: '', ref: 'main' } }
+
+function WatchEditor({ value, onChange }: { value: Watch; onChange: (w: Watch) => void }) {
+  const s = value.source
+  const min = s.kind === 'url' ? 5 : 1
+  return (
+    <div className="tm-watch">
+      <div className="sched-tabs" role="tablist" aria-label="What it watches">
+        <button type="button" role="tab" aria-selected={s.kind === 'git'} className={`sched-tab ${s.kind === 'git' ? 'active' : ''}`}
+          onClick={() => s.kind !== 'git' && onChange({ ...value, source: { kind: 'git', repo: '', ref: 'main' } })}>A git branch</button>
+        <button type="button" role="tab" aria-selected={s.kind === 'url'} className={`sched-tab ${s.kind === 'url' ? 'active' : ''}`}
+          onClick={() => s.kind !== 'url' && onChange({ ...value, everyMinutes: Math.max(value.everyMinutes, 15), source: { kind: 'url', url: '', contains: '' } })}>A web page</button>
+      </div>
+      {s.kind === 'git' ? (
+        <div className="tm-watch-fields">
+          <label className="field tm-grow">
+            <span>Repository</span>
+            <input className="tm-input" value={s.repo} onChange={(e) => onChange({ ...value, source: { ...s, repo: e.target.value } })} placeholder="/home/you/projects/app, or https://github.com/owner/repo" spellCheck={false} />
+          </label>
+          <label className="field tm-ref">
+            <span>Branch</span>
+            <input className="tm-input" value={s.ref} onChange={(e) => onChange({ ...value, source: { ...s, ref: e.target.value } })} spellCheck={false} />
+          </label>
+          <span className="muted tm-hint tm-full">A checkout on this machine is watched through its origin remote, so it wakes on what was merged upstream, not on local commits.</span>
+        </div>
+      ) : (
+        <div className="tm-watch-fields">
+          <label className="field tm-full">
+            <span>Page</span>
+            <input className="tm-input" value={s.url} onChange={(e) => onChange({ ...value, source: { ...s, url: e.target.value } })} placeholder="https://…" spellCheck={false} />
+          </label>
+          <label className="field tm-full">
+            <span>Only when it shows this text <span className="muted">(optional)</span></span>
+            <input className="tm-input" value={s.contains || ''} onChange={(e) => onChange({ ...value, source: { ...s, contains: e.target.value } })} placeholder="e.g. In stock" />
+          </label>
+          <span className="muted tm-hint tm-full">With text, it wakes when that text appears or disappears. Without, any change to the page’s text counts, so pick a page that doesn’t change on every load.</span>
+        </div>
+      )}
+      <label className="sched-time">
+        <span>Check every</span>
+        <input type="number" min={min} max={1440} value={value.everyMinutes} onChange={(e) => onChange({ ...value, everyMinutes: Math.max(min, Math.min(1440, Number(e.target.value) || min)) })} aria-label="Minutes between checks" />
+        <span>minutes</span>
+      </label>
+      <p className="muted tm-hint">Checks use no AI. The first one only notes how things look now; the totem runs each time that changes.</p>
+    </div>
+  )
+}
+
+const watchReady = (w: Watch | null) => !w || (w.source.kind === 'git' ? !!w.source.repo.trim() && !!w.source.ref.trim() : /^https?:\/\/\S+/.test(w.source.url.trim()))
+
+function WhenItRuns({ schedule, trigger, onSchedule, onTrigger }: { schedule: any; trigger: Watch | null; onSchedule: (s: any) => void; onTrigger: (t: Watch | null) => void }) {
+  return (
+    <>
+      <div className="sched-tabs tm-mode" role="tablist" aria-label="What wakes it">
+        <button type="button" role="tab" aria-selected={!trigger} className={`sched-tab ${!trigger ? 'active' : ''}`} onClick={() => trigger && onTrigger(null)}>On a schedule</button>
+        <button type="button" role="tab" aria-selected={!!trigger} className={`sched-tab ${trigger ? 'active' : ''}`} onClick={() => !trigger && onTrigger(NEW_WATCH)}>When something changes</button>
+      </div>
+      {trigger ? <WatchEditor value={trigger} onChange={onTrigger} /> : <ScheduleBuilder value={schedule} onChange={onSchedule} />}
+    </>
+  )
+}
+
 function Builder({ onClose, onCreated }: { onClose: () => void; onCreated: (job: any) => void }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState<'' | 'build' | 'create'>('')
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [rec, setRec] = useState(0)
+  const [choice, setChoice] = useState<Choice>({ provider: 'default', model: '', effort: '' })
+  const models = useChat((s) => s.models)
 
   async function build() {
     setBusy('build')
     try {
       const { draft } = await api<{ draft: Draft }>('/api/totems/build', { method: 'POST', body: JSON.stringify({ description: text }) })
       setDraft(draft)
-      setRec(0)
+      const top = draft.recommendations[0]
+      setChoice(top ? { provider: top.provider, model: top.model || '', effort: top.effort || '' } : { provider: 'default', model: '', effort: '' })
     } catch (e: any) { pushError(e.message) } finally { setBusy('') }
   }
 
@@ -100,8 +224,9 @@ function Builder({ onClose, onCreated }: { onClose: () => void; onCreated: (job:
     if (!draft) return
     setBusy('create')
     try {
-      const { job } = await api<{ job: any }>('/api/totems', { method: 'POST', body: JSON.stringify({ draft, recommendation: rec }) })
-      pushToast(`${job.name} is live. Its first run is starting now.`, 'info')
+      const label = choice.model ? modelLabel(models[choice.provider], choice.model) : ''
+      const { job } = await api<{ job: any }>('/api/totems', { method: 'POST', body: JSON.stringify({ draft, choice: { ...choice, label } }) })
+      pushToast(job.trigger ? `${job.name} is watching. It runs the first time that changes.` : `${job.name} is live. Its first run is starting now.`, 'info')
       onCreated(job)
     } catch (e: any) { pushError(e.message) } finally { setBusy('') }
   }
@@ -151,8 +276,8 @@ function Builder({ onClose, onCreated }: { onClose: () => void; onCreated: (job:
           )}
           <section className="tm-section">
             <h2>Model</h2>
-            <p className="muted">Cheapest first. You can change this any time.</p>
-            <Recommendations recs={draft.recommendations} value={rec} onChange={setRec} />
+            <p className="muted">Suggestions are cheapest first. You can change this any time.</p>
+            <ModelSection recs={draft.recommendations} value={choice} onChange={setChoice} />
           </section>
           <section className="tm-section">
             <h2>Instructions</h2>
@@ -160,7 +285,7 @@ function Builder({ onClose, onCreated }: { onClose: () => void; onCreated: (job:
           </section>
           <section className="tm-section">
             <h2>When it runs</h2>
-            <ScheduleBuilder value={draft.schedule} onChange={(schedule: any) => patch({ schedule })} />
+            <WhenItRuns schedule={draft.schedule} trigger={draft.trigger} onSchedule={(schedule) => patch({ schedule })} onTrigger={(trigger) => patch({ trigger })} />
           </section>
           <section className="tm-section tm-row-fields">
             <label className="field">
@@ -176,7 +301,7 @@ function Builder({ onClose, onCreated }: { onClose: () => void; onCreated: (job:
             </div>
           </section>
           <div className="tm-actions">
-            <button type="button" className="btn primary" disabled={!!busy || !draft.name.trim() || !draft.instructions.trim()} onClick={create}>
+            <button type="button" className="btn primary" disabled={!!busy || !draft.name.trim() || !draft.instructions.trim() || !watchReady(draft.trigger)} onClick={create}>
               {busy === 'create' ? 'Creating…' : 'Create totem'}
             </button>
             <button type="button" className="btn" disabled={!!busy} onClick={() => setDraft(null)}>Back</button>
@@ -218,12 +343,15 @@ function SettingsTab({ job, onChanged, onDeleted }: { job: any; onChanged: (job:
   const agent = !job.runner && !job.skillId
   const [instructions, setInstructions] = useState(job.prompt || '')
   const [recommending, setRecommending] = useState(false)
+  // A watch is saved with a button, not per keystroke: half a path is not a watch.
+  const [trigger, setTrigger] = useState<Watch | null>(job.trigger || null)
   useEffect(() => setInstructions(job.prompt || ''), [job.id, job.prompt])
+  useEffect(() => setTrigger(job.trigger || null), [job.id, JSON.stringify(job.trigger)]) // eslint-disable-line react-hooks/exhaustive-deps
+  const triggerDirty = JSON.stringify(trigger) !== JSON.stringify(job.trigger || null)
   const save = async (patch: any) => {
     try { const r: any = await updateJob(job.id, patch); onChanged(r.job) } catch (e: any) { pushError(e.message) }
   }
   const recs: Rec[] = job.recommendations || []
-  const current = recs.findIndex((r) => r.provider === job.provider && (r.model || null) === (job.model || null))
   async function recommend() {
     setRecommending(true)
     try { const r = await api<{ job: any }>(`/api/totems/${encodeURIComponent(job.id)}/recommend`, { method: 'POST' }); onChanged(r.job) }
@@ -251,13 +379,28 @@ function SettingsTab({ job, onChanged, onDeleted }: { job: any; onChanged: (job:
       )}
       <section className="tm-section">
         <h2>When it runs</h2>
-        <ScheduleBuilder value={job.schedule} onChange={(schedule: any) => save({ schedule })} />
+        <WhenItRuns
+          schedule={job.schedule}
+          trigger={trigger}
+          onSchedule={(schedule) => save({ schedule })}
+          onTrigger={(t) => { setTrigger(t); if (!t && job.trigger) save({ trigger: null }) }}
+        />
+        {trigger && triggerDirty && (
+          <div className="tm-actions">
+            <button type="button" className="btn primary" disabled={!watchReady(trigger)} onClick={() => save({ trigger })}>{job.trigger ? 'Save watch' : 'Start watching'}</button>
+            <button type="button" className="btn" onClick={() => setTrigger(job.trigger || null)}>Discard</button>
+          </div>
+        )}
+        {job.trigger && !triggerDirty && job.watch?.label && <p className="muted tm-hint">Last seen: {job.watch.label}{job.watch.checkedAt ? `, ${relativeTime(job.watch.checkedAt)}` : ''}.</p>}
       </section>
       {!job.agentless && !job.fixedProvider && (
         <section className="tm-section">
           <h2>Model</h2>
-          {recs.length > 0 && <Recommendations recs={recs} value={current} onChange={(i) => save({ provider: recs[i].provider, model: recs[i].model || null, effort: recs[i].effort || null })} />}
-          {current < 0 && <p className="muted">Now: {job.provider === 'default' ? 'the default account' : job.provider}{job.model ? ` · ${job.model}` : ''}.</p>}
+          <ModelSection
+            recs={recs}
+            value={{ provider: job.provider || 'default', model: job.model || '', effort: job.effort || '' }}
+            onChange={(c) => save({ provider: c.provider, model: c.model || null, effort: c.effort || null })}
+          />
           <div className="tm-actions">
             <button type="button" className="btn compact" disabled={recommending} onClick={recommend}>
               {recommending ? <><TI icon={IconLoader2} size={14} className="tm-spin" />Asking…</> : <><TI icon={IconRefresh} size={14} />{recs.length ? 'Recommend again' : 'Recommend models'}</>}

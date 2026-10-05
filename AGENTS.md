@@ -69,8 +69,8 @@ open-ended work. The default provider and model come from Settings → AI (store
 | Lists | `lists/` | Simple checklists with optional links to tasks. |
 | Voice journal | `journal/`, `web/src/journal/` | Record in the browser, transcribe on the box with whisper.cpp, digest into the notes repo after a grace period. `docs/journal.md`. |
 | Notifications | `notify/`, `web/public/sw.js` | Web Push (RFC 8291/8292 on `node:crypto`), a due-queue drained on the job tick, digests, feed scan, quota nudges. `docs/notifications.md`. |
-| Totems | `totems/`, the "Totems" block in `bridge.mjs`, `web/src/components/TotemsView.tsx` | Standing agents over the job store: every job is a totem (no second scheduler). Agent totems keep `data/totems/<id>/memory.md`, end runs with `NOTIFY:`/`QUIET`, post runs to their chat `totem-<id>`, and get cheapest-first model recommendations from the builder. Any chat can propose a change (Accept card). Replaced Studio. `docs/totems.md`. |
-| Jobs | `jobs/` | Timezone-aware schedules (`daily`, `weekly`, `interval`, `window`) and `data/jobs.json`. One 30-second tick in `bridge.mjs` runs jobs and drains notifications. `docs/jobs.md`. |
+| Totems | `totems/`, the "Totems" block in `bridge.mjs`, `web/src/components/TotemsView.tsx` | Standing agents over the job store: every job is a totem (no second scheduler). Agent totems keep `data/totems/<id>/memory.md`, end runs with `NOTIFY:`/`QUIET`, post runs to their chat `totem-<id>`, and get cheapest-first model recommendations from the builder or any model from the chat picker (`modelsOnly`). A totem can wake on a watch (git branch or web page) instead of a schedule; the built-in "Deploy Totem" pulls, rebuilds and restarts the bridge when main moves. Any chat can propose a change (Accept card). Replaced Studio. `docs/totems.md`. |
+| Jobs | `jobs/` | Timezone-aware schedules (`daily`, `weekly`, `interval`, `window`), watch triggers checked without AI (`jobs/triggers.mjs`), and `data/jobs.json`. One 30-second tick in `bridge.mjs` runs jobs, checks watches and drains notifications. `docs/jobs.md`. |
 | Skills | `skills/` | Every prompt as an editable `SKILL.md` with `{{variables}}`. Generic seeds in `skills/seeds/` are copied into `data/skills/` once. `docs/skills.md`. |
 | Examples | `examples/` | Optional personalised skills, never installed automatically. |
 | Action log, approvals, runs | `logs/` | Every mutation is audited; MCP clients act through owner-approved, time-boxed leases. `docs/logs.md`. |
@@ -234,5 +234,9 @@ row counts, ids and foreign keys, and run it twice.
 - **`claude -p` cannot ask for permission.** A write the prompt asks for is refused unless the bridge allows that path (`allowWrite` → `--allowedTools Edit(…)`), and a small model may still tell the owner it saved. Any new "keep this file updated" rule needs its path added there.
 - **Codex's sandbox has no network.** `workspace-write` blocks it, so a Codex run that must fetch the web (a totem watching a page) needs `network: true` on `runAgent`, which adds `sandbox_workspace_write.network_access=true`. Without it the run reports a DNS failure rather than erroring.
 - **The address bar is normalised on boot.** `buildPath` keeps only the query params it knows (`?thread=`/`?project=` on chat, `?totem=` on totems, `?q=` on search). A new deep-link param must be added there, or anything that reads it after sign-in finds it gone; read one-time params at module load (see `AuthGate.tsx`).
+- **`INVOCATION_ID` does not mean "I am the service".** A process started from a shell inside
+  any systemd unit (T3 Code's, for one) inherits it. A test bridge that trusted it restarted
+  the live `assistant-bridge`. Anything that restarts the unit must first check that
+  `systemctl --user show -p MainPID --value <unit>` is its own pid, as `restartBridgeSoon` does.
 - **Google OAuth apps in Testing mode** only admit listed test users and their refresh tokens
   expire; publish the app once setup is stable.

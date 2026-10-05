@@ -102,3 +102,23 @@ test('a builder reply with no usable model falls back to the cheapest in the cat
   assert.deepEqual(d.schedule, { type: 'daily', time: '09:00' })
   assert.equal(d.notify, 'agent')
 })
+
+test('a run its watch started says what changed; a hand-started watcher is told to check anyway', () => {
+  const totem = { name: 'Deployer', prompt: 'Deploy bushido.', trigger: { type: 'watch' }, scheduleLabel: 'When main changes in o/r (checked every 2 minutes)' }
+  const woke = totemRunPrompt({ totem, trigger: 'watch', event: 'main in o/r moved from abc1234 to def5678.' })
+  assert.match(woke, /wakes when something it watches changes \(When main changes/)
+  assert.match(woke, /WHAT WOKE YOU: your watch saw a change[\s\S]*moved from abc1234 to def5678/)
+  assert.match(totemRunPrompt({ totem, trigger: 'manual' }), /started this run by hand, not a change/)
+  assert.doesNotMatch(totemRunPrompt({ totem: { name: 'X', prompt: 'y' } }), /WHAT WOKE YOU/)
+})
+
+test('the builder can design a watch, and an unusable one falls back to the schedule', () => {
+  const watch = parseBuilderReply(JSON.stringify({
+    name: 'Bushido Deployer', instructions: 'Deploy it.', schedule: { type: 'daily', time: '09:00' },
+    trigger: { type: 'watch', everyMinutes: 2, source: { kind: 'git', repo: '/srv/bushido', ref: 'main' } },
+  }), { catalog: [] })
+  assert.deepEqual(watch.trigger, { type: 'watch', source: { kind: 'git', repo: '/srv/bushido', ref: 'main' }, everyMinutes: 2 })
+  const bad = parseBuilderReply(JSON.stringify({ name: 'X', instructions: 'y', trigger: { type: 'watch', source: { kind: 'git', repo: 'somewhere' } } }), { catalog: [] })
+  assert.equal(bad.trigger, null)
+  assert.match(builderPrompt({ description: 'x' }), /"kind":"git"/)
+})

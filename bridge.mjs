@@ -21,6 +21,7 @@ import { Poller as AiUsagePoller } from './ai-usage/poller.mjs'
 import { createJobStore } from './jobs/store.mjs'
 import { totemRunPrompt, parseRunReply, totemChatBlock, totemsRule, parseProposals, appendMemoryNote, builderPrompt, parseBuilderReply, costTier } from './totems/core.mjs'
 import { dueState } from './jobs/schedule.mjs'
+import { normalizeTrigger, checkWatch, describeChange, watchDue } from './jobs/triggers.mjs'
 import { createSkillStore } from './skills/store.mjs'
 import { Gateway as McpGateway, loadManifest as loadMcpManifest, NS as MCP_NS } from './mcp-gateway.mjs'
 import { createActionLog, normalizeActor } from './logs/store.mjs'
@@ -229,6 +230,12 @@ const {
   // It runs on an interval rather than a time of day because it is answering
   // "did something get plugged in since I last looked", not "is it 7am".
   CAMERA_SYNC_ENABLED = 'false',
+  // Deploy Totem: when the checkout's upstream main moves, pull, rebuild and
+  // restart this bridge (the "self-update" runner). Off unless set; once the
+  // job exists, its switch in Totems is what counts.
+  TOTEM_SELF_UPDATE_ENABLED = 'false',
+  // The systemd user unit Deploy Totem restarts.
+  TOTEM_SERVICE_NAME = 'assistant-bridge',
   CAMERA_SYNC_INTERVAL_MINUTES = '15',
   // How long photos may sit in staging before Totem says something. They're
   // stuck until the MacBook — the only machine that can reach iCloud Photos — is
@@ -12926,6 +12933,8 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'PATCH' && path === '/api/jobs') {
         const { id, ...patch } = await readJsonBody(req)
         if (!id) return send(res, 400, { error: 'missing id' })
+        // A watch that doesn't parse would quietly fall back to the schedule.
+        if (patch.trigger && !normalizeTrigger(patch.trigger)) return send(res, 400, { error: 'that watch is incomplete: a git watch needs a checkout path or remote URL, a page watch an http(s) URL' })
         const updated = await jobStore.update(id, patch)
         if (!updated) return send(res, 404, { error: 'no such job' })
         log(`job updated: ${id} (enabled=${updated.enabled}, ${updated.scheduleLabel})`)
@@ -13710,6 +13719,13 @@ const JOB_RUNNER_DEFS = {
     detail: 'Files completed tasks into the archive once the day\'s archive hour has passed. No prompt, so nothing to edit.',
     agentless: true,
   },
+  'self-update': {
+    label: 'Deploy Totem',
+    detail: 'Pulls the branch into this checkout (fast-forward only, never over uncommitted work), installs dependencies if they changed, rebuilds the dashboard and restarts the bridge. No prompt, so nothing to edit.',
+    // Plain git and npm. An agent can't do this job: restarting the bridge
+    // kills the run that asked for it.
+    agentless: true,
+  },
   'camera-sync': {
     label: 'Camera sync report',
     detail: 'Reports photos pulled off the camera and warns if they are stuck waiting for the MacBook.',
@@ -13831,6 +13847,18 @@ const SEED_JOB_DEFS = {
   // job pinned to one time would keep sweeping at the old hour after it changed. The
   // boundary is what decides eligibility; this just has to check often enough that
   // the Done column has cleared by the time the owner looks at it.
+  'self-update': {
+    name: 'Deploy Totem',
+    description: 'When main moves upstream, pull it into this checkout, rebuild, and restart Totem so it runs the new code.',
+    iconName: 'git-branch',
+    action: 'Pull, rebuild and restart the bridge',
+    requires: [],
+    runner: 'self-update',
+    enabled: isTruthyFlag(TOTEM_SELF_UPDATE_ENABLED),
+    notify: 'always',
+    schedule: { type: 'daily', time: '04:00' },
+    trigger: { type: 'watch', source: { kind: 'git', repo: HERE, ref: 'main' }, everyMinutes: 2 },
+  },
   'todo-archive': {
     name: 'Task archive sweep',
     description: "File completed tasks into the archive once the day's archive hour has passed.",
@@ -14600,6 +14628,49 @@ async function runFeedScan({ now = Date.now() } = {}) {
   }
 }
 
+// Run a command without a shell and resolve with stdout. The error carries the
+// tail of stderr, which is where git and npm say what went wrong.
+function execText(cmd, args, { cwd, env, timeoutMs = 60_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { cwd, env: { ...process.env, ...(env || {}) }, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (!err) return resolve(String(stdout))
+      const tail = String(stderr || stdout || '').trim().split('\n').slice(-6).join(' ').slice(0, 500)
+      reject(new Error(`${cmd} ${args.filter((a) => !a.startsWith('/')).slice(0, 3).join(' ')} failed${err.killed ? ' (timed out)' : ''}: ${tail || err.message}`))
+    })
+  })
+}
+
+// Restart this bridge so it loads new code. Only when systemd says this very
+// process is the unit's main PID: a bridge started by hand from a shell that
+// itself runs under systemd inherits INVOCATION_ID, and restarting "the unit"
+// from there restarts a different bridge (the live one). Anywhere else (Docker,
+// a terminal, a test bridge) it says so and leaves the restart to a person.
+//
+// A restart kills every chat reply and job in flight, so it waits until nothing
+// is running (checked every 15 s), and gives up waiting after 30 minutes.
+async function restartBridgeSoon(reason, { selfJobId = null } = {}) {
+  const mainPid = await execText('systemctl', ['--user', 'show', '--property=MainPID', '--value', TOTEM_SERVICE_NAME], { timeoutMs: 10_000 })
+    .then((out) => Number(out.trim()))
+    .catch(() => 0)
+  if (mainPid !== process.pid) {
+    log(`restart requested (${reason}), but this bridge is not ${TOTEM_SERVICE_NAME}'s main process; restart it by hand to load the new code`)
+    return false
+  }
+  const deadline = Date.now() + 30 * 60_000
+  for (;;) {
+    const chats = chatRuns.list().filter((r) => r.status === 'running').length
+    const jobs = (await jobStore.list().catch(() => [])).filter((j) => j.id !== selfJobId && j.lastRun?.status === 'running').length
+    if (!chats && !jobs) break
+    if (Date.now() > deadline) { log(`restarting with ${chats} chat run(s) and ${jobs} job(s) still going: waited 30 minutes`); break }
+    await new Promise((r) => setTimeout(r, 15_000))
+  }
+  log(`restarting ${TOTEM_SERVICE_NAME} (${reason})`)
+  execFile('systemctl', ['--user', 'restart', '--no-block', TOTEM_SERVICE_NAME], { timeout: 15_000 }, (err) => {
+    if (err) log(`restart of ${TOTEM_SERVICE_NAME} failed: ${err.message}`)
+  })
+  return true
+}
+
 // What each built-in actually does. Each returns a short summary that lands in the
 // run history as the run's preview; throwing marks the run failed.
 //
@@ -14621,6 +14692,36 @@ async function runFeedScan({ now = Date.now() } = {}) {
 // are correctness guards rather than prose. A job that picks a different skill
 // keeps the bookkeeping; a job with its runner detached keeps only the prompt.
 const JOB_RUNNERS = {
+  // Deploy Totem. Refuses rather than guesses: uncommitted work or a different
+  // branch in the live checkout belongs to someone, and a pull that can't
+  // fast-forward needs a person. The restart happens after the run is recorded
+  // (runJobOnce honours `restartBridge`), so the report survives it.
+  'self-update': async ({ job }) => {
+    const ref = job.trigger?.source?.kind === 'git' ? job.trigger.source.ref : 'main'
+    const git = (...args) => execText('git', ['-C', HERE, ...args], { env: { GIT_TERMINAL_PROMPT: '0' }, timeoutMs: 120_000 })
+    const dirty = (await git('status', '--porcelain', '--untracked-files=no')).trim()
+    if (dirty) throw new Error(`not deploying: the checkout has uncommitted changes (${dirty.split('\n').length} file(s)). Commit, stash or move that work to a worktree, then run this again`)
+    const branch = (await git('rev-parse', '--abbrev-ref', 'HEAD')).trim()
+    if (branch !== ref) throw new Error(`not deploying: the checkout is on "${branch}", not "${ref}"`)
+    const before = (await git('rev-parse', 'HEAD')).trim()
+    await git('pull', '--ff-only', '--quiet', 'origin', ref)
+    const after = (await git('rev-parse', 'HEAD')).trim()
+    if (before === after) return { output: `Already on ${after.slice(0, 7)}; nothing to deploy.`, status: 'skipped', agentless: true }
+    const changed = (await git('diff', '--name-only', before, after)).split('\n').filter(Boolean)
+    const steps = [`pulled ${before.slice(0, 7)} → ${after.slice(0, 7)} (${changed.length} file(s))`]
+    if (changed.some((f) => /(^|\/)package(-lock)?\.json$/.test(f))) {
+      await execText('npm', ['install', '--no-audit', '--no-fund'], { cwd: HERE, timeoutMs: 10 * 60_000 })
+      steps.push('installed dependencies')
+    }
+    await execText('npm', ['run', 'build'], { cwd: HERE, timeoutMs: 10 * 60_000 })
+    steps.push('rebuilt the dashboard')
+    const log1 = (await git('log', '--oneline', '--no-decorate', '-n', '10', `${before}..${after}`)).trim()
+    return {
+      output: `Deployed ${after.slice(0, 7)}: ${steps.join(', ')}; restarting as soon as nothing is running.${log1 ? `\n${log1}` : ''}`,
+      agentless: true,
+      restartBridge: true,
+    }
+  },
   'morning-brief': async ({ agentOptions, job }) => {
     const reply = await runMorningBriefing({ agentOptions, skillId: job.skillId || 'daily-brief' })
     return { output: reply, channel: 'morning' }
@@ -14812,7 +14913,7 @@ class JobHandled extends Error {
 
 // Run one job to completion and record what happened. Never throws: a job that
 // blows up must not take the tick loop (or the bridge) with it.
-async function runJobOnce(job, { trigger = 'schedule', late = false } = {}) {
+async function runJobOnce(job, { trigger = 'schedule', late = false, event = '' } = {}) {
   const claimed = await jobStore.claim(job.id, { trigger })
   if (!claimed) return { skipped: true, reason: 'already running' }
   const startedAt = Date.now()
@@ -14823,6 +14924,7 @@ async function runJobOnce(job, { trigger = 'schedule', late = false } = {}) {
   log(`job ${job.id}: running (${trigger}${late ? ', catch-up' : ''})`)
 
   let result
+  let restartBridge = false
   try {
     let agentOptions = {}
     let providerId = null
@@ -14848,7 +14950,8 @@ async function runJobOnce(job, { trigger = 'schedule', late = false } = {}) {
         startedAt, trigger, late,
       }
     } else if (runner) {
-      const out = await runner({ agentOptions, today, job: claimed })
+      const out = await runner({ agentOptions, today, job: claimed, event })
+      restartBridge = out?.restartBridge === true
       result = {
         status: out?.status || 'ok',
         output: typeof out?.output === 'string' ? out.output : '',
@@ -14864,7 +14967,7 @@ async function runJobOnce(job, { trigger = 'schedule', late = false } = {}) {
     } else if (String(claimed.prompt || '').trim()) {
       // An inline prompt is an agent totem: it runs with its memory and recent
       // runs, keeps its memory itself, and decides whether to notify.
-      const out = await runAgentTotem(claimed, agentOptions)
+      const out = await runAgentTotem(claimed, agentOptions, { trigger, event })
       result = { status: out.status, output: out.report, provider: providerId, startedAt, trigger, late, totemNotify: out.notify }
       recordUse('job', { text: `${claimed.name} (${trigger})`, startedAt, provider: providerId })
     } else {
@@ -14889,10 +14992,12 @@ async function runJobOnce(job, { trigger = 'schedule', late = false } = {}) {
 
   const totemNotify = result.totemNotify || null
   delete result.totemNotify
+  if (event) result.event = event
   const { job: updated, record } = await jobStore.finish(job.id, result)
   await maybeNotifyJobRun(updated || claimed, record, totemNotify)
   await postTotemRun(updated || claimed, record, totemNotify).catch((e) => log(`totem ${job.id}: posting the run to its chat failed`, e?.message || e))
   log(`job ${job.id}: ${record.status}${record.ms != null ? ` in ${record.ms}ms` : ''}`)
+  if (restartBridge && record.status === 'ok') restartBridgeSoon(`${job.name} deployed new code`, { selfJobId: job.id }).catch((e) => log('restart failed', e?.message || e))
   return record
 }
 
@@ -14971,14 +15076,14 @@ async function postTotemRun(job, record, notify) {
   })
 }
 
-async function runAgentTotem(job, agentOptions) {
+async function runAgentTotem(job, agentOptions, { trigger = 'schedule', event = '' } = {}) {
   const memoryPath = totemMemoryPath(job.id)
   await mkdir(dirname(memoryPath), { recursive: true })
   const recentRuns = (await jobStore.runs({ jobId: job.id, limit: 6 })).reverse()
   const browser = job.browser ? grantBrowserAccess(totemThreadId(job.id), () => {}) : null
   try {
     const reply = await runAgent(
-      totemRunPrompt({ totem: job, memory: await readTotemMemory(job.id), memoryPath, recentRuns, browser: !!browser }),
+      totemRunPrompt({ totem: job, memory: await readTotemMemory(job.id), memoryPath, recentRuns, browser: !!browser, trigger, event }),
       'job',
       // A totem's run gets a long budget (a watcher may browse) and may write only its own memory.
       // `network`: Codex's sandbox blocks the network by default, and a totem that
@@ -15037,24 +15142,33 @@ async function handleTotemsApi(req, res, path) {
     const body = await readJsonBody(req)
     const d = body.draft || {}
     if (!String(d.name || '').trim() || !String(d.instructions || '').trim()) return send(res, 400, { error: 'a totem needs a name and instructions' })
-    const pick = (d.recommendations || [])[Number(body.recommendation) || 0] || null
+    if (d.trigger && !normalizeTrigger(d.trigger)) return send(res, 400, { error: 'that watch is incomplete: a git watch needs a checkout path or remote URL, a page watch an http(s) URL' })
+    // A model he picked himself wins over the builder's suggestions.
+    const own = body.choice && typeof body.choice.provider === 'string' ? body.choice : null
+    const rec = (d.recommendations || [])[Number(body.recommendation) || 0] || null
+    const pick = own
+      ? { provider: own.provider, model: own.model || '', effort: ['low', 'medium', 'high'].includes(own.effort) ? own.effort : '', label: own.label || own.model || own.provider }
+      : rec
     const job = await jobStore.create({
       name: d.name, description: String(d.summary || String(d.instructions).split(/(?<=[.!?])\s/)[0]).slice(0, 300), iconName: cleanIcon(d.icon) || 'sparkles',
-      enabled: body.enabled !== false, schedule: d.schedule, notify: ['agent', 'always', 'errors', 'never'].includes(d.notify) ? d.notify : 'agent',
+      enabled: body.enabled !== false, schedule: d.schedule, trigger: d.trigger || null, notify: ['agent', 'always', 'errors', 'never'].includes(d.notify) ? d.notify : 'agent',
       prompt: d.instructions, provider: pick?.provider || 'default', model: pick?.model || null, effort: pick?.effort || null,
       taskType: d.taskType, browser: d.browser === true, recommendations: d.recommendations, threadId: null,
     })
     await writeTotemMemory(job.id, '')
     await ensureTotemThread(job)
-    const intro = `I'm **${job.name}**. ${job.scheduleLabel ? `I run ${job.scheduleLabel.charAt(0).toLowerCase()}${job.scheduleLabel.slice(1)}` : 'I run on my schedule'}${pick ? ` on ${pick.label}` : ''}.`
+    const when = job.scheduleLabel ? `${job.trigger ? 'I wake' : 'I run'} ${job.scheduleLabel.charAt(0).toLowerCase()}${job.scheduleLabel.slice(1)}` : 'I run on my schedule'
+    const intro = `I'm **${job.name}**. ${when}${pick ? ` on ${pick.label}` : ''}.`
       + `${job.notify === 'agent' ? ' I only notify you when something is worth it.' : ''} Tell me here if anything should change, or what else to keep an eye on.`
     await threadStore.update(totemThreadId(job.id), (t) => {
       t.messages.push({ id: randomUUID(), role: 'assistant', content: intro, status: 'done', createdAt: Date.now(), parts: [{ type: 'text', text: intro }] })
     })
     const updated = await jobStore.update(job.id, { threadId: totemThreadId(job.id) })
     log(`totem created: ${job.id} (${job.name}) — ${job.scheduleLabel}`)
-    // Its first run happens now, so he sees it work instead of waiting for the schedule.
-    if (body.runNow !== false && updated.enabled) runJobOnce(updated, { trigger: 'manual' }).catch((e) => log(`totem ${job.id} first run failed`, e?.message || e))
+    // Its first run happens now, so he sees it work instead of waiting for the
+    // schedule. A watcher waits for its first change instead; its first check
+    // only records what the thing looks like now.
+    if (body.runNow !== false && updated.enabled && !updated.trigger) runJobOnce(updated, { trigger: 'manual' }).catch((e) => log(`totem ${job.id} first run failed`, e?.message || e))
     return send(res, 200, { job: updated, threadId: totemThreadId(job.id) })
   }
   if (req.method === 'POST' && path === '/api/totems/proposal') {
@@ -15105,6 +15219,53 @@ async function handleTotemsApi(req, res, path) {
   return send(res, 405, { error: 'method not allowed' })
 }
 
+// ---- Watches ------------------------------------------------------------------
+// A job with a `trigger` (jobs/triggers.mjs) is checked here instead of being
+// scheduled: no AI, one git ls-remote or page fetch. The first check records a
+// baseline; a later change wakes the job once, with what changed. Checks run in
+// the background so a slow remote can't hold up the tick, one at a time per job.
+const watchesInFlight = new Set()
+
+async function checkJobWatch(job, now) {
+  const prev = job.watch || {}
+  let seen
+  try {
+    seen = await checkWatch(job.trigger, { exec: execText })
+  } catch (e) {
+    const error = e?.message || String(e)
+    const failures = (prev.failures || 0) + 1
+    await jobStore.recordWatch(job.id, { checkedAt: now, error, failures })
+    // Said once when it starts failing, not on every check.
+    if (failures === 3) await jobStore.notify({ level: 'error', title: `${job.name} can't check what it watches`, body: error, jobId: job.id })
+    return
+  }
+  const first = !prev.fingerprint
+  const changed = !first && seen.fingerprint !== prev.fingerprint
+  await jobStore.recordWatch(job.id, {
+    fingerprint: seen.fingerprint, label: seen.label, checkedAt: now, error: null, failures: 0,
+    ...(changed ? { changedAt: now } : {}),
+  })
+  if (first) return log(`job ${job.id}: watching, baseline ${seen.label}`)
+  if (!changed) return
+  const event = await describeChange(job.trigger, prev, seen, { exec: execText }).catch(() => `${prev.label} → ${seen.label}`)
+  log(`job ${job.id}: watch fired (${prev.label} → ${seen.label})`)
+  await runJobOnce(job, { trigger: 'watch', event })
+}
+
+function startDueWatches(jobs, now) {
+  for (const job of jobs) {
+    if (!job.enabled || !job.trigger || watchesInFlight.has(job.id)) continue
+    // A change seen while it runs would fire into a busy job and be lost; the
+    // first check after the run catches it instead.
+    if (job.lastRun?.status === 'running') continue
+    if (!watchDue(job.trigger, job.watch, now)) continue
+    watchesInFlight.add(job.id)
+    checkJobWatch(job, now)
+      .catch((e) => log(`job ${job.id} watch error`, e?.message || e))
+      .finally(() => watchesInFlight.delete(job.id))
+  }
+}
+
 // One tick for every job. Runs are started concurrently but each job is guarded by
 // its own exclusive claim, so a slow agent prompt can't block an unrelated job.
 let jobTickRunning = false
@@ -15119,8 +15280,9 @@ async function jobTick() {
     const seed = (await readStudioState()).workflows
     await jobStore.list({ seed })
     const jobs = await jobStore.reschedule({ now })
+    startDueWatches(jobs, now)
     for (const job of jobs) {
-      if (!job.enabled) continue
+      if (!job.enabled || job.trigger) continue
       if (job.lastRun?.status === 'running') continue
       const state = dueState(job.nextRunAt, now, job.catchUpMinutes * 60_000)
       if (state === 'pending' || state === 'unscheduled') continue
@@ -15185,6 +15347,13 @@ skillStore.seed()
     // A second, throwaway bridge (a smoke test on another port) must not also run
     // every job and drain the push queue alongside the real service.
     if (process.env.BRIDGE_NO_SCHEDULER === '1') return log('job scheduler disabled (BRIDGE_NO_SCHEDULER=1)')
-    setInterval(jobTick, JOB_TICK_MS)
-    jobTick()
+    // Only the bridge that runs the scheduler owns run state, so only it clears
+    // runs a restart cut off.
+    jobStore.recoverInterrupted()
+      .then((ids) => { if (ids.length) log(`marked ${ids.length} interrupted run(s) failed: ${ids.join(', ')}`) })
+      .catch((e) => log('interrupted-run recovery failed', e?.message || e))
+      .finally(() => {
+        setInterval(jobTick, JOB_TICK_MS)
+        jobTick()
+      })
   })

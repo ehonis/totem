@@ -437,3 +437,69 @@ test('a job saved under a renamed id and runner carries over with its settings',
   assert.equal(jobs[0].enabled, true, 'an enabled job stays enabled')
   assert.equal(jobs[0].runner, 'new-runner')
 })
+
+// ---- watch triggers --------------------------------------------------------
+
+const WATCH = { type: 'watch', source: { kind: 'git', repo: 'https://github.com/o/r.git', ref: 'main' }, everyMinutes: 2 }
+
+test('a watch job has no clock-based next run, ever', async () => {
+  const store = await freshStore()
+  const job = await store.create({ name: 'Deploy', prompt: 'deploy it', trigger: WATCH })
+  assert.equal(job.nextRunAt, null)
+  assert.match(job.scheduleLabel, /^When main changes in o\/r/)
+  const [after] = (await store.reschedule()).filter((j) => j.id === job.id)
+  assert.equal(after.nextRunAt, null)
+  const claimed = await store.claim(job.id, { trigger: 'watch' })
+  assert.equal(claimed.nextRunAt, null)
+  const { job: done } = await store.finish(job.id, { status: 'ok', startedAt: Date.now(), trigger: 'watch', event: 'main moved' })
+  assert.equal(done.nextRunAt, null)
+  assert.equal(done.lastRun.event, 'main moved')
+})
+
+test('switching between schedule and watch recomputes the next run and resets the baseline', async () => {
+  const store = await freshStore()
+  const job = await store.create({ name: 'Flip', prompt: 'x', schedule: { type: 'daily', time: '09:00' } })
+  assert.ok(job.nextRunAt)
+  const watching = await store.update(job.id, { trigger: WATCH })
+  assert.equal(watching.nextRunAt, null)
+  await store.recordWatch(job.id, { fingerprint: 'abc', label: 'abc', checkedAt: 1 })
+  assert.equal((await store.update(job.id, { trigger: { ...WATCH, everyMinutes: 10 } })).watch.fingerprint, 'abc', 'same source keeps its baseline')
+  assert.equal((await store.update(job.id, { trigger: { ...WATCH, source: { ...WATCH.source, ref: 'dev' } } })).watch, null, 'a new source starts over')
+  const back = await store.update(job.id, { trigger: null })
+  assert.equal(back.trigger, null)
+  assert.ok(back.nextRunAt)
+})
+
+test('recordWatch saves check state without counting as an edit, and only for watch jobs', async () => {
+  const store = await freshStore()
+  const job = await store.create({ name: 'W', prompt: 'x', trigger: WATCH })
+  const saved = await store.recordWatch(job.id, { fingerprint: 'f1', label: 'f1', checkedAt: 5, error: null })
+  assert.deepEqual({ ...saved.watch }, { fingerprint: 'f1', label: 'f1', checkedAt: 5, changedAt: null, error: null, failures: 0 })
+  assert.equal(saved.updatedAt, job.updatedAt)
+  const plain = await store.create({ name: 'P', prompt: 'x' })
+  assert.equal(await store.recordWatch(plain.id, { fingerprint: 'f' }), null)
+})
+
+test('a seed can ship a watch trigger and a notify mode', async () => {
+  const store = await freshStore({
+    seedDefs: { ...SEED_DEFS, deploy: { name: 'Deploy', runner: 'whoop-sleep', enabled: false, notify: 'always', schedule: { type: 'daily', time: '04:00' }, trigger: WATCH } },
+  })
+  const job = (await store.list()).find((j) => j.id === 'deploy')
+  assert.equal(job.notify, 'always')
+  assert.equal(job.trigger.source.ref, 'main')
+  assert.equal(job.nextRunAt, null)
+})
+
+test('recoverInterrupted fails runs a restart cut off, so the job can run again', async () => {
+  const store = await freshStore()
+  const job = await store.create({ name: 'Long', prompt: 'x' })
+  await store.claim(job.id, { trigger: 'manual' })
+  assert.equal(await store.claim(job.id, { trigger: 'manual' }), null, 'still running blocks a claim')
+  assert.deepEqual(await store.recoverInterrupted(), [job.id])
+  const after = await store.get(job.id)
+  assert.equal(after.lastRun.status, 'error')
+  assert.equal(after.lastRun.errorKind, 'interrupted')
+  assert.ok(await store.claim(job.id, { trigger: 'manual' }), 'claimable again')
+  assert.deepEqual(await store.recoverInterrupted(), [job.id].slice(0, 1), 'the new claim is itself running')
+  assert.deepEqual(await store.recoverInterrupted(), [])
+})
