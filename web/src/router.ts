@@ -26,7 +26,7 @@ export interface Route {
 export type NavTarget = string | Partial<Route>
 
 export const TAB_IDS = [
-  'overview', 'chat', 'productivity', 'code', 'inbox', 'logs', 'brain', 'studio', 'settings',
+  'overview', 'chat', 'productivity', 'totems', 'code', 'inbox', 'logs', 'brain', 'settings',
 ]
 
 // Todos/Calendar/Habits are apps *inside* Productivity, but their ids still turn
@@ -37,7 +37,6 @@ export const DEFAULT_PRODUCTIVITY_APP = 'calendar'
 const SUB_TABS: Record<string, string[]> = {
   // Keep in step with SUB_TABS in components/SettingsView.tsx.
   settings: ['general', 'chat', 'ai', 'integrations', 'tasks', 'providers', 'shortcuts', 'notifications', 'voice', 'skills', 'jobs', 'connections', 'logs'],
-  studio: ['skills', 'workflows', 'connections'],
 }
 
 export const productivityApp = (id?: string | null) =>
@@ -49,6 +48,12 @@ const validSub = (tab: string, sub?: string | null) =>
 /** Fold a bare id (which may be a productivity app) into a full route. */
 export function toRoute(target: NavTarget): Route {
   const partial = typeof target === 'string' ? { tab: target } : { ...target }
+  // Studio is gone: its jobs became Totems, its skills and connections live in
+  // Settings. Old links still land.
+  if (partial.tab === 'studio') {
+    if (partial.sub === 'skills' || partial.sub === 'connections') return toRoute({ ...partial, tab: 'settings' })
+    return toRoute({ tab: 'totems', hash: partial.hash })
+  }
   const app = productivityApp(partial.tab) || productivityApp(partial.app)
   const tab = productivityApp(partial.tab) ? 'productivity' : (partial.tab || 'overview')
   return {
@@ -61,7 +66,7 @@ export function toRoute(target: NavTarget): Route {
 
 // Tabs that always have a pane showing, so the URL should name it rather than
 // leaving `/settings` pointing at whatever the view happens to default to.
-const DEFAULT_SUB: Record<string, string> = { settings: 'general', studio: 'skills' }
+const DEFAULT_SUB: Record<string, string> = { settings: 'general' }
 
 /** Fill in the app / sub-tab a bare tab URL implies. */
 export function withDefaults(route: Route, landing?: string | null): Route {
@@ -101,8 +106,14 @@ export function buildPath(route: Route, search = ''): string {
   const parts = [route.tab]
   if (route.tab === 'productivity' && route.app) parts.push(route.app)
   if (route.sub) parts.push(route.sub)
-  const query = route.tab === 'chat' ? threadQuery(search) : ''
+  const query = route.tab === 'chat' ? threadQuery(search) : route.tab === 'totems' ? totemQuery(search) : ''
   return `/${parts.join('/')}${query}${route.hash ? `#${route.hash}` : ''}`
+}
+
+/** On /totems, ?totem=<id> opens that totem. */
+function totemQuery(search: string): string {
+  const totem = new URLSearchParams(search).get('totem')
+  return totem ? `?totem=${encodeURIComponent(totem)}` : ''
 }
 
 /** Keep only ?project= and ?thread= — the query params that still mean something. */

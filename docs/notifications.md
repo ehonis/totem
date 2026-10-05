@@ -332,7 +332,7 @@ source with the key in `.env` rather than scraped.
 
 ## Scheduled notifications
 
-Two seed jobs, editable and deletable in Studio → Jobs like any other:
+Two seed jobs, editable and deletable in Totems like any other:
 
 | Job | Default | What it does |
 |---|---|---|

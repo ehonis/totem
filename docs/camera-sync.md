@@ -145,7 +145,7 @@ One sudo run: the udev rule, the unit, the config, and the node wrapper, then a
 udev and systemd reload. Re-running is safe and is how you pick up an edit to a
 template. `--uninstall` removes it.
 
-Then turn the reporting job on — Studio → Jobs → *Camera sync*, or seed it with
+Then turn the reporting job on — Totems → *Camera sync*, or seed it with
 `CAMERA_SYNC_ENABLED=true` in `.env`. **The job only reports; the pull happens
 whether or not it's enabled.**
 

@@ -1,6 +1,7 @@
 import { POWER_NAMES } from './models'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from '../components/Markdown'
+import TotemProposal from './TotemProposal'
 import WorkLog from './WorkLog'
 import type { Attachment, ChatMessage, Part, ProviderRow, ToolPart } from './types'
 import { TI, ProviderLogo, formatBytes, formatDuration } from './ui'
@@ -150,7 +151,11 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
 
 // --- assistant -------------------------------------------------------------------
 
-type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string }
+type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string }
+
+// A totem proposal arrives as a fenced block while streaming; the bridge turns it
+// into a card when the reply settles. Until then, don't show the raw JSON.
+const PROPOSAL_FENCE = /```totem-proposal[\s\S]*?(```|$)/g
 
 function blocks(parts: Part[]): Block[] {
   const out: Block[] = []
@@ -162,6 +167,7 @@ function blocks(parts: Part[]): Block[] {
       else out.push({ kind: 'tools', tools: [p], key: `w${i}` })
     } else if (p.type === 'image') out.push({ kind: 'image', part: p, key: `i${i}` })
     else if (p.type === 'file') out.push({ kind: 'file', part: p, key: `f${i}` })
+    else if (p.type === 'totem-proposal') out.push({ kind: 'proposal', part: p, key: `p${i}` })
     else if (p.text) {
       const last = out[out.length - 1]
       // Two text parts with no tool between them are one paragraph run.
@@ -169,6 +175,7 @@ function blocks(parts: Part[]): Block[] {
       else out.push({ kind: 'text', text: p.text, key: `t${i}` })
     }
   }
+  for (const b of out) if (b.kind === 'text') b.text = b.text.replace(PROPOSAL_FENCE, '')
   return out
 }
 
@@ -223,6 +230,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
       <div className="vc-assistant-body">
         {list.map((b, i) => {
           if (b.kind === 'tools') return <WorkLog key={b.key} tools={b.tools} live={live && i === list.length - 1} />
+          if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
           if (b.kind === 'file') return <FileCard key={b.key} file={b.part} onOpen={() => openArtifact(b.part)} />
           if (b.kind === 'image') {
             const src = b.part.url || `/api/chat/uploads/${b.part.uploadId}`

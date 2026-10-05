@@ -1,7 +1,8 @@
 # Jobs — scheduled work
 
-Everything Totem does on a timer: the defaults Totem ships with and anything you add
-in **Studio → Jobs**. One store, one scheduler, one place that tells you whether a
+Everything Totem does on a timer: the defaults Totem ships with and anything you add.
+Every job is also a **totem** and is managed in the Totems tab (`docs/totems.md`);
+this file is the scheduler underneath. One store, one scheduler, one place that tells you whether a
 job ran.
 
 Nothing here is locked. Every job — including the ones that shipped — can be

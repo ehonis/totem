@@ -338,6 +338,19 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
             </button>
           )}
           {project && active && !empty && <span className="vc-top-sep" aria-hidden>/</span>}
+          {active?.totemId && (
+            <>
+              <button
+                type="button"
+                className="vc-top-project"
+                title="Open this totem's settings, memory and runs"
+                onClick={() => { window.history.pushState({}, '', `/totems?totem=${encodeURIComponent(active.totemId!)}`); window.dispatchEvent(new PopStateEvent('popstate')) }}
+              >
+                <TI icon={IconSparkles} size={15} /><span>Totem</span>
+              </button>
+              <span className="vc-top-sep" aria-hidden>/</span>
+            </>
+          )}
           {active && !empty && <ThreadIcon t={active} size={17} busy={retitling} />}
           {(!project || (active && !empty)) && <div className={`vc-top-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{active && !empty ? threadTitle(active) : temporary ? 'Temporary chat' : 'New chat'}</div>}
           {active && !empty && (

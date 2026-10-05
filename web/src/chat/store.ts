@@ -554,6 +554,14 @@ function setRun(id: string, patch: Partial<RunState> | null) {
   })
 }
 
+/** Update one part of one message in place (a proposal card after Accept). */
+export function patchMessagePart(threadId: string, messageId: string, partId: string, patch: Record<string, unknown>) {
+  patchThread(threadId, (t) => ({
+    ...t,
+    messages: t.messages.map((m) => (m.id !== messageId ? m : { ...m, parts: (m.parts || []).map((p: any) => (p.id === partId ? { ...p, ...patch } : p)) })),
+  }))
+}
+
 function patchAssistant(threadId: string, fn: (m: ChatMessage) => ChatMessage) {
   patchThread(threadId, (t) => {
     const msgs = t.messages.slice()

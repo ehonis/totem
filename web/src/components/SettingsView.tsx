@@ -115,7 +115,7 @@ function GeneralPane({ onDisconnect }: { onDisconnect: () => void }) {
             <option value="habits">Productivity · Habits</option>
             <option value="lists">Productivity · Lists</option>
             <option value="brain">Brain</option>
-            <option value="studio">Studio</option>
+            <option value="totems">Totems</option>
           </select>
         </SettingRow>
       </div>

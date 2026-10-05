@@ -64,7 +64,7 @@ change to it.
    guarded by the unguessable `state`.
 5. **Sync history** once (the button, or `node strava/cli.mjs sync --full`). A fresh app has
    a read budget of 100 requests per 15 minutes; each 200 activities is one request, so
-   years of history is a handful. Turn on **Studio → Jobs → Strava sync** to keep the
+   years of history is a handful. Turn on **Totems → Strava sync** to keep the
    mirror current (every 3 h by default).
 
 New Strava apps are in "single-player mode" — only your own account can authorize —

@@ -38,7 +38,8 @@ const INTERVAL_CHOICES = [
   { minutes: 720, label: '12 hours' },
 ]
 
-const NOTIFY_CHOICES = [
+export const NOTIFY_CHOICES = [
+  { id: 'agent', label: 'When the totem decides it matters' },
   { id: 'errors', label: 'Only when it fails' },
   { id: 'always', label: 'Every run' },
   { id: 'never', label: 'Never' },
@@ -46,7 +47,7 @@ const NOTIFY_CHOICES = [
 
 // ---- formatting ------------------------------------------------------------
 
-function relativeTime(ts: number | null | undefined): string {
+export function relativeTime(ts: number | null | undefined): string {
   if (!ts) return ''
   const diff = ts - Date.now()
   const ahead = diff >= 0
@@ -141,7 +142,7 @@ interface SwitchProps {
   label: string
 }
 
-function Switch({ checked, onChange, disabled, label }: SwitchProps) {
+export function Switch({ checked, onChange, disabled, label }: SwitchProps) {
   return (
     <button
       type="button"
@@ -254,7 +255,7 @@ function windowRuns(from: string, to: string, everyMinutes: number): number {
 // The point of this control is that what you pick is what runs. So it renders the
 // resolved schedule back as a sentence, and the row it lives in shows the actual
 // next run the server computed — not a promise, a timestamp.
-function ScheduleBuilder({ value, onChange }: { value: ScheduleValue; onChange: (v: ScheduleValue) => void }) {
+export function ScheduleBuilder({ value, onChange }: { value: ScheduleValue; onChange: (v: ScheduleValue) => void }) {
   const type = value.type
   // Falling back through `from` keeps the time you already chose when you switch
   // a window back to a daily schedule, instead of silently resetting it to 08:00.
@@ -614,7 +615,7 @@ function JobForm({ initial, providers, skills, runners, heading, submitLabel, on
 
 // ---- run history -----------------------------------------------------------
 
-function RunHistory({ jobId }: { jobId: string }) {
+export function RunHistory({ jobId }: { jobId: string }) {
   const [runs, setRuns] = useState<any[] | null>(null)
   const [err, setErr] = useState('')
   const { dayAndTime } = useJobTime()
