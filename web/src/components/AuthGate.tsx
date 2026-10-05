@@ -13,9 +13,15 @@ function message(e: unknown) {
   return e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
 }
 
-/** The setup token from the one-time link (/setup?token=…), if this is that link. */
+// The setup token from the one-time link (/setup?token=…), read once when the
+// module loads. It has to be taken this early: App normalises the address bar on
+// boot (/setup isn't a tab, and only ?thread= survives), and that runs before
+// the setup form mounts, so reading the URL from the form found no token.
+const SETUP_TOKEN = new URLSearchParams(window.location.search).get('token') || ''
+
+/** The setup token from the one-time link, if this page was opened from it. */
 function setupTokenFromUrl() {
-  return new URLSearchParams(window.location.search).get('token') || ''
+  return SETUP_TOKEN
 }
 
 /**
