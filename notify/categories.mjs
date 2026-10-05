@@ -175,6 +175,14 @@ export const CATEGORIES = {
     dedupeWindowMinutes: 0,
     slot: 'midday',
   },
+  // Timex collaboration drops — daily scan, notify only on new headlines; Sunday rollup.
+  'news.timex': {
+    label: 'Timex collabs',
+    quietHours: 'defer',
+    defaultEnabled: true,
+    dedupeWindowMinutes: 0,
+    slot: null,
+  },
   // ---- what the subscriptions are doing (notify/usage.mjs) ----------------
   // A quota is a number he can act on — stop, switch provider, or spend the rest
   // of it — but only while the window is still open, so none of these override
@@ -238,6 +246,17 @@ export const CATEGORIES = {
   'journal.failed': {
     label: 'Journal problems',
     quietHours: 'defer',
+    defaultEnabled: true,
+    pinned: true,
+    dedupeWindowMinutes: 0,
+    slot: null,
+  },
+  // A chat that finished while nobody was watching it: a long task sent from the
+  // phone, a computer-use run, a tab that was closed mid-answer. Only sent when no
+  // viewer is attached, so an answer read as it streams never also buzzes.
+  'chat.finished': {
+    label: 'Chat answers you walked away from',
+    quietHours: 'override',
     defaultEnabled: true,
     pinned: true,
     dedupeWindowMinutes: 0,

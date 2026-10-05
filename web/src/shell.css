@@ -1,0 +1,186 @@
+/* ==========================================================================
+   App shell, after ChatGPT's current layout (components/Shell.tsx).
+   Desktop: icon rail | chats panel | view.   Phone: top bar + drawer.
+   ========================================================================== */
+
+.app.shell {
+  grid-template-columns: 64px auto minmax(0, 1fr);
+  background: var(--bg);
+}
+.app.shell.term-open { grid-template-columns: 64px auto minmax(0, 1fr) auto; }
+.app.shell > .sh-rail { grid-column: 1; }
+.app.shell > .sh-panel { grid-column: 2; }
+.app.shell > .main { grid-column: 3; }
+.app.shell > .term-panel { grid-column: 4; }
+
+/* --- rail ------------------------------------------------------------------ */
+.sh-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 12px 0 14px; min-height: 0;
+  background: #0b0c10; border-right: 1px solid #1a1d26;
+}
+.sh-rail-brand {
+  position: relative; display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 8px;
+  border-radius: 12px; border: 0; background: none; padding: 0;
+}
+.sh-rail-logo { width: 32px; height: 32px; }
+.sh-rail-brand-toggle {
+  position: absolute; inset: 0; display: grid; place-items: center; border-radius: 12px;
+  background: #1c1f29; color: var(--text); opacity: 0; transition: opacity .12s;
+}
+.sh-rail-brand:hover .sh-rail-brand-toggle, .sh-rail-brand:focus-visible .sh-rail-brand-toggle { opacity: 1; }
+.sh-rail-tabs { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.sh-rail-btn {
+  position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px;
+  background: none; border: 0; color: color-mix(in srgb, var(--text) 62%, transparent);
+  transition: background .12s, color .12s;
+}
+.sh-rail-btn:hover { background: #181b24; color: var(--text); }
+.sh-rail-btn.on { background: #1f2330; color: var(--text); }
+.sh-rail-bottom { margin-top: auto; }
+.sh-badge {
+  position: absolute; top: 4px; right: 3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+/* Label on hover, to the right of the rail. */
+.sh-tip {
+  position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  padding: 5px 9px; border-radius: 8px; background: #2a2f3c; color: var(--text);
+  font-size: 12.5px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .1s .25s;
+  z-index: 60; box-shadow: 0 6px 18px #0008;
+}
+.sh-rail-btn:hover .sh-tip { opacity: 1; }
+
+/* --- chats panel ------------------------------------------------------------ */
+.sh-panel {
+  width: 268px; min-height: 0; display: flex; flex-direction: column;
+  background: var(--bg-2); border-right: 1px solid var(--line);
+  padding: 0 8px;
+}
+.sh-panel-head { display: flex; align-items: center; gap: 4px; height: 58px; padding: 0 0 0 10px; flex: none; }
+.sh-brand { flex: 1; min-width: 0; }
+.sh-brand .brand-name { margin-left: 0; font-size: 17px; }
+.sh-panel-actions { display: flex; align-items: center; gap: 2px; }
+.sh-icon {
+  position: relative; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px;
+  background: none; border: 0; color: color-mix(in srgb, var(--text) 72%, transparent);
+}
+.sh-icon:hover { background: var(--bg-3); color: var(--text); }
+.sh-dot { position: absolute; top: 8px; right: 8px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg-2); }
+.sh-new {
+  display: flex; align-items: center; gap: 11px; width: 100%; height: 40px; padding: 0 12px; margin: 2px 0 6px;
+  border-radius: 10px; background: none; border: 0; color: var(--text); font-size: 14.5px; text-align: left; flex: none;
+}
+.sh-new:hover { background: var(--bg-3); }
+.sh-panel .vc-threads { flex: 1; min-height: 0; }
+.sh-panel .vc-threads-head { padding-top: 14px; }
+
+/* --- phone --------------------------------------------------------------------- */
+.sh-mbar {
+  flex: none; display: flex; align-items: center; gap: 4px; height: 52px; padding: 0 6px;
+  position: relative; z-index: 5; background: var(--bg);
+}
+.sh-mbar-title { flex: 1; min-width: 0; text-align: center; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.sh-scrim { position: fixed; inset: 0; z-index: 65; background: #00000080; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.sh-scrim.show { opacity: 1; pointer-events: auto; }
+.sh-drawer {
+  position: fixed; z-index: 66; top: 0; bottom: 0; left: 0; width: min(86vw, 340px);
+  display: flex; flex-direction: column;
+  padding: env(safe-area-inset-top) 8px 0;
+  background: var(--bg-2); border-right: 1px solid var(--line);
+  transform: translateX(-102%); transition: transform .24s cubic-bezier(.2, .8, .2, 1);
+}
+.sh-drawer.open { transform: none; box-shadow: 20px 0 60px #0009; }
+.sh-drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; }
+.sh-drawer-scroll .vc-threads { flex: none; }
+.sh-drawer-scroll .vc-threads-list { overflow: visible; }
+.sh-drawer-nav { display: flex; flex-direction: column; padding: 2px 0 6px; border-bottom: 1px solid var(--line); }
+.sh-drawer-item {
+  position: relative; display: flex; align-items: center; gap: 13px; width: 100%; height: 44px; padding: 0 12px;
+  border-radius: 10px; background: none; border: 0; color: color-mix(in srgb, var(--text) 86%, transparent); font-size: 15.5px; text-align: left;
+}
+.sh-drawer-item.on { background: #252a37; color: var(--text); }
+.sh-drawer-item .sh-badge { position: static; margin-left: auto; }
+.sh-drawer .vc-thread-main { height: 42px; font-size: 15px; }
+.sh-drawer .sh-new { height: 44px; font-size: 15.5px; }
+
+@media (max-width: 720px) {
+  /* No bottom dock any more. Everything that used to clear it now just keeps a
+     small margin off the bottom edge (plus the home indicator when installed).
+     Literals only — see the env()-in-custom-property gotcha in styles.css. */
+  :root { --dock-h: 0px; --dock-bottom: 0px; --dock-clear: 14px; }
+  @media (display-mode: standalone) { :root { --dock-clear: 30px; } }
+  .app.shell { grid-template-columns: minmax(0, 1fr); }
+  .app.shell > .main { grid-column: 1; }
+  .app.shell::after { display: none; }
+  .app.shell .main { display: flex; flex-direction: column; }
+  .app.shell .main > :not(.sh-mbar) { flex: 1 1 auto; min-height: 0; height: auto; }
+  .app.shell .view { padding-bottom: calc(var(--dock-clear) + 56px); }
+  /* Settings (and anything else) nests a scrolling .view inside a .view: the
+     outer one's padding sat under the inner scroller and ended it 70px early,
+     a dead band where the old dock used to be. Only the innermost pays. */
+  .app.shell .view:has(.view, .settings-content, .todo-board-list, .tg-body) { padding-bottom: 0; }
+  .app.shell .view .settings-content, .app.shell .view .todo-board-list, .app.shell .view .tg-body { padding-bottom: calc(var(--dock-clear) + 56px); }
+  .app.shell .view .settings-content:has(.view) { padding-bottom: 0; }
+}
+
+/* --- phone: ChatGPT's push sidebar ------------------------------------------------
+   The sidebar sits underneath; the whole page slides right to reveal it (and
+   follows a finger dragged from the left edge, see useEdgeSwipe). Tapping the
+   strip of page that's still showing closes it. */
+@media (max-width: 720px) {
+  :root { --sh-w: min(84vw, 330px); }
+  .sh-drawer {
+    z-index: 1; width: var(--sh-w); border-right: 0; box-shadow: none !important;
+    transform: translateX(-24%); opacity: .6;
+    transition: transform .32s cubic-bezier(.2, .8, .2, 1), opacity .32s;
+  }
+  .app.shell > .main {
+    position: relative; z-index: 2; background: var(--bg);
+    transition: transform .32s cubic-bezier(.2, .8, .2, 1), border-radius .32s;
+    will-change: transform;
+  }
+  .app.shell.drawer-open > .main {
+    transform: translateX(var(--sh-w)); border-radius: 22px 0 0 22px; overflow: hidden;
+    box-shadow: -16px 0 50px #000a;
+  }
+  .app.shell.drawer-open .sh-drawer { transform: none; opacity: 1; }
+  /* The scrim covers the part of the page still on screen, not the sidebar. */
+  .sh-scrim { z-index: 3; left: var(--sh-w); background: #00000059; }
+  /* Mid-drag: no easing, and the page sits wherever the finger is. */
+  html.sh-dragging .app.shell > .main { transition: none; transform: translateX(var(--sh-drag)); border-radius: 22px 0 0 22px; overflow: hidden; }
+  html.sh-dragging .sh-drawer { transition: none; transform: translateX(calc((var(--sh-drag) / 330px - 1) * 24%)); opacity: 1; }
+  /* Things pinned to the viewport would otherwise stay put while the page moves. */
+  .app.shell.drawer-open .action-launcher, .app.shell.drawer-open .todo-new-task { opacity: 0; pointer-events: none; }
+}
+
+/* --- phone: the "new chat" button ------------------------------------------------ */
+.sh-fab { display: none; }
+@media (max-width: 720px) {
+  .app.shell .action-launcher { display: none; }
+  .sh-fab {
+    position: fixed; z-index: 44; right: 16px; bottom: calc(var(--dock-clear) + 8px);
+    display: grid; place-items: center; width: 54px; height: 54px; border-radius: 50%;
+    background: var(--text); color: #0f1115; border: 0;
+    box-shadow: 0 10px 28px #00000080;
+    transition: transform .12s, opacity .2s;
+  }
+  .sh-fab:active { transform: scale(.94); }
+  .app.shell.drawer-open .sh-fab { opacity: 0; pointer-events: none; }
+  /* Todos' own "new task" button sits beside it rather than under it. */
+  .app.shell .todo-new-task { right: calc(16px + 54px + 12px); bottom: calc(var(--dock-clear) + 13px); }
+}
+@media (max-width: 720px) {
+  /* The lifecycle chips keep a lane clear of the two corner buttons. */
+  .app.shell .todo-board-footer { padding-right: calc(16px + 54px + 12px + 44px + 8px); }
+}
+@media (max-width: 720px) {
+  /* Voice sits directly above new chat: the same column, a little smaller, so the
+     pair reads as one control and stays out of Todos' "new task" button. */
+  .sh-fab.sh-fab-voice {
+    width: 46px; height: 46px; right: 20px; bottom: calc(var(--dock-clear) + 8px + 54px + 12px);
+    background: #2a2f3c; color: var(--text); border: 1px solid #3a4152;
+  }
+}

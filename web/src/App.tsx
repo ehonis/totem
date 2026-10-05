@@ -5,7 +5,6 @@ import { parseLocation, buildPath, toRoute, resolveTarget, type NavTarget, type 
 import { COMMANDS } from './shortcuts'
 import { useShortcuts, useCommand } from './useShortcuts'
 import { useInboxCount, describeInboxCount } from './useInboxCount'
-import totemLogo from './assets/totem-logo.png'
 import AuthGate from './components/AuthGate'
 import OverviewView from './components/OverviewView'
 import InboxView from './components/InboxView'
@@ -14,6 +13,8 @@ import ProductivityView from './components/ProductivityView'
 import BrainView from './components/BrainView'
 import GithubView from './components/GithubView'
 import ChatView from './components/ChatView'
+import { Rail, SidePanel, MobileBar, MobileDrawer, NewChatFab, usePanelOpen, useEdgeSwipe } from './components/Shell'
+import { setActive, requestVoice } from './chat/store'
 import StudioView from './components/StudioView'
 import SettingsView from './components/SettingsView'
 import TerminalPanel from './components/TerminalPanel'
@@ -48,16 +49,13 @@ const PRIMARY_TABS: TabDef[] = [
   { id: 'overview', label: 'Overview', icon: Squares2X2Icon },
   { id: 'chat', label: 'Chat', icon: ChatBubbleLeftRightIcon },
   { id: 'productivity', label: 'Productivity', icon: CalendarDaysIcon },
-  { id: 'code', label: 'Code', icon: CodeBracketIcon },
   { id: 'inbox', label: 'Inbox', icon: InboxArrowDownIcon },
 ]
 
-// Secondary tabs tucked under the "More" group so the sidebar stays scannable.
-const MORE_TABS: TabDef[] = [
-  { id: 'logs', label: 'Logs', icon: ShieldCheckIcon },
-  { id: 'brain', label: 'Brain', icon: CircleStackIcon },
-  { id: 'studio', label: 'Studio', icon: SparklesIcon },
-]
+// No longer on the nav: Code and Brain open from the Overview's app row, and the
+// AI workshop (Studio's skills/jobs/connections, and Logs) lives in Settings.
+// Their routes still work, so links and shortcuts to them keep landing.
+const MORE_TABS: TabDef[] = []
 
 // Settings lives at the bottom of the sidebar (replacing the old Disconnect link).
 // It isn't in the tab arrays because it's pinned separately — except on a phone,
@@ -89,130 +87,6 @@ function useNarrow() {
 // remembered here instead of in the route.
 const TERMINAL_OPEN_KEY = 'totem.terminal.open'
 
-interface NavTabButtonProps {
-  tab: TabDef
-  active: boolean
-  onSelect: (id: string) => void
-  sub?: boolean
-  badge?: number | null
-  badgeTitle?: string
-}
-
-// Shared nav button so primary tabs and More sub-items stay visually consistent.
-// `badge` is a count to show beside the label; null or 0 renders nothing, so a
-// tab with nothing waiting looks exactly as it did before.
-function NavTabButton({ tab, active, onSelect, sub, badge, badgeTitle }: NavTabButtonProps) {
-  const showBadge = typeof badge === 'number' && badge > 0
-  return (
-    <button
-      type="button"
-      className={`nav-item${sub ? ' nav-subitem' : ''}${active ? ' active' : ''}`}
-      onClick={() => onSelect(tab.id)}
-      title={showBadge ? badgeTitle : undefined}
-    >
-      <span className="ico"><Hi icon={tab.icon} size={18} /></span>
-      {tab.label}
-      {showBadge && (
-        // The number is decoration for a sighted user; the title text is what
-        // actually says what it means, so that is what gets announced.
-        <span className="nav-badge" role="status" aria-label={badgeTitle}>
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-    </button>
-  )
-}
-
-interface NavMoreProps {
-  tabs: TabDef[]
-  activeTab: string
-  onSelect: (id: string) => void
-  // Count carried up from a tab that folded into the group, so a waiting inbox
-  // is still visible when its own button isn't on the bar.
-  badge?: number | null
-  badgeTitle?: string
-}
-
-// Collapsible "More" group for secondary tabs. Auto-expands when one of its
-// children is active; on mobile the same items appear in a flyout above the bar.
-function NavMore({ tabs, activeTab, onSelect, badge, badgeTitle }: NavMoreProps) {
-  const moreActive = tabs.some((t) => t.id === activeTab)
-  const [open, setOpen] = useState(moreActive)
-  const [flyout, setFlyout] = useState(false)
-  const wrapRef = useRef<HTMLDivElement>(null)
-
-  // Keep the desktop accordion open while a More tab is selected.
-  useEffect(() => {
-    if (moreActive) setOpen(true)
-  }, [moreActive])
-
-  // Close the mobile flyout when tapping outside or after picking a tab.
-  useEffect(() => {
-    if (!flyout) return
-    const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setFlyout(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [flyout])
-
-  const pick = (id: string) => {
-    onSelect(id)
-    setFlyout(false)
-  }
-
-  return (
-    <div className="nav-more" ref={wrapRef}>
-      <button
-        type="button"
-        className={`nav-item nav-more-toggle${moreActive ? ' active' : ''}${open || flyout ? ' open' : ''}`}
-        aria-expanded={open || flyout}
-        aria-haspopup="true"
-        onClick={() => {
-          // Narrow screens use a flyout; wide screens use an inline accordion.
-          if (window.matchMedia('(max-width: 720px)').matches) {
-            setFlyout((v) => !v)
-          } else {
-            setOpen((v) => !v)
-          }
-        }}
-      >
-        <span className="ico"><Hi icon={EllipsisHorizontalIcon} size={18} /></span>
-        More
-        {typeof badge === 'number' && badge > 0 && (
-          <span className="nav-badge" role="status" aria-label={badgeTitle}>
-            {badge > 99 ? '99+' : badge}
-          </span>
-        )}
-        <Hi icon={ChevronDownIcon} size={14} className="nav-more-chevron" />
-      </button>
-      {/* Desktop: inline sub-nav */}
-      <div className={`nav-more-items${open ? ' open' : ''}`}>
-        {tabs.map((t) => (
-          <NavTabButton key={t.id} tab={t} active={activeTab === t.id} onSelect={pick} sub />
-        ))}
-      </div>
-      {/* Mobile: popover above the bottom bar */}
-      {flyout && (
-        <div className="nav-more-flyout" role="menu">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="menuitem"
-              className={`nav-item${activeTab === t.id ? ' active' : ''}`}
-              onClick={() => pick(t.id)}
-            >
-              <span className="ico"><Hi icon={t.icon} size={18} /></span>
-              {t.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 export default function App() {
   const settings = useSettings()
   const narrow = useNarrow()
@@ -225,6 +99,9 @@ export default function App() {
   // /settings/providers, /chat?thread=…. See router.ts.
   const [route, setRoute] = useState<Route>(() => parseLocation(window.location, getSettings().landingTab))
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [panelOpen, setPanelOpen] = usePanelOpen()
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  useEdgeSwipe(narrow, drawerOpen, setDrawerOpen)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
 
   // Normalise the address bar once on boot: a legacy ?tab= link, or a bare "/"
@@ -364,55 +241,37 @@ export default function App() {
     root.classList.toggle('density-compact', settings.compact)
   }, [settings.reduceMotion, settings.compact])
 
-  // On a phone the bar keeps four tabs and hands the rest to More, so nothing
-  // ends up scrolled off the edge.
-  const inlineTabs = narrow ? PRIMARY_TABS.slice(0, MOBILE_INLINE_TABS) : PRIMARY_TABS
-  const moreTabs = narrow
-    ? [...PRIMARY_TABS.slice(MOBILE_INLINE_TABS), ...MORE_TABS, SETTINGS_TAB_DEF]
-    : MORE_TABS
-  const moreHasInbox = moreTabs.some((t) => t.id === 'inbox')
+  // Every tab is on the rail (desktop) or in the drawer (phone); nothing is
+  // folded under "More" any more.
+  const allTabs = [...PRIMARY_TABS, ...MORE_TABS]
+  const badges = inboxOpen ? { inbox: { count: inboxOpen, title: describeInboxCount(inboxOpen, inboxByKind) } } : {}
+  const tabLabel = [...allTabs, SETTINGS_TAB_DEF].find((t) => t.id === tab)?.label || 'Totem'
+  const openChat = () => selectTab('chat')
+  const newChat = () => { setActive(null); selectTab('chat') }
 
   if (!unlocked) return <AuthGate onUnlock={unlock} />
 
   return (
-    <div className={`app${terminalVisible ? ' term-open' : ''}`}>
-      <nav className="sidebar">
-        <div className="brand">
-          <img className="brand-logo" src={totemLogo} alt="Totem logo" />
-          <span className="brand-name">Totem</span>
-        </div>
-        {inlineTabs.map((t) => (
-          <NavTabButton
-            key={t.id}
-            tab={t}
-            active={tab === t.id}
-            onSelect={selectTab}
-            badge={t.id === 'inbox' ? inboxOpen : null}
-            badgeTitle={t.id === 'inbox' && inboxOpen ? describeInboxCount(inboxOpen, inboxByKind) : undefined}
-          />
-        ))}
-        <NavMore
-          tabs={moreTabs}
-          activeTab={tab}
+    <div className={`app shell${terminalVisible ? ' term-open' : ''}${!narrow && panelOpen ? ' panel-open' : ''}${narrow && drawerOpen ? ' drawer-open' : ''}`}>
+      {!narrow && (
+        <Rail
+          tabs={allTabs}
+          bottom={SETTINGS_TAB_DEF}
+          active={tab}
           onSelect={selectTab}
-          badge={moreHasInbox ? inboxOpen : null}
-          badgeTitle={moreHasInbox && inboxOpen ? describeInboxCount(inboxOpen, inboxByKind) : undefined}
+          panelOpen={panelOpen}
+          onTogglePanel={() => setPanelOpen(!panelOpen)}
+          badges={badges}
         />
-        {!narrow && (
-          <div className="sidebar-foot">
-            <button
-              className={`nav-item ${tab === SETTINGS_TAB ? 'active' : ''}`}
-              onClick={() => selectTab(SETTINGS_TAB)}
-            >
-              <span className="ico"><Hi icon={Cog6ToothIcon} size={18} /></span>
-              Settings
-            </button>
-          </div>
-        )}
-      </nav>
+      )}
+      {!narrow && panelOpen && (
+        <SidePanel onOpenChat={openChat} onNotifications={() => setNotificationsOpen(true)} unread={unreadNotifications} onCollapse={() => setPanelOpen(false)} />
+      )}
       <main className="main">
+        {/* The chat draws its own top bar; every other screen gets ChatGPT's. */}
+        {narrow && tab !== 'chat' && <MobileBar title={tabLabel} onMenu={() => setDrawerOpen(true)} onNewChat={newChat} />}
         {/* Keep Chat mounted so its conversation survives tab switches. */}
-        <ChatView visible={tab === 'chat'} onAuthError={onAuthError} />
+        <ChatView visible={tab === 'chat'} onAuthError={onAuthError} onOpenChat={openChat} onOpenMenu={() => setDrawerOpen(true)} panelOpen={panelOpen} onShowPanel={() => setPanelOpen(true)} />
         {tab === 'overview' && <OverviewView onNavigate={navigate} onAuthError={onAuthError} />}
         {/* `/inbox#P12` is a release notification's "tap to update" link. */}
         {tab === 'inbox' && <InboxView onAuthError={onAuthError} focusId={route.hash} />}
@@ -434,6 +293,20 @@ export default function App() {
           />
         )}
       </main>
+      {narrow && tab !== 'chat' && <NewChatFab onNewChat={newChat} onVoice={() => { requestVoice(); selectTab('chat') }} />}
+      {narrow && (
+        <MobileDrawer
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          tabs={[...allTabs, SETTINGS_TAB_DEF]}
+          active={tab}
+          onSelect={selectTab}
+          onOpenChat={openChat}
+          badges={badges}
+          onNotifications={() => setNotificationsOpen(true)}
+          unread={unreadNotifications}
+        />
+      )}
       {terminalVisible && <TerminalPanel open onClose={toggleTerminal} />}
       <NotificationCenter
         open={notificationsOpen}

@@ -13,7 +13,7 @@ import { spawn, execFile } from 'node:child_process'
 import { randomUUID, timingSafeEqual, randomBytes, createHash, createPublicKey, verify as cryptoVerify } from 'node:crypto'
 import { tmpdir, homedir } from 'node:os'
 import { join, extname, normalize, relative, dirname, basename } from 'node:path'
-import { readFile, writeFile, unlink, readdir, mkdir, rename, stat, appendFile, copyFile, rm } from 'node:fs/promises'
+import { readFile, writeFile, unlink, readdir, mkdir, mkdtemp, rename, stat, appendFile, copyFile, rm } from 'node:fs/promises'
 import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { createInterface } from 'node:readline'
@@ -44,6 +44,17 @@ import { createListService } from './lists/service.mjs'
 import { createListHttpHandler } from './lists/http.mjs'
 import { createJournalStore } from './journal/store.mjs'
 import { createTranscriber } from './journal/transcribe.mjs'
+import { createThreadStore, validThreadId } from './chat/store.mjs'
+import { createUploadStore, validUploadId } from './chat/uploads.mjs'
+import { createChatRuns } from './chat/runs.mjs'
+import { planHistory, renderTranscript, attachmentBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer } from './chat/turn.mjs'
+import { describeMcpCall, describeCommand, humanizeTool, stringifyInput, resultText } from './chat/tools.mjs'
+import { pickRoute, PRESETS } from './chat/route.mjs'
+import { THREAD_ICONS, parseTitleReply, cleanIcon } from './chat/thread-icons.mjs'
+import { createBrowserManager } from './browser/manager.mjs'
+import { callBrowserTool, browserToolDescriptors, BROWSER_TOOLS } from './browser/tools.mjs'
+import { embedLocalImages } from './browser/shots.mjs'
+import { createVoiceService, realtimeTools, VOICE_INSTRUCTIONS } from './chat/voice.mjs'
 import { createJournalService } from './journal/service.mjs'
 import { createJournalHttpHandler } from './journal/http.mjs'
 import ffmpegStaticPath from 'ffmpeg-static'
@@ -55,6 +66,7 @@ import { createDigest, factsForPrompt, parseCopy } from './notify/digest.mjs'
 import { receivedNotification, parseSummary, fallbackSummary, failedNotification } from './notify/shortcut.mjs'
 import { deriveWeights, ignoredSince } from './notify/weights.mjs'
 import { scanFeeds, DEFAULT_SOURCES } from './notify/feed.mjs'
+import { scanTimexCollabs, emptyState as emptyTimexCollabState } from './notify/timex-collabs.mjs'
 import { slotTimeOn, DEFAULT_SLOTS } from './notify/schedule.mjs'
 import { usageFacts } from './notify/usage.mjs'
 import { decideUpdate, readInstalledVersion, proposalFor } from './notify/updates.mjs'
@@ -1475,7 +1487,21 @@ function normalizeEntryMetric(entry) {
   // contract, so the chart can't accidentally stack a percentage onto minutes.
   const parts = numberMap(entry?.parts, 12)
   const stats = numberMap(entry?.stats, 16)
-  return { value, parts, stats, window: normalizeEntryWindow(entry?.window) }
+  return { value, parts, stats, window: normalizeEntryWindow(entry?.window), source: normalizeEntrySource(entry?.source) }
+}
+
+// Who wrote an entry's numbers, when a connector did. Only the WHOOP sync sets
+// it, and it is what lets that sync tell "a night it wrote and WHOOP has since
+// revised" from "a number the owner typed". Any hand edit of the value drops it.
+function normalizeEntrySource(raw) {
+  if (!raw || typeof raw !== 'object' || raw.kind !== 'whoop') return null
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 80) : null)
+  const id = str(raw.id)
+  if (!id) return null
+  const out = { kind: 'whoop', id }
+  const updatedAt = str(raw.updatedAt)
+  if (updatedAt) out.updatedAt = updatedAt
+  return out
 }
 
 // A local wall-clock span, "YYYY-MM-DDTHH:MM" at each end — when the thing being
@@ -1541,7 +1567,7 @@ async function readHabitsState() {
       for (const [habitId, e] of Object.entries(day)) {
         const count = Math.min(Math.max(Math.round(Number(e?.count)) || 0, 0), 999)
         const note = typeof e?.note === 'string' ? e.note.trim().slice(0, 500) : ''
-        const { value, parts, stats, window } = normalizeEntryMetric(e)
+        const { value, parts, stats, window, source } = normalizeEntryMetric(e)
         const hasParts = Object.keys(parts).length > 0
         const hasStats = Object.keys(stats).length > 0
         // A day with only a number and no check still matters — a logged sleep
@@ -1553,6 +1579,7 @@ async function readHabitsState() {
         if (hasParts) clean[habitId].parts = parts
         if (hasStats) clean[habitId].stats = stats
         if (window) clean[habitId].window = window
+        if (source) clean[habitId].source = source
       }
       if (Object.keys(clean).length) entries[date] = clean
     }
@@ -1684,7 +1711,7 @@ async function deleteHabitRecord(id) {
 // scraper and a nightly check-in write through exactly the same path.
 // `complete: true` ticks the habit off when a number arrives without a count —
 // the number is itself the evidence the habit happened.
-async function logHabitRecord({ id, date, count, delta, note, value, parts, stats, window, complete } = {}) {
+async function logHabitRecord({ id, date, count, delta, note, value, parts, stats, window, complete, source } = {}) {
   const state = await readHabitsState()
   const habit = state.habits.find((h) => h.id === id)
   if (!habit) throw new Error('unknown habit')
@@ -1749,6 +1776,13 @@ async function logHabitRecord({ id, date, count, delta, note, value, parts, stat
     }
   }
 
+  // A caller that sets the number without saying where it came from is a person
+  // (or an agent on their behalf), and from then on the number is theirs: the
+  // WHOOP sync must stop treating the night as its own to revise.
+  let nextSource = existing.source || null
+  if (source !== undefined) nextSource = normalizeEntrySource(source)
+  else if (value !== undefined || parts !== undefined) nextSource = null
+
   const hasParts = Object.keys(nextParts).length > 0
   const hasStats = Object.keys(nextStats).length > 0
   if (complete === true && (nextValue !== null || hasParts) && nextCount < 1) nextCount = 1
@@ -1760,6 +1794,7 @@ async function logHabitRecord({ id, date, count, delta, note, value, parts, stat
     if (hasParts) entry.parts = nextParts
     if (hasStats) entry.stats = nextStats
     if (nextWindow) entry.window = nextWindow
+    if (nextSource && (nextValue !== null || hasParts)) entry.source = nextSource
     ;(state.entries[day] ||= {})[habit.id] = entry
   } else if (state.entries[day]) {
     delete state.entries[day][habit.id]
@@ -2398,6 +2433,9 @@ function whoopNightFromRecord(record) {
 
   return {
     id: record.id,
+    // WHOOP publishes a sleep the moment it thinks you woke, then revises the
+    // same record (same id) when you actually get up. This is how a revision shows.
+    updatedAt: typeof record.updated_at === 'string' ? record.updated_at : null,
     date: whoopLocalDate(record.start, record.timezone_offset),
     wakeDate: whoopLocalDate(record.end, record.timezone_offset),
     value,
@@ -2408,9 +2446,11 @@ function whoopNightFromRecord(record) {
   }
 }
 
-// `force` overwrites nights that already carry a number (WHOOP re-scores a night
-// if you edit it in the app); the default leaves anything already logged — hand
-// -entered or not — exactly as it is.
+// A night the sync wrote itself (entry.source.kind === 'whoop') is WHOOP's, and
+// is rewritten whenever WHOOP revises it — which it routinely does: the record
+// is published the moment the band thinks you woke (4:53 AM, say) and updated
+// hours later when you actually get up. A number typed by hand has no source
+// and is never overwritten unless `force` is passed.
 async function syncWhoopSleep({ days = WHOOP_SLEEP_DAYS, force = false } = {}) {
   const state = await readHabitsState()
   // The habit marked "filled by WHOOP sleep sync" wins; the env id is the
@@ -2447,13 +2487,24 @@ async function syncWhoopSleep({ days = WHOOP_SLEEP_DAYS, force = false } = {}) {
 
   const today = localISODate()
   const updated = []
+  const revised = []
   const skipped = []
   const enriched = []
   for (const [date, night] of [...byDate].sort(([a], [b]) => (a < b ? -1 : 1))) {
     if (date > today) continue
     const existing = state.entries[date]?.[habit.id]
-    if (!force && existing?.value != null) {
+    const owned = whoopOwnsEntry(existing)
+    // A night this sync wrote is rewritten whenever WHOOP's copy differs from
+    // the one it wrote: a different record won the day, WHOOP revised the
+    // record, or recovery was scored after the sleep was.
+    const stale = owned && (
+      existing.source?.id !== night.id
+      || (night.updatedAt && existing.source?.updatedAt !== night.updatedAt)
+      || (night.stats.recovery !== undefined && existing.stats?.recovery !== night.stats.recovery)
+    )
+    if (!force && existing?.value != null && !stale) {
       skipped.push(date)
+      if (owned) continue
       // The don't-overwrite rule exists to protect a number you typed yourself.
       // It was never meant to protect the *absence* of WHOOP's own metadata, so
       // a night that already has a value still gets its window and readings
@@ -2474,19 +2525,40 @@ async function syncWhoopSleep({ days = WHOOP_SLEEP_DAYS, force = false } = {}) {
       }
       continue
     }
+    // parts/stats merge key by key in logHabitRecord; a rewrite has to replace,
+    // or a stage WHOOP dropped from its revision would survive from the draft.
+    const replacing = (before, after) => {
+      const out = { ...after }
+      for (const [key, v] of Object.entries(before || {})) if (v !== undefined && !(key in out)) out[key] = null
+      return out
+    }
     await logHabitRecord({
       id: habit.id,
       date,
-      value: night.value ?? undefined,
-      parts: night.parts,
-      stats: night.stats,
+      value: night.value ?? null,
+      parts: replacing(owned ? existing.parts : null, night.parts),
+      // Recovery is the exception: it comes from a second collection that can
+      // lag or be clipped by the fetch window, so absent is "not known yet".
+      stats: replacing(owned ? { ...existing.stats, recovery: undefined } : null, night.stats),
       window: night.window ?? undefined,
       complete: true,
+      source: { kind: 'whoop', id: night.id, updatedAt: night.updatedAt ?? undefined },
     })
-    updated.push({ date, score: night.value ?? null, totalMin: night.totalMin ?? null })
+    const row = { date, score: night.value ?? null, totalMin: night.totalMin ?? null }
+    if (existing?.value != null) revised.push({ ...row, was: existing.value })
+    else updated.push(row)
   }
 
-  return { habit: habit.id, updated, enriched, skipped, errors: [], checked: byDate.size }
+  return { habit: habit.id, updated, revised, enriched, skipped, errors: [], checked: byDate.size }
+}
+
+// Nights written before entries carried a source are recognisable by shape: the
+// sync is the only writer of stage parts *and* a window. A hand-typed number
+// has neither, and the enrich path above only ever adds a window and stats.
+function whoopOwnsEntry(entry) {
+  if (!entry || entry.value == null) return false
+  if (entry.source) return entry.source.kind === 'whoop'
+  return Boolean(entry.window && entry.parts && Object.keys(entry.parts).length)
 }
 
 async function whoopStatus() {
@@ -3067,18 +3139,53 @@ function toolCallDetail(call) {
   return ''
 }
 
-// Structured tool-call summary for the web UI: a stable {kind, title, detail}
-// the client renders as an inline "Ran command"-style row. We only surface tool
-// *starts* — the UI shows that a tool ran and what kind, not the results.
-function summarizeCursorTool(event) {
-  const call = event.tool_call || {}
-  if (call.shellToolCall) {
-    const args = call.shellToolCall.args || {}
-    return { kind: 'command', title: 'Ran command', detail: truncate(args.command || args.description || '', 400) }
+// Tool calls as the web chat shows them: a stable {id, phase, kind, title,
+// detail, server, tool, input, status, output}. `phase: 'start'` opens a card and
+// `phase: 'end'` settles it with what came back; chat/tools.mjs owns the naming so
+// "Looked up tasks" reads the same whichever CLI made the call.
+//
+// cursor nests a call as `{<name>ToolCall: {args, result}}` — readToolCall,
+// shellToolCall, mcpToolCall — so the key itself is the tool's name.
+const CURSOR_TOOL_TITLES = {
+  read: 'Read a file', edit: 'Edited a file', write: 'Wrote a file', delete: 'Deleted a file',
+  ls: 'Listed a folder', grep: 'Searched files', glob: 'Found files', semSearch: 'Searched',
+  webSearch: 'Searched the web', webFetch: 'Opened a page', updateTodos: 'Updated the plan',
+  readLints: 'Checked lints', fetchRules: 'Loaded rules',
+}
+
+function cursorCallEntry(call) {
+  for (const [key, value] of Object.entries(call || {})) {
+    if (key.endsWith('ToolCall') && value && typeof value === 'object') return [key.slice(0, -'ToolCall'.length), value]
   }
-  const raw = call.name || call.toolName || 'tool'
-  const title = TOOL_TITLES[raw] || raw.replace(/[_-]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
-  return { kind: raw, title, detail: toolCallDetail(call) }
+  return [String(call?.name || call?.toolName || 'tool'), call || {}]
+}
+
+function chatToolFromCursor(event, phase) {
+  const call = event.tool_call || {}
+  const [name, body] = cursorCallEntry(call)
+  // Listing the MCP catalogue is the agent finding out what it can do, not doing it.
+  if (name === 'getMcpTools' || name === 'listMcpResources') return null
+  const args = body.args || {}
+  let tool
+  if (name === 'shell') tool = describeCommand(args.command, args.description || body.description)
+  else if (name === 'mcp') tool = describeMcpCall({ name: args.toolName || args.name, server: args.serverIdentifier || args.providerIdentifier, input: args.args })
+  else {
+    tool = {
+      kind: name,
+      title: CURSOR_TOOL_TITLES[name] || humanizeTool(name),
+      detail: toolCallDetail(call),
+      input: stringifyInput(args),
+    }
+  }
+  const out = { id: event.call_id || call.toolCallId || '', phase, ...tool }
+  if (phase === 'end') {
+    const result = body.result || {}
+    const failed = result.error !== undefined || result.success?.isError === true ||
+      (name === 'shell' && Number(result.success?.exitCode ?? 0) !== 0)
+    out.status = failed ? 'error' : 'done'
+    out.output = resultText(result)
+  }
+  return out
 }
 
 // Pull the assistant's text out of a cursor stream-json event, whatever shape it
@@ -3104,14 +3211,18 @@ function normalizeCursorModelSpec(model, fallback = null) {
   return spec
 }
 
-function spawnCursorStream(text, { label = 'request', onActivity, onTool, onText, signal, cursorModel, instance, timeoutMs = TIMEOUT } = {}) {
+// `resume` continues cursor's own chat (`--resume <session_id>`), so a long
+// thread stops re-sending its whole transcript every turn. cursor has no image
+// flag; images reach it as file paths in the prompt, which its read tool opens.
+function spawnCursorStream(text, { label = 'request', onActivity, onTool, onText, onSession, signal, cursorModel, instance, resume, browser = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('cursor')
   return new Promise((resolve) => {
     const args = ['-p', '--output-format', 'stream-json', '--stream-partial-output', '--force', text]
     if (cursorModel) args.splice(args.length - 1, 0, '--model', cursorModel)
+    if (resume) args.splice(args.length - 1, 0, '--resume', resume)
     for (const extra of splitLaunchArgs(account.config.launchArgs).reverse()) args.splice(args.length - 1, 0, extra)
-    const child = spawn(account.cli, args, { cwd: AGENT_CWD, env: instanceEnvironment(account) })
-    let stdout = '', stderr = '', result = ''
+    const child = spawn(account.cli, args, { cwd: AGENT_CWD, env: { ...instanceEnvironment(account), ...browserArgs('cursor', browser).env } })
+    let stdout = '', stderr = '', result = '', sessionId = ''
     let timedOut = false
     let stopped = false
     const id = ++runSeq
@@ -3120,11 +3231,11 @@ function spawnCursorStream(text, { label = 'request', onActivity, onTool, onText
       timedOut = true
       child.kill('SIGKILL')
     }, timeoutMs)
-    // If the caller goes away (browser aborts the stream / closes the thread),
-    // kill the child so we don't leave orphaned cursor-agent processes running.
+    // If the caller goes away (an explicit stop), kill the child so we don't
+    // leave orphaned cursor-agent processes running.
     if (signal) {
       if (signal.aborted) child.kill('SIGKILL')
-      else signal.addEventListener('abort', () => child.kill('SIGKILL'), { once: true })
+      else signal.addEventListener('abort', () => { stopped = true; child.kill('SIGKILL') }, { once: true })
     }
 
     const rl = createInterface({ input: child.stdout })
@@ -3132,6 +3243,10 @@ function spawnCursorStream(text, { label = 'request', onActivity, onTool, onText
       stdout += line + '\n'
       let event
       try { event = JSON.parse(line) } catch { return }
+      if (event.session_id && event.session_id !== sessionId) {
+        sessionId = event.session_id
+        Promise.resolve(onSession?.(sessionId)).catch((e) => log('session update failed', e))
+      }
       if (event.type === 'result' && typeof event.result === 'string') {
         result = event.result
         return
@@ -3153,25 +3268,28 @@ function spawnCursorStream(text, { label = 'request', onActivity, onTool, onText
       }
       if (event.type === 'tool_call' && event.subtype === 'started') {
         Promise.resolve(onActivity?.(describeCursorToolStart(event))).catch((e) => log('activity update failed', e))
-        Promise.resolve(onTool?.(summarizeCursorTool(event))).catch((e) => log('tool update failed', e))
+        const tool = chatToolFromCursor(event, 'start')
+        if (tool) Promise.resolve(onTool?.(tool)).catch((e) => log('tool update failed', e))
         return
       }
       if (event.type === 'tool_call' && event.subtype === 'completed') {
         Promise.resolve(onActivity?.(describeCursorToolComplete(event))).catch((e) => log('activity update failed', e))
+        const tool = chatToolFromCursor(event, 'end')
+        if (tool) Promise.resolve(onTool?.(tool)).catch((e) => log('tool update failed', e))
       }
     })
     child.stderr.on('data', (d) => { stderr += d })
     child.on('error', (err) => {
-      stopped = activeRun?.id === id && activeRun.stopped
+      stopped = stopped || (activeRun?.id === id && activeRun.stopped)
       if (activeRun?.id === id) activeRun = null
       clearTimeout(timer)
-      resolve({ code: -1, stdout, stderr: String(err), result, timedOut, stopped })
+      resolve({ code: -1, stdout, stderr: String(err), result, timedOut, stopped, sessionId })
     })
     child.on('close', (code) => {
-      stopped = activeRun?.id === id && activeRun.stopped
+      stopped = stopped || (activeRun?.id === id && activeRun.stopped)
       if (activeRun?.id === id) activeRun = null
       clearTimeout(timer)
-      resolve({ code, stdout, stderr, result, timedOut, stopped })
+      resolve({ code, stdout, stderr, result, timedOut, stopped, sessionId })
     })
     child.stdin.end()
   })
@@ -3197,8 +3315,8 @@ function spawnJsonStream(cmd, args, { input, label = 'request', signal, onEvent,
       child.kill('SIGKILL')
     }, timeoutMs)
     if (signal) {
-      if (signal.aborted) child.kill('SIGKILL')
-      else signal.addEventListener('abort', () => child.kill('SIGKILL'), { once: true })
+      if (signal.aborted) { stopped = true; child.kill('SIGKILL') }
+      else signal.addEventListener('abort', () => { stopped = true; child.kill('SIGKILL') }, { once: true })
     }
     const rl = createInterface({ input: child.stdout })
     rl.on('line', (line) => {
@@ -3209,13 +3327,13 @@ function spawnJsonStream(cmd, args, { input, label = 'request', signal, onEvent,
     })
     child.stderr.on('data', (d) => { stderr += d })
     child.on('error', (err) => {
-      stopped = activeRun?.id === id && activeRun.stopped
+      stopped = stopped || (activeRun?.id === id && activeRun.stopped)
       if (activeRun?.id === id) activeRun = null
       clearTimeout(timer)
       resolve({ code: -1, stdout, stderr: String(err), timedOut, stopped })
     })
     child.on('close', (code) => {
-      stopped = activeRun?.id === id && activeRun.stopped
+      stopped = stopped || (activeRun?.id === id && activeRun.stopped)
       if (activeRun?.id === id) activeRun = null
       clearTimeout(timer)
       resolve({ code, stdout, stderr, timedOut, stopped })
@@ -3234,71 +3352,102 @@ function genericToolDetail(input) {
   return typeof d === 'string' ? truncate(d.trim(), 400) : ''
 }
 
+const emitSafe = (fn, value, what) => { if (fn) Promise.resolve(fn(value)).catch((e) => log(`${what} update failed`, e)) }
+
 // Friendly titles for Claude Code's built-in tools (PascalCase). MCP tools arrive
 // as mcp__<server>__<tool>; everything unmapped falls back to a humanized name.
 const CLAUDE_TOOL_TITLES = {
-  Bash: 'Ran command',
-  Read: 'Read file',
-  Edit: 'Edited file',
-  Write: 'Wrote file',
-  Glob: 'Searched files',
-  Grep: 'Searched',
-  LS: 'Listed directory',
+  Read: 'Read a file',
+  Edit: 'Edited a file',
+  MultiEdit: 'Edited a file',
+  Write: 'Wrote a file',
+  Glob: 'Found files',
+  Grep: 'Searched files',
+  LS: 'Listed a folder',
   WebSearch: 'Searched the web',
-  WebFetch: 'Fetched a page',
+  WebFetch: 'Opened a page',
   Task: 'Ran a sub-agent',
-  TodoWrite: 'Updated plan',
-  NotebookEdit: 'Edited notebook',
+  Agent: 'Ran a sub-agent',
+  TodoWrite: 'Updated the plan',
+  NotebookEdit: 'Edited a notebook',
+  ToolSearch: 'Looked for a tool',
+  Skill: 'Used a skill',
 }
 
-function summarizeClaudeTool(block) {
+function chatToolFromClaude(block) {
   const raw = block.name || 'tool'
-  if (raw === 'Bash') {
-    return { kind: 'command', title: 'Ran command', detail: truncate(block.input?.command || block.input?.description || '', 400) }
-  }
-  let title = CLAUDE_TOOL_TITLES[raw]
-  if (!title) {
-    const m = /^mcp__([^_]+)__(.+)$/.exec(raw)
-    const base = m ? `${m[1]} ${m[2]}` : raw
-    title = base.replace(/[_-]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
-  }
-  return { kind: raw, title, detail: genericToolDetail(block.input) }
+  let tool
+  if (raw === 'Bash') tool = describeCommand(block.input?.command, block.input?.description)
+  else if (raw.startsWith('mcp__')) tool = describeMcpCall({ name: raw, input: block.input })
+  else tool = { kind: raw, title: CLAUDE_TOOL_TITLES[raw] || humanizeTool(raw), detail: genericToolDetail(block.input), input: stringifyInput(block.input) }
+  return { id: block.id, phase: 'start', ...tool }
 }
 
 function describeClaudeTool(block) {
-  const s = summarizeClaudeTool(block)
+  const s = chatToolFromClaude(block)
   return s.detail ? `${s.title}: ${s.detail}` : s.title
 }
 
 // Claude Code: stream-json emits incremental text_delta events (token streaming),
-// full `assistant` messages carrying tool_use blocks, and a final `result` event
-// with the settled reply. We stream the deltas, surface each tool_use once (keyed
-// by block id so the buffered repeat doesn't double-count), and keep `result`.
+// full `assistant` messages carrying tool_use blocks, `user` messages carrying
+// their tool_result blocks, and a final `result` event with the settled reply.
 // Claude Code has no sandbox flag equivalent to codex's, so read-only means
 // withholding the tools that change things. Read and search stay available.
 const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'NotebookEdit']
 
-function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, signal, model, effort, readOnly, instance, timeoutMs = TIMEOUT } = {}) {
+// Images go in natively: with `images`, the prompt is sent as one stream-json
+// user message whose content is the text plus a base64 block per image, which is
+// the same thing the Claude Code TUI sends for a pasted screenshot.
+async function claudeStdinMessage(text, images) {
+  const content = [{ type: 'text', text }]
+  for (const img of images) {
+    try {
+      const data = (await readFile(img.path)).toString('base64')
+      content.push({ type: 'image', source: { type: 'base64', media_type: img.mime || 'image/png', data } })
+    } catch (e) { log('claude image read failed', img.path, e?.message || e) }
+  }
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`
+}
+
+const CLAUDE_NATIVE_IMAGE = /^image\/(png|jpe?g|gif|webp)$/i
+
+async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, signal, model, effort, readOnly, instance, resume, images = [], browser = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('claude')
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
   const m = bareModelId(model) || CLAUDE_MODEL
   if (m) args.push('--model', m)
   if (effort) args.push('--effort', effort)
+  if (resume) args.push('--resume', resume)
   // Always keep Claude's file tools off Totem's own secrets (the session key in
   // data/auth.json would let an agent mint a dashboard cookie). Read-only runs
   // also lose every tool that can write.
   args.push('--disallowedTools', ...(readOnly ? CLAUDE_WRITE_TOOLS : []), ...claudeSecretDenyRules(HERE))
   args.push(...splitLaunchArgs(account.config.launchArgs))
-  // `--` before the prompt is not optional. --disallowedTools is variadic, so
-  // without a separator it eats the prompt as one more tool name and claude exits
-  // complaining there was no prompt at all. It also protects any prompt that
-  // happens to start with a dash.
-  args.push('--', text)
+  const browserCli = browserArgs('claude', browser)
+  args.push(...browserCli.args)
+  const native = images.filter((i) => CLAUDE_NATIVE_IMAGE.test(i.mime || ''))
+  let input = null
+  if (native.length) {
+    args.push('--input-format', 'stream-json')
+    input = await claudeStdinMessage(text, native)
+  } else {
+    // `--` before the prompt is not optional. --disallowedTools is variadic, so
+    // without a separator it eats the prompt as one more tool name and claude exits
+    // complaining there was no prompt at all. It also protects any prompt that
+    // happens to start with a dash.
+    args.push('--', text)
+  }
   let result = ''
+  let sessionId = ''
   const seenTools = new Set()
+  const toolNames = new Map() // tool_use id → name, to tell a browser snapshot from any other image
   return spawnJsonStream(account.cli, args, {
-    label, signal, timeoutMs, env: instanceEnvironment(account),
+    input, label, signal, timeoutMs, env: { ...instanceEnvironment(account), ...browserCli.env },
     onEvent: (event) => {
+      if (event.session_id && event.session_id !== sessionId) {
+        sessionId = event.session_id
+        emitSafe(onSession, sessionId, 'session')
+      }
       if (event.type === 'result' && typeof event.result === 'string') { result = event.result; return }
       if (event.type === 'stream_event') {
         const ev = event.event
@@ -3309,66 +3458,117 @@ function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText
         for (const block of event.message.content) {
           if (block?.type === 'tool_use' && block.id && !seenTools.has(block.id)) {
             seenTools.add(block.id)
-            Promise.resolve(onActivity?.(describeClaudeTool(block))).catch((e) => log('activity update failed', e))
-            Promise.resolve(onTool?.(summarizeClaudeTool(block))).catch((e) => log('tool update failed', e))
+            emitSafe(onActivity, describeClaudeTool(block), 'activity')
+            if (block.id && block.name) toolNames.set(block.id, block.name)
+            emitSafe(onTool, chatToolFromClaude(block), 'tool')
           }
+        }
+        return
+      }
+      // Tool results come back in the user turn. A screenshot (computer use, a
+      // browser tool, Read on an image) arrives as an image block, which is
+      // worth showing in the chat rather than as "[image]".
+      if (event.type === 'user' && Array.isArray(event.message?.content)) {
+        for (const block of event.message.content) {
+          if (block?.type !== 'tool_result' || !block.tool_use_id) continue
+          const content = Array.isArray(block.content) ? block.content : block.content
+          // The browser's snapshots are the agent's eyes, shown live in the browser
+          // panel; only the ones it chooses to share belong in the reply.
+          const fromBrowser = String(toolNames.get(block.tool_use_id) || '').startsWith(`mcp__${BROWSER_MCP_NAME}__`)
+          if (Array.isArray(content) && !fromBrowser) {
+            for (const c of content) {
+              if (c?.type === 'image' && c.source?.type === 'base64' && c.source.data) {
+                emitSafe(onImage, { buffer: Buffer.from(c.source.data, 'base64'), mime: c.source.media_type || 'image/png' }, 'image')
+              }
+            }
+          }
+          emitSafe(onTool, { id: block.tool_use_id, phase: 'end', status: block.is_error ? 'error' : 'done', output: resultText(content) }, 'tool')
         }
       }
     },
-  }).then((res) => ({ ...res, result }))
+  }).then((res) => ({ ...res, result, sessionId }))
 }
 
-// Friendly summary for a Codex `item.*` event. Codex names items by type; we only
-// surface command/tool/search/edit work as activity (reasoning and message items
-// are handled by the streamer itself). Unknown types return null → no activity.
-function summarizeCodexItem(item, phase) {
+// The web chat card for a Codex `item.*` event; null for item types that are
+// not tool work (reasoning and messages are handled by the streamer itself).
+function chatToolFromCodex(item, phase) {
   const type = item.type || ''
-  if (type === 'command_execution') {
-    const cmd = item.command || item.aggregated_output || '(command)'
-    const activity = phase === 'item.completed'
+  let tool
+  if (type === 'command_execution') tool = describeCommand(item.command || '', '')
+  else if (type === 'mcp_tool_call' || type === 'tool_call') tool = describeMcpCall({ name: item.tool || item.name, server: item.server, input: item.arguments || item.input })
+  else if (type === 'file_change' || type === 'patch') {
+    const files = (item.changes || []).map((c) => c.path).filter(Boolean)
+    tool = { kind: 'edit', title: files.length > 1 ? `Edited ${files.length} files` : 'Edited a file', detail: truncate(files.join(', '), 300) }
+  } else if (type === 'web_search') tool = { kind: 'web_search', title: 'Searched the web', detail: truncate(item.query || '', 300) }
+  else if (type === 'image_generation' || type === 'view_image') tool = { kind: type, title: type === 'view_image' ? 'Looked at an image' : 'Made an image', detail: truncate(item.path || item.prompt || '', 300) }
+  else return null
+  const out = { id: item.id || '', phase, ...tool }
+  if (phase === 'end') {
+    const failed = item.status === 'failed' || item.error != null || (type === 'command_execution' && item.exit_code != null && item.exit_code !== 0)
+    out.status = failed ? 'error' : 'done'
+    out.output = type === 'command_execution' ? truncate(item.aggregated_output || '', 6000) : resultText(item.result ?? item.error)
+  }
+  return out
+}
+
+function codexActivity(item, phase) {
+  if (item.type === 'command_execution') {
+    const cmd = item.command || '(command)'
+    return phase === 'item.completed'
       ? `Done: ${truncate(cmd, 360)}${item.exit_code != null ? ` (exit ${item.exit_code})` : ''}`
       : `Running: ${truncate(cmd, 360)}`
-    return { activity, tool: phase !== 'item.completed' ? { kind: 'command', title: 'Ran command', detail: truncate(cmd, 400) } : null }
   }
-  if (type === 'mcp_tool_call' || type === 'tool_call') {
-    const name = [item.server, item.tool || item.name].filter(Boolean).join(' ') || 'tool'
-    return { activity: `Tool: ${truncate(name, 200)}`, tool: phase !== 'item.completed' ? { kind: 'tool', title: truncate(name, 120), detail: genericToolDetail(item.arguments || item.input) } : null }
-  }
-  if (type === 'file_change' || type === 'patch') {
-    return { activity: 'Edited files', tool: phase !== 'item.completed' ? { kind: 'edit', title: 'Edited files', detail: '' } : null }
-  }
-  if (type === 'web_search') {
-    return { activity: `Searched the web${item.query ? `: ${truncate(item.query, 200)}` : ''}`, tool: null }
-  }
-  return null
+  const tool = chatToolFromCodex(item, 'start')
+  return tool ? `${tool.title}${tool.detail ? `: ${tool.detail}` : ''}` : ''
 }
 
-// Codex: `exec --json` emits item.started/updated/completed events plus a final
-// turn.completed. The settled reply is the last `agent_message` item's text; we
-// also forward it (and any partial updates) as onText so the web chat fills in.
-async function spawnCodexStream(text, { label = 'request', onActivity, onTool, onText, signal, model, effort, sandbox, instance, timeoutMs = TIMEOUT } = {}) {
+// Codex: `exec --json` emits thread.started, item.started/updated/completed and a
+// final turn.completed. The settled reply is the last `agent_message` item's
+// text; we also forward it (and any partial updates) as onText.
+//
+// `resume` continues the thread with `codex exec resume <id>`. That subcommand
+// has no -C or --sandbox flag, so the sandbox goes in as a config override and
+// the working directory comes from the spawn's cwd, which is AGENT_CWD anyway.
+async function spawnCodexStream(text, { label = 'request', onActivity, onTool, onText, onSession, signal, model, effort, sandbox, instance, resume, images = [], features = [], extraArgs = [], browser = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('codex')
   // Entries added to the shared home since the last run (a new skill, a new MCP
   // server in config.toml) only reach this account once they're linked in.
   await materializeCodexShadowHome(account)
   // `sandbox` overrides AGENT_SANDBOX for one call. Used by tasks that are pure
   // text transformation and have no business writing to the disk at all.
-  const args = ['exec', '-C', AGENT_CWD, '--skip-git-repo-check', '--sandbox', sandbox || AGENT_SANDBOX, '--json']
+  const mode = sandbox || AGENT_SANDBOX
+  const args = resume
+    ? ['exec', 'resume', resume, '--skip-git-repo-check', '-c', `sandbox_mode="${mode}"`, '--json']
+    : ['exec', '-C', AGENT_CWD, '--skip-git-repo-check', '--sandbox', mode, '--json']
   const m = bareModelId(model) || AGENT_MODEL
   if (m) args.push('-m', m)
   // Codex has no --effort flag; the reasoning level is a config override. Safe to
   // interpolate: effort only ever arrives here after resolveModelChoice has
   // matched it against EFFORT_LEVELS.
   if (effort) args.push('-c', `model_reasoning_effort="${effort}"`)
+  for (const f of features) if (/^[a-z_]+$/.test(f)) args.push('--enable', f)
+  // `--image=<path>` rather than `-i <path>`: the flag is variadic, and a bare
+  // value list would swallow the `-` that says "prompt on stdin".
+  for (const img of images) args.push(`--image=${img.path}`)
+  args.push(...extraArgs)
   args.push(...splitLaunchArgs(account.config.launchArgs))
+  const browserCli = browserArgs('codex', browser)
+  args.push(...browserCli.args)
   args.push('-')
-  let result = ''
-  let streamed = ''
+  const messages = new Map() // agent_message item id -> its text so far
+  let lastMessage = ''
   let turnError = ''
+  let sessionId = ''
+  const seenTools = new Set()
   return spawnJsonStream(account.cli, args, {
-    input: text, label, signal, timeoutMs, env: instanceEnvironment(account),
+    input: text, label, signal, timeoutMs, env: { ...instanceEnvironment(account), ...browserCli.env },
     onEvent: (event) => {
       const t = event.type
+      if (t === 'thread.started' && event.thread_id) {
+        sessionId = event.thread_id
+        emitSafe(onSession, sessionId, 'session')
+        return
+      }
       // A rejected model, a quota block or a server error arrives as an event, not
       // as a non-zero exit — codex still exits 0. Keep it so the caller can tell
       // "no answer because it failed" from "no answer at all".
@@ -3379,46 +3579,76 @@ async function spawnCodexStream(text, { label = 'request', onActivity, onTool, o
       if (t !== 'item.started' && t !== 'item.updated' && t !== 'item.completed') return
       const item = event.item || {}
       if (item.type === 'agent_message') {
+        // Codex often talks, runs a tool, then talks again: two messages. The chat
+        // shows both, separated; `result` stays the last one, which is what every
+        // job that matches a sentinel reply (NO_JOURNAL, …) has always received.
+        const key = item.id || 'message'
+        const prev = messages.get(key) || ''
         const full = item.text || ''
-        if (onText && full !== streamed) {
-          onText(full.startsWith(streamed) ? full.slice(streamed.length) : full)
-          streamed = full
+        if (onText && full !== prev) {
+          let delta = prev && full.startsWith(prev) ? full.slice(prev.length) : full
+          if (!prev && [...messages.entries()].some(([k, v]) => k !== key && v)) delta = `\n\n${delta}`
+          onText(delta)
         }
-        if (t === 'item.completed') result = full
+        messages.set(key, full)
+        if (t === 'item.completed' && full) lastMessage = full
         return
       }
-      const summary = summarizeCodexItem(item, t)
-      if (summary) {
-        Promise.resolve(onActivity?.(summary.activity)).catch((e) => log('activity update failed', e))
-        if (summary.tool) Promise.resolve(onTool?.(summary.tool)).catch((e) => log('tool update failed', e))
+      if (t === 'item.updated') return
+      const phase = t === 'item.completed' ? 'end' : 'start'
+      const activity = codexActivity(item, t)
+      if (activity) emitSafe(onActivity, activity, 'activity')
+      const key = item.id || ''
+      // An item that only ever completes (web_search often does) still needs its
+      // card opened before it is settled.
+      if (!seenTools.has(key)) {
+        const start = chatToolFromCodex(item, 'start')
+        if (start) emitSafe(onTool, start, 'tool')
+        seenTools.add(key)
+      }
+      if (phase === 'end') {
+        const end = chatToolFromCodex(item, 'end')
+        if (end) emitSafe(onTool, end, 'tool')
       }
     },
-  }).then((res) => ({ ...res, result: result || streamed, turnError }))
+  }).then((res) => ({ ...res, result: lastMessage || [...messages.values()].filter(Boolean).pop() || '', turnError, sessionId }))
 }
 
-function summarizeOpenCodeTool(part) {
+function chatToolFromOpenCode(part, phase) {
   const name = part.tool || part.name || part.state?.tool || 'tool'
   const input = part.state?.input || part.input || {}
-  if (name === 'bash') return { kind: 'command', title: 'Ran command', detail: genericToolDetail(input) }
-  const title = String(name).replace(/[_-]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
-  return { kind: name, title, detail: genericToolDetail(input) }
+  let tool
+  if (name === 'bash') tool = describeCommand(input.command, input.description)
+  else if (/__/.test(name)) tool = describeMcpCall({ name, input })
+  else tool = { kind: name, title: humanizeTool(name), detail: genericToolDetail(input), input: stringifyInput(input) }
+  const out = { id: part.id || part.callID || '', phase, ...tool }
+  if (phase === 'end') {
+    out.status = part.state?.status === 'error' ? 'error' : 'done'
+    out.output = resultText(part.state?.output ?? part.state?.error)
+  }
+  return out
 }
 
 // OpenCode: `run --format json` emits step_start / text / tool / step_finish
 // events. Each `text` part streams as it grows (keyed by part id), so we diff
 // against what we've already sent. The reply is the concatenation of text parts.
-function spawnOpenCodeStream(text, { label = 'request', onActivity, onTool, onText, signal, model, instance, timeoutMs = TIMEOUT } = {}) {
+function spawnOpenCodeStream(text, { label = 'request', onActivity, onTool, onText, onSession, signal, model, instance, resume, images = [], browser = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('opencode')
   const args = ['run', '--format', 'json']
   const m = bareModelId(model) || OPENCODE_MODEL
   if (m) args.push('--model', m)
+  if (resume) args.push('--session', resume)
+  for (const img of images) args.push('--file', img.path)
   args.push(...splitLaunchArgs(account.config.launchArgs))
   args.push(text)
   const parts = new Map() // part id -> latest text
-  const seenTools = new Set()
+  const toolPhase = new Map() // tool id -> 'start' | 'end'
+  let sessionId = ''
   return spawnJsonStream(account.cli, args, {
-    label, signal, timeoutMs, env: instanceEnvironment(account),
+    label, signal, timeoutMs, env: { ...instanceEnvironment(account), ...browserArgs('opencode', browser).env },
     onEvent: (event) => {
+      const sid = event.sessionID || event.part?.sessionID
+      if (sid && sid !== sessionId) { sessionId = sid; emitSafe(onSession, sid, 'session') }
       if (event.type === 'text' && event.part) {
         const id = event.part.id || 'text'
         const full = event.part.text || ''
@@ -3428,15 +3658,21 @@ function spawnOpenCodeStream(text, { label = 'request', onActivity, onTool, onTe
         return
       }
       if (event.type === 'tool' && event.part) {
-        const key = event.part.id || event.part.callID
-        if (key && seenTools.has(key)) return
-        if (key) seenTools.add(key)
-        const summary = summarizeOpenCodeTool(event.part)
-        Promise.resolve(onActivity?.(summary.detail ? `${summary.title}: ${summary.detail}` : summary.title)).catch((e) => log('activity update failed', e))
-        Promise.resolve(onTool?.(summary)).catch((e) => log('tool update failed', e))
+        const key = event.part.id || event.part.callID || `t${toolPhase.size}`
+        const settled = ['completed', 'error'].includes(event.part.state?.status)
+        if (!toolPhase.has(key)) {
+          const start = chatToolFromOpenCode(event.part, 'start')
+          emitSafe(onActivity, start.detail ? `${start.title}: ${start.detail}` : start.title, 'activity')
+          emitSafe(onTool, start, 'tool')
+          toolPhase.set(key, 'start')
+        }
+        if (settled && toolPhase.get(key) !== 'end') {
+          emitSafe(onTool, chatToolFromOpenCode(event.part, 'end'), 'tool')
+          toolPhase.set(key, 'end')
+        }
       }
     },
-  }).then((res) => ({ ...res, result: [...parts.values()].join('').trim() }))
+  }).then((res) => ({ ...res, result: [...parts.values()].join('').trim(), sessionId }))
 }
 
 // A run that produced no assistant message did not answer, and returning its
@@ -4285,10 +4521,10 @@ const SHORTCUT_NOTIFY_ON = isTruthyFlag(SHORTCUT_NOTIFY)
  * on every phone request, after the expensive model has already done the work,
  * and the last thing it should be able to do is act on what it is summarising.
  */
-async function runShortcutSummaryModel(prompt) {
+async function runShortcutSummaryModel(prompt, model = null) {
   const budget = Number(SHORTCUT_SUMMARY_BUDGET_MS) || 60_000
   const args = [
-    '-p', '--model', bareModelId(SHORTCUT_SUMMARY_MODEL) || 'haiku', '--effort', 'low',
+    '-p', '--model', bareModelId(model) || bareModelId(SHORTCUT_SUMMARY_MODEL) || 'haiku', ...(model && /haiku/.test(model) ? [] : ['--effort', 'low']),
     // Everything a summariser does not need and would pay cold-start latency for:
     // the manifest's MCP servers, the repo's settings and CLAUDE.md, a session
     // saved to disk. Run from home for the same reason — no project to discover.
@@ -5638,7 +5874,7 @@ async function startInboxPromptRun({ item, provider, model, effort, promptText }
   const streamOpts = {
     ...opts,
     onActivity: (a) => runRegistry.append(item.id, { stream: 'activity', text: `${a}\n` }),
-    onTool: (t) => runRegistry.append(item.id, { stream: 'tool', text: `${t?.title || 'tool'}${t?.detail ? `: ${t.detail}` : ''}\n` }),
+    onTool: (t) => { if (t?.phase !== 'end') runRegistry.append(item.id, { stream: 'tool', text: `${t?.title || 'tool'}${t?.detail ? `: ${t.detail}` : ''}\n` }) },
     onText: (delta) => runRegistry.append(item.id, { stream: 'text', text: delta }),
   }
   ;(async () => {
@@ -6561,6 +6797,10 @@ async function syncCursorMcp(manifest, instance = instanceFor('cursor')) {
   const mcpServers = { ...(cfg.mcpServers || cfg.servers || {}) }
   for (const [id, server] of Object.entries(manifest.servers || {})) {
     mcpServers[id] = cursorServerConfig(server)
+    // Cursor gives MCP servers only a handful of environment variables, so a chat
+    // run's browser token (TOTEM_BROWSER_TOKEN) reaches the gateway only by
+    // interpolation. Outside a run it interpolates to nothing.
+    if (id === GATEWAY_ID) mcpServers[id].env = { ...(mcpServers[id].env || {}), TOTEM_BROWSER_TOKEN: '${env:TOTEM_BROWSER_TOKEN}', TOTEM_BROWSER_URL: '${env:TOTEM_BROWSER_URL}' }
   }
   delete cfg.servers
   cfg.mcpServers = mcpServers
@@ -7701,6 +7941,8 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
   '.map': 'application/json',
+  '.wasm': 'application/wasm',
+  '.onnx': 'application/octet-stream',
 }
 
 async function serveStatic(req, res) {
@@ -7711,7 +7953,14 @@ async function serveStatic(req, res) {
   if (!filePath.startsWith(root)) return send(res, 403, { error: 'forbidden' })
   try {
     const data = await readFile(filePath)
-    res.writeHead(200, { 'content-type': MIME[extname(filePath)] || 'application/octet-stream' })
+    // Vite's /assets/ names are content-hashed and the voice model never changes
+    // under its name, so both can be cached for good — without this, the 14 MB
+    // ONNX runtime and the 8 MB turn model were fetched on every voice session.
+    const immutable = urlPath.startsWith('/assets/') || urlPath.startsWith('/models/')
+    res.writeHead(200, {
+      'content-type': MIME[extname(filePath)] || 'application/octet-stream',
+      ...(immutable ? { 'cache-control': 'public, max-age=31536000, immutable' } : { 'cache-control': 'no-cache' }),
+    })
     return res.end(data)
   } catch {
     // Only extension-less paths are client-side routes. Falling back to
@@ -7730,11 +7979,23 @@ async function serveStatic(req, res) {
   }
 }
 
-function readJsonBody(req) {
+// Over the limit used to `req.destroy()` without settling the promise, so the
+// handler awaited forever and the client saw a hung request rather than an error.
+function readJsonBody(req, maxBytes = 2e6) {
   return new Promise((resolve, reject) => {
     let body = ''
-    req.on('data', (d) => { body += d; if (body.length > 1e6) req.destroy() })
+    let over = false
+    req.on('data', (d) => {
+      if (over) return
+      body += d
+      if (body.length > maxBytes) {
+        over = true
+        reject(Object.assign(new Error(`request body is larger than ${Math.round(maxBytes / 1e6)} MB`), { status: 413 }))
+        req.resume()
+      }
+    })
     req.on('end', () => {
+      if (over) return
       let parsed
       try { parsed = body ? JSON.parse(body) : {} } catch { return reject(Object.assign(new Error('bad json'), { status: 400 })) }
       // `null`, `"x"` or `3` parse fine but are not a request body; letting them
@@ -7748,87 +8009,178 @@ function readJsonBody(req) {
   })
 }
 
+// Raw request bytes (an upload, a voice clip), capped.
+async function readRawBody(req, maxBytes) {
+  const advertised = Number(req.headers['content-length'])
+  if (Number.isFinite(advertised) && advertised > maxBytes) {
+    req.resume()
+    throw Object.assign(new Error(`file is larger than ${Math.round(maxBytes / 1e6)} MB`), { status: 413 })
+  }
+  const chunks = []
+  let bytes = 0
+  for await (const chunk of req) {
+    bytes += chunk.length
+    if (bytes > maxBytes) throw Object.assign(new Error(`file is larger than ${Math.round(maxBytes / 1e6)} MB`), { status: 413 })
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
 // ---------------------------------------------------------------------------
 // Thread store (one JSON file per thread under THREADS_DIR).
 // ---------------------------------------------------------------------------
-// Thread ids come from the client (crypto.randomUUID). Only allow filename-safe
-// characters so an id can never escape THREADS_DIR via path traversal.
-const validThreadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
-const threadFile = (id) => join(THREADS_DIR, `${id}.json`)
-const isExpiredTemporaryThread = (t) =>
-  t?.kind === 'temporary' && Number(t.expiresAt || 0) > 0 && Number(t.expiresAt) <= Date.now()
-
-function normalizeThreadModelSettings(settings) {
-  if (!settings || typeof settings !== 'object') return null
-  const out = {}
-  for (const key of ['modelId', 'speed', 'effort', 'context']) {
-    if (typeof settings[key] === 'string' && settings[key].length <= 80) out[key] = settings[key]
-  }
-  return Object.keys(out).length ? out : null
-}
-
-async function listThreads() {
-  let names = []
-  try { names = await readdir(THREADS_DIR) } catch { return [] }
-  const out = []
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue
-    try {
-      const t = JSON.parse(await readFile(join(THREADS_DIR, name), 'utf8'))
-      if (!t || !validThreadId(t.id)) continue
-      if (isExpiredTemporaryThread(t)) {
-        await deleteThread(t.id)
-        continue
-      }
-      out.push(t)
-    } catch {} // skip a corrupt/half-written file rather than failing the whole list
-  }
-  return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-}
-
-async function readThread(id) {
-  if (!validThreadId(id)) return null
-  try {
-    const t = JSON.parse(await readFile(threadFile(id), 'utf8'))
-    if (isExpiredTemporaryThread(t)) {
-      await deleteThread(id)
-      return null
+// Threads live in chat/store.mjs (one JSON file each, server-owned messages) and
+// their attachments in chat/uploads.mjs. These wrappers keep the names the rest
+// of the bridge already calls.
+const CHAT_UPLOADS_DIR = process.env.CHAT_UPLOADS_DIR || join(HERE, 'data', 'chat-uploads')
+// Where the agent saves documents it makes in a chat, one folder per thread.
+const CHAT_OUTPUTS_DIR = process.env.CHAT_OUTPUTS_DIR || join(HERE, 'data', 'chat-outputs')
+const chatUploads = createUploadStore({
+  dir: CHAT_UPLOADS_DIR,
+  secret: BRIDGE_SECRET,
+  maxBytes: Math.max(1, Number(process.env.CHAT_MAX_UPLOAD_MB) || 25) * 1024 * 1024,
+  log,
+})
+const threadStore = createThreadStore({
+  dir: THREADS_DIR,
+  log,
+  // A deleted thread takes its attachments with it; nothing else references them.
+  onDelete: async (thread) => {
+    for (const m of thread.messages || []) {
+      for (const a of m.attachments || []) await chatUploads.remove(a.id)
+      for (const p of m.parts || []) if (p.type === 'image' || p.type === 'file') await chatUploads.remove(p.uploadId)
     }
-    return t
-  } catch { return null }
+    await rm(join(CHAT_OUTPUTS_DIR, thread.id), { recursive: true, force: true }).catch(() => {})
+    await browserManager.closeSession(thread.id).catch(() => {})
+  },
+})
+const chatRuns = createChatRuns({ log })
+
+// ---- Agent browser ------------------------------------------------------------
+// T3 Code's collaborative browser, for Totem's agents: headless Chromium driven
+// by Playwright (browser/manager.mjs) behind T3's `preview_*` tool names
+// (browser/tools.mjs). Each chat run gets a random token and an HTTP MCP server
+// at /agent-mcp bound to its thread, the way T3 hands each session its own
+// `t3-code` server: the browser session is the chat's, so tabs and logins carry
+// across turns, and every page change streams a frame to the chat (`browser`
+// events) so the owner watches what the agent is looking at.
+const BROWSER_ENABLED = String(process.env.BROWSER_ENABLED ?? 'true').toLowerCase() !== 'false'
+const BROWSER_MCP_URL = `http://127.0.0.1:${BRIDGE_PORT}/agent-mcp`
+const BROWSER_MCP_NAME = 'totem-browser'
+const agentBrowserAccess = new Map() // token → { threadId, push }
+const browserFrames = new Map() // threadId → the latest frame, for a viewer that arrives late
+const browserManager = createBrowserManager({
+  log,
+  onFrame: (threadId, f) => {
+    const frame = { tabId: f.tabId, url: f.url, title: f.title, image: `data:image/jpeg;base64,${f.jpeg.toString('base64')}`, at: Date.now() }
+    browserFrames.delete(threadId)
+    browserFrames.set(threadId, frame)
+    if (browserFrames.size > 40) browserFrames.delete(browserFrames.keys().next().value)
+    for (const a of agentBrowserAccess.values()) if (a.threadId === threadId) a.push?.({ type: 'browser', ...frame })
+  },
+})
+const browserReady = () => BROWSER_ENABLED && browserManager.available()
+const BROWSER_TOOL_NAMES = BROWSER_TOOLS.map((t) => t.name)
+
+/** A run's key to its chat's browser; revoke() when the run ends. */
+function grantBrowserAccess(threadId, push) {
+  if (!browserReady()) return null
+  const token = randomBytes(24).toString('base64url')
+  agentBrowserAccess.set(token, { threadId, push })
+  return { token, url: BROWSER_MCP_URL, revoke: () => agentBrowserAccess.delete(token) }
 }
 
-// Upsert. Trusts the client's id/timestamps but normalizes messages so a bad
-// body can't corrupt the file. Writes to a temp file then renames (atomic).
-async function writeThread(id, body) {
-  if (!validThreadId(id)) throw new Error('bad thread id')
-  const now = Date.now()
-  const messages = Array.isArray(body?.messages)
-    ? body.messages
-        .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-        .map((m) => ({ role: m.role, content: m.content }))
-    : []
-  const thread = {
-    id,
-    kind: body?.kind === 'temporary' ? 'temporary' : 'regular',
-    messages,
-    createdAt: Number(body?.createdAt) || now,
-    updatedAt: Number(body?.updatedAt) || now,
+// Not a default capability. It exists for the day computer use on the Mac mini
+// matters; until then a model gets it only when he asks.
+const BROWSER_ASK = /\b(?:use|open|in|with|via|through|on)\s+(?:your|the|a)\s+browser\b|\bbrows(?:e|ing)\s+(?:to|the|for|around)\b|\bscreenshots?\b/i
+function wantsBrowser({ body, text, threadId }) {
+  return body?.browser === true || BROWSER_ASK.test(String(text || '')) || browserManager.sessionKeys().includes(threadId)
+}
+
+const BROWSER_RULES = `BROWSER: The owner asked for the browser in this chat. Your preview_* tools (the ${BROWSER_MCP_NAME} MCP server, or browser__preview_* through totem-gateway) are your browser — a real Chromium on the owner's machine that they watch live in the chat. Prefer its preview_* tools over curl, fetch or other browsers whenever you need to look at a website: open with preview_open (or preview_navigate), call preview_snapshot to see the page (you get the screenshot and the elements with locators), act with preview_click / preview_type / preview_press using the snapshot's role locators rather than coordinates, then snapshot again to check. Use it to look things up, read pages that need JavaScript, check a site or a dev server (target {kind:'environment-port',port}). The tab stays open across messages in this chat. To show the owner what you saw, call preview_snapshot with save:true and put ![short description](screenshotPath) in your reply; only do that when the picture helps. Never enter passwords, pay, buy, send messages, or submit anything irreversible on his behalf without asking first.`
+
+// Agent-side MCP endpoint. Loopback only, never through the tunnel (cloudflared
+// also connects from localhost, so its headers are refused), and only with a
+// live run's token.
+async function handleAgentMcp(req, res) {
+  const remote = req.socket.remoteAddress || ''
+  const viaTunnel = req.headers['cf-connecting-ip'] || req.headers['cf-ray'] || req.headers['cf-access-jwt-assertion']
+  if (!/^(127\.|::1$|::ffff:127\.)/.test(remote) || viaTunnel) return send(res, 403, { error: 'loopback only' })
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+  const access = token && agentBrowserAccess.get(token)
+  if (!access) {
+    res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer realm="totem-agent"' })
+    return res.end(JSON.stringify({ error: 'this chat run has ended' }))
   }
-  const modelSettings = normalizeThreadModelSettings(body?.modelSettings)
-  if (modelSettings) thread.modelSettings = modelSettings
-  if (thread.kind === 'temporary') thread.expiresAt = Number(body?.expiresAt) || now
-  await mkdir(THREADS_DIR, { recursive: true })
-  const tmp = threadFile(`${id}.${randomUUID()}.tmp`)
-  await writeFile(tmp, JSON.stringify(thread))
-  await rename(tmp, threadFile(id))
-  return thread
+  if (req.method !== 'POST') return send(res, 405, { error: 'use POST' })
+  let msg
+  try { msg = await readJsonBody(req) } catch { msg = null }
+  if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return send(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } })
+  const sessionId = req.headers['mcp-session-id'] || randomUUID()
+  const reply = (code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'mcp-session-id': sessionId }); res.end(body) }
+  if (msg.id == null) return reply(202, '')
+  const ok = (result) => reply(200, JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }))
+  const { method, params } = msg
+  if (method === 'initialize') {
+    const asked = params?.protocolVersion
+    return ok({
+      protocolVersion: asked && MCP_SUPPORTED_PROTOCOLS.has(asked) ? asked : MCP_PROTOCOL_VERSION,
+      capabilities: { tools: { listChanged: false } },
+      serverInfo: { name: BROWSER_MCP_NAME, version: '1.0.0' },
+      instructions: BROWSER_RULES,
+    })
+  }
+  if (method === 'ping') return ok({})
+  if (method === 'tools/list') return ok({ tools: browserToolDescriptors() })
+  if (method === 'tools/call') {
+    const saveDir = join(CHAT_OUTPUTS_DIR, access.threadId, 'screenshots')
+    return ok(await callBrowserTool(browserManager, params?.name, params?.arguments || {}, { key: access.threadId, saveDir }))
+  }
+  return reply(200, JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `method not found: ${method}` } }))
 }
 
-async function deleteThread(id) {
-  if (!validThreadId(id)) return
-  try { await unlink(threadFile(id)) } catch {}
+/** The CLI flags that hand a run its browser. */
+function browserArgs(driver, access) {
+  if (!access) return { args: [], env: {} }
+  if (driver === 'claude') {
+    const config = { mcpServers: { [BROWSER_MCP_NAME]: { type: 'http', url: access.url, headers: { Authorization: `Bearer ${access.token}` } } } }
+    return { args: ['--mcp-config', JSON.stringify(config), '--allowedTools', `mcp__${BROWSER_MCP_NAME}`], env: {} }
+  }
+  if (driver === 'codex') {
+    // The token travels in the environment, not argv (bearer_token_env_var).
+    const key = 'mcp_servers.totem_browser'
+    // exec cannot ask for approval, so an un-approved MCP tool is simply refused.
+    return {
+      args: [
+        '-c', `${key}.url="${access.url}"`, '-c', `${key}.bearer_token_env_var="TOTEM_BROWSER_TOKEN"`,
+        '-c', `${key}.default_tools_approval_mode="approve"`,
+        ...BROWSER_TOOL_NAMES.flatMap((t) => ['-c', `${key}.tools.${t}.approval_mode="approve"`]),
+      ],
+      env: { TOTEM_BROWSER_TOKEN: access.token },
+    }
+  }
+  // Cursor and OpenCode reach it through the gateway's `browser` builtin, which
+  // reads the run's token from the environment it inherits.
+  return { args: [], env: { TOTEM_BROWSER_TOKEN: access.token, TOTEM_BROWSER_URL: access.url } }
 }
+
+// Attachments and screenshots are stored by id only; every copy that leaves the
+// bridge carries a freshly signed URL so an <img> tag can load it.
+function signMessage(m) {
+  if (!m) return m
+  const out = { ...m }
+  if (m.attachments) out.attachments = m.attachments.map((a) => ({ ...a, url: chatUploads.urlFor(a.id) }))
+  if (m.parts?.some((p) => p.type === 'image' || p.type === 'file')) {
+    out.parts = m.parts.map((p) => (p.type === 'image' || p.type === 'file' ? { ...p, url: chatUploads.urlFor(p.uploadId) } : p))
+  }
+  return out
+}
+const signThread = (t) => (t ? { ...t, messages: (t.messages || []).map(signMessage) } : t)
+
+const listThreads = async () => (await threadStore.list()).map(signThread)
+const readThread = async (id) => signThread(await threadStore.get(id))
+const writeThread = async (id, body) => signThread(await threadStore.put(id, body))
+const deleteThread = (id) => threadStore.remove(id)
 
 let chatModelsCache = { ts: 0, data: null }
 
@@ -7865,20 +8217,31 @@ const CURSOR_DEFAULT_MODELS = new Set([
   'grok-4.3',                  // Grok 4.3 1M
 ])
 
-// Claude Code has no model-list command; its selectable models are the built-in
-// aliases, which always resolve to the current latest version. Seeding the aliases
-// gives "all current models" without pinning to a version that goes stale — the
-// names below say which version each alias resolves to today, but it is the alias
-// that gets passed to `claude --model`, so they never need updating.
-// Haiku is deliberately absent: delegated work is heavy work.
+// Claude Code has no model-list command, so its catalog is written down here —
+// as full model ids with their real names. It used to list the aliases (`opus`,
+// `sonnet`) under names written by hand ("Sonnet 5"); the CLI quietly resolves an
+// alias to the newest version, so the picker said Sonnet 5 while Sonnet 5.5
+// answered. A full id means what is shown is what runs. Update this list when
+// Anthropic ships a model (check with `claude -p --model <id> "reply with your id"`).
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const MODEL_SEEDS = {
   claude: [
-    { id: 'opus', name: 'Opus 5', recommended: true },
-    { id: 'fable', name: 'Fable 5.1' },
-    { id: 'sonnet', name: 'Sonnet 5' },
+    { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', recommended: true },
+    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5' },
+    { id: 'claude-fable-5-1', name: 'Claude Fable 5.1' },
+    { id: 'claude-opus-5', name: 'Claude Opus 5' },
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
+    { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', efforts: [], defaultEffort: null },
   ],
 }
+// Old threads and settings saved the aliases; read them as what they ran.
+const CLAUDE_ALIASES = { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', fable: 'claude-fable-5-1', haiku: 'claude-haiku-4-5-20251001' }
+
+// Codex here is pointed at CLIProxy, which also serves Claude models. Those must
+// never run through Codex — Claude goes through Claude Code, full stop — so the
+// Codex catalog is OpenAI chat models only, and resolveModelChoice refuses
+// anything else on a Codex account even if a stale setting names it.
+const CODEX_MODEL_ID = /^(gpt-(?!image)|o\d|codex-(?!auto-review))/i
 
 // Codex keeps a self-refreshing catalog at ~/.codex/models_cache.json (the CLI
 // updates it from the server), so we read that for the live model list rather
@@ -7915,7 +8278,7 @@ function modelGeneration(slug) {
 async function listCodexModels(instance) {
   try {
     const cfg = JSON.parse(await readFile(codexModelsCache(instance), 'utf8'))
-    let live = (cfg.models || []).filter((m) => m && m.slug && m.visibility !== 'hide' && m.supported_in_api !== false)
+    let live = (cfg.models || []).filter((m) => m && m.slug && m.visibility !== 'hide' && m.supported_in_api !== false && CODEX_MODEL_ID.test(m.slug))
     if (CODEX_ALLOWLIST.length) {
       live = live.filter((m) => CODEX_ALLOWLIST.includes(m.slug))
     } else if (live.length) {
@@ -8025,7 +8388,14 @@ function modelChoiceError(message, models) {
 }
 
 async function resolveModelChoice(provider, model, effort, { strict = true } = {}) {
-  const wantedModel = bareModelId(model)
+  let wantedModel = bareModelId(model)
+  if (driverOf(provider) === 'claude' && CLAUDE_ALIASES[wantedModel]) wantedModel = CLAUDE_ALIASES[wantedModel]
+  if (driverOf(provider) === 'codex' && wantedModel && !CODEX_MODEL_ID.test(wantedModel)) {
+    // Never forward a Claude (or any non-OpenAI) id to Codex/CLIProxy.
+    if (strict) throw modelChoiceError(`"${wantedModel}" is not an OpenAI model; Claude models run through Claude Code`, [])
+    log(`refusing to run "${wantedModel}" through codex — using its default instead`)
+    wantedModel = ''
+  }
   const wantedEffort = String(effort || '').trim().toLowerCase()
   // Cursor and OpenCode enumerate hundreds of ids and accept ones we do not list,
   // so their model passes through untouched — the RAW spec, not bareModelId, since
@@ -8148,112 +8518,944 @@ async function listChatModels(requestedProvider) {
   return { ...base, models: merged, ...(error ? { error } : {}) }
 }
 
-// Streaming web chat. Streams tokens to the browser via Server-Sent Events.
-// Uses cursor's token stream when available; otherwise falls back to a single
-// final chunk from whatever backend is configured.
-async function handleWebChat(req, res) {
-  const { text, history, model, provider: requestedProvider } = await readJsonBody(req)
-  if (!text || typeof text !== 'string') return send(res, 400, { error: 'missing text' })
-  const config = await readProviderConfig()
-  // The web chat may target any enabled provider; anything else (or absent) falls
-  // back to the default. The shortcut never reaches here — it uses the default.
-  const requested = normalizeProviderId(requestedProvider, '')
-  const provider = requested && config.enabledProviders.includes(requested) ? requested : config.defaultProvider
-  const cursorModel = driverOf(provider) === 'cursor'
-    ? normalizeCursorModelSpec(model, config.defaultModel || DEFAULT_WEB_CURSOR_MODEL)
-    : null
-  // Codex/Claude/OpenCode take a bare model id (no Cursor params); fall back to
-  // the configured default, then each CLI's own env default.
-  const driver = driverOf(provider)
-  let plainModel = (driver === 'codex' || driver === 'claude' || driver === 'opencode')
-    ? (bareModelId(model) || bareModelId(config.defaultModel))
-    : ''
-  // The chat talks to the streamers directly rather than through runAgent, so it
-  // needs its own trip through the gate — otherwise a model the picker showed
-  // before the catalog moved on would still reach the CLI from here.
-  let plainEffort = ''
-  if (takesReasoning(provider)) {
-    const choice = await resolveModelChoice(provider, plainModel, '', { strict: false })
-    plainModel = choice.model || plainModel
-    plainEffort = choice.effort || ''
+// ---------------------------------------------------------------------------
+// Web chat — server-side runs over server-owned threads.
+//
+// POST /api/chat starts a run (chat/runs.mjs) and streams it as Server-Sent
+// Events. The run belongs to the thread, not the request: the browser can close,
+// re-open the thread and re-attach with GET /api/chat/runs/<thread>/stream, and
+// the reply is written to the thread file whether or not anyone watched it. A run
+// that ends with nobody attached pushes a notification instead.
+//
+// Each provider resumes its own native session (cursor --resume, claude
+// --resume, codex exec resume, opencode --session), so turn 20 sends one message
+// rather than the whole transcript. planHistory replays whatever another provider
+// said in between, and a resume that fails is retried once from scratch.
+// ---------------------------------------------------------------------------
+
+// A chat answer has a person waiting for it, but it also calls tools. Three
+// minutes (the phone budget) cut real MCP-heavy answers off half way.
+const CHAT_TIMEOUT_MS = Number(process.env.CHAT_TIMEOUT_MS) || 15 * 60_000
+// Task and computer-use runs are hand-offs. They get an hour, and a Stop button.
+const CHAT_TASK_TIMEOUT_MS = Number(process.env.CHAT_TASK_TIMEOUT_MS) || 60 * 60_000
+
+const VOICE_RULES =
+  'VOICE MODE: The owner is talking to you out loud and your reply will be read aloud by text-to-speech. ' +
+  'Answer the way a person would in conversation: usually one to three short sentences, plain spoken words. ' +
+  'No Markdown, no lists, no headings, no tables, no emoji, and never read out a URL or an id. ' +
+  'If you did something, say what in one sentence. If you need something from him, ask one short question. ' +
+  'This overrides the Markdown guidance above.'
+
+const TASK_RULES =
+  'TASK MODE: The owner handed this off as a job to carry out, not a question to answer. Work through it end to end ' +
+  'with your tools (shell, files, the Totem app tools) and only stop to ask when you are genuinely blocked. ' +
+  'Finish with a short summary: what you did, what changed, and anything only he can do.'
+
+const COMPUTER_RULES =
+  'COMPUTER USE: The owner wants you to operate this computer\'s desktop for this. Use your computer-use tools ' +
+  '(screenshots, clicks, typing) for anything that needs a real app or his signed-in browser. Never type a ' +
+  'password, a payment card or a one-time code: if a page needs a sign-in, stop and ask him to sign in himself, ' +
+  'then carry on. Confirm with him before anything that cannot be undone (sending, buying, posting, deleting). ' +
+  'Between steps, say in a few words what you are doing.'
+
+const CHAT_MODES = new Set(['chat', 'task', 'computer'])
+
+// Pictures of what was found, the way ChatGPT shows products and places. The
+// chat lays images out by where they sit in the Markdown (web/src/components/
+// Markdown.tsx): several in one paragraph become a row of cards captioned by
+// their alt text, one per paragraph stack as a column.
+const IMAGE_RULES = `IMAGES: When you recommend, compare or describe things that have a look — products (bikes, gear, clothes), places, dishes, people's work, anything he would want to see — show a real picture of each next to what you say about it. Use only image URLs you actually saw while researching (the product's image or the page's og:image), never guessed or made up; skip an item rather than invent one. Write ![Name](https://…image…) with the item's name as the alt text, and wrap it in a link to the page when you have one: [![Trek Domane SL 6](https://…jpg)](https://trekbikes.com/…). To put several side by side as a row (comparisons, a short list of options), write their images one after another in the same paragraph, one per line with no blank line between. To stack them as a column, give each its own paragraph with its own text. A row of 2-6 is ideal. For a comparison table, put the row of pictures just above the table, in the same order as its columns, rather than inside the cells. Don't add pictures to answers that don't need them.`
+
+// Documents the agent makes become file cards with a live preview (Markdown
+// rendered, HTML in a sandboxed frame), the way ChatGPT shows a canvas. The agent
+// is told where to save them; after the turn, anything new in that folder — and
+// any document its file tools wrote elsewhere — is snapshotted into the chat.
+function filesRule(dir) {
+  return 'FILES: When the owner asks for a document, report, write-up, plan, page, table or anything he would want as a file, '
+    + `save it as a file in ${dir} (create the folder if it is missing): Markdown (.md) for documents, one self-contained `
+    + '.html (inline CSS and JS, nothing external it needs to load) for anything visual or interactive, .csv for tables. '
+    + 'He sees each file as a card he can open, preview and download, so in your reply say what you made in a sentence or '
+    + 'two instead of pasting the whole thing.'
+}
+
+const ARTIFACT_EXT = /\.(md|markdown|html?|csv|tsv|txt|json|ya?ml|svg|pdf|xml|ics)$/i
+const ARTIFACT_MIME = { md: 'text/markdown', markdown: 'text/markdown', html: 'text/html', htm: 'text/html', csv: 'text/csv', tsv: 'text/tab-separated-values', txt: 'text/plain', json: 'application/json', yml: 'text/yaml', yaml: 'text/yaml', svg: 'image/svg+xml', pdf: 'application/pdf', xml: 'application/xml', ics: 'text/calendar' }
+const WRITE_KINDS = new Set(['write', 'edit', 'Write', 'Edit', 'MultiEdit', 'create_file', 'edit_file'])
+
+async function collectArtifacts({ threadId, since, parts }) {
+  const candidates = new Set()
+  const dir = join(CHAT_OUTPUTS_DIR, threadId)
+  try {
+    for (const name of await readdir(dir, { recursive: true })) candidates.add(join(dir, name))
+  } catch {}
+  for (const p of parts || []) {
+    if (p.type !== 'tool' || !WRITE_KINDS.has(p.kind)) continue
+    for (const raw of String(p.detail || '').split(/,\s*/)) {
+      const path = raw.trim()
+      if (path) candidates.add(path.startsWith('/') ? path : join(AGENT_CWD, path))
+    }
   }
-  log('WEB chat:', text.slice(0, 100))
-  const chatInstance = instanceFor(provider)
-  if (chatInstance && !(await cliInstalled(chatInstance.cli))) {
-    return send(res, 409, { error: { code: 'AI_NOT_CONFIGURED', message: new AiNotConfiguredError(chatInstance.cli).message } })
+  const dataDir = join(HERE, 'data')
+  const out = []
+  for (const path of candidates) {
+    if (out.length >= 8 || !ARTIFACT_EXT.test(path)) continue
+    // Memory and Totem's own state are not deliverables.
+    if ((path.startsWith(dataDir) && !path.startsWith(CHAT_OUTPUTS_DIR)) || path.startsWith(MEMORY_ROOT)) continue
+    try {
+      const st = await stat(path)
+      if (!st.isFile() || st.mtimeMs < since - 1000 || st.size > 10 * 1024 * 1024) continue
+      const ext = path.split('.').pop().toLowerCase()
+      const saved = await chatUploads.save({ buffer: await readFile(path), name: basename(path), mime: ARTIFACT_MIME[ext] || '' })
+      out.push({ uploadId: saved.id, name: saved.name, mime: saved.mime, size: saved.size, path, url: saved.url })
+    } catch (e) { log('chat: artifact snapshot failed', path, e?.message || e) }
   }
+  return out
+}
+
+function chatSse(res) {
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache',
     connection: 'keep-alive',
     'x-accel-buffering': 'no',
   })
-  const sse = (obj) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`) }
-  const ac = new AbortController()
-  req.on('close', () => ac.abort()) // browser navigated away / aborted the fetch
-  const t0 = Date.now()
-  let webOk = true
-  // Power-user workflow actions also work from the web composer. `$` is the
-  // current manual workflow trigger prefix; keep the old slash forms tolerated
-  // so saved threads and muscle memory don't break.
-  const cmd = text.trim().toLowerCase()
-  let webChannel = 'web'
-  try {
-    // Run a skill by its chat command.
-    //
-    // The command list used to be hardcoded here, which meant a skill you renamed
-    // or added was unreachable from chat no matter what the Skills tab said. It's
-    // now looked up in the skill store, so the same file that the 08:00 job runs is
-    // the one `$plaud-meetings` runs, and a command you invent works immediately.
-    const matchedSkill = await lookupSkillCommand(cmd, text)
-    if (matchedSkill) {
-      const onActivity = (a) => sse({ type: 'activity', text: a })
-      const agentOptions = { onActivity, cursorModel }
-      webChannel = SKILL_CHAT_CHANNELS[matchedSkill.id] || 'web'
-      // A skill with bookkeeping runs through its runner so an on-demand run keeps
-      // the same watermark and sentinel handling as the scheduled one.
-      const viaRunner = SKILL_CHAT_RUNNERS[matchedSkill.id]
-      const reply = viaRunner
-        ? await viaRunner({ agentOptions, skillId: matchedSkill.id })
-        : (await runSkillAgent(matchedSkill.id, webChannel, agentOptions)).trim()
-      sse({ type: 'done', text: reply })
-      log(`web chat (${matchedSkill.command || cmd}) replied in ${Date.now() - t0}ms`)
-      recordUse(webChannel, { text: matchedSkill.command || cmd, startedAt: t0, ok: true, provider })
-      return res.end()
-    }
-    const prompt = buildPrompt(text, 'web', history)
-    const streamFn = STREAMERS[driver]
-    if (streamFn && streamingEnabled(provider, config)) {
-      // cursor reads cursorModel; codex/claude/opencode read model — pass both and
-      // each streamer takes what it needs.
-      const r = await streamFn(prompt, {
-        label: 'web chat',
-        signal: ac.signal,
-        instance: instanceFor(provider),
-        cursorModel,
-        model: plainModel,
-        effort: plainEffort,
-        onText: (delta) => sse({ type: 'delta', text: delta }),
-        onActivity: (a) => sse({ type: 'activity', text: a }),
-        onTool: (tool) => sse({ type: 'tool', tool }),
-      })
-      if (r.stopped) sse({ type: 'done', text: 'Stopped.' })
-      else sse({ type: 'done', text: (r.result || '').trim() })
-    } else {
-      const fn = BACKENDS[driver]
-      const reply = await fn(prompt, { model: plainModel, effort: plainEffort, instance: instanceFor(provider) })
-      sse({ type: 'delta', text: reply })
-      sse({ type: 'done', text: reply })
-    }
-  } catch (e) {
-    webOk = false
-    log('web chat error', e)
-    sse({ type: 'error', text: String(e.message || e) })
-  }
-  log(`web chat replied in ${Date.now() - t0}ms`)
-  recordUse('web', { text, startedAt: t0, ok: webOk, provider })
-  res.end()
+  // A comment line every 20s keeps a proxy (Cloudflare drops idle streams at 100s)
+  // from closing a long run that is busy thinking rather than talking.
+  const ping = setInterval(() => { if (!res.writableEnded) res.write(': ping\n\n') }, 20_000)
+  res.on('close', () => clearInterval(ping))
+  return (obj) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`) }
 }
+
+// Attach a viewer to a thread's run and stream until it ends or the viewer leaves.
+function streamChatRun(req, res, threadId, since = 0) {
+  const sse = chatSse(res)
+  let unsubscribe = null
+  const finish = () => { unsubscribe?.(); if (!res.writableEnded) res.end() }
+  unsubscribe = chatRuns.subscribe(threadId, since, (event) => {
+    sse(event)
+    if (event.type === 'end') setImmediate(finish)
+  })
+  if (!unsubscribe) { sse({ type: 'end', status: 'none' }); return res.end() }
+  // Closing the tab detaches; it does not stop the work.
+  req.on('close', () => unsubscribe?.())
+  const run = chatRuns.get(threadId)
+  if (run && run.status !== 'running') setImmediate(finish)
+}
+
+// Which account answers. Temporary chats ride the default, as before; computer
+// use needs Codex, so it moves to the first enabled Codex account rather than
+// failing because the thread happened to be on Claude.
+function chooseChatProvider(config, requested, { kind, mode, routed = false }) {
+  let provider = requested && config.enabledProviders.includes(requested) ? requested : config.defaultProvider
+  // A routed turn (Auto/Instant/Thinking) already chose; only a hand-picked model
+  // on a temporary chat is held to the default.
+  if (kind === 'temporary' && !routed) provider = config.defaultProvider
+  if (mode === 'computer' && driverOf(provider) !== 'codex') {
+    const codex = config.enabledProviders.find((id) => driverOf(id) === 'codex')
+    if (!codex) throw Object.assign(new Error('Computer use runs on Codex. Enable a Codex account in Settings → Providers.'), { status: 400 })
+    provider = codex
+  }
+  return provider
+}
+
+// Settings → Chat: global choices for Auto/Instant/Thinking (chat/route.mjs).
+const CHAT_SETTINGS_FILE = join(HERE, 'data', 'chat-settings.json')
+const CHAT_PRESETS = new Set(['auto', 'instant', 'thinking', 'manual'])
+const DEFAULT_CHAT_SETTINGS = { defaultPreset: 'auto', defaultLevel: 2, instant: { provider: '', model: '', effort: '' }, thinking: { provider: '', model: '' }, titles: { provider: '', model: '', effort: '', off: false } }
+let chatSettings = structuredClone(DEFAULT_CHAT_SETTINGS)
+readFile(CHAT_SETTINGS_FILE, 'utf8').then((raw) => { chatSettings = normalizeChatSettings(JSON.parse(raw)) }).catch(() => {})
+
+function normalizeChatSettings(raw = {}) {
+  const lane = (l, keys) => Object.fromEntries(keys.map((k) => [k, typeof l?.[k] === 'string' ? l[k].slice(0, 160) : '']))
+  return {
+    defaultPreset: CHAT_PRESETS.has(raw.defaultPreset) ? raw.defaultPreset : 'auto',
+    defaultLevel: Math.min(5, Math.max(1, Math.round(Number(raw.defaultLevel) || 2))),
+    instant: lane(raw.instant, ['provider', 'model', 'effort']),
+    thinking: lane(raw.thinking, ['provider', 'model']),
+    titles: { ...lane(raw.titles, ['provider', 'model', 'effort']), off: raw.titles?.off === true },
+  }
+}
+
+async function resolveChatModel(provider, model, effort, config) {
+  const driver = driverOf(provider)
+  const cursorModel = driver === 'cursor'
+    ? normalizeCursorModelSpec(model, provider === config.defaultProvider ? (config.defaultModel || DEFAULT_WEB_CURSOR_MODEL) : DEFAULT_WEB_CURSOR_MODEL)
+    : null
+  let plainModel = driver !== 'cursor'
+    ? (bareModelId(model) || (provider === config.defaultProvider ? bareModelId(config.defaultModel) : ''))
+    : ''
+  let plainEffort = typeof effort === 'string' ? effort : ''
+  // The chat talks to the streamers directly rather than through runAgent, so it
+  // needs its own trip through the gate — otherwise a model the picker showed
+  // before the catalog moved on would still reach the CLI from here.
+  if (takesReasoning(provider)) {
+    const choice = await resolveModelChoice(provider, plainModel, plainEffort, { strict: false })
+    plainModel = choice.model || plainModel
+    plainEffort = choice.effort || ''
+  }
+  return { cursorModel, model: plainModel, effort: plainEffort, label: cursorModel || plainModel || '' }
+}
+
+async function loadChatFiles(attachments) {
+  const out = []
+  for (const a of attachments || []) {
+    const meta = await chatUploads.meta(a.id)
+    if (!meta) continue
+    const file = { ...meta }
+    if (meta.kind === 'text' && meta.size <= 200_000) {
+      try { file.text = await readFile(meta.path, 'utf8') } catch {}
+    }
+    out.push(file)
+  }
+  return out
+}
+
+function chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser = false }) {
+  const plan = fresh ? { resumeId: null, replay: thread.messages.slice(0, userIndex) } : planHistory(thread, provider, userIndex)
+  const extras = [!voice && filesRule(join(CHAT_OUTPUTS_DIR, thread.id)), mode === 'task' && TASK_RULES, mode === 'computer' && COMPUTER_RULES, browser && BROWSER_RULES, !voice && IMAGE_RULES, voice && VOICE_RULES].filter(Boolean)
+  const extraBlock = extras.length ? `${extras.join('\n\n')}\n\n` : ''
+  const att = attachmentBlock(files)
+  const request = text || '(The owner sent only the attachments above. Look at them and respond.)'
+  if (plan.resumeId) {
+    const missed = renderTranscript(plan.replay, { heading: 'Earlier in this chat, answered while you were away:' })
+    return { resumeId: plan.resumeId, prompt: `${temporalContext()}\n\n${extraBlock}${missed}${att}${OWNER_NAME || 'Owner'}: ${request}` }
+  }
+  const prompt =
+    `${IDENTITY}\n\n${WEB_RULES}\n\n${MEMORY_RULES}\n\n${INBOX_RULES}\n\n${HABIT_RULES}\n\n${GOAL_RULES}` +
+    `${stravaRule()}${appToolsRule()}\n\n${extraBlock}${temporalContext()}\n\n` +
+    `${renderTranscript(plan.replay)}${att}User request:\n${request}`
+  return { resumeId: null, prompt }
+}
+
+// Chat titles, written the way Codex titles its threads: two to five words,
+// Title Case, saying what the chat is for ("Compare Mac Mini MacBook Pro"). A
+// background one-shot on the lightest model available — Codex's GPT 6 Luna at
+// low effort by default (~4 s, MCP servers off, nothing saved to disk) — so it
+// lands while the reply is still streaming. Settings → Chat → Titles picks the
+// account/model, or turns it off (the first-line fallback is already set).
+// The title model also picks the chat's icon from THREAD_ICONS (chat/thread-icons.mjs),
+// in the same call: one line for each, so a model that ignores the icon line still
+// gives a usable title.
+const TITLE_STYLE = '2 to 5 words, Title Case, like "Compare Mac Mini MacBook Pro", "Explain NOALai Simply" or '
+  + '"Plan Chicago Weekend Trip". No quotes, no emoji, no punctuation at the end.'
+const ICON_STYLE = () => 'Then pick the one icon from this list that best matches what the chat is about (a bike ride → bike, a wristwatch → device-watch, '
+  + 'a tax question → receipt-tax, a bug → bug); use message if nothing fits:\n' + THREAD_ICONS.join(', ')
+const TITLE_FORMAT = 'Reply with exactly two lines and nothing else:\nTitle: <the title>\nIcon: <an icon name from the list>'
+
+const TITLE_PROMPT = (text) =>
+  `Write a title for a chat that starts with the message below. ${TITLE_STYLE} ${ICON_STYLE()}\n\n${TITLE_FORMAT}`
+  + '\n\nMessage:\n' + truncate(text, 1500)
+
+async function runTitleModel(prompt) {
+  const t = chatSettings.titles || {}
+  if (t.off) return ''
+  const config = await readProviderConfig()
+  const provider = t.provider && config.enabledProviders.includes(t.provider)
+    ? t.provider
+    : config.enabledProviders.find((id) => driverOf(id) === 'codex') || ''
+  const driver = provider ? driverOf(provider) : 'claude'
+  if (driver === 'codex') {
+    const choice = await resolveModelChoice(provider, t.model || 'gpt-6-luna', t.effort || 'low', { strict: false })
+    const r = await spawnCodexStream(prompt, {
+      label: 'chat title', instance: instanceFor(provider), model: choice.model, effort: choice.effort,
+      sandbox: 'read-only', extraArgs: ['--ephemeral', '-c', 'mcp_servers={}'], timeoutMs: 60_000,
+    })
+    return r.result
+  }
+  if (driver === 'cursor') {
+    return (await spawnCursorStream(prompt, { label: 'chat title', instance: instanceFor(provider), cursorModel: t.model || 'composer-2.5[fast=true]', timeoutMs: 60_000 })).result
+  }
+  if (driver === 'opencode') {
+    return (await spawnOpenCodeStream(prompt, { label: 'chat title', instance: instanceFor(provider), model: t.model || undefined, timeoutMs: 60_000 })).result
+  }
+  // Claude (or no Codex account at all): the same no-tools one-shot the phone summary uses.
+  return runShortcutSummaryModel(prompt, t.model || 'claude-haiku-4-5-20251001')
+}
+
+// Retitle from the whole conversation (the chat menu's "Regenerate title and icon"),
+// with the same model and style as the first-message title.
+const RETITLE_PROMPT = (transcript) =>
+  `Write a title for the conversation below, saying what it is about as a whole — not just its first message. ${TITLE_STYLE} `
+  + `${ICON_STYLE()}\n\n${TITLE_FORMAT}\n\n` + transcript
+
+async function regenerateChatTitle(thread) {
+  // The whole chat, newest turns kept when it's long; the opening request is
+  // always included so a drifted chat is still titled by what it set out to do.
+  const msgs = thread.messages.filter((m) => (m.content || '').trim())
+  const first = msgs.find((m) => m.role === 'user')
+  let transcript = renderTranscript(msgs, { budget: 7000, heading: 'Conversation:' })
+  if (first && !transcript.includes(first.content.trim().slice(0, 60))) transcript = `Opening request: ${truncate(first.content, 600)}\n\n${transcript}`
+  return parseTitleReply(await runTitleModel(RETITLE_PROMPT(transcript)))
+}
+
+// Chats from before icons existed get one from their title (or opening line) alone: forty
+// titles per call, answered "3: bike". POST /api/chat/icons/backfill.
+async function backfillChatIcons() {
+  // Untitled chats are described by their opening message, as the sidebar shows them.
+  const about = (t) => t.title || plainPreview(t.messages.find((m) => m.role === 'user')?.content || '', 120)
+  const todo = (await threadStore.list()).filter((t) => !t.icon && t.kind !== 'temporary' && about(t))
+  let done = 0
+  for (let i = 0; i < todo.length; i += 40) {
+    const batch = todo.slice(i, i + 40)
+    const prompt = `Pick an icon for each chat title below. ${ICON_STYLE()}\n\n`
+      + 'Reply with one line per title, "<number>: <icon name>", and nothing else.\n\n'
+      + batch.map((t, j) => `${j + 1}. ${about(t)}`).join('\n')
+    const raw = await runTitleModel(prompt)
+    for (const line of String(raw || '').split('\n')) {
+      const m = /^\s*(\d+)[.:)]\s*(?:[^:]*:\s*)?(.+)$/.exec(line)
+      const t = m && batch[Number(m[1]) - 1]
+      const icon = t && cleanIcon(m[2])
+      if (!icon) continue
+      await threadStore.update(t.id, (x) => { if (!x.icon) x.icon = icon })
+      done++
+    }
+  }
+  return { checked: todo.length, iconed: done }
+}
+
+async function generateChatTitle(text) {
+  return parseTitleReply(await runTitleModel(TITLE_PROMPT(text)))
+}
+
+// What a "Totem answered" push says: the answer, never the narration before it.
+// Two views of it: the text after the last tool step (finalAnswer), and the
+// CLI's own last message (Codex reports narration and answer as separate
+// messages, which merge in the chat when no tool sits between them). Whichever
+// is shorter has dropped the most narration.
+function replyForPush(assistant, finalText) {
+  const options = [finalAnswer(assistant), String(finalText || '').trim()].filter(Boolean)
+  return options.sort((a, b) => a.length - b.length)[0] || assistant.content
+}
+
+function plainPreview(markdown, max = 160) {
+  return truncate(String(markdown || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/[#>*_`~|]/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim(), max)
+}
+
+// Auto/Instant/Thinking → account, model, effort for one turn (null = manual).
+// Shared by the send and by the composer's live preview, so what the preview
+// says is what the send does. Auto's power: the composer's, else the chat's
+// stored one, else read from the message (pickRoute → autoPower).
+async function routeChatTurn({ preset, body = {}, existing, config, mode = 'chat', voice = false, text = '', attachments = 0 }) {
+  if (preset === 'manual') return null
+  const accounts = await Promise.all(config.enabledProviders.map(async (id) => ({
+    id, driver: driverOf(id), isDefault: id === config.defaultProvider,
+    state: (await providerHealth(id).catch(() => ({ state: 'unknown' }))).state,
+  })))
+  // Once a chat has replies it keeps its account (older chats stored none, so
+  // fall back to whoever answered last).
+  const started = (existing?.messages || []).some((m) => m.role === 'assistant')
+  const lockTo = started
+    ? (existing.provider || [...existing.messages].reverse().find((m) => m.role === 'assistant' && m.provider)?.provider || null)
+    : null
+  return pickRoute({
+    preset, level: body.level, mode, voice, accounts, prefs: chatSettings,
+    power: body.power || existing?.modelSettings?.power,
+    lockTo: lockTo && config.enabledProviders.includes(lockTo) ? lockTo : null,
+    text, attachments,
+  })
+}
+
+async function handleChatSend(req, res) {
+  const body = await readJsonBody(req)
+  const threadId = body.threadId
+  if (!validThreadId(threadId)) return send(res, 400, { error: 'missing threadId' })
+  if (chatRuns.active(threadId)) return send(res, 409, { error: 'this chat is already answering' })
+
+  const config = await readProviderConfig()
+  const existing = await threadStore.get(threadId)
+  const kind = existing?.kind || (body.kind === 'temporary' ? 'temporary' : 'regular')
+  const mode = CHAT_MODES.has(body.mode) ? body.mode : 'chat'
+  const voice = body.voice === true
+  let text = typeof body.text === 'string' ? body.text.trim() : ''
+  let attachments = (Array.isArray(body.attachments) ? body.attachments : [])
+    .map((a) => (typeof a === 'string' ? a : a?.id)).filter(validUploadId).slice(0, 20)
+
+  // Auto / Instant / Thinking pick the account and model themselves; "manual"
+  // (and any client that predates presets) keeps the thread's own choice.
+  const preset = PRESETS.includes(body.preset) ? body.preset : 'manual'
+  const lastUser = body.regenerate ? [...(existing?.messages || [])].reverse().find((m) => m.role === 'user') : null
+  const route = await routeChatTurn({
+    preset, body, existing, config, mode, voice,
+    text: lastUser ? lastUser.content : text,
+    attachments: lastUser ? (lastUser.attachments || []).length : attachments.length,
+  })
+  const provider = chooseChatProvider(config, route ? route.provider : normalizeProviderId(body.provider, ''), { kind, mode, routed: !!route })
+  const driver = driverOf(provider)
+  const choice = route && provider === route.provider
+    ? await resolveChatModel(provider, route.cursorModel || route.model, route.effort, config)
+    : await resolveChatModel(provider, body.model, body.effort, config)
+  const now = Date.now()
+  const assistantId = randomUUID()
+  let userIndex = -1
+  let userMessage = null
+
+  // One write: drop what a regenerate or an edit replaces, append the turn.
+  const thread = await threadStore.update(threadId, async (t) => {
+    if (body.regenerate) {
+      while (t.messages.length && t.messages[t.messages.length - 1].role === 'assistant') t.messages.pop()
+      const last = t.messages[t.messages.length - 1]
+      if (!last || last.role !== 'user') throw Object.assign(new Error('nothing to regenerate'), { status: 400 })
+      userMessage = t.messages.pop()
+      text = userMessage.content
+      attachments = (userMessage.attachments || []).map((a) => a.id)
+      delete t.sessions // the sessions saw the reply being replaced
+    } else if (validThreadId(body.editMessageId)) {
+      const at = t.messages.findIndex((m) => m.id === body.editMessageId && m.role === 'user')
+      if (at < 0) throw Object.assign(new Error('message not found'), { status: 404 })
+      t.messages.splice(at)
+      delete t.sessions
+    }
+    if (!text && !attachments.length) throw Object.assign(new Error('missing text'), { status: 400 })
+    const metas = []
+    for (const id of attachments) {
+      const m = await chatUploads.meta(id)
+      if (m) metas.push({ id: m.id, name: m.name, mime: m.mime, size: m.size, kind: m.kind, ...(m.preview ? { preview: m.preview } : {}) })
+    }
+    userMessage = { id: userMessage?.id || randomUUID(), role: 'user', content: text, createdAt: now, ...(metas.length ? { attachments: metas } : {}), ...(mode !== 'chat' ? { mode } : {}), ...(voice ? { voice: true } : {}) }
+    t.messages.push(userMessage)
+    userIndex = t.messages.length - 1
+    t.messages.push({
+      id: assistantId, role: 'assistant', content: '', parts: [], status: 'streaming', provider, model: choice.label, createdAt: now,
+      ...(route ? { route: route.route, ...(route.level ? { level: route.level } : {}), ...(route.power ? { power: route.power } : {}) } : {}),
+    })
+    // The account a chat starts on is its account from then on (routed or not);
+    // a hand-picked model (always within that account) updates it.
+    if (!t.provider || !route) t.provider = provider
+    if (body.modelSettings && typeof body.modelSettings === 'object') t.modelSettings = body.modelSettings
+    // Auto's first pick becomes the chat's power until he moves the dial.
+    if (route?.power) t.modelSettings = { ...(t.modelSettings || {}), preset: 'auto', power: String(route.power) }
+    if (!t.title) t.title = fallbackTitle(text) || (metas[0]?.name ?? '')
+    t.updatedAt = now
+  }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
+
+  const files = await loadChatFiles(userMessage.attachments)
+  const needsTitle = !existing?.title || userIndex === 0
+  const streamLive = streamingEnabled(provider, config)
+  log(`WEB chat [${provider}${route ? ` ${route.route}${route.power ? ` p${route.power}` : ''}${route.level ? `:${route.level}` : ''} (${route.reason})` : ''}${mode !== 'chat' ? `/${mode}` : ''}${voice ? '/voice' : ''}]:`, text.slice(0, 100))
+
+  const run = chatRuns.start(threadId, {
+    id: assistantId,
+    mode,
+    assistantMessageId: assistantId,
+    execute: async ({ emit: push, signal, run }) => {
+      const t0 = Date.now()
+      const assistant = { ...thread.messages[thread.messages.length - 1], parts: [] }
+      let pending = null
+      const save = (extra) => threadStore.update(threadId, (t) => {
+        const i = t.messages.findIndex((m) => m.id === assistant.id)
+        if (i >= 0) t.messages[i] = structuredClone(assistant)
+        t.updatedAt = Date.now()
+        extra?.(t)
+      }).catch((e) => log('chat: save failed', e?.message || e))
+      // A reload mid-run shows the reply so far, not an empty bubble.
+      const saveSoon = () => { if (!pending) pending = setTimeout(() => { pending = null; save() }, 1500) }
+      const forward = (event, { live = true } = {}) => {
+        applyEvent(assistant, event)
+        if (live) push(event)
+        saveSoon()
+      }
+      push({ type: 'start', threadId, runId: run.id, userMessage: signMessage(userMessage), assistantMessage: { ...assistant }, provider, mode, ...(route?.power ? { power: route.power } : {}) })
+
+      if (needsTitle && text) {
+        generateChatTitle(text)
+          .then(({ title, icon }) => {
+            if (!title) return
+            return threadStore.update(threadId, (t) => { t.title = title; if (icon) t.icon = icon })
+              .then(() => push({ type: 'title', title, icon: icon || undefined }))
+          })
+          .catch((e) => log('chat title failed', e?.message || e))
+      }
+
+      let status = 'done'
+      let error = ''
+      let finalText = ''
+      let sessionId = ''
+      let browserAccess = null
+      try {
+        // A skill command ($morning, /journal, …) runs the skill rather than chatting.
+        const matchedSkill = !body.regenerate && !files.length ? await lookupSkillCommand(text.toLowerCase(), text) : null
+        if (matchedSkill) {
+          const agentOptions = { onActivity: (a) => push({ type: 'activity', text: a }), cursorModel: choice.cursorModel }
+          const channel = SKILL_CHAT_CHANNELS[matchedSkill.id] || 'web'
+          const viaRunner = SKILL_CHAT_RUNNERS[matchedSkill.id]
+          finalText = viaRunner
+            ? await viaRunner({ agentOptions, skillId: matchedSkill.id })
+            : (await runSkillAgent(matchedSkill.id, channel, agentOptions)).trim()
+          forward({ type: 'delta', text: finalText })
+          recordUse(channel, { text: matchedSkill.command || text, startedAt: t0, ok: true, provider })
+          return
+        }
+
+        const streamFn = STREAMERS[driver]
+        // The browser is opt-in: only when the owner asked for it (the composer's "Use
+        // the browser", or in so many words), or this chat already has one open
+        // from an earlier ask. Never by default; voice turns never.
+        if (!voice && wantsBrowser({ body, text, threadId })) browserAccess = grantBrowserAccess(threadId, push)
+        const runOnce = async ({ fresh }) => {
+          const { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, mode, voice, fresh, browser: !!browserAccess })
+          return {
+            resumeId,
+            r: await streamFn(prompt, {
+              label: 'web chat',
+              signal,
+              instance: instanceFor(provider),
+              cursorModel: choice.cursorModel,
+              model: choice.model,
+              effort: choice.effort,
+              resume: resumeId || undefined,
+              images: files.filter((f) => f.kind === 'image'),
+              features: mode === 'computer' ? ['computer_use'] : [],
+              browser: browserAccess,
+              timeoutMs: mode === 'chat' ? CHAT_TIMEOUT_MS : CHAT_TASK_TIMEOUT_MS,
+              onText: (delta) => forward({ type: 'delta', text: delta }, { live: streamLive }),
+              onActivity: (a) => push({ type: 'activity', text: a }),
+              onTool: (tool) => forward({ type: 'tool', tool }),
+              onSession: (id) => { sessionId = id },
+              onImage: async ({ buffer, mime }) => {
+                const ext = (mime.split('/')[1] || 'png').replace('jpeg', 'jpg')
+                const up = await chatUploads.save({ buffer, name: `screenshot-${Date.now()}.${ext}`, mime })
+                forward({ type: 'image', uploadId: up.id, url: up.url })
+              },
+            }),
+          }
+        }
+        let { r, resumeId } = await runOnce({ fresh: false })
+        // A session the CLI no longer has (cleared history, a different account
+        // home) fails fast with nothing said. Start over once with the transcript.
+        if (resumeId && !r.stopped && !(r.result || '').trim() && !assistant.content.trim()) {
+          log(`chat: resume of ${provider} session ${resumeId} produced nothing; retrying fresh`)
+          sessionId = ''
+          ;({ r } = await runOnce({ fresh: true }))
+        }
+        finalText = (r.result || '').trim()
+        if (!streamLive && finalText) {
+          // Streaming switched off for this provider: the deltas were held back.
+          push({ type: 'delta', text: assistant.content || finalText })
+        }
+        if (r.stopped) status = 'stopped'
+        else if (!finalText && !assistant.content.trim()) {
+          status = 'error'
+          error = r.timedOut
+            ? `${providerLabel(provider)} ran out of time after ${Math.round((mode === 'chat' ? CHAT_TIMEOUT_MS : CHAT_TASK_TIMEOUT_MS) / 60_000)} minutes without answering.`
+            : truncate(r.turnError || r.stderr?.trim().split('\n').filter((l) => !/rmcp::transport|AuthRequired/.test(l)).slice(-4).join('\n') || `${providerLabel(provider)} exited ${r.code} without answering.`, 600)
+        } else if (r.turnError && !finalText) {
+          error = truncate(r.turnError, 600)
+        }
+      } catch (e) {
+        status = signal.aborted ? 'stopped' : 'error'
+        error = status === 'error' ? String(e?.message || e) : ''
+      } finally {
+        if (pending) { clearTimeout(pending); pending = null }
+        browserAccess?.revoke()
+        // Screenshots the agent chose to show (![…](/path.png)) become attachments.
+        if (browserAccess || /!\[[^\]]*\]\(\s*<?(file:\/\/)?\//.test(assistant.content + finalText)) {
+          const embed = (t) => embedLocalImages(t, {
+            allowedDirs: [join(CHAT_OUTPUTS_DIR, threadId), tmpdir()],
+            save: ({ buffer, name, mime }) => chatUploads.save({ buffer, name, mime }),
+          }).then((r) => r.text).catch(() => t)
+          for (const part of assistant.parts || []) if (part.type === 'text') part.text = await embed(part.text)
+          assistant.content = await embed(assistant.content)
+          finalText = await embed(finalText)
+        }
+        if (status !== 'stopped') {
+          for (const file of await collectArtifacts({ threadId, since: t0, parts: assistant.parts }).catch(() => [])) forward({ type: 'file', file })
+        }
+        finalizeMessage(assistant, { status, error, finalText, startedAt: t0 })
+        await save((t) => {
+          if (sessionId && status !== 'error') {
+            t.sessions = { ...(t.sessions || {}), [provider]: { id: sessionId, through: t.messages.length } }
+          }
+        })
+        push({ type: 'done', message: signMessage(structuredClone(assistant)) })
+        noteAiUsage(provider)
+        recordUse('web', { text, startedAt: t0, ok: status !== 'error', provider })
+        log(`web chat [${provider}] ${status} in ${Date.now() - t0}ms`)
+        // Nobody looking at this chat (phone locked, app in the background, another
+        // chat open): tell the phone it's done. Skipped only while someone is on it.
+        if (status !== 'stopped' && !someoneViewing(threadId)) {
+          const latest = await threadStore.get(threadId).catch(() => null)
+          notifier.deliver({
+            title: status === 'error' ? `Totem couldn't finish: ${latest?.title || 'your chat'}` : (latest?.title || 'Totem answered'),
+            // The answer, not the narration that came before it ("I'll look for…").
+            body: status === 'error' ? truncate(error, 160) : plainPreview(replyForPush(assistant, finalText)) || 'Done.',
+            category: 'chat.finished',
+            url: webThreadUrl(threadId),
+            tag: `chat:${threadId}`,
+          }).catch((e) => log('chat finished push failed', e?.message || e))
+        }
+      }
+    },
+  })
+
+  void run
+  return streamChatRun(req, res, threadId, 0)
+}
+
+// What each enabled account can do in chat, for the composer to show honestly.
+// Computer use is a probe, not a guess: Codex is asked what desktop tools it has,
+// and the answer is cached. On the Linux box it says none; on a Mac with Codex
+// computer use installed, the same question lights the toggle up.
+const CHAT_CAPS_FILE = join(HERE, 'data', 'chat-capabilities.json')
+
+async function readChatCapsCache() {
+  try { return JSON.parse(await readFile(CHAT_CAPS_FILE, 'utf8')) } catch { return {} }
+}
+
+async function probeComputerUse(provider) {
+  const prompt =
+    'List the exact names of any tools you have right now that can take a screenshot of, or click and type on, ' +
+    'this computer\'s desktop GUI (computer use). Do not call them. Reply with the names one per line, or exactly NONE.'
+  const r = await spawnCodexStream(prompt, {
+    label: 'computer-use probe', instance: instanceFor(provider), sandbox: 'read-only', features: ['computer_use'], timeoutMs: 120_000,
+  })
+  const answer = (r.result || '').trim()
+  const tools = /^none\b/i.test(answer) ? [] : answer.split('\n').map((l) => l.replace(/^[-*\s`]+|[`\s]+$/g, '')).filter((l) => /^[\w.:-]{2,80}$/.test(l))
+  return {
+    available: tools.length > 0,
+    tools,
+    platform: process.platform,
+    checkedAt: new Date().toISOString(),
+    reason: tools.length ? null : (process.platform === 'darwin'
+      ? 'Codex reported no computer-use tools. Install the Codex app\'s Computer Use plugin and grant it Screen Recording and Accessibility.'
+      : 'Codex computer use needs macOS with a signed-in desktop. It will turn on once Totem runs on the Mac mini.'),
+  }
+}
+
+async function chatCapabilities() {
+  const config = await readProviderConfig()
+  const cache = await readChatCapsCache()
+  const status = await journalTranscriber.status().catch(() => ({ ready: false }))
+  const providers = {}
+  const health = await Promise.all(config.enabledProviders.map((id) => providerHealth(id).catch(() => ({ state: 'unknown' }))))
+  for (const [i, id] of config.enabledProviders.entries()) {
+    const driver = driverOf(id)
+    providers[id] = {
+      driver,
+      // 'missing' / 'logged-out' let the picker say why an account will fail
+      // before a message is sent to it, rather than after.
+      state: health[i]?.state || 'unknown',
+      fix: health[i]?.fix || null,
+      images: driver === 'codex' || driver === 'claude' ? 'native' : 'file',
+      resume: true,
+      computerUse: driver === 'codex'
+        ? (cache.computerUse?.[id] || { available: false, reason: 'Not checked yet.', platform: process.platform, checkedAt: null })
+        : { available: false, reason: 'Computer use runs on Codex.' },
+    }
+  }
+  return {
+    providers,
+    transcription: { ready: !!status.ready, model: status.model || null },
+    maxUploadBytes: chatUploads.maxBytes,
+    platform: process.platform,
+  }
+}
+
+// Who is looking at which chat, per device: { threadId -> Map(deviceId -> at) }.
+// A finished reply pushes to the phone unless someone is viewing that chat right
+// now — the app visible, focused and on that thread — the way ChatGPT does. An
+// open-but-backgrounded tab is not viewing: it reports "hidden" as it goes, and a
+// device that stops checking in (a locked phone) goes stale after PRESENCE_TTL_MS.
+const PRESENCE_TTL_MS = 45_000
+const chatPresence = new Map()
+function setPresence(deviceId, threadId, viewing) {
+  for (const [tid, devices] of chatPresence) { devices.delete(deviceId); if (!devices.size) chatPresence.delete(tid) }
+  if (viewing && threadId) {
+    if (!chatPresence.has(threadId)) chatPresence.set(threadId, new Map())
+    chatPresence.get(threadId).set(deviceId, Date.now())
+  }
+}
+function someoneViewing(threadId) {
+  const devices = chatPresence.get(threadId)
+  if (!devices) return false
+  for (const at of devices.values()) if (Date.now() - at < PRESENCE_TTL_MS) return true
+  return false
+}
+
+async function handleChatApi(req, res, path) {
+  if (req.method === 'POST' && path === '/api/chat') return handleChatSend(req, res)
+  if (req.method === 'GET' && path === '/api/chat/runs') return send(res, 200, { runs: chatRuns.list() })
+  const runMatch = /^\/api\/chat\/runs\/([A-Za-z0-9_-]{1,128})\/stream$/.exec(path)
+  if (req.method === 'GET' && runMatch) {
+    const since = Number(new URL(req.url, 'http://x').searchParams.get('since')) || 0
+    return streamChatRun(req, res, runMatch[1], since)
+  }
+  if (req.method === 'POST' && path === '/api/chat/title') {
+    const { threadId } = await readJsonBody(req)
+    const thread = validThreadId(threadId) ? await threadStore.get(threadId) : null
+    if (!thread) return send(res, 404, { error: 'chat not found' })
+    if (!thread.messages.some((m) => m.role === 'user')) return send(res, 400, { error: 'nothing to title yet' })
+    // Titles may be switched off for new chats; an explicit ask still runs.
+    const saved = chatSettings.titles?.off
+    if (saved) chatSettings.titles.off = false
+    let title = '', icon = ''
+    try { ({ title, icon } = await regenerateChatTitle(thread)) } finally { if (saved) chatSettings.titles.off = true }
+    if (!title) return send(res, 502, { error: 'the title model returned nothing' })
+    await threadStore.update(threadId, (t) => { t.title = title; if (icon) t.icon = icon })
+    return send(res, 200, { title, icon: icon || null })
+  }
+  // The chat's browser: its latest frame for a viewer that arrives mid-run, and
+  // a way to close it (tabs, cookies and all).
+  if (req.method === 'GET' && path === '/api/chat/browser') {
+    const threadId = new URL(req.url, 'http://x').searchParams.get('threadId')
+    if (!validThreadId(threadId)) return send(res, 400, { error: 'missing threadId' })
+    const open = browserManager.sessionKeys().includes(threadId)
+    return send(res, 200, { available: browserReady(), open, frame: open ? browserFrames.get(threadId) || null : null })
+  }
+  if (req.method === 'POST' && path === '/api/chat/browser/close') {
+    const { threadId } = await readJsonBody(req)
+    if (!validThreadId(threadId)) return send(res, 400, { error: 'missing threadId' })
+    await browserManager.closeSession(threadId)
+    browserFrames.delete(threadId)
+    return send(res, 200, { ok: true })
+  }
+  // What Auto would do with this message right now, for the composer to show
+  // before sending: account, model, effort, power.
+  if (req.method === 'POST' && path === '/api/chat/route') {
+    const body = await readJsonBody(req)
+    const config = await readProviderConfig()
+    const existing = validThreadId(body.threadId) ? await threadStore.get(body.threadId) : null
+    const preset = PRESETS.includes(body.preset) ? body.preset : 'auto'
+    const mode = CHAT_MODES.has(body.mode) ? body.mode : 'chat'
+    const route = await routeChatTurn({ preset, body, existing, config, mode, text: String(body.text || '').slice(0, 4000), attachments: Math.max(0, Number(body.attachments) || 0) })
+    if (!route) return send(res, 200, { route: null })
+    const choice = await resolveChatModel(route.provider, route.cursorModel || route.model, route.effort, config)
+    // The catalog's name ("Claude Sonnet 5.5"), not the wire id. Cursor's spec
+    // carries its speed in brackets; the catalog lists the bare model.
+    const id = String(choice.label || '').split('[')[0]
+    const catalog = await listChatModels(route.provider).catch(() => null)
+    const row = (catalog?.models || []).find((m) => m.id === id || m.id === choice.label)
+    const fast = /fast=true/.test(choice.label || '')
+    const modelName = row ? `${row.name}${driverOf(route.provider) === 'cursor' && fast && !/fast/i.test(row.name) ? ' Fast' : ''}` : id
+    return send(res, 200, { route: { ...route, driver: driverOf(route.provider), providerName: providerLabel(route.provider), modelName, effort: choice.effort || route.effort } })
+  }
+  if (req.method === 'POST' && path === '/api/chat/icons/backfill') return send(res, 200, await backfillChatIcons())
+  if (req.method === 'POST' && path === '/api/chat/presence') {
+    const { deviceId, threadId, viewing } = await readJsonBody(req)
+    if (typeof deviceId === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(deviceId)) setPresence(deviceId, validThreadId(threadId) ? threadId : null, viewing === true)
+    return send(res, 200, { ok: true })
+  }
+  if (req.method === 'POST' && path === '/api/chat/stop') {
+    const { threadId } = await readJsonBody(req)
+    return send(res, 200, { ok: chatRuns.stop(threadId) })
+  }
+  if (req.method === 'POST' && path === '/api/chat/uploads') {
+    const q = new URL(req.url, 'http://x').searchParams
+    const buffer = await readRawBody(req, chatUploads.maxBytes)
+    const kind = q.get('kind') === 'text' ? 'text' : undefined
+    return send(res, 201, await chatUploads.save({ buffer, name: q.get('name') || '', mime: q.get('mime') || req.headers['content-type'] || '', kind }))
+  }
+  if (req.method === 'DELETE' && path.startsWith('/api/chat/uploads/')) {
+    const id = path.slice('/api/chat/uploads/'.length)
+    // Only an attachment nobody sent yet: a sent one belongs to its thread.
+    const threads = await threadStore.list()
+    const used = threads.some((t) => t.messages.some((m) => (m.attachments || []).some((a) => a.id === id)))
+    if (!used) await chatUploads.remove(id)
+    return send(res, 200, { ok: !used })
+  }
+  if (req.method === 'POST' && path === '/api/chat/transcribe') {
+    // Dictation and voice mode: a few seconds of audio, transcribed on the box by
+    // the same whisper.cpp the voice journal uses.
+    const buffer = await readRawBody(req, 25 * 1024 * 1024)
+    const mime = String(req.headers['content-type'] || 'audio/webm')
+    const ext = /mp4|m4a|aac/.test(mime) ? 'm4a' : /ogg/.test(mime) ? 'ogg' : /wav/.test(mime) ? 'wav' : 'webm'
+    const work = await mkdtemp(join(tmpdir(), 'totem-dictation-'))
+    try {
+      const audioFile = join(work, `clip.${ext}`)
+      await writeFile(audioFile, buffer)
+      const out = await journalTranscriber.transcribe({ audioFile, prompt: ['Totem', OWNER_NAME].filter(Boolean).join(', ') + '.' })
+      return send(res, 200, { text: (out.text || '').trim(), ms: out.ms, durationSec: out.durationSec })
+    } catch (e) {
+      const empty = /empty/i.test(String(e?.message))
+      return send(res, empty ? 200 : 500, empty ? { text: '', empty: true } : { error: String(e?.message || e) })
+    } finally {
+      await rm(work, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+  if (req.method === 'GET' && path === '/api/chat/settings') return send(res, 200, { settings: chatSettings })
+  if (req.method === 'PUT' && path === '/api/chat/settings') {
+    const body = await readJsonBody(req)
+    const next = normalizeChatSettings({ ...chatSettings, ...body, instant: { ...chatSettings.instant, ...(body.instant || {}) }, thinking: { ...chatSettings.thinking, ...(body.thinking || {}) }, titles: { ...chatSettings.titles, ...(body.titles || {}) } })
+    // A Claude model can only be chosen on a Claude account (never Codex).
+    for (const lane of ['instant', 'thinking', 'titles']) {
+      if (next[lane].provider && !(await readProviderConfig()).enabledProviders.includes(next[lane].provider)) next[lane].provider = ''
+      if (next[lane].provider && driverOf(next[lane].provider) === 'codex' && next[lane].model && !CODEX_MODEL_ID.test(next[lane].model)) next[lane].model = ''
+    }
+    chatSettings = next
+    await mkdir(dirname(CHAT_SETTINGS_FILE), { recursive: true })
+    await writeFile(CHAT_SETTINGS_FILE, JSON.stringify(next, null, 2))
+    return send(res, 200, { settings: next })
+  }
+  if (req.method === 'GET' && path === '/api/chat/capabilities') return send(res, 200, await chatCapabilities())
+  if (req.method === 'POST' && path === '/api/chat/capabilities/probe') {
+    const config = await readProviderConfig()
+    const cache = await readChatCapsCache()
+    cache.computerUse = cache.computerUse || {}
+    for (const id of config.enabledProviders.filter((p) => driverOf(p) === 'codex')) {
+      try { cache.computerUse[id] = await probeComputerUse(id) }
+      catch (e) { cache.computerUse[id] = { available: false, reason: String(e?.message || e), platform: process.platform, checkedAt: new Date().toISOString() } }
+    }
+    await mkdir(dirname(CHAT_CAPS_FILE), { recursive: true })
+    await writeFile(CHAT_CAPS_FILE, JSON.stringify(cache, null, 2))
+    return send(res, 200, await chatCapabilities())
+  }
+  return false
+}
+
+// ---------------------------------------------------------------------------
+// Voice — ChatGPT-grade voice over OpenAI's Realtime API (chat/voice.mjs).
+// Off until OPENAI_API_KEY is set; the local whisper.cpp voice mode stays as the
+// free fallback. Settings (engine/model/voice) live in data/voice-settings.json.
+// ---------------------------------------------------------------------------
+const VOICE_SETTINGS_FILE = join(HERE, 'data', 'voice-settings.json')
+const VOICE_MODELS = [
+  { id: 'gpt-realtime-2.1-mini', name: 'Realtime mini', note: 'About 2-10¢ a conversation' },
+  { id: 'gpt-realtime-2.1', name: 'Realtime', note: 'About 3× the cost; better at long, tricky requests' },
+]
+let voiceSettings = { engine: 'auto', model: '', voice: '' }
+readFile(VOICE_SETTINGS_FILE, 'utf8').then((raw) => { voiceSettings = { ...voiceSettings, ...JSON.parse(raw) } }).catch(() => {})
+
+const voiceService = createVoiceService({
+  apiKey: () => process.env.OPENAI_API_KEY || '',
+  model: () => voiceSettings.model || process.env.VOICE_REALTIME_MODEL || 'gpt-realtime-2.1-mini',
+  voice: () => voiceSettings.voice || process.env.VOICE_REALTIME_VOICE || 'marin',
+  usageFile: join(HERE, 'data', 'voice-usage.jsonl'),
+  log,
+})
+
+// The card a voice tool call gets in the saved thread: totem_get_tasks reads as
+// "Looked up tasks · Tasks", like the same call made by an agent CLI.
+function voiceToolCard(name, args) {
+  if (name === 'ask_totem_agent') return { kind: 'agent', title: 'Asked the agent', detail: truncate(String(args?.request || ''), 300) }
+  const bare = String(name).replace(/^totem_/, '')
+  const server = /strava/.test(bare) ? 'strava' : (bare.split('_').pop() || '').replace(/s?$/, 's').replace(/ss$/, 's')
+  const card = describeMcpCall({ name: bare, server: '' })
+  return { ...card, server: ['tasks', 'goals', 'lists', 'calendars', 'habits', 'strava'].includes(server) ? server.replace('calendars', 'calendar') : '' }
+}
+
+async function voiceInstructions(threadId) {
+  let recent = ''
+  if (threadId) {
+    const t = await threadStore.get(threadId).catch(() => null)
+    if (t?.messages?.length) recent = renderTranscript(t.messages.slice(-14), { budget: 6000, heading: 'This chat so far (you are continuing it by voice):' })
+  }
+  return `${VOICE_INSTRUCTIONS}\n\n${temporalContext()}\n\n${recent}`.trim()
+}
+
+async function handleVoiceApi(req, res, path) {
+  if (req.method === 'GET' && path === '/api/voice/status') {
+    const transcription = await journalTranscriber.status().catch(() => ({ ready: false }))
+    return send(res, 200, {
+      realtime: { configured: voiceService.configured(), model: voiceSettings.model || process.env.VOICE_REALTIME_MODEL || 'gpt-realtime-2.1-mini', voice: voiceSettings.voice || 'marin', voices: voiceService.voices, models: VOICE_MODELS },
+      local: { ready: !!transcription.ready },
+      settings: voiceSettings,
+      spend: await voiceService.spend(),
+    })
+  }
+  if (req.method === 'PUT' && path === '/api/voice/settings') {
+    const body = await readJsonBody(req)
+    const next = { ...voiceSettings }
+    if (['auto', 'realtime', 'local'].includes(body.engine)) next.engine = body.engine
+    if (body.model === '' || VOICE_MODELS.some((m) => m.id === body.model)) next.model = body.model
+    if (body.voice === '' || voiceService.voices.includes(body.voice)) next.voice = body.voice
+    voiceSettings = next
+    await mkdir(dirname(VOICE_SETTINGS_FILE), { recursive: true })
+    await writeFile(VOICE_SETTINGS_FILE, JSON.stringify(next, null, 2))
+    return send(res, 200, { settings: next })
+  }
+  if (req.method === 'POST' && path === '/api/voice/session') {
+    if (!voiceService.configured()) return send(res, 503, { error: 'Realtime voice needs OPENAI_API_KEY in .env' })
+    const { threadId } = await readJsonBody(req)
+    const minted = await voiceService.mint()
+    const model = voiceSettings.model || process.env.VOICE_REALTIME_MODEL || 'gpt-realtime-2.1-mini'
+    return send(res, 200, {
+      ...minted,
+      model,
+      session: {
+        type: 'realtime',
+        instructions: await voiceInstructions(validThreadId(threadId) ? threadId : null),
+        tools: realtimeTools(mcpToolDescriptors()),
+        tool_choice: 'auto',
+        audio: {
+          input: { transcription: { model: 'gpt-4o-mini-transcribe' }, turn_detection: { type: 'semantic_vad' } },
+        },
+      },
+    })
+  }
+  if (req.method === 'POST' && path === '/api/voice/tool') {
+    const { name, arguments: rawArgs } = await readJsonBody(req)
+    let args = {}
+    try { args = typeof rawArgs === 'string' ? JSON.parse(rawArgs || '{}') : (rawArgs || {}) } catch { return send(res, 200, { ok: false, output: JSON.stringify({ error: 'arguments were not valid JSON' }) }) }
+    const startedAt = Date.now()
+    try {
+      let payload
+      if (name === 'ask_totem_agent') {
+        payload = { reply: await runAgent(String(args.request || ''), 'http', { timeoutMs: 5 * 60_000 }) }
+      } else {
+        const tool = MCP_TOOL_INDEX.get(name)
+        if (!tool) return send(res, 200, { ok: false, output: JSON.stringify({ error: `no tool named ${name}` }) })
+        payload = await tool.handler(args, { id: null, client: 'Totem voice' })
+        logMcpMutation({ name, args, session: { id: null, client: 'Totem voice' }, startedAt, payload })
+      }
+      recordUse('web', { text: `voice: ${name}`, startedAt, ok: true, tool: name, agentless: name !== 'ask_totem_agent' })
+      const output = JSON.stringify(payload)
+      return send(res, 200, { ok: true, output: output.length > 12_000 ? `${output.slice(0, 12_000)}…(truncated)` : output, card: voiceToolCard(name, args) })
+    } catch (e) {
+      recordUse('web', { text: `voice: ${name}`, startedAt, ok: false, tool: name })
+      return send(res, 200, { ok: false, output: JSON.stringify({ error: String(e?.message || e) }), card: voiceToolCard(name, args) })
+    }
+  }
+  if (req.method === 'POST' && path === '/api/voice/turns') {
+    // A finished exchange, saved as ordinary chat messages so a spoken
+    // conversation is a normal thread afterwards.
+    const { threadId, kind, turns, usage, model, diag } = await readJsonBody(req)
+    // Call quality from the browser's WebRTC stats: if the voice popped, this
+    // says whether packets were lost (network) or not (local playback).
+    if (diag && typeof diag === 'object') log('voice call stats', JSON.stringify(diag).slice(0, 300))
+    if (!validThreadId(threadId) || !Array.isArray(turns) || !turns.length) return send(res, 400, { error: 'missing threadId or turns' })
+    const now = Date.now()
+    const cost = await voiceService.recordUsage({ threadId, usage, model })
+    const thread = await threadStore.update(threadId, (t) => {
+      for (const turn of turns.slice(0, 20)) {
+        const text = String(turn?.text || '').trim()
+        if (turn?.role === 'user') {
+          if (text) t.messages.push({ id: randomUUID(), role: 'user', content: text, createdAt: now, voice: true })
+          continue
+        }
+        const parts = []
+        for (const tool of (Array.isArray(turn?.tools) ? turn.tools : []).slice(0, 20)) {
+          const card = tool?.card || voiceToolCard(tool?.name, {})
+          parts.push({ type: 'tool', id: randomUUID(), ...card, status: tool?.ok === false ? 'error' : 'done', output: truncate(String(tool?.output || ''), 6000), startedAt: now, endedAt: now })
+        }
+        if (text) parts.push({ type: 'text', text })
+        if (parts.length) t.messages.push({ id: randomUUID(), role: 'assistant', content: text, parts, status: 'done', provider: 'openai-realtime', model: model || '', createdAt: now })
+      }
+      if (!t.title) t.title = fallbackTitle(turns.find((x) => x?.role === 'user')?.text || 'Voice chat')
+      t.updatedAt = now
+    }, { create: { id: threadId, kind: kind === 'temporary' ? 'temporary' : 'regular', createdAt: now, updatedAt: now, ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
+    return send(res, 200, { ok: true, cost, thread: signThread(thread) })
+  }
+  return false
+}
+
+// Unattached drafts' files, swept daily.
+setInterval(async () => {
+  try {
+    const referenced = new Set()
+    for (const t of await threadStore.list()) {
+      for (const m of t.messages) {
+        for (const a of m.attachments || []) referenced.add(a.id)
+        for (const p of m.parts || []) if (p.type === 'image' || p.type === 'file') referenced.add(p.uploadId)
+      }
+    }
+    await chatUploads.sweepOrphans({ referenced })
+  } catch (e) { log('chat upload sweep failed', e?.message || e) }
+}, 6 * 60 * 60_000).unref?.()
 
 // ---------------------------------------------------------------------------
 // Usage tab — live-ish coding-assistant usage + subscription facts.
@@ -11085,6 +12287,7 @@ const server = http.createServer(async (req, res) => {
   if (req.url.split('?')[0] === '/mcp') {
     return handleMcpRequest(req, res)
   }
+  if (req.url.split('?')[0] === '/agent-mcp') return handleAgentMcp(req, res)
 
   // Gateway OAuth callback — hit by the provider's browser redirect, so it can't
   // carry the bearer; the unguessable `state` (looked up in completeGatewayOAuth)
@@ -11146,6 +12349,26 @@ const server = http.createServer(async (req, res) => {
   // see the header of notify/http.mjs.
   if (pushHttpHandler && PUSH_PUBLIC_PATHS.includes(req.url.split('?')[0])) {
     if (await pushHttpHandler(req, res, new URL(req.url, 'http://x'))) return
+  }
+
+  // Chat attachments are read by <img> tags, which cannot send a bearer token, so
+  // this one route authorises itself with a per-file signature (chat/uploads.mjs).
+  // A signed-in session or the bearer header also works, for fetch()-based downloads.
+  if (req.method === 'GET' && req.url.startsWith('/api/chat/uploads/')) {
+    const u = new URL(req.url, 'http://x')
+    const id = u.pathname.slice('/api/chat/uploads/'.length)
+    if (!chatUploads.verify(id, u.searchParams.get('sig') || '') && !authorized(req)) return send(res, 401, { error: 'unauthorized' })
+    const file = await chatUploads.read(id)
+    if (!file) return send(res, 404, { error: 'not found' })
+    const inline = /^(image\/|text\/plain|application\/pdf)/.test(file.meta.mime)
+    res.writeHead(200, {
+      'content-type': file.meta.mime,
+      'content-length': file.buffer.length,
+      'cache-control': 'private, max-age=31536000, immutable',
+      'content-disposition': `${inline && !u.searchParams.has('download') ? 'inline' : 'attachment'}; filename="${file.meta.name.replace(/"/g, '')}"`,
+      'x-content-type-options': 'nosniff',
+    })
+    return res.end(file.buffer)
   }
 
   // Sign-in routes: status, one-time setup, login, logout, change password.
@@ -11824,8 +13047,13 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && path === '/api/approvals/revoke') {
         return send(res, 200, await approvalController.revokeSession(await readJsonBody(req)))
       }
-      if (req.method === 'POST' && path === '/api/chat') {
-        return handleWebChat(req, res)
+      if (path === '/api/chat' || path.startsWith('/api/chat/')) {
+        const handled = await handleChatApi(req, res, path)
+        if (handled !== false) return
+      }
+      if (path.startsWith('/api/voice/')) {
+        const handled = await handleVoiceApi(req, res, path)
+        if (handled !== false) return
       }
       // Cross-device chat history.
       if (req.method === 'GET' && path === '/api/threads') {
@@ -11849,6 +13077,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 404, { error: 'not found' })
     } catch (e) {
       log('api error', path, e)
+      // A thrown error may carry its own status (413 too large, 404, 409 busy).
       const status = Number(e?.status) >= 400 && Number(e?.status) < 500 ? Number(e.status) : 500
       if (res.headersSent) return res.end()
       return send(res, status, { error: String(e.message || e) })
@@ -12033,6 +13262,11 @@ const JOB_RUNNER_DEFS = {
     detail: 'Checks releases, world news, Hacker News and the channels he follows. Roundups land at their own hour; everything else is queued as it is found. No prompt, so nothing to edit.',
     agentless: true,
   },
+  'timex-collab-watch': {
+    label: 'Timex collab watch',
+    detail: 'Scans news for Timex collaborations daily; notifies on new drops and sends a Sunday summary of the week\'s checks.',
+    agentless: true,
+  },
   digest: {
     label: 'Notification digest',
     detail: 'Collects the day\u2019s facts, words them with the daily-digest skill, and schedules them across the day.',
@@ -12201,6 +13435,16 @@ const SEED_JOB_DEFS = {
     // Through the waking day, not overnight: the point is to hear about a release
     // while it is still news, and nothing here is worth a 4am check.
     schedule: { type: 'window', from: '07:00', to: '22:00', everyMinutes: 120 },
+  },
+  'timex-collab-watch': {
+    name: 'Timex collab watch',
+    description: 'Scan for Timex collaboration announcements; push when something new drops, plus a weekly check summary on Sundays.',
+    iconName: 'clock',
+    action: 'Check Timex collabs and queue alerts for new ones',
+    requires: [],
+    runner: 'timex-collab-watch',
+    enabled: isTruthyFlag(process.env.TIMEX_COLLAB_WATCH_ENABLED),
+    schedule: { type: 'daily', time: '09:00' },
   },
   'evening-digest': {
     name: 'Evening digest',
@@ -12626,6 +13870,55 @@ async function readFeedState() {
   }
 }
 
+const TIMEX_COLLAB_STATE_FILE =
+  process.env.TIMEX_COLLAB_STATE_FILE || join(HERE, 'data', 'timex-collab-watch-state.json')
+
+async function readTimexCollabState() {
+  try {
+    const parsed = JSON.parse(await readFile(TIMEX_COLLAB_STATE_FILE, 'utf8'))
+    return parsed && typeof parsed === 'object' ? parsed : emptyTimexCollabState()
+  } catch {
+    return emptyTimexCollabState()
+  }
+}
+
+async function runTimexCollabWatch({ now = Date.now() } = {}) {
+  const state = await readTimexCollabState()
+  const { notifications, weekly, next, newCount, candidateCount, queryErrors, bootstrapped } = await scanTimexCollabs({
+    state,
+    now,
+    tz: MORNING_BRIEFING_TZ,
+    log,
+  })
+
+  let queued = 0
+  for (const n of notifications) {
+    const { deduped } = await notifyStore.enqueue({
+      ...n,
+      revalidate: null,
+      source: { kind: 'timex-collab-watch', id: n.factKind },
+    })
+    if (!deduped) queued += 1
+  }
+  if (weekly) {
+    const { deduped } = await notifyStore.enqueue({
+      ...weekly,
+      revalidate: null,
+      source: { kind: 'timex-collab-watch', id: weekly.factKind },
+    })
+    if (!deduped) queued += 1
+  }
+
+  await writeFile(TIMEX_COLLAB_STATE_FILE, JSON.stringify(next, null, 2))
+
+  const errBit = queryErrors.length ? `; ${queryErrors.length} query error(s)` : ''
+  const bootBit = bootstrapped ? `; bootstrapped ${bootstrapped} existing headline(s) (no alerts)` : ''
+  return {
+    output: `${candidateCount} collab headline(s) seen, ${newCount} new, ${queued} notification(s) queued${bootBit}${errBit}`,
+    status: queryErrors.length && !candidateCount ? 'degraded' : 'ok',
+  }
+}
+
 // ---- releases you can actually act on -------------------------------------
 // A release notification that only names a version leaves the work to later,
 // which usually means never. For the two tools this box runs, a release it is
@@ -12849,10 +14142,13 @@ const JOB_RUNNERS = {
   }),
   'whoop-sleep': async () => {
     const result = await syncWhoopSleep()
-    const summary = `${result.updated.length} night(s) written, ${result.skipped.length} already logged`
+    const revisedText = result.revised.map((r) => `${r.date} ${r.was}→${r.score ?? '—'}`).join(', ')
+    const summary = `${result.updated.length} night(s) written, ${result.revised.length} revised by WHOOP`
+      + `${revisedText ? ` (${revisedText})` : ''}, ${result.skipped.length} unchanged`
     // Nothing to write isn't a failure — it usually means the nights were already
     // filled in. Reported as skipped so a quiet run doesn't read as a broken one.
-    return { output: summary, channel: 'whoop-sleep', status: result.updated.length ? 'ok' : 'skipped', agentless: true }
+    const wrote = result.updated.length + result.revised.length
+    return { output: summary, channel: 'whoop-sleep', status: wrote ? 'ok' : 'skipped', agentless: true }
   },
   // The pull itself already happened, as root, from udev. This is only the
   // reporting half: drain the spool the sync left behind, look at what's still
@@ -12947,6 +14243,10 @@ const JOB_RUNNERS = {
   'feed-scan': async () => {
     const result = await runFeedScan({ now: Date.now() })
     return { output: result.output, channel: 'digest', status: result.status, agentless: true }
+  },
+  'timex-collab-watch': async () => {
+    const result = await runTimexCollabWatch({ now: Date.now() })
+    return { output: result.output, channel: 'timex-collab-watch', status: result.status, agentless: true }
   },
   digest: async ({ job, today }) => {
     const result = await runNotificationDigest({
@@ -13189,6 +14489,9 @@ async function drainNotifications(now) {
 skillStore.seed()
   .catch((e) => log(`skill seeding failed: ${e?.message || e}`))
   .finally(() => {
+    // A second, throwaway bridge (a smoke test on another port) must not also run
+    // every job and drain the push queue alongside the real service.
+    if (process.env.BRIDGE_NO_SCHEDULER === '1') return log('job scheduler disabled (BRIDGE_NO_SCHEDULER=1)')
     setInterval(jobTick, JOB_TICK_MS)
     jobTick()
   })

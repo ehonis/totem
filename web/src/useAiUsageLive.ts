@@ -11,7 +11,7 @@
  * as web chat: Bearer header, read the body, reconnect with backoff.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AuthError, getAiUsage, getSecret } from './api'
+import { AuthError, getAiUsage, authHeaders } from './api'
 
 export type AiUsageSnapshot = {
   ok?: boolean
@@ -65,7 +65,7 @@ async function connect() {
   abort = new AbortController()
   try {
     const response = await fetch('/api/ai-usage/stream', {
-      headers: { Authorization: `Bearer ${getSecret()}`, accept: 'text/event-stream' },
+      headers: authHeaders({ accept: 'text/event-stream' }),
       signal: abort.signal,
     })
     if (response.status === 401) {

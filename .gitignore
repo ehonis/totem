@@ -28,6 +28,8 @@ data/
 __pycache__/
 *.pyc
 
+# Smart Turn model, fetched by scripts/install-smart-turn.sh
+web/public/models/*.onnx
 # Owner-only agent notes (deployment-specific, never published)
 AGENTS.local.md
 CLAUDE.local.md

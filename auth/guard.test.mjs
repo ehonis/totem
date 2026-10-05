@@ -79,7 +79,7 @@ test('bridge applies the guard to the auth routes, the API gate, /ask, /morning-
 
 test('bridge rejects non-object JSON bodies and survives stray rejections', () => {
   const bridge = readFileSync(join(import.meta.dirname, '..', 'bridge.mjs'), 'utf8')
-  const start = bridge.indexOf('function readJsonBody(req)')
+  const start = bridge.indexOf('function readJsonBody(req')
   const body = bridge.slice(start, bridge.indexOf('\n}\n', start))
   assert.match(body, /parsed === null \|\| typeof parsed !== 'object'/)
   assert.match(body, /status: 400/)

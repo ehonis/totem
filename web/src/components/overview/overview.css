@@ -1,0 +1,322 @@
+/* ==========================================================================
+   Overview (home). The chat's visual language — dark surfaces, 1px lines,
+   16px radii, Tabler glyphs — applied to a calm read of the day. Namespaced
+   ovx-* so it neither leaks out nor collides with the old ov-* board rules.
+   ========================================================================== */
+
+.ovx {
+  --ovx-text: color-mix(in srgb, var(--text) 94%, transparent);
+  --ovx-soft: color-mix(in srgb, var(--text) 62%, transparent);
+  --ovx-faint: color-mix(in srgb, var(--text) 40%, transparent);
+  --ovx-surface: #171a22;
+  --ovx-raise: #1f2330;
+  --ovx-line: #2a2f3c;
+  --ovx-bar: color-mix(in srgb, var(--text) 70%, transparent);
+  height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--bg); color: var(--ovx-text);
+}
+.ovx .ti { display: block; flex: none; }
+.ovx button { font: inherit; color: inherit; }
+.ovx-inner {
+  max-width: 1080px; margin: 0 auto;
+  padding: 36px 32px 120px; /* clears the floating utilities launcher */
+  display: flex; flex-direction: column; gap: 20px;
+}
+
+/* --- greeting ------------------------------------------------------------ */
+.ovx-head { display: flex; align-items: flex-start; gap: 12px; }
+.ovx-head-text { flex: 1; min-width: 0; }
+.ovx-head h1 { margin: 0; font-size: 28px; line-height: 1.2; font-weight: 600; letter-spacing: -0.015em; color: var(--text); }
+.ovx-head p { margin: 6px 0 0; font-size: 15px; color: var(--ovx-soft); }
+.ovx-head-sum { color: var(--ovx-faint); }
+.ovx-refresh { margin-top: 2px; }
+.ovx-refresh.spin .ti { animation: ovx-spin .8s linear infinite; }
+@keyframes ovx-spin { to { transform: rotate(360deg); } }
+
+.ovx-icon-btn {
+  display: inline-grid; place-items: center; flex: none;
+  width: 34px; height: 34px; border-radius: 10px;
+  background: none; border: 0; color: var(--ovx-faint); cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.ovx-icon-btn:hover { background: var(--ovx-raise); color: var(--text); }
+.ovx-icon-btn.on { color: var(--ovx-soft); }
+
+/* --- ask ------------------------------------------------------------------ */
+.ovx-ask {
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 8px 8px 8px 18px; border-radius: 26px;
+  background: var(--ovx-surface); border: 1px solid var(--ovx-line);
+  transition: border-color .15s, background .15s;
+}
+.ovx-ask:focus-within { border-color: #3a4152; background: #191c25; }
+.ovx-ask textarea {
+  flex: 1; min-width: 0; resize: none; border: 0; outline: 0; background: none;
+  color: var(--text); font: inherit; font-size: 16px; line-height: 24px;
+  padding: 8px 0; max-height: 140px;
+}
+.ovx-ask textarea::placeholder { color: var(--ovx-faint); }
+.ovx-ask-send {
+  display: grid; place-items: center; flex: none;
+  width: 40px; height: 40px; border-radius: 50%; border: 0; cursor: pointer;
+  background: var(--text); color: #0f1115 !important;
+  transition: opacity .15s, transform .1s;
+}
+.ovx-ask-send:disabled { opacity: .18; cursor: default; }
+.ovx-ask-send:active:not(:disabled) { transform: scale(.94); }
+
+/* --- needs you ------------------------------------------------------------- */
+.ovx-attn {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--ovx-line); border-radius: 16px; overflow: hidden;
+  background: var(--ovx-surface);
+}
+.ovx-attn-row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  min-height: 48px; padding: 10px 12px 10px 14px;
+  background: none; border: 0; text-align: left; cursor: pointer; font-size: 14px;
+}
+.ovx-attn-row + .ovx-attn-row { border-top: 1px solid var(--ovx-line); }
+.ovx-attn-row:hover { background: var(--ovx-raise); }
+.ovx-attn-ico {
+  display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 8px;
+}
+.ovx-attn-row.info .ovx-attn-ico { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.ovx-attn-row.warn .ovx-attn-ico { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+.ovx-attn-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ovx-soft); }
+.ovx-attn-text b { color: var(--text); font-weight: 600; }
+.ovx-attn-sub { color: var(--ovx-faint); }
+.ovx-attn-go { color: var(--ovx-faint); }
+
+/* --- apps ------------------------------------------------------------------ */
+.ovx-apps {
+  display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 4px;
+}
+.ovx-app {
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 10px 2px 8px; border-radius: 14px; border: 0; background: none; cursor: pointer;
+  transition: background .12s;
+}
+.ovx-app:hover { background: var(--ovx-surface); }
+.ovx-app-ico {
+  display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px;
+  background: var(--ovx-surface); border: 1px solid var(--ovx-line); color: var(--ovx-soft);
+  transition: color .12s, border-color .12s;
+}
+.ovx-app:hover .ovx-app-ico { color: var(--text); border-color: #384055; }
+.ovx-app-label { font-size: 12.5px; color: var(--ovx-soft); white-space: nowrap; }
+
+/* --- cards ----------------------------------------------------------------- */
+.ovx-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.ovx-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.ovx-card {
+  background: var(--ovx-surface); border: 1px solid var(--ovx-line); border-radius: 18px;
+  padding: 14px 16px 12px; min-width: 0;
+}
+.ovx-card-head { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; min-height: 28px; }
+.ovx-card-head h2 { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
+.ovx-card-meta { font-size: 13px; color: var(--ovx-faint); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ovx-link {
+  margin-left: auto; margin-right: -6px; flex: none;
+  display: inline-flex; align-items: center; gap: 2px;
+  height: 28px; padding: 0 6px 0 10px; border-radius: 8px;
+  background: none; border: 0; cursor: pointer; font-size: 13px; color: var(--ovx-soft) !important;
+}
+.ovx-link:hover { background: var(--ovx-raise); color: var(--text) !important; }
+
+.ovx-quiet { font-size: 14px; color: var(--ovx-faint); padding: 6px 0 8px; }
+.ovx-failed { display: flex; align-items: center; gap: 8px; color: var(--amber); }
+.ovx-subhead { font-size: 13px; color: var(--ovx-faint); padding: 12px 0 4px; }
+.ovx-subhead.first { padding-top: 2px; }
+.ovx-more {
+  align-self: flex-start; margin-top: 4px; padding: 6px 0; border: 0; background: none; cursor: pointer;
+  font-size: 13px; color: var(--ovx-soft) !important;
+}
+.ovx-more:hover { color: var(--text) !important; }
+
+.ovx-skel { display: flex; flex-direction: column; gap: 10px; padding: 6px 0 10px; }
+.ovx-skel span { height: 12px; border-radius: 6px; background: var(--ovx-raise); animation: ovx-pulse 1.4s ease-in-out infinite; }
+.ovx-skel span:nth-child(2) { width: 78%; }
+.ovx-skel span:nth-child(3) { width: 56%; }
+@keyframes ovx-pulse { 50% { opacity: .45; } }
+
+/* --- schedule -------------------------------------------------------------- */
+.ovx-events { display: flex; flex-direction: column; }
+.ovx-allday { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
+.ovx-chip {
+  font-size: 12.5px; padding: 3px 10px; border-radius: 999px;
+  background: var(--ovx-raise); color: var(--ovx-soft); max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ovx-event {
+  display: flex; align-items: stretch; gap: 12px; width: 100%;
+  margin: 0 -8px; padding: 8px; width: calc(100% + 16px);
+  border: 0; border-radius: 10px; background: none; text-align: left; cursor: pointer;
+}
+.ovx-event:hover { background: var(--ovx-raise); }
+.ovx-event-time {
+  flex: none; width: 64px; padding-top: 1px;
+  font-size: 13.5px; color: var(--ovx-soft); font-variant-numeric: tabular-nums;
+}
+.ovx-event-rule { flex: none; width: 3px; border-radius: 2px; background: var(--accent); opacity: .85; }
+.ovx-event-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ovx-event-title { font-size: 14.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovx-event-sub { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--ovx-faint); }
+.ovx-event-loc { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovx-now { color: var(--green); }
+.ovx-event.past .ovx-event-title, .ovx-event.past .ovx-event-time { color: var(--ovx-faint); }
+.ovx-event.past .ovx-event-rule { opacity: .3; }
+.ovx-event.later .ovx-event-title { color: var(--ovx-soft); }
+.ovx-event.later .ovx-event-rule { opacity: .4; }
+
+/* --- tasks ----------------------------------------------------------------- */
+.ovx-tasks { display: flex; flex-direction: column; }
+.ovx-task { display: flex; align-items: center; gap: 4px; min-height: 42px; }
+.ovx-task + .ovx-task { border-top: 1px solid color-mix(in srgb, var(--ovx-line) 70%, transparent); }
+.ovx-check {
+  --c: var(--ovx-faint);
+  display: grid; place-items: center; flex: none;
+  width: 34px; height: 34px; margin-left: -8px; border: 0; background: none; cursor: pointer; padding: 0;
+}
+.ovx-check::before {
+  content: ''; grid-area: 1 / 1; width: 18px; height: 18px; border-radius: 50%;
+  border: 1.5px solid var(--c); transition: background .12s;
+}
+.ovx-check .ti { grid-area: 1 / 1; color: var(--bg); opacity: 0; transition: opacity .12s; }
+.ovx-check:hover::before { background: color-mix(in srgb, var(--c) 22%, transparent); }
+.ovx-check:hover .ti { opacity: 1; color: var(--c); }
+.ovx-check.p1 { --c: var(--red); }
+.ovx-check.p2 { --c: var(--amber); }
+.ovx-check.p3 { --c: var(--accent); }
+.ovx-task-open {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+  padding: 9px 0; border: 0; background: none; text-align: left; cursor: pointer;
+}
+.ovx-task-title { flex: 1; min-width: 0; font-size: 14.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovx-task-open:hover .ovx-task-title { text-decoration: underline; text-decoration-color: var(--ovx-faint); text-underline-offset: 3px; }
+.ovx-due { flex: none; font-size: 12.5px; color: var(--ovx-faint); font-variant-numeric: tabular-nums; }
+.ovx-due.today { color: var(--ovx-soft); }
+.ovx-due.late, .ovx-overdue { color: #ff8095; }
+
+/* --- habits ---------------------------------------------------------------- */
+.ovx-habits { display: flex; flex-direction: column; }
+.ovx-habit { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 0; }
+.ovx-habit + .ovx-habit { border-top: 1px solid color-mix(in srgb, var(--ovx-line) 70%, transparent); }
+.ovx-habit-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ovx-habit-main { flex: 1; min-width: 0; }
+.ovx-habit-name { font-size: 14.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovx-habit.done .ovx-habit-name { color: var(--ovx-soft); }
+.ovx-habit-note { font-size: 12.5px; color: var(--ovx-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovx-habit .habit-check { width: 34px; height: 34px; border-color: #394052; background: transparent; }
+.ovx-habit .habit-check:hover:not(.on):not(:disabled) { border-color: var(--ovx-soft); }
+.ovx-habit .ovx-icon-btn { width: 32px; height: 32px; }
+.ovx-stepper { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.ovx-stepper button {
+  display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px;
+  border: 1px solid var(--ovx-line); background: none; cursor: pointer; color: var(--ovx-soft);
+}
+.ovx-stepper button:hover:not(:disabled) { background: var(--ovx-raise); color: var(--text); }
+.ovx-stepper button:disabled { opacity: .35; cursor: default; }
+.ovx-stepper > span { min-width: 34px; text-align: center; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ovx-stepper small { color: var(--ovx-faint); font-weight: 400; }
+
+/* --- goals ----------------------------------------------------------------- */
+.ovx-goals { display: flex; flex-direction: column; }
+.ovx-goal-group { display: flex; flex-direction: column; }
+.ovx-goal {
+  display: flex; flex-direction: column; gap: 6px;
+  margin: 0 -8px; padding: 9px 8px; border: 0; border-radius: 10px;
+  background: none; text-align: left; cursor: pointer;
+}
+.ovx-goal:hover { background: var(--ovx-raise); }
+.ovx-goal-top { display: flex; align-items: baseline; gap: 10px; }
+.ovx-goal-title { flex: 1; min-width: 0; font-size: 14.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovx-goal-pct { flex: none; font-size: 13px; color: var(--ovx-soft); font-variant-numeric: tabular-nums; }
+.ovx-goal.done .ovx-goal-pct { color: var(--green); }
+.ovx-goal-sub { font-size: 12.5px; color: var(--ovx-faint); }
+.ovx-empty-action { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ovx-pill-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px 0 10px;
+  border-radius: 999px; border: 1px solid var(--ovx-line); background: var(--ovx-raise); cursor: pointer;
+  font-size: 13px; color: var(--text) !important;
+}
+.ovx-pill-btn:hover { background: #262b39; }
+
+.ovx-bar { display: block; height: 4px; border-radius: 2px; background: var(--ovx-raise); overflow: hidden; flex: 1; min-width: 0; }
+.ovx-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--ovx-bar); transition: width .3s; }
+
+/* --- pinned graphs --------------------------------------------------------- */
+.ovx-pinned { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); gap: 16px; }
+
+/* The chart names itself in the card header; drop its own repeated label. */
+.ovx-metric .habit-metric-head { display: none; }
+.ovx-metric .habit-metric { padding: 0; border: 0; background: none; }
+
+/* --- system strip ---------------------------------------------------------- */
+.ovx-system { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 16px; }
+.ovx-sys {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  padding: 14px 16px; border-radius: 18px; text-align: left; cursor: pointer;
+  background: none; border: 1px solid var(--ovx-line);
+  transition: background .12s;
+}
+.ovx-sys:hover { background: var(--ovx-surface); }
+.ovx-sys-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--ovx-soft); }
+.ovx-sys-head .ti { color: var(--ovx-faint); }
+.ovx-sys-value { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.ovx-sys-value small { font-size: 13px; font-weight: 400; color: var(--ovx-soft); }
+.ovx-sys-sub { display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ovx-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovx-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ovx-dot.good { background: var(--green); }
+.ovx-dot.bad { background: var(--red); }
+
+.ovx-quota { display: flex; flex-direction: column; gap: 9px; padding-top: 2px; }
+.ovx-quota-row { display: flex; align-items: center; gap: 9px; font-size: 13.5px; }
+.ovx-quota-name { width: 64px; flex: none; color: var(--ovx-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovx-quota-pct { width: 36px; flex: none; text-align: right; color: var(--ovx-soft); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.ovx-quota-pct.muted { color: var(--ovx-faint); }
+
+.ovx-spark { display: flex; align-items: flex-end; gap: 3px; height: 28px; }
+.ovx-spark-col { flex: 1; height: 100%; display: flex; flex-direction: column-reverse; gap: 1px; min-width: 0; }
+.ovx-spark-col > span { display: block; border-radius: 2px; min-height: 0; }
+.ovx-spark-col .a { background: color-mix(in srgb, var(--text) 28%, transparent); }
+.ovx-spark-col .w { background: var(--green); opacity: .75; }
+.ovx-key { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-left: 2px; }
+.ovx-key.a { background: color-mix(in srgb, var(--text) 28%, transparent); margin-left: 0; }
+.ovx-key.w { background: var(--green); opacity: .75; margin-left: 6px; }
+
+/* --- responsive ------------------------------------------------------------ */
+@media (max-width: 980px) {
+  .ovx-apps { grid-template-columns: repeat(6, minmax(0, 1fr)); row-gap: 6px; }
+  .ovx-system { grid-template-columns: 1fr 1fr; }
+  .ovx-system > :first-child { grid-column: 1 / -1; }
+}
+@media (max-width: 820px) {
+  .ovx-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .ovx-inner {
+    padding: 12px 16px 0;
+    /* Clear the round "new chat" button in the bottom-right corner. */
+    padding-bottom: calc(var(--dock-clear, 14px) + 96px);
+    gap: 16px;
+  }
+  .ovx-head h1 { font-size: 24px; }
+  .ovx-head p { font-size: 14px; margin-top: 4px; }
+  .ovx-head-sum { display: block; }
+  .ovx-sep { display: none; }
+  /* A sideways strip of apps, like a dock, instead of two rows pushing the day down. */
+  .ovx-apps {
+    display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none;
+    margin: 0 -16px; padding: 0 12px; scroll-padding: 0 12px;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 24px), transparent);
+            mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 24px), transparent);
+  }
+  .ovx-apps::-webkit-scrollbar { display: none; }
+  .ovx-app { flex: none; width: 68px; padding: 6px 0; }
+  .ovx-app:hover { background: none; }
+  .ovx-card { padding: 12px 14px 10px; border-radius: 16px; }
+  .ovx-system { grid-template-columns: 1fr; gap: 12px; }
+  .ovx-system > :first-child { grid-column: auto; }
+  .ovx-sys { border-radius: 16px; }
+}
