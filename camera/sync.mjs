@@ -22,6 +22,7 @@ import { dirname, join, relative } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { isEntry } from '../scripts/is-entry.mjs'
 
 import { EXIF_HEAD_BYTES, exifDateFromBuffer, partsFromMtime } from './exif.mjs'
 import { stagingDir, stateDir } from './paths.mjs'
@@ -411,7 +412,7 @@ async function main() {
 }
 
 // Importable for tests, executable from udev.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntry(import.meta.url)) {
   main()
 }
 

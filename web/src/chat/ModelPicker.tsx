@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useChat, ensureModels, providerById, toggleFavorite } from './store'
 import { defaultSettingsFor, normalizeModelSettings, visibleModels } from './models'
 import type { ModelRow, ModelSettings, Preset } from './types'
-import { TI, ProviderLogo, useDismiss } from './ui'
+import { TI, ProviderLogo, useDismiss, usePopoverPlacement } from './ui'
 import { IconChevronDown, IconChevronRight, IconSearch, IconSparkles, IconBolt, IconBrain } from './icons'
 import { StarIcon, StarSolidIcon, Hi } from '../icons'
 
@@ -63,6 +63,9 @@ export default function ModelPicker({ provider, settings, onChange, locked = fal
   const defaultProvider = useChat((s) => s.defaultProvider)
   const defaultModel = useChat((s) => s.defaultModel)
   useDismiss(open, ref, useCallback(() => setOpen(false), []))
+  // Up from the chip when there is room; down (or shorter) when the composer sits
+  // high on the page, as on an empty chat or a project's home.
+  const placement = usePopoverPlacement(open, ref, { width: 560, height: 440, offsetX: -46 })
   const manual = settings.preset === 'manual'
   // Once a chat has started it stays on its account. Auto/Instant/Thinking stay
   // available (they now choose between that account's own models), and so do
@@ -188,7 +191,7 @@ export default function ModelPicker({ provider, settings, onChange, locked = fal
         {!compact && <TI icon={IconChevronDown} size={14} className="vc-chip-caret" />}
       </button>
       {open && (
-        <div className="vc-picker-pop" role="dialog" aria-label="Choose a model" onKeyDown={onKeyDown}>
+        <div className="vc-picker-pop" style={placement} role="dialog" aria-label="Choose a model" onKeyDown={onKeyDown}>
           <nav className="vc-picker-rail" aria-label="Sources">
             <button type="button" className={tab === 'favorites' && !term ? 'on' : ''} onClick={() => { setTab('favorites'); setQ('') }} title="Favourites" aria-label="Favourites">
               <Hi icon={StarSolidIcon} size={20} />

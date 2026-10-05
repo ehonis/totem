@@ -203,6 +203,23 @@ next `preview_open` starts a fresh one.
 
 Images load without a referrer; a broken one removes itself.
 
+## Files and memory
+
+Two standing rules ride every chat turn (`extras` in `chatPrompt`, so resumed sessions
+get them too):
+
+- **Files are opt-in** (`filesRule`). The agent answers in the chat; plans, summaries
+  and write-ups are replies, not `.md` files. It saves a file to the chat's outputs
+  folder (shown as a card) only when the owner asks for one, or when the deliverable only
+  works as a file: something visual or interactive, a downloadable table, a long document
+  meant to be kept.
+- **Memory is eager** (`CHAT_MEMORY_RULES`). Without being asked, the agent records
+  durable things the turn reveals (preferences, facts, decisions, finished work,
+  corrections) as short dated notes in the memory repo, or in the project memory when
+  only that project needs them. It ends the reply with one "Noted in memory: …" line so
+  a wrong guess is easy to correct. Writes to memory and project memory are never
+  snapshotted as file cards (`collectArtifacts`).
+
 ## Mac mini
 
 Computer use only exists where Codex has a signed-in desktop to drive. Once
@@ -241,8 +258,9 @@ conclusions reach the next.
   (`POST /api/chat` with `projectId`); afterwards only `PUT /api/threads/:id {projectId}`
   moves it, and a chat moved in brings its attachments and documents into the files.
 - **Claude needs explicit write paths.** A `claude -p` run cannot ask for permission, so
-  the chat passes `--allowedTools Edit(…)/Write(…)` for exactly the chat's outputs folder
-  and the project's `memory.md` (`allowWrite` in `spawnClaudeStream`). Without it the
+  the chat passes `--allowedTools Edit(…)/Write(…)` for exactly the chat's outputs folder,
+  the owner's memory repo (`MEMORY_ROOT`) and the project's `memory.md` (`allowWrite` in
+  `spawnClaudeStream`). Without it the
   memory write is refused and Haiku still tells the owner it saved the note.
 - **Removing a file** drops it from the project; the bytes go only when no chat message
   still shows it. **Deleting a project** deletes its files, instructions and memory (and

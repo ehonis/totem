@@ -27,9 +27,9 @@ import { spawn } from 'node:child_process'
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { fileURLToPath } from 'node:url'
+import { isEntry } from './scripts/is-entry.mjs'
 
 import { createActionLog } from './logs/store.mjs'
 import { createTodoCommands } from './todos/commands.mjs'
@@ -710,5 +710,4 @@ async function main() {
 
 // Only serve when run as a script. bridge.mjs imports Gateway to expose the same
 // downstreams over its own /mcp endpoint, and an import must not seize stdio.
-const isEntry = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-if (isEntry) main().catch((e) => { logErr('fatal:', e.message || e); process.exit(1) })
+if (isEntry(import.meta.url)) main().catch((e) => { logErr('fatal:', e.message || e); process.exit(1) })

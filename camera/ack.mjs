@@ -12,6 +12,7 @@
 import { mkdir, rename, stat, appendFile } from 'node:fs/promises'
 import { dirname, join, normalize, relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isEntry } from '../scripts/is-entry.mjs'
 import { stagingDir, archiveDir, stateDir } from './paths.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -80,7 +81,7 @@ async function main() {
 }
 
 // Importable for tests, executable over ssh.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntry(import.meta.url)) {
   main()
 }
 

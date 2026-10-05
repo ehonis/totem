@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from '../scripts/is-entry.mjs';
 
 import { createActionLog } from '../logs/store.mjs';
 import {
@@ -164,8 +165,7 @@ export async function runTodoCli(argv, { stdout = process.stdout } = {}) {
   return result;
 }
 
-const isEntry = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isEntry) {
+if (isEntry(import.meta.url)) {
   runTodoCli(process.argv.slice(2)).catch(error => {
     process.stderr.write(`todos CLI: ${error.message}\n`);
     process.exitCode = 1;
