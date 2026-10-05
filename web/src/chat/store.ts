@@ -758,7 +758,9 @@ export function send(input: SendInput): string {
   upsertThread({ ...thread, messages: [...thread.messages, userMessage, assistant], updatedAt: t0 })
   const args: SendArgs = {
     threadId, text: input.text, attachments: (input.attachments || []).map((a) => a.id), provider,
-    model: kind === 'temporary' && settings.preset === 'manual' ? null : wire.model, effort: wire.effort, kind,
+    // The bridge keeps this model only when the turn runs on `provider`; a
+    // temporary chat held to the default account drops it there.
+    model: wire.model, effort: wire.effort, kind,
     modelSettings: settings, mode: input.mode || 'chat', voice: input.voice, preset: wire.preset, level: wire.level,
     ...(wire.power ? { power: wire.power } : {}),
     ...(input.browser ? { browser: true } : {}),

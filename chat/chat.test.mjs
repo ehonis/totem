@@ -161,7 +161,7 @@ test('stop aborts the run and reports stopped', async () => {
   assert.equal(runs.get('t').status, 'stopped')
 })
 
-import { pickRoute, wantsThinking } from './route.mjs'
+import { manualModelFor, pickRoute, wantsThinking } from './route.mjs'
 
 const ACCOUNTS = [
   { id: 'cursor', driver: 'cursor', state: 'ready', isDefault: true },
@@ -283,4 +283,13 @@ test("Auto's power dial picks the model and effort together, and a chat keeps it
   // A chosen power wins over the message, and a started chat stays on its account.
   const max = pickRoute({ preset: 'auto', text: 'hi', accounts, power: 5, lockTo: 'claude' })
   assert.deepEqual([max.provider, max.model, max.effort, max.powerAuto], ['claude', 'claude-opus-5-5', 'max', false])
+})
+
+test('a hand-picked model only runs on the account it was picked on', () => {
+  // Same account: kept.
+  assert.deepEqual(manualModelFor({ requested: 'codex', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high' }), { model: 'gpt-6.1-sol', effort: 'high' })
+  // A temporary chat held to the default account: a Codex model means nothing on Cursor.
+  assert.deepEqual(manualModelFor({ requested: 'codex', provider: 'cursor', model: 'gpt-6.1-sol', effort: 'high' }), { model: null, effort: null })
+  // A request that names no account keeps its model, as before.
+  assert.deepEqual(manualModelFor({ requested: '', provider: 'cursor', model: 'composer-2.5', effort: null }), { model: 'composer-2.5', effort: null })
 })

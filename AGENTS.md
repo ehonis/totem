@@ -208,7 +208,10 @@ row counts, ids and foreign keys, and run it twice.
   separately and merged by numeric issue id. Only a 404 marks a link missing.
 - **Claude quota polling uses Claude Code's credentials.** `ai-usage/providers/claude.mjs`
   refreshes the stored Claude Code login with the client id built into Claude Code and writes the
-  rotated token back to its credentials file. Cursor polling calls Cursor's private,
+  rotated token back to wherever it read it: the credentials file on Linux, or on macOS the
+  `Claude Code-credentials` login-Keychain item (`ai-usage/keychain.mjs`; default home only, the
+  Keychain is only unlocked in the desktop session, and values go to `security` on stdin, never
+  argv). Cursor reads `cursor-access-token` the same way on macOS. Cursor polling calls Cursor's private,
   undocumented usage endpoint. Both are off on fresh installs and recorded once in
   `data/ai-usage.json` (`ensureUsageOptIns`); a poller added later inherits the recorded
   decision rather than re-judging whether the install is new.
