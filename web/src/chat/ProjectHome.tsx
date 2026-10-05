@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   useChat, loadProject, updateProject, saveProjectMemory, addProjectFiles, removeProjectFiles, deleteProject, openArtifact,
-  setActive, threadTitle, threadChoice, groupThreads,
+  setActive, threadTitle, threadChoice, groupThreads, openProject, foldersOf, moveMemoryUp, moveFilesUp,
 } from './store'
+import { memoryEntries } from './memoryEntries'
 import { uploadFile } from './api'
 import { ARTIFACT_PREVIEWABLE, artifactIcon } from './ArtifactPanel'
 import ModelPicker from './ModelPicker'
@@ -12,7 +13,7 @@ import { THREAD_ICONS } from './threadIcons.gen'
 import { normalizeModelSettings } from './models'
 import type { Project, ProjectFile } from './types'
 import { TI, formatBytes } from './ui'
-import { IconUpload, IconTrash, IconExternalLink, IconPaperclip } from './icons'
+import { IconUpload, IconTrash, IconExternalLink, IconPaperclip, IconFolderUp, IconChevronRight } from './icons'
 import { pushError, pushToast } from '../toast'
 
 // A project's own page: what shows in the chat pane when a project is open and
@@ -41,12 +42,33 @@ function when(ts: number) {
 function ChatsTab({ project }: { project: Project }) {
   const threads = useChat((s) => s.threads)
   const runs = useChat((s) => s.runs)
+  const all = useChat((s) => s.projects)
+  const folders = useMemo(() => foldersOf(all, project.id), [all, project.id])
   const mine = useMemo(() => threads.filter((t) => t.projectId === project.id && t.messages.length), [threads, project.id])
+  const folderRows = folders.length > 0 && (
+    <div>
+      <div className="vc-proj-group">Folders</div>
+      {folders.map((f) => (
+        <button key={f.id} type="button" className="vc-proj-chat" onClick={() => openProject(f.id)}>
+          <ProjectIcon p={f} size={17} />
+          <span className="vc-proj-chat-text"><span className="vc-proj-chat-title">{f.name}</span></span>
+          <span className="vc-proj-chat-when">{f.chatCount} chat{f.chatCount === 1 ? '' : 's'}</span>
+          <TI icon={IconChevronRight} size={15} />
+        </button>
+      ))}
+    </div>
+  )
   if (!mine.length) {
-    return <p className="vc-proj-blank">No chats yet. Ask something above and it starts here, with this project’s files, instructions and memory.</p>
+    return (
+      <div className="vc-proj-chats">
+        {folderRows}
+        <p className="vc-proj-blank">No chats yet. Ask something above and it starts here, with this {project.parentId ? 'folder' : 'project'}’s files, instructions and memory.</p>
+      </div>
+    )
   }
   return (
     <div className="vc-proj-chats">
+      {folderRows}
       {groupThreads(mine).map((g) => (
         <div key={g.label}>
           <div className="vc-proj-group">{g.label}</div>
@@ -56,7 +78,10 @@ function ChatsTab({ project }: { project: Project }) {
               <button key={t.id} type="button" className="vc-proj-chat" onClick={() => setActive(t.id)}>
                 <ThreadIcon t={t} size={17} />
                 <span className="vc-proj-chat-text">
-                  <span className="vc-proj-chat-title">{threadTitle(t)}{runs[t.id] && <span className="vc-live-dot" aria-label="Answering" />}</span>
+                  <span className="vc-proj-chat-title">
+                    {threadTitle(t)}
+                    {runs[t.id] ? <span className="vc-live-dot" aria-label="Answering" /> : t.needsReply && <span className="vc-reply-dot" aria-label="Waiting on you" />}
+                  </span>
                   {last && <span className="vc-proj-chat-sub">{last.content.replace(/[#*_`>|[\]()!]/g, '').replace(/\s+/g, ' ').slice(0, 140)}</span>}
                 </span>
                 <span className="vc-proj-chat-when">{when(t.updatedAt)}</span>
@@ -71,6 +96,7 @@ function ChatsTab({ project }: { project: Project }) {
 
 function FilesTab({ project, maxUploadBytes }: { project: Project; maxUploadBytes?: number }) {
   const threads = useChat((s) => s.threads)
+  const parent = useChat((s) => (project.parentId ? s.projects.find((p) => p.id === project.parentId) : undefined))
   const [filter, setFilter] = useState<SourceFilter>('all')
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [uploading, setUploading] = useState<{ name: string; progress: number }[]>([])
@@ -106,6 +132,15 @@ function FilesTab({ project, maxUploadBytes }: { project: Project; maxUploadByte
     pushToast(ids.length === 1 ? 'Removed the file from the project' : `Removed ${ids.length} files from the project`, 'info')
   }
 
+  async function moveUp(ids: string[]) {
+    if (!parent || !ids.length) return
+    try {
+      const n = await moveFilesUp(project.id, ids)
+      setPicked(new Set())
+      pushToast(`Moved ${n === 1 ? 'the file' : `${n} files`} to ${parent.name}`, 'info')
+    } catch (e: any) { pushError(`Couldn't move the files: ${e.message}`) }
+  }
+
   function open(f: ProjectFile) {
     if (ARTIFACT_PREVIEWABLE.test(f.mime) || f.kind === 'image') openArtifact({ uploadId: f.id, name: f.name, mime: f.mime, url: f.url, size: f.size })
     else if (f.url) window.open(f.url, '_blank', 'noopener')
@@ -135,6 +170,7 @@ function FilesTab({ project, maxUploadBytes }: { project: Project; maxUploadByte
         {picked.size > 0 ? (
           <>
             <button type="button" className="vc-btn sm ghost" onClick={() => setPicked(new Set())}>Clear</button>
+            {parent && <button type="button" className="vc-btn sm" onClick={() => moveUp([...picked])} title={`Share with all of ${parent.name}`}><TI icon={IconFolderUp} size={15} />Move {picked.size} to {parent.name}</button>}
             <button type="button" className="vc-btn sm danger" onClick={() => remove([...picked])}><TI icon={IconTrash} size={15} />Remove {picked.size}</button>
           </>
         ) : (
@@ -153,7 +189,7 @@ function FilesTab({ project, maxUploadBytes }: { project: Project; maxUploadByte
       {!files.length && !uploading.length && (
         <button type="button" className="vc-proj-drop" onClick={() => input.current?.click()}>
           <TI icon={IconUpload} size={22} />
-          <strong>Add files to share with every chat in this project</strong>
+          <strong>Add files to share with every chat in this {project.parentId ? 'folder' : 'project'}</strong>
           <span>Drop them here or click to choose. Files you attach in a project chat, and documents Totem makes in one, show up here too.</span>
         </button>
       )}
@@ -228,20 +264,92 @@ function TextTab({ value, onSave, placeholder, intro, rows = 14, extra }: {
   )
 }
 
+/** A folder's memory entries with checkboxes, moved up into the parent project's memory. */
+function MoveMemoryUp({ project, parent, onDone }: { project: Project; parent: Project; onDone: () => void }) {
+  const entries = useMemo(() => memoryEntries(project.memory || ''), [project.memory])
+  const [picked, setPicked] = useState<Set<number>>(new Set())
+  const [moving, setMoving] = useState(false)
+  const toggle = (i: number) => setPicked((p) => { const n = new Set(p); n.has(i) ? n.delete(i) : n.add(i); return n })
+  async function move() {
+    setMoving(true)
+    try {
+      const n = await moveMemoryUp(project.id, entries.filter((_, i) => picked.has(i)).map((e) => e.text))
+      pushToast(`Moved ${n === 1 ? 'one entry' : `${n} entries`} to ${parent.name}`, 'info')
+      onDone()
+    } catch (e: any) { pushError(`Couldn't move the entries: ${e.message}`) } finally { setMoving(false) }
+  }
+  return (
+    <div className="vc-proj-text">
+      <p className="vc-proj-intro">Pick what the rest of {parent.name} should know. It moves into {parent.name}’s memory, under the same heading, and leaves this folder’s.</p>
+      <div className="vc-mem-pick">
+        {!entries.length && <p className="vc-proj-blank">This folder’s memory is empty.</p>}
+        {entries.map((e, i) => (
+          <React.Fragment key={i}>
+            {e.heading && e.heading !== entries[i - 1]?.heading && <div className="vc-proj-group">{e.heading.replace(/^#+\s*/, '')}</div>}
+            <label className={`vc-mem-entry ${picked.has(i) ? 'picked' : ''}`}>
+              <input type="checkbox" checked={picked.has(i)} onChange={() => toggle(i)} />
+              <span>{e.text.replace(/^\s?([-*+]|\d+[.)])\s/, '')}</span>
+            </label>
+          </React.Fragment>
+        ))}
+      </div>
+      <div className="vc-proj-text-bar">
+        <span className="vc-proj-spacer" />
+        <button type="button" className="vc-btn sm ghost" onClick={onDone}>Cancel</button>
+        <button type="button" className="vc-btn sm primary" disabled={!picked.size || moving} onClick={move}>
+          <TI icon={IconFolderUp} size={15} />{moving ? 'Moving…' : picked.size ? `Move ${picked.size} to ${parent.name}` : `Move to ${parent.name}`}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function MemoryTab({ project }: { project: Project }) {
+  const parent = useChat((s) => (project.parentId ? s.projects.find((p) => p.id === project.parentId) : undefined))
+  const [picking, setPicking] = useState(false)
+  if (picking && parent) return <MoveMemoryUp project={project} parent={parent} onDone={() => setPicking(false)} />
+  const saved = project.memory || ''
+  return (
+    <TextTab
+      value={saved}
+      onSave={(v) => saveProjectMemory(project.id, v)}
+      placeholder={`Nothing yet. As you chat, Totem notes decisions, facts and preferences here for the ${parent ? 'folder' : 'project'}’s other chats.`}
+      intro={parent
+        ? <>Totem keeps these notes for this folder’s chats only. They also read {parent.name}’s memory but never write to it. To share something with the whole project, use “Move to {parent.name}”.</>
+        : 'Totem keeps these notes up to date as you work, so what one chat settles, the next one already knows. Edit or delete anything that’s wrong.'}
+      rows={16}
+      extra={(draft, set) => (
+        <>
+          {draft ? <button type="button" className="vc-btn sm ghost" onClick={() => set('')}>Clear all</button> : null}
+          {parent && saved && (
+            <button type="button" className="vc-btn sm" disabled={draft !== saved} title={draft !== saved ? 'Save or discard your edit first' : undefined} onClick={() => setPicking(true)}>
+              <TI icon={IconFolderUp} size={15} />Move to {parent.name}…
+            </button>
+          )}
+        </>
+      )}
+    />
+  )
+}
+
 function SettingsTab({ project }: { project: Project }) {
   const [name, setName] = useState(project.name)
   useEffect(() => setName(project.name), [project.name])
   const choice = threadChoice(null, { provider: project.provider, modelSettings: project.modelSettings })
   const settings = normalizeModelSettings(project.modelSettings || choice.settings)
 
+  const parent = useChat((s) => (project.parentId ? s.projects.find((p) => p.id === project.parentId) : undefined))
+  const folderCount = useChat((s) => foldersOf(s.projects, project.id).length)
+  const where = parent ? parent.name : 'Home'
   async function remove() {
     const chats = project.chatCount
-    const ok = window.confirm(`Delete “${project.name}”?\n\nIts ${project.fileCount} file${project.fileCount === 1 ? '' : 's'}, instructions and memory are deleted.${chats ? ` Its ${chats} chat${chats === 1 ? '' : 's'} move to Home.` : ''}`)
+    const folders = folderCount ? ` Its ${folderCount} folder${folderCount === 1 ? ' is' : 's are'} deleted the same way, and their chats move to Home.` : ''
+    const ok = window.confirm(`Delete “${project.name}”?\n\nIts ${project.fileCount} file${project.fileCount === 1 ? '' : 's'}, instructions and memory are deleted.${chats ? ` Its ${chats} chat${chats === 1 ? '' : 's'} move to ${where}.` : ''}${folders}`)
     if (!ok) return
     try {
       const moved = await deleteProject(project.id)
-      pushToast(`Deleted ${project.name}${moved ? `; ${moved} chat${moved === 1 ? '' : 's'} moved to Home` : ''}`, 'info')
-    } catch (e: any) { pushError(`Couldn't delete the project: ${e.message}`) }
+      pushToast(`Deleted ${project.name}${moved ? `; ${moved} chat${moved === 1 ? '' : 's'} moved to ${where}` : ''}`, 'info')
+    } catch (e: any) { pushError(`Couldn't delete it: ${e.message}`) }
   }
 
   return (
@@ -268,9 +376,9 @@ function SettingsTab({ project }: { project: Project }) {
         </div>
       </div>
       <div className="vc-proj-field">
-        <span>Delete project</span>
-        <p className="vc-proj-hint">Deletes the project’s files, instructions and memory. Its chats are kept and move to Home.</p>
-        <div><button type="button" className="vc-btn sm danger" onClick={remove}><TI icon={IconTrash} size={15} />Delete project</button></div>
+        <span>Delete {parent ? 'folder' : 'project'}</span>
+        <p className="vc-proj-hint">Deletes the {parent ? 'folder' : 'project'}’s files, instructions and memory{folderCount ? ', and its folders' : ''}. Its chats are kept and move to {where}.{parent ? ` To keep a file or a note, move it to ${parent.name} first.` : ''}</p>
+        <div><button type="button" className="vc-btn sm danger" onClick={remove}><TI icon={IconTrash} size={15} />Delete {parent ? 'folder' : 'project'}</button></div>
       </div>
     </div>
   )
@@ -282,13 +390,20 @@ export default function ProjectHome({ projectId, composer, maxUploadBytes }: { p
   const [tab, setTab] = useState<Tab>('chats')
   useEffect(() => { loadProject(projectId) }, [projectId])
   useEffect(() => setTab('chats'), [projectId])
+  const parent = useChat((s) => (summary?.parentId ? s.projects.find((p) => p.id === summary.parentId) : undefined))
   const project = detail || (summary ? { ...summary, files: undefined } : null)
   if (!project) return <div className="vc-proj-page"><p className="vc-proj-blank">Loading the project…</p></div>
 
   return (
     <div className="vc-proj-page">
       <div className="vc-proj-hero">
+        {parent && (
+          <button type="button" className="vc-proj-crumb" onClick={() => openProject(parent.id)}>
+            <ProjectIcon p={parent} size={15} /><span>{parent.name}</span><TI icon={IconChevronRight} size={13} />
+          </button>
+        )}
         <h1><ProjectIcon p={project} size={26} />{project.name}</h1>
+        {parent && <p className="vc-proj-sub">A folder in {parent.name}. Its chats read {parent.name}’s instructions, memory and files, but what they learn stays here.</p>}
         <div className="vc-proj-composer">{composer}</div>
       </div>
       <div className="vc-proj-tabs" role="tablist">
@@ -308,22 +423,13 @@ export default function ProjectHome({ projectId, composer, maxUploadBytes }: { p
             value={project.instructions || ''}
             onSave={(v) => updateProject(project.id, { instructions: v })}
             placeholder="e.g. This is my day job at a logistics company. Answer like a senior colleague: short, concrete, no hedging. Use British spelling."
-            intro="Every chat in this project follows these. Say who it’s for, what you’re working on, and how you want answers."
+            intro={parent
+              ? `Every chat in this folder follows these, on top of ${parent.name}’s instructions.`
+              : 'Every chat in this project follows these. Say who it’s for, what you’re working on, and how you want answers.'}
             rows={10}
           />
         )}
-        {tab === 'memory' && (
-          detail
-            ? <TextTab
-                value={detail.memory || ''}
-                onSave={(v) => saveProjectMemory(project.id, v)}
-                placeholder="Nothing yet. As you chat, Totem notes decisions, facts and preferences here for the project’s other chats."
-                intro="Totem keeps these notes up to date as you work, so what one chat settles, the next one already knows. Edit or delete anything that’s wrong."
-                rows={16}
-                extra={(draft, set) => draft ? <button type="button" className="vc-btn sm ghost" onClick={() => set('')}>Clear all</button> : null}
-              />
-            : <p className="vc-proj-blank">Loading memory…</p>
-        )}
+        {tab === 'memory' && (detail ? <MemoryTab project={detail} /> : <p className="vc-proj-blank">Loading memory…</p>)}
         {tab === 'settings' && <SettingsTab project={project} />}
       </div>
     </div>

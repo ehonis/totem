@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createProjectStore, MEMORY_MAX } from './projects.mjs'
+import { createProjectStore, MEMORY_MAX, memoryEntries, moveMemoryEntries } from './projects.mjs'
 import { createThreadStore } from './store.mjs'
 import { projectBlock } from './turn.mjs'
 
@@ -94,4 +94,69 @@ test('projectBlock lists instructions, memory with its path, and files with path
   assert.doesNotMatch(block, /gone\.png/, 'a file whose upload is gone is not offered')
   assert.equal(projectBlock(null), '')
   assert.match(projectBlock({ name: 'Empty' }, { memoryPath: '/m.md' }), /\(empty so far\)/)
+})
+
+test('a folder records its parent; a project cannot be its own parent', async () => {
+  const dir = await tmp()
+  const store = createProjectStore({ dir })
+  const work = await store.create({ name: 'Work' })
+  const folder = await store.create({ name: 'Hiring', parentId: work.id })
+  assert.equal(folder.parentId, work.id)
+  assert.equal((await store.patch(folder.id, { parentId: 'elsewhere' })).parentId, work.id, 'the parent is fixed at creation')
+  assert.equal((await store.update(work.id, (p) => { p.parentId = work.id })).parentId, undefined)
+  await rm(dir, { recursive: true, force: true })
+})
+
+test('memory entries are bullets with their indented lines, or paragraphs, under a heading', () => {
+  const text = 'Loose note\n\n## Decisions\n- use X\n  because Y\n* use Z\n1. numbered\n\n### Sub\nA paragraph\nthat wraps\n'
+  assert.deepEqual(memoryEntries(text).map((e) => [e.heading, e.text]), [
+    ['', 'Loose note'],
+    ['## Decisions', '- use X\n  because Y'],
+    ['## Decisions', '* use Z'],
+    ['## Decisions', '1. numbered'],
+    ['### Sub', 'A paragraph\nthat wraps'],
+  ])
+})
+
+test('moving memory entries up keeps their heading, merges into an existing one, and drops emptied headings', () => {
+  const folder = '## Decisions\n- use X\n  because Y\n- keep W\n\n## Facts\n- sky is blue\n'
+  const parent = 'Top note\n\n## Decisions\n- older call\n\n## People\n- Sam'
+  const r = moveMemoryEntries(folder, parent, ['- use X\n  because Y', '- sky is blue', '- not there'])
+  assert.equal(r.moved, 2)
+  assert.equal(r.from, '## Decisions\n- keep W')
+  assert.equal(r.to, 'Top note\n\n## Decisions\n- older call\n- use X\n  because Y\n\n## People\n- Sam\n\n## Facts\n- sky is blue')
+  assert.deepEqual(moveMemoryEntries('a', 'b', ['nope']), { from: 'a', to: 'b', moved: 0 })
+  assert.equal(moveMemoryEntries('- one', '', ['- one']).to, '- one')
+})
+
+test('a folder chat reads the parent read-only and keeps only the folder memory', () => {
+  const block = projectBlock(
+    { name: 'Hiring', instructions: 'Use the scorecard.' },
+    {
+      memory: '- shortlisted 3', memoryPath: '/p/hiring/memory.md', files: [],
+      parent: { project: { name: 'Work', instructions: 'Be terse.' }, memory: '- Q4 plan agreed', files: [{ name: 'plan.pdf', mime: 'application/pdf', size: 1024, path: '/u/plan.pdf' }] },
+    },
+  )
+  assert.match(block, /folder inside the owner's project "Work"/)
+  assert.match(block, /parent project "Work" \(follow them in this chat\):\nBe terse\./)
+  assert.match(block, /Parent project memory \(read-only[^)]*\):\n- Q4 plan agreed/)
+  assert.match(block, /plan\.pdf .*: \/u\/plan\.pdf/)
+  assert.match(block, /Folder instructions from the owner[^\n]*\nUse the scorecard\./)
+  assert.match(block, /Folder memory \(\/p\/hiring\/memory\.md\):\n- shortlisted 3/)
+  assert.doesNotMatch(block, /work\/memory\.md/i, 'the parent memory path is never offered for writing')
+})
+
+test('a thread keeps project-context-off and needs-reply flags, and clears them', async () => {
+  const dir = await tmp()
+  const threads = createThreadStore({ dir })
+  await threads.put('t1', { messages: [], projectId: 'p1', projectContextOff: true })
+  await threads.update('t1', (t) => { t.needsReply = true })
+  let t = await threads.get('t1')
+  assert.equal(t.projectContextOff, true)
+  assert.equal(t.needsReply, true)
+  await threads.put('t1', { projectContextOff: false, needsReply: false })
+  t = await threads.get('t1')
+  assert.equal(t.projectContextOff, undefined)
+  assert.equal(t.needsReply, undefined)
+  await rm(dir, { recursive: true, force: true })
 })

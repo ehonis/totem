@@ -86,33 +86,54 @@ export function attachmentBlock(files) {
 const PROJECT_MEMORY_PROMPT_LIMIT = 12_000
 const PROJECT_FILES_LISTED = 80
 
+function fileLines(files) {
+  const listed = files.filter((f) => f?.path).slice(-PROJECT_FILES_LISTED)
+  if (!listed.length) return ''
+  const lines = listed.map((f) => {
+    const kb = Math.max(1, Math.round((f.size || 0) / 1024))
+    const what = f.kind === 'image' ? 'image' : f.mime
+    return `- ${f.name} (${what}, ${kb} KB${f.source === 'agent' ? ', made by you in an earlier chat' : ''}): ${f.path}`
+  })
+  const more = files.length > listed.length ? `\n(${files.length - listed.length} older files not listed.)` : ''
+  return `${lines.join('\n')}${more}`
+}
+
+const clip = (mem) => (mem.length > PROJECT_MEMORY_PROMPT_LIMIT ? `${mem.slice(0, PROJECT_MEMORY_PROMPT_LIMIT)}\n…(truncated; the full file is at the path below)` : mem)
+
 /**
  * What a chat in a project knows about the project: its instructions, its
  * memory (and where to keep it), and every shared file with its path. Sent on
  * every turn, resumed or not, because files and memory change between turns.
  * `files` carry `path` resolved; ones whose upload has gone are left out.
+ *
+ * A folder's chat (`parent` given) reads the parent project's instructions,
+ * memory and files too, but keeps only the folder's memory: nothing it learns
+ * reaches the parent unless the owner moves it there.
  */
-export function projectBlock(project, { memory = '', memoryPath = '', files = [] } = {}) {
+export function projectBlock(project, { memory = '', memoryPath = '', files = [], parent = null } = {}) {
   if (!project) return ''
-  const out = [`PROJECT: This chat is part of the owner's project "${project.name}". The other chats in it share these instructions, this memory and these files.`]
-  const instructions = String(project.instructions || '').trim()
-  if (instructions) out.push(`Project instructions from the owner (follow them in this chat):\n${instructions}`)
-  const mem = String(memory || '').trim()
-  const memText = mem.length > PROJECT_MEMORY_PROMPT_LIMIT ? `${mem.slice(0, PROJECT_MEMORY_PROMPT_LIMIT)}\n…(truncated; the full file is at the path below)` : mem
-  out.push(
-    `Project memory (${memoryPath}):\n${memText || '(empty so far)'}\n` +
-    'Keep that file current with your file tools: when this chat settles a decision, learns a fact or preference the other chats in the project will need, or finishes something worth remembering, add a short dated bullet under a fitting heading, and correct anything that is no longer true. Keep it short; it is notes for the next chat, not a transcript. Do not tell the owner each time you update it.',
-  )
-  const listed = files.filter((f) => f?.path).slice(-PROJECT_FILES_LISTED)
-  if (listed.length) {
-    const lines = listed.map((f) => {
-      const kb = Math.max(1, Math.round((f.size || 0) / 1024))
-      const what = f.kind === 'image' ? 'image' : f.mime
-      return `- ${f.name} (${what}, ${kb} KB${f.source === 'agent' ? ', made by you in an earlier chat' : ''}): ${f.path}`
-    })
-    const more = files.length > listed.length ? `\n(${files.length - listed.length} older files not listed.)` : ''
-    out.push(`Project files, saved on this machine. Open the ones that matter to the request with your file tools; do not ask the owner to upload them again:\n${lines.join('\n')}${more}`)
+  const out = []
+  if (parent?.project) {
+    out.push(`PROJECT: This chat is in "${project.name}", a folder inside the owner's project "${parent.project.name}". The folder is a side topic: the other chats in it share its instructions, memory and files; the parent project's are shown for context and are read-only here.`)
+    const pi = String(parent.project.instructions || '').trim()
+    if (pi) out.push(`Instructions from the parent project "${parent.project.name}" (follow them in this chat):\n${pi}`)
+    const pm = String(parent.memory || '').trim()
+    if (pm) out.push(`Parent project memory (read-only; do not edit that file, and do not copy this folder's notes into it):\n${clip(pm)}`)
+    const pf = fileLines(parent.files || [])
+    if (pf) out.push(`Parent project files, saved on this machine. Open the ones that matter with your file tools:\n${pf}`)
+  } else {
+    out.push(`PROJECT: This chat is part of the owner's project "${project.name}". The other chats in it share these instructions, this memory and these files.`)
   }
+  const scope = parent?.project ? 'Folder' : 'Project'
+  const instructions = String(project.instructions || '').trim()
+  if (instructions) out.push(`${scope} instructions from the owner (follow them in this chat):\n${instructions}`)
+  const mem = String(memory || '').trim()
+  out.push(
+    `${scope} memory (${memoryPath}):\n${clip(mem) || '(empty so far)'}\n` +
+    `Keep that file current with your file tools: when this chat settles a decision, learns a fact or preference the other chats in the ${scope.toLowerCase()} will need, or finishes something worth remembering, add a short dated bullet under a fitting heading, and correct anything that is no longer true. Keep it short; it is notes for the next chat, not a transcript. Do not tell the owner each time you update it.`,
+  )
+  const own = fileLines(files)
+  if (own) out.push(`${scope} files, saved on this machine. Open the ones that matter to the request with your file tools; do not ask the owner to upload them again:\n${own}`)
   return `${out.join('\n\n')}\n\n`
 }
 

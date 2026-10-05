@@ -14,6 +14,12 @@
 // Chats do not read each other's transcripts; the memory is how one chat's
 // conclusions reach the next.
 //
+// Folders: a project may sit inside one top-level project (`parentId`; one level
+// only). A folder is a project in every other way, with its own instructions,
+// memory and files. Its chats also read the parent's, but write only to the
+// folder's, so a side topic never leaks into the main project. The owner moves
+// what should be shared up by hand: memory entries (moveMemoryEntries) and files.
+//
 // Layout: <dir>/<id>/project.json + <dir>/<id>/memory.md. The memory is a file,
 // not a field, because the agent edits it with its own file tools.
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -68,12 +74,76 @@ function normalizeProject(raw, id) {
   // One of chat/thread-icons.mjs's names.
   if (typeof raw?.icon === 'string' && /^[a-z0-9-]{1,40}$/.test(raw.icon)) out.icon = raw.icon
   if (typeof raw?.provider === 'string' && /^[a-z0-9_-]{1,80}$/i.test(raw.provider)) out.provider = raw.provider
+  if (validProjectId(raw?.parentId) && raw.parentId !== id) out.parentId = raw.parentId
   const ms = normalizeModelSettings(raw?.modelSettings)
   if (ms) out.modelSettings = ms
   return out
 }
 
 const EDITABLE = ['name', 'instructions', 'icon', 'provider', 'modelSettings']
+
+// A memory file as entries: each top-level bullet (with its indented lines) or
+// paragraph, under the heading it sits beneath. web/src/chat/memoryEntries.ts is
+// the browser's twin; keep the two in step.
+export function memoryEntries(text) {
+  const lines = String(text || '').split('\n')
+  const out = []
+  let heading = ''
+  let cur = null
+  const close = (end) => { if (cur) { cur.end = end; cur.text = lines.slice(cur.start, end).join('\n').trimEnd(); out.push(cur); cur = null } }
+  lines.forEach((line, i) => {
+    if (/^#{1,6}\s/.test(line)) { close(i); heading = line.trim(); return }
+    if (!line.trim()) { close(i); return }
+    const bullet = /^\s{0,1}([-*+]|\d+[.)])\s/.test(line)
+    if (cur && (!bullet || /^\s{2,}/.test(line))) return
+    close(i)
+    cur = { heading, start: i }
+  })
+  close(lines.length)
+  return out
+}
+
+/**
+ * Move entries (matched by their text) from one memory file's text to another's.
+ * An entry lands under the same heading in the target, which is made if missing;
+ * a heading left with nothing under it in the source goes. Returns both texts.
+ */
+export function moveMemoryEntries(fromText, toText, texts) {
+  const want = new Set((texts || []).map((t) => String(t).trimEnd()))
+  const picked = memoryEntries(fromText).filter((e) => want.has(e.text))
+  if (!picked.length) return { from: fromText, to: toText, moved: 0 }
+  const src = String(fromText || '').split('\n')
+  for (const e of [...picked].reverse()) src.splice(e.start, e.end - e.start)
+  // A heading this move emptied goes too (the next thing under it is another heading or the end).
+  const emptied = new Set(picked.map((e) => e.heading).filter(Boolean))
+  const kept = src.filter((line, i) => {
+    if (!emptied.has(line.trim())) return true
+    const next = src.slice(i + 1).find((l) => l.trim())
+    return !!next && !/^#{1,6}\s/.test(next)
+  })
+  const from = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+
+  const dst = String(toText || '').replace(/\s+$/, '').split('\n').filter((l, i, a) => a.length > 1 || l)
+  for (const heading of [...new Set(picked.map((e) => e.heading))]) {
+    const block = picked.filter((e) => e.heading === heading).map((e) => e.text)
+    const at = heading ? dst.findIndex((l) => l.trim() === heading) : -1
+    if (heading && at < 0) {
+      if (dst.length) dst.push('')
+      dst.push(heading, ...block)
+    } else if (!heading) {
+      // Unheaded entries go at the top, before the first heading.
+      const first = dst.findIndex((l) => /^#{1,6}\s/.test(l))
+      if (first < 0) dst.push(...block)
+      else dst.splice(first, 0, ...block, '')
+    } else {
+      let end = at + 1
+      while (end < dst.length && !/^#{1,6}\s/.test(dst[end])) end++
+      while (end > at + 1 && !dst[end - 1].trim()) end--
+      dst.splice(end, 0, ...block)
+    }
+  }
+  return { from, to: dst.join('\n').trim(), moved: picked.length }
+}
 
 export function createProjectStore({ dir } = {}) {
   if (!dir) throw new TypeError('createProjectStore requires dir')
@@ -124,7 +194,8 @@ export function createProjectStore({ dir } = {}) {
   async function create(body = {}) {
     const id = randomUUID().replace(/-/g, '').slice(0, 20)
     const now = Date.now()
-    const project = normalizeProject({ ...Object.fromEntries(EDITABLE.map((k) => [k, body[k]])), createdAt: now, updatedAt: now }, id)
+    // A folder's parent is fixed when it is made (the caller checks it is top-level).
+    const project = normalizeProject({ ...Object.fromEntries(EDITABLE.map((k) => [k, body[k]])), parentId: body.parentId, createdAt: now, updatedAt: now }, id)
     await rawWrite(project)
     await writeFile(memoryPath(id), '')
     return project

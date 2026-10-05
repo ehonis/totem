@@ -1,8 +1,9 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react'
-import { useChat, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread } from './store'
-import type { ChatThread } from './types'
+import { useChat, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread, markDone, setProjectContext } from './store'
+import type { ChatThread, Project } from './types'
 import { TI, useDismiss } from './ui'
-import { IconDots, IconPinned, IconPencil, IconTrash, IconSearch, IconX, IconCheck, IconSparkles, IconFolder, IconHome, IconChevronLeft } from './icons'
+import { IconDots, IconPinned, IconPencil, IconTrash, IconSearch, IconX, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconHome, IconChevronLeft, IconCircleCheck } from './icons'
+import { dragThreadProps } from './dnd'
 import ProjectIcon from './ProjectIcon'
 import { pushToast } from '../toast'
 import ThreadIcon from './ThreadIcon'
@@ -10,17 +11,20 @@ import ThreadIcon from './ThreadIcon'
 function MoveMenu({ t, onBack, onClose }: { t: ChatThread; onBack: () => void; onClose: () => void }) {
   const projects = useChat((s) => s.projects)
   const inProject = !!(t.projectId && projects.some((p) => p.id === t.projectId))
+  const move = (p: Project) => { onClose(); moveThread(t.id, p.id); pushToast(`Moved “${threadTitle(t)}” to ${p.name}`, 'info') }
+  // Each project with its folders under it.
+  const rows = projects.filter((p) => !p.parentId).flatMap((p) => [{ p, folder: false }, ...projects.filter((f) => f.parentId === p.id).map((f) => ({ p: f, folder: true }))])
   return (
     <>
-      <button type="button" role="menuitem" className="muted" onClick={onBack}><TI icon={IconChevronLeft} size={16} /><span>Move to project</span></button>
+      <button type="button" role="menuitem" className="muted" onClick={onBack}><TI icon={IconChevronLeft} size={16} /><span>Move to…</span></button>
       <div className="vc-menu-sep" />
       {inProject && (
         <button type="button" role="menuitem" onClick={() => { onClose(); moveThread(t.id, null); pushToast(`Moved “${threadTitle(t)}” to Home`, 'info') }}>
           <TI icon={IconHome} size={16} /><span>Home (no project)</span>
         </button>
       )}
-      {projects.filter((p) => p.id !== t.projectId).map((p) => (
-        <button key={p.id} type="button" role="menuitem" onClick={() => { onClose(); moveThread(t.id, p.id); pushToast(`Moved “${threadTitle(t)}” to ${p.name}`, 'info') }}>
+      {rows.map(({ p, folder }) => (
+        <button key={p.id} type="button" role="menuitem" className={folder ? 'vc-menu-indent' : ''} disabled={p.id === t.projectId} onClick={() => move(p)}>
           <ProjectIcon p={p} size={16} /><span>{p.name}</span>
         </button>
       ))}
@@ -32,6 +36,7 @@ function MoveMenu({ t, onBack, onClose }: { t: ChatThread; onBack: () => void; o
 function ThreadMenu({ t, onRename, onClose }: { t: ChatThread; onRename: () => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [moving, setMoving] = useState(false)
+  const inProject = useChat((s) => !!(t.projectId && s.projects.some((p) => p.id === t.projectId)))
   useDismiss(true, ref, onClose)
   if (moving) {
     return (
@@ -42,12 +47,20 @@ function ThreadMenu({ t, onRename, onClose }: { t: ChatThread; onRename: () => v
   }
   return (
     <div className="vc-menu vc-thread-menu" ref={ref} role="menu" onClick={(e) => e.stopPropagation()}>
+      {t.needsReply && (
+        <button type="button" role="menuitem" onClick={() => { onClose(); markDone(t.id) }}><TI icon={IconCircleCheck} size={16} /><span>Mark as done</span></button>
+      )}
       <button type="button" role="menuitem" onClick={() => { onClose(); onRename() }}><TI icon={IconPencil} size={16} /><span>Rename</span></button>
       {t.messages.some((m) => m.role === 'user') && (
         <button type="button" role="menuitem" onClick={() => { onClose(); regenerateTitle(t.id) }}><TI icon={IconSparkles} size={16} /><span>Regenerate title and icon</span></button>
       )}
       <button type="button" role="menuitem" onClick={() => { onClose(); setPinned(t.id, !t.pinned) }}><TI icon={IconPinned} size={16} /><span>{t.pinned ? 'Unpin' : 'Pin'}</span></button>
-      <button type="button" role="menuitem" onClick={() => setMoving(true)}><TI icon={IconFolder} size={16} /><span>Move to project</span></button>
+      <button type="button" role="menuitem" onClick={() => setMoving(true)}><TI icon={IconFolder} size={16} /><span>Move to…</span></button>
+      {inProject && (
+        <button type="button" role="menuitem" onClick={() => { onClose(); setProjectContext(t.id, !!t.projectContextOff) }}>
+          <TI icon={t.projectContextOff ? IconFolder : IconFolderOff} size={16} /><span>{t.projectContextOff ? 'Use project context' : 'Leave out project context'}</span>
+        </button>
+      )}
       {t.kind === 'temporary' && (
         <button type="button" role="menuitem" onClick={() => { onClose(); keepThread(t.id) }}><TI icon={IconCheck} size={16} /><span>Keep this chat</span></button>
       )}
@@ -68,7 +81,7 @@ function ThreadMenu({ t, onRename, onClose }: { t: ChatThread; onRename: () => v
   )
 }
 
-function ThreadItem({ t, active, live, onOpen }: { t: ChatThread; active: boolean; live: boolean; onOpen: (id: string) => void }) {
+export function ThreadItem({ t, active, live, onOpen }: { t: ChatThread; active: boolean; live: boolean; onOpen: (id: string) => void }) {
   const [menu, setMenu] = useState(false)
   const retitling = useChat((s) => !!s.retitling[t.id])
   const [editing, setEditing] = useState(false)
@@ -93,11 +106,11 @@ function ThreadItem({ t, active, live, onOpen }: { t: ChatThread; active: boolea
     )
   }
   return (
-    <div className={`vc-thread ${active ? 'active' : ''} ${menu ? 'menu-open' : ''}`}>
+    <div className={`vc-thread ${active ? 'active' : ''} ${menu ? 'menu-open' : ''} ${t.needsReply && !live ? 'waiting' : ''}`} {...dragThreadProps(t.id)}>
       <button type="button" className="vc-thread-main" onClick={() => onOpen(t.id)} title={title}>
         <ThreadIcon t={t} size={16} busy={retitling} />
         <span className={`vc-thread-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{title}</span>
-        {live && <span className="vc-live-dot" aria-label="Answering" />}
+        {live ? <span className="vc-live-dot" aria-label="Answering" /> : t.needsReply && <span className="vc-reply-dot" aria-label="Waiting on you" title="Waiting on you" />}
       </button>
       <button type="button" className="vc-thread-more" onClick={(e) => { e.stopPropagation(); setMenu((m) => !m) }} aria-label={`Options for ${title}`}>
         <TI icon={IconDots} size={16} />

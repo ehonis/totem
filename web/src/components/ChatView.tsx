@@ -6,7 +6,7 @@ import { setChatCommands } from '../studio'
 import {
   useChat, initChat, send, stop, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
-  openProject, threadProject,
+  openProject, threadProject, projectById, setProjectContext,
 } from '../chat/store'
 import ProjectHome from '../chat/ProjectHome'
 import ProjectIcon from '../chat/ProjectIcon'
@@ -24,7 +24,7 @@ import UsageChips from '../chat/UsageChips'
 import ThreadIcon from '../chat/ThreadIcon'
 import { useChatPresence } from '../chat/presence'
 import { TI } from '../chat/ui'
-import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconPaperclip, IconLayoutSidebar, IconSparkles } from '../chat/icons'
+import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconPaperclip, IconLayoutSidebar, IconSparkles, IconFolder, IconFolderOff } from '../chat/icons'
 import type { Attachment, ChatMode, ModelSettings } from '../chat/types'
 import '../chat/chat.css'
 import { useOwnerName } from '../useOwnerName'
@@ -88,6 +88,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   const models = useChat((s) => s.models)
   const [draftKind, setDraftKind] = useState<'regular' | 'temporary'>('regular')
   const [draftModel, setDraftModel] = useState<{ provider?: string; modelSettings?: ModelSettings }>({})
+  // A new project chat can start without the project's instructions, memory and files.
+  const [draftContextOff, setDraftContextOff] = useState(false)
   // The project the panel is showing. A new chat here starts in it, on its default model.
   const scopeId = useChat((s) => s.projectId)
   const scopeProject = useChat((s) => s.projects.find((p) => p.id === s.projectId))
@@ -159,6 +161,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   const run = activeId ? runs[activeId] : undefined
   // The chat's project (or, for a new chat, the one the panel is in).
   const project = active ? threadProject(active) : scopeProject
+  const parentProject = project?.parentId ? projectById(project.parentId) : undefined
+  const contextOff = active ? !!active.projectContextOff : draftContextOff
   const kind = project ? 'regular' : active?.kind || draftKind
   const temporary = kind === 'temporary'
   // A new project chat starts on the project's model until he picks another.
@@ -204,12 +208,13 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
     setActive(null)
     setDraftKind(k)
     setDraftModel({})
+    setDraftContextOff(false)
     requestAnimationFrame(() => composer.current?.focus())
   }
   useCommand(COMMANDS.chatNew, () => newChat('regular'))
 
   function onSend({ text, attachments, mode, browser }: { text: string; attachments: Attachment[]; mode: ChatMode; browser?: boolean }) {
-    const id = send({ threadId: activeId, text, attachments, mode, browser, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id })
+    const id = send({ threadId: activeId, text, attachments, mode, browser, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff })
     setInput('')
     if (id !== activeId) {
       setDrafts((d) => { const n = { ...d }; delete n[draftKey]; return n })
@@ -331,8 +336,17 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
           </>
         )}
         <div className="vc-top-title-wrap">
+          {parentProject && (
+            <>
+              <button type="button" className="vc-top-project" onClick={() => openProject(parentProject.id)} title={`Open ${parentProject.name}`}>
+                <ProjectIcon p={parentProject} size={16} />
+                <span>{parentProject.name}</span>
+              </button>
+              <span className="vc-top-sep" aria-hidden>/</span>
+            </>
+          )}
           {project && (
-            <button type="button" className="vc-top-project" onClick={() => openProject(project.id)} title={`Open ${project.name}`}>
+            <button type="button" className={`vc-top-project ${contextOff ? 'context-off' : ''}`} onClick={() => openProject(project.id)} title={`Open ${project.name}`}>
               <ProjectIcon p={project} size={16} />
               <span>{project.name}</span>
             </button>
@@ -360,6 +374,20 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
           )}
         </div>
         <div className="vc-top-right">
+          {project && (
+            <button
+              type="button"
+              className={`vc-icon-btn ${contextOff ? 'on' : ''}`}
+              onClick={() => (active ? setProjectContext(active.id, contextOff) : setDraftContextOff(!contextOff))}
+              aria-pressed={contextOff}
+              aria-label={contextOff ? 'Project context is off for this chat' : 'Project context is on for this chat'}
+              title={contextOff
+                ? `Project context off: this chat doesn't read ${project.name}'s instructions, memory or files, and adds nothing to them. Click to turn it on.`
+                : `Project context on: this chat reads ${project.name}'s instructions, memory and files. Click to leave them out of this chat.`}
+            >
+              <TI icon={contextOff ? IconFolderOff : IconFolder} size={19} />
+            </button>
+          )}
           <BrowserChip threadId={activeId} />
           <UsageChips compact={narrow} />
           {temporary && active && (

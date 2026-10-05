@@ -245,16 +245,51 @@ conclusions reach the next.
   and the project's `memory.md` (`allowWrite` in `spawnClaudeStream`). Without it the
   memory write is refused and Haiku still tells the owner it saved the note.
 - **Removing a file** drops it from the project; the bytes go only when no chat message
-  still shows it. **Deleting a project** deletes its files, instructions and memory and
-  moves its chats to Home. Thread deletion and the orphan sweep leave project files alone.
+  still shows it. **Deleting a project** deletes its files, instructions and memory (and
+  its folders') and moves its chats to Home. Thread deletion and the orphan sweep leave
+  project files alone.
+- **Project context can be off for one chat.** `projectContextOff` on the thread (the
+  folder button in the top bar, or the chat's menu) leaves out `projectBlock`, keeps the
+  chat's attachments and documents out of the project's files, and drops the memory from
+  `allowWrite`. It still starts on the project's default model. It can be switched either
+  way at any turn.
+
+### Folders
+
+A folder is a project with a `parentId`: one level only, inside a top-level project
+(the API refuses a folder in a folder). It has its own instructions, memory and files.
+Its chats get the parent's instructions, memory and files as read-only context
+(`projectBlock(..., { parent })`) and keep only the folder's memory, so a side topic
+never leaks into the project. The owner moves what should be shared up by hand:
+
+- **Memory:** the folder's Memory tab → "Move to <project>" lists entries (top-level
+  bullets with their indented lines, or paragraphs, under their heading:
+  `memoryEntries` in `chat/projects.mjs`, twinned in `web/src/chat/memoryEntries.ts`).
+  Picked entries land under the same heading in the parent and leave the folder.
+- **Files:** pick files on the folder's Files tab → "Move to <project>".
+- **Deleting a folder** moves its chats up to its project.
+
+In the panel, a project's folders sit above its own chats and unfold in place. Dragging
+a chat (desktop only) onto a folder, the project's title, a project on Home, or the
+back arrow (Home) moves it there; on a phone the chat menu's "Move to…" does the same.
+
+### Waiting on you
+
+A finished or failed run sets `needsReply` on the thread (not a stopped one, and never
+a totem's chat). The panel shows a steady dot and a bold title, and project and folder
+rows show a dot when a chat inside is waiting. Sending in the chat (a reply, a
+regenerate, an edit) clears it, and so does "Mark as done" in the chat's menu
+(`PUT /api/threads/:id {needsReply:false}`). Opening the chat does not.
 
 | Route | Body | Returns |
 |---|---|---|
 | `GET /api/chat/projects` | | `{projects}` with `fileCount`, `chatCount` (no files or memory) |
-| `POST /api/chat/projects` | `{name, icon?, instructions?, provider?, modelSettings?}` | `{project}` |
+| `POST /api/chat/projects` | `{name, icon?, instructions?, provider?, modelSettings?, parentId?}` | `{project}` (with `parentId`, a folder) |
 | `GET /api/chat/projects/:id` | | `{project}` with signed `files` and `memory` |
 | `PATCH /api/chat/projects/:id` | any of the create fields (`null` clears) | `{project}` |
-| `DELETE /api/chat/projects/:id` | | `{ok, movedChats}` |
+| `DELETE /api/chat/projects/:id` | | `{ok, movedChats, removedFolders}` |
+| `POST /api/chat/projects/:id/memory/move` | `{entries}` (entry texts; folder only) | `{moved, project}` |
+| `POST /api/chat/projects/:id/files/move` | `{ids}` (folder only) | `{moved, project}` |
 | `PUT /api/chat/projects/:id/memory` | `{memory}` | `{memory}` |
 | `POST /api/chat/projects/:id/files` | `{uploadIds}` (uploaded via `/api/chat/uploads` first) | `{added, project}` |
 | `DELETE /api/chat/projects/:id/files[/:uploadId]` | `{ids}` without a path id | `{removed, project}` |

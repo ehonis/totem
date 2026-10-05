@@ -100,6 +100,10 @@ export interface ChatThread {
   projectId?: string
   /** This is a totem's own chat (its job id). Kept out of Recents. */
   totemId?: string
+  /** A project chat that reads none of the project's instructions, memory or files. */
+  projectContextOff?: boolean
+  /** Finished, and not yet answered or marked done. */
+  needsReply?: boolean
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
@@ -128,6 +132,8 @@ export interface Project {
   instructions: string
   provider?: string
   modelSettings?: Partial<ModelSettings>
+  /** A folder: the top-level project it sits in. */
+  parentId?: string
   fileCount: number
   chatCount: number
   createdAt: number

@@ -12,7 +12,7 @@ import { pushError } from '../toast'
 import { applyEvent } from './reduce'
 import {
   sendChat, attachRun, stopChat, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
-  deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, type SendArgs, type StreamHandle,
+  deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
 } from './api'
 import { defaultSettingsFor, normalizeModelSettings, visibleModels, wireModel } from './models'
 import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, StreamEvent } from './types'
@@ -297,6 +297,11 @@ export function openProject(id: string | null) {
 
 export const projectById = (id?: string | null) => (id ? state.projects.find((p) => p.id === id) : undefined)
 
+/** A project or folder's top-level project (itself for a top-level one). */
+export const rootProject = (p?: Project | null) => (p?.parentId ? projectById(p.parentId) || p : p || undefined)
+/** A project's folders, by name. */
+export const foldersOf = (projects: Project[], id: string) => projects.filter((p) => p.parentId === id)
+
 /** A chat's project, if it still exists (a chat in a deleted project shows in Home). */
 export function threadProject(t: Pick<ChatThread, 'projectId'> | null | undefined) {
   return t?.projectId ? projectById(t.projectId) : undefined
@@ -327,7 +332,7 @@ export async function loadProject(id: string) {
   }
 }
 
-export async function createProject(body: { name: string; icon?: string; instructions?: string }) {
+export async function createProject(body: { name: string; icon?: string; instructions?: string; parentId?: string }) {
   // A new project starts on whatever a new chat would use right now.
   const { provider, settings } = threadChoice(null)
   const { project } = await createProjectApi({ ...body, provider, modelSettings: settings })
@@ -367,20 +372,68 @@ export async function removeProjectFiles(id: string, ids: string[]) {
   }
 }
 
-/** Delete a project. Its chats move to Home; returns how many did. */
+/** Delete a project (and its folders) or a folder. Chats move to Home, or a folder's up to its project; returns how many did. */
 export async function deleteProject(id: string) {
+  const parentId = projectById(id)?.parentId
   const { movedChats } = await deleteProjectApi(id)
+  if (parentId) {
+    set((s) => {
+      const detail = { ...s.projectDetail }
+      delete detail[id]
+      return {
+        projects: s.projects.filter((p) => p.id !== id),
+        projectDetail: detail,
+        projectId: s.projectId === id ? parentId : s.projectId,
+        threads: s.threads.map((t) => (t.projectId === id ? { ...t, projectId: parentId } : t)),
+      }
+    })
+    loadProject(parentId)
+    loadProjects()
+    return movedChats
+  }
+  const gone = new Set([id, ...foldersOf(state.projects, id).map((f) => f.id)])
   set((s) => {
     const detail = { ...s.projectDetail }
-    delete detail[id]
+    for (const g of gone) delete detail[g]
     return {
-      projects: s.projects.filter((p) => p.id !== id),
+      projects: s.projects.filter((p) => !gone.has(p.id)),
       projectDetail: detail,
-      projectId: s.projectId === id ? null : s.projectId,
-      threads: s.threads.map((t) => (t.projectId === id ? { ...t, projectId: undefined } : t)),
+      projectId: s.projectId && gone.has(s.projectId) ? null : s.projectId,
+      threads: s.threads.map((t) => (t.projectId && gone.has(t.projectId) ? { ...t, projectId: undefined } : t)),
     }
   })
   return movedChats
+}
+
+/** Move a folder's memory entries (by text) up into its project. */
+export async function moveMemoryUp(folderId: string, entries: string[]) {
+  const parentId = projectById(folderId)?.parentId
+  const { moved, project } = await moveProjectMemoryApi(folderId, entries)
+  takeProject(project)
+  if (parentId && state.projectDetail[parentId]) loadProject(parentId)
+  return moved
+}
+
+/** Move a folder's files up into its project. */
+export async function moveFilesUp(folderId: string, ids: string[]) {
+  const parentId = projectById(folderId)?.parentId
+  const { moved, project } = await moveProjectFilesApi(folderId, ids)
+  takeProject(project)
+  if (parentId) loadProject(parentId)
+  loadProjects()
+  return moved
+}
+
+/** Read the project's instructions, memory and files in this chat, or leave them out. */
+export function setProjectContext(threadId: string, on: boolean) {
+  patchThread(threadId, (t) => ({ ...t, projectContextOff: on ? undefined : true }))
+  putThread({ id: threadId, projectContextOff: !on }).catch(fail)
+}
+
+/** Clear a chat's "waiting on you" mark without replying. */
+export function markDone(threadId: string) {
+  patchThread(threadId, (t) => ({ ...t, needsReply: undefined }))
+  putThread({ id: threadId, needsReply: false }).catch(fail)
 }
 
 /** Move a chat into a project, or back to Home with null. Its files come with it. */
@@ -619,6 +672,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
       break
     case 'done':
       patchAssistant(threadId, (m) => ({ ...e.message, parts: e.message.parts?.length ? e.message.parts : m.parts }))
+      // The bridge marks it waiting on him too; this shows it without a sync.
+      if (e.message.status !== 'stopped') patchThread(threadId, (t) => (t.totemId ? t : { ...t, needsReply: true }))
       break
     case 'error':
       patchAssistant(threadId, (m) => ({ ...m, status: 'error', error: e.text }))
@@ -663,6 +718,8 @@ export interface SendInput {
   browser?: boolean
   /** Start a new chat inside this project. */
   projectId?: string | null
+  /** A new project chat that leaves the project's context out. */
+  projectContextOff?: boolean
 }
 
 /** Start a turn. Returns the thread id (new chats get one here). */
@@ -682,10 +739,12 @@ export function send(input: SendInput): string {
     ...(input.voice ? { voice: true } : {}),
   }
   const assistant: ChatMessage = { id: `local-${newId()}`, role: 'assistant', content: '', parts: [], status: 'streaming', provider, createdAt: t0 }
+  const contextOff = !!projectId && !thread && !!input.projectContextOff
   if (!thread) {
     thread = {
       id: threadId, kind, provider: kind === 'regular' ? provider : undefined, modelSettings: settings,
-      ...(projectId ? { projectId } : {}), messages: [], createdAt: t0, updatedAt: t0, ...(kind === 'temporary' ? { expiresAt: endOfToday() } : {}),
+      ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}),
+      messages: [], createdAt: t0, updatedAt: t0, ...(kind === 'temporary' ? { expiresAt: endOfToday() } : {}),
     }
   }
   upsertThread({ ...thread, messages: [...thread.messages, userMessage, assistant], updatedAt: t0 })
@@ -697,8 +756,9 @@ export function send(input: SendInput): string {
     ...(input.browser ? { browser: true } : {}),
     // Only read for a chat the bridge hasn't seen; an existing one keeps its project.
     ...(projectId ? { projectId } : {}),
+    ...(contextOff ? { projectContextOff: true } : {}),
   }
-  const { messages: _m, ...meta } = thread
+  const { messages: _m, needsReply: _n, ...meta } = thread
   outboxPut(threadId, { args, message: userMessage, thread: { ...meta, updatedAt: t0 }, at: t0 })
   return startRun(threadId, args)
 }
@@ -732,6 +792,8 @@ export function discardUnsent(threadId: string): string {
 
 function startRun(threadId: string, args: SendArgs) {
   setRun(threadId, { seq: 0, activity: '', mode: args.mode || 'chat', startedAt: now() })
+  // Replying (or regenerating, or editing) is what clears "waiting on you".
+  patchThread(threadId, (t) => (t.needsReply ? { ...t, needsReply: undefined } : t))
   const handle = sendChat(args, (e) => handleEvent(threadId, e), (err: any) => {
     if (fail(err)) { setRun(threadId, null); return }
     // Never reached the bridge: the message stays, marked unsent, with Retry —
