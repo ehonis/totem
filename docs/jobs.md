@@ -155,6 +155,29 @@ Every attempt appends to `data/job-runs.jsonl` and updates the job's `lastRun`
 with status, duration, provider, and error. `consecutiveFailures` counts a streak
 and resets on success.
 
+## Watch triggers
+
+A job can wake when something changes instead of on its schedule:
+`trigger: { type: 'watch', source, everyMinutes }` (`jobs/triggers.mjs`, pure and
+tested). Sources:
+
+| `source` | Check | Fingerprint |
+|---|---|---|
+| `{ kind: 'git', repo, ref }` | `git ls-remote`. A local checkout path watches its `origin`, so it wakes on what was merged upstream, not local commits. Min 1 minute. | branch SHA |
+| `{ kind: 'url', url, contains? }` | One GET, scripts/styles/tags stripped. Min 5 minutes. | with `contains`: whether the text is there; without: a hash of the visible text |
+
+Every tick, each enabled watch job that is due and not running gets a background
+check (`startDueWatches` in `bridge.mjs`, one at a time per job). The first check
+only records a baseline in the job's `watch` field; a later change of fingerprint
+runs the job once with `trigger: 'watch'` and an `event` describing the change
+(for a local checkout, the new commits from `git log`), which agent totems get in
+their prompt and the run record keeps. Three failed checks in a row notify once.
+
+Hardening: a repo or ref starting with `-` is refused (git would read it as an
+option such as `--upload-pack`), commands run without a shell, and git runs with
+`GIT_TERMINAL_PROMPT=0` and `protocol.ext.allow=never`. Changing what a job
+watches resets its baseline; `trigger: null` puts it back on its schedule.
+
 ## AI selection and health
 
 Each job picks an AI, or `default` to follow the Providers tab. Two exceptions,
@@ -262,6 +285,7 @@ and fails with a message saying so, rather than silently falling through.
 | `journal-ingest` | 07:00 | `journal-ingest` + the `journal-ingest` skill. Needs Plaud |
 | `plaud-meetings-ingest` | 08:00 | `plaud-meetings-ingest` + the `plaud-action-items-ingest` skill. Needs Plaud |
 | `whoop-sleep-ingest` | 11:00 | `whoop-sleep`. See `docs/whoop-sleep-ingest.md` |
+| `self-update` ("Deploy Totem") | watch: this checkout's `main`, every 2 min | `self-update`: refuse a dirty tree or another branch, `pull --ff-only`, `npm install` if a `package*.json` changed, `npm run build`, then restart `TOTEM_SERVICE_NAME` once no chat or job is running. Off unless `TOTEM_SELF_UPDATE_ENABLED` |
 
 These are **seeds, not built-ins**. `SEED_JOB_DEFS` is read on first boot and when
 a genuinely new id ships; it is never re-applied to a job that already exists, so
@@ -284,9 +308,14 @@ back (`POST /api/jobs/restore`).
   plus an exclusive `claim()` replaced them, which is also what makes `Run now`
   work rather than being swallowed as already-ran-today. The date is still written
   to those state files for continuity.
-- **Event/"Triggered" jobs no longer exist in the UI.** The four event sources the
-  old tab offered were wired to nothing. If they come back, they need real bridge
-  pollers first.
+- **A watch job has no `nextRunAt`.** A job with a `trigger` is checked by the
+  tick instead of scheduled (see "Watch triggers" below). `reschedule()`,
+  `create()`, `update()` and `finish()` all leave its `nextRunAt` null; an enabled
+  job with no next run is only a bug for schedule jobs.
+- **A restart mid-run used to wedge the job.** `claim()` refuses a job whose
+  `lastRun` is `running`, and nothing cleared that. `recoverInterrupted()` now runs
+  at boot (only on the bridge that runs the scheduler) and records those runs as
+  `error`/`interrupted`.
 - **A job's prompt runs with Totem's full tool access**, unattended, on whatever
   schedule you set. It can create tasks, edit the brain, and touch repos. That now
   includes a skill you edited — preview it before it runs at 07:00.

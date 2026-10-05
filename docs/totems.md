@@ -1,7 +1,8 @@
 # Totems
 
-A totem is a standing agent: it wakes on a schedule to do one job, remembers what
-it saw between runs, and tells the owner only what matters. The Totems tab replaced
+A totem is a standing agent: it wakes on a schedule, or when something it watches
+changes, to do one job, remembers what it saw between runs, and tells the owner
+only what matters. The Totems tab replaced
 Studio. This is the spec; AGENTS.md has the summary.
 
 ## Every job is a totem
@@ -48,6 +49,25 @@ ends with one line:
 The browser is per totem (`browser: true`), off by default. A run gets a fresh grant
 for the totem's thread and the session is closed when it ends.
 
+## Waking on a change
+
+A totem can carry a watch trigger instead of a schedule (`docs/jobs.md` → Watch
+triggers): a git branch or a web page, checked without AI. The run it wakes gets a
+`WHAT WOKE YOU` section with the change (the new commits, for a local checkout); a
+hand-started run of a watcher is told to check the current state anyway. Creating a
+watcher does not run it: its first check only records a baseline.
+
+This is the cheap way to "wait for X": the polling costs nothing, and the model is
+only paid when X happens. An agent totem polling on a schedule (with QUIET) is
+still the right tool when deciding whether something changed takes judgement.
+
+**Deploying Totem itself is a built-in, not an agent.** An agent that restarts the
+bridge kills its own run. "Deploy Totem" (`self-update` runner) watches this
+checkout's upstream `main`, pulls, rebuilds and restarts; see `docs/jobs.md` → The
+defaults. Deploying another app (a sibling service) can be an agent totem with a
+git watch, but the agent needs a backend allowed to write outside `AGENT_CWD` and
+run the restart (Codex's sandbox and `claude -p` without allowed Bash will refuse).
+
 ## Builder and model recommendations
 
 `POST /api/totems/build {description}` runs one read-only `builderPrompt` on the
@@ -61,8 +81,15 @@ validated before anything is created:
 - schedules are clamped to at most once every 15 minutes;
 - `notify` defaults to `agent`.
 
-The owner edits the draft, picks a recommendation, and `POST /api/totems` creates the
-job, its memory file and its chat, posts an intro, and starts the first run.
+The builder may also return a `trigger` (a watch) when the job is "when X changes,
+do Y" and he named X; an unusable one is dropped and the schedule applies.
+
+The owner edits the draft and picks a recommendation, or any model through the
+chat model picker (`ModelPicker` with `modelsOnly`: concrete models across every
+account, no Auto/Instant/Thinking, since a scheduled run has nobody to route
+for) plus an effort. `POST /api/totems` creates the job, its memory file and its
+chat, posts an intro, and starts the first run (not for a watcher). A totem's
+settings offer the same picker.
 `POST /api/totems/:id/recommend` re-asks for models for an existing totem.
 
 ## Chats and proposals
@@ -78,7 +105,7 @@ job, its memory file and its chat, posts an intro, and starts the first run.
 | Route | Body | Returns |
 |---|---|---|
 | `POST /api/totems/build` | `{description}` | `{draft}` |
-| `POST /api/totems` | `{draft, recommendation, enabled?, runNow?}` | `{job, threadId}` |
+| `POST /api/totems` | `{draft, choice?: {provider, model, effort, label}, recommendation?, enabled?, runNow?}` (`choice` wins) | `{job, threadId}` |
 | `POST /api/totems/proposal` | `{threadId, messageId, partId, action: 'accept'\|'dismiss'}` | `{ok, status}`; 409 if already handled |
 | `GET/PUT /api/totems/:id/memory` | `{memory}` | `{memory}` |
 | `POST /api/totems/:id/thread` | | `{threadId}` |
@@ -89,5 +116,6 @@ totem also deletes its memory and its chat.
 
 ## Not yet
 
-- Event triggers (a new email, a calendar change) instead of schedules.
+- Event sources beyond git branches and web pages (a new email, a calendar
+  change, a GitHub release), and a non-AI "run this command" action.
 - Proposals that create a new totem from a chat.

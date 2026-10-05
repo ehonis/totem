@@ -19,6 +19,8 @@
 //   costTier         — a model's rough price class, for "cheapest that works".
 //   totemsRule / parseProposals — how any chat proposes a change to a totem.
 
+import { normalizeTrigger } from '../jobs/triggers.mjs'
+
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '')
 
 export const TASK_TYPES = ['watcher', 'researcher', 'analyst', 'writer', 'organiser', 'coach', 'coder', 'other']
@@ -50,12 +52,21 @@ Use NOTIFY only when there is something the owner would want to be interrupted f
 /**
  * One run of an agent totem. `recentRuns` are the last few run records
  * (newest last); their previews are how the totem knows what it said lately.
+ * A run its watch started carries `trigger: 'watch'` and the `event` it saw.
  */
-export function totemRunPrompt({ totem, memory = '', memoryPath = '', recentRuns = [], browser = false } = {}) {
+export function totemRunPrompt({ totem, memory = '', memoryPath = '', recentRuns = [], browser = false, trigger = 'schedule', event = '' } = {}) {
+  const wakes = totem.trigger ? `when something it watches changes (${totem.scheduleLabel})` : `on a schedule (${totem.scheduleLabel || 'on its schedule'})`
   const lines = [
-    `You are "${totem.name}", one of the owner's totems: a standing agent that wakes on a schedule (${totem.scheduleLabel || 'on its schedule'}) to do one job for him, and remembers between runs.`,
+    `You are "${totem.name}", one of the owner's totems: a standing agent that wakes ${wakes} to do one job for him, and remembers between runs.`,
     `YOUR JOB (written for you by the owner; follow it):\n${String(totem.prompt || totem.description || '').trim()}`,
   ]
+  if (trigger === 'watch' && event) {
+    lines.push(`WHAT WOKE YOU: your watch saw a change. This is why you are running now; act on it.\n${String(event).trim()}`)
+  } else if (trigger === 'manual') {
+    lines.push(totem.trigger
+      ? 'WHAT WOKE YOU: the owner started this run by hand, not a change. Check the current state and do your job as if it had just changed.'
+      : 'WHAT WOKE YOU: the owner started this run by hand.')
+  }
   const mem = String(memory || '').trim()
   lines.push(
     `YOUR MEMORY (${memoryPath}):\n${mem || '(empty: this is your first run)'}\n` +
@@ -180,6 +191,7 @@ Choose:
 - taskType: one of ${TASK_TYPES.join(', ')}.
 - instructions: the totem's standing brief in second person ("You watch…"), specific and complete: what to check, where, what counts as worth telling him, and what to keep in memory so the next run can tell what changed. 4-12 sentences.
 - schedule: one of {"type":"interval","everyMinutes":N} (N ≥ 15), {"type":"daily","time":"HH:MM"}, {"type":"weekly","time":"HH:MM","days":[0-6, Sunday=0]}, {"type":"window","from":"HH:MM","to":"HH:MM","everyMinutes":N,"days":[...]}. Times are ${timezone}. Pick the least frequent schedule that still does the job: a stock watch every 30-60 minutes, a daily digest once a day.
+- trigger: null, or a watch when the job is "when X changes, do Y" and X is a git branch or one web page. A watch is checked without AI every few minutes and wakes the totem only when the thing changes, which is far cheaper than polling with a model. {"type":"watch","everyMinutes":N,"source":{"kind":"git","repo":"<absolute checkout path or https/ssh remote URL>","ref":"<branch>"}} (a local checkout watches its origin remote; N ≥ 1), or {"type":"watch","everyMinutes":N,"source":{"kind":"url","url":"https://…","contains":"<text whose appearance or disappearance matters, optional>"}} (N ≥ 5). With a trigger, schedule is ignored. Use the paths and URLs he gave; never invent one (leave trigger null and ask in questions instead). If he wants Totem itself redeployed when its main branch changes, do not design an agent for it: the built-in "Deploy Totem" totem does that (an agent restarting Totem would cut off its own run); say so in questions.
 - browser: true only if the job needs pages that load with JavaScript (store pages, dashboards); plain fetches and web search cover most things.
 - notify: "agent" (the totem decides when to notify; right for watchers), "always" (every run sends its report; right for digests), or "errors".
 - recommendations: 2-4 model choices from the accounts below, cheapest first, that can do THIS job well. The goal is the lowest cost that still gets it right: a simple check or a short digest needs a small fast model; deep analysis or long writing needs a stronger one. For each: {"provider": account id, "model": model id exactly as listed (or "" for the account default), "effort": "low"|"medium"|"high"|"", "why": one short sentence}.
@@ -250,6 +262,7 @@ export function parseBuilderReply(text, { catalog = [], description = '' } = {})
     taskType: TASK_TYPES.includes(j.taskType) ? j.taskType : 'other',
     instructions: str(j.instructions, 8000).trim() || String(description).trim(),
     schedule: cleanSchedule(j.schedule),
+    trigger: normalizeTrigger(j.trigger),
     browser: j.browser === true,
     notify,
     recommendations: recs.slice(0, 4),

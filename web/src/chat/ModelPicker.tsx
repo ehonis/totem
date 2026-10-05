@@ -41,7 +41,7 @@ export function chipLabel(settings: ModelSettings, provider: string, models: Rec
   return m?.name || row?.name || provider
 }
 
-export default function ModelPicker({ provider, settings, onChange, locked = false, compact = false }: {
+export default function ModelPicker({ provider, settings, onChange, locked = false, compact = false, modelsOnly = false }: {
   provider: string
   settings: ModelSettings
   onChange: (patch: { provider: string; modelSettings: ModelSettings }) => void
@@ -49,6 +49,8 @@ export default function ModelPicker({ provider, settings, onChange, locked = fal
   locked?: boolean
   /** Auto: the power pill beside it does the talking; this is just the way into manual picking. */
   compact?: boolean
+  /** Concrete models only, no Auto/Instant/Thinking: a totem's scheduled run has nobody to route for. */
+  modelsOnly?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('totem')
@@ -79,7 +81,7 @@ export default function ModelPicker({ provider, settings, onChange, locked = fal
   useEffect(() => {
     if (!open) return
     for (const p of providers) ensureModels(p.id)
-    setTab(manual ? provider : 'totem')
+    setTab(manual || modelsOnly ? (providerById(provider) ? provider : ordered[0]?.id || 'favorites') : 'totem')
     setQ('')
     setLegacy(false)
     requestAnimationFrame(() => search.current?.focus())
@@ -100,14 +102,14 @@ export default function ModelPicker({ provider, settings, onChange, locked = fal
   const term = q.trim().toLowerCase()
   let rows: Row[] = []
   let legacyRows: Row[] = []
-  const presetsAllowed = true
+  const presetsAllowed = !modelsOnly
   if (term) {
     rows = [
       ...(presetsAllowed ? presetRows.filter((r) => r.title.toLowerCase().includes(term)) : []),
       ...ordered.flatMap((p) => modelRows(p.id, models[p.id] || [])).filter((r) => `${r.title} ${r.source} ${r.model?.id || ''}`.toLowerCase().includes(term)),
     ]
   } else if (tab === 'favorites') {
-    rows = [...presetRows, ...ordered.flatMap((p) => modelRows(p.id, (models[p.id] || []).filter((m) => m.favorite)))]
+    rows = [...(presetsAllowed ? presetRows : []), ...ordered.flatMap((p) => modelRows(p.id, (models[p.id] || []).filter((m) => m.favorite)))]
   } else if (tab === 'totem') {
     rows = presetRows
   } else {
@@ -182,11 +184,11 @@ export default function ModelPicker({ provider, settings, onChange, locked = fal
   )
 
   const row = providerById(provider)
-  const label = chipLabel(settings, provider, models)
+  const label = chipLabel(modelsOnly ? { ...settings, preset: 'manual' } : settings, provider, models)
   return (
     <div className="vc-picker" ref={ref}>
       <button type="button" className={`vc-chip vc-model-chip ${open ? 'on' : ''} ${compact ? 'compact' : ''}`} onClick={() => setOpen((o) => !o)} aria-haspopup="dialog" aria-expanded={open} title="Choose how Totem answers">
-        {manual || locked ? <ProviderLogo driver={row?.driver} name={row?.name} size={16} /> : <TI icon={PRESET_ICON[settings.preset] || IconSparkles} size={16} />}
+        {manual || locked || modelsOnly ? <ProviderLogo driver={row?.driver} name={row?.name} size={16} /> : <TI icon={PRESET_ICON[settings.preset] || IconSparkles} size={16} />}
         {compact ? <span className="vc-sr">{label}</span> : <span className="vc-chip-label">{label}</span>}
         {!compact && <TI icon={IconChevronDown} size={14} className="vc-chip-caret" />}
       </button>
