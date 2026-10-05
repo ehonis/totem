@@ -6,10 +6,14 @@
  * "Claude HOME path" field points at the flat config dir, which produces
  * `<home>/.credentials.json` instead. We accept either and use whichever
  * actually holds a `claudeAiOauth` block.
+ *
+ * On macOS Claude Code keeps the default login in the Keychain rather than a
+ * file, so the default home falls back to that item (see ../keychain.mjs).
  */
 import { readdir, stat } from 'node:fs/promises';
 import { join, basename, dirname } from 'node:path';
 import { readJson, writeJsonAtomic, meter, fetchJson, expandHome } from '../util.mjs';
+import { CLAUDE_SERVICE, readKeychain, writeKeychain } from '../keychain.mjs';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
@@ -38,12 +42,33 @@ function credentialPaths(home) {
   return [join(home, '.credentials.json'), join(home, '.claude', '.credentials.json')];
 }
 
-/** Locate the credential file inside `home` that actually has an OAuth block. */
+const hasOauth = (data) => Boolean(data?.claudeAiOauth?.accessToken || data?.claudeAiOauth?.refreshToken);
+
+/**
+ * Locate the login for `home`: a credentials file with an OAuth block, or, for
+ * the default home on macOS, Claude Code's Keychain item. Returns where it came
+ * from, its data, and how to save a refreshed copy back to the same place.
+ */
 async function findCredentials(home) {
   for (const path of credentialPaths(home)) {
     const data = await readJson(path);
-    if (data?.claudeAiOauth?.accessToken || data?.claudeAiOauth?.refreshToken) {
-      return { path, data };
+    if (hasOauth(data)) {
+      return { path, data, save: (next) => writeJsonAtomic(path, next) };
+    }
+  }
+  // Only the default home: Claude Code names a non-default config dir's item
+  // after a hash of the path, and those homes keep file logins here anyway.
+  if (home === join(process.env.HOME ?? '', '.claude')) {
+    const raw = await readKeychain(CLAUDE_SERVICE);
+    let data = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+    if (hasOauth(data)) {
+      return {
+        path: join(home, '.credentials.json'), // .claude.json sits beside it, as for a file login
+        source: `Keychain: ${CLAUDE_SERVICE}`,
+        data,
+        save: (next) => writeKeychain(CLAUDE_SERVICE, JSON.stringify(next)),
+      };
     }
   }
   return null;
@@ -102,9 +127,10 @@ export async function discover() {
  *
  * Anthropic rotates the refresh token on every use, so the write-back is not
  * optional: dropping the response would lock the profile out until re-login.
- * We merge into the existing file so sibling keys (mcpOAuth, etc.) survive.
+ * We merge into the existing data so sibling keys (mcpOAuth, etc.) survive, and
+ * save it wherever it came from: the file, or the macOS Keychain item.
  */
-async function refreshToken(credPath, fileData) {
+async function refreshToken(creds, fileData) {
   const oauth = fileData.claudeAiOauth ?? {};
   if (!oauth.refreshToken) throw new Error('no refresh token stored');
 
@@ -127,7 +153,7 @@ async function refreshToken(credPath, fileData) {
   };
   if (res.subscription_type) updated.subscriptionType = res.subscription_type;
 
-  await writeJsonAtomic(credPath, { ...fileData, claudeAiOauth: updated });
+  await creds.save({ ...fileData, claudeAiOauth: updated });
   return updated;
 }
 
@@ -205,14 +231,14 @@ export async function fetchAccount(account) {
   if (!creds) {
     return { ...base, status: 'error', error: `No Claude credentials under ${home}` };
   }
-  base.sourceFile = creds.path.replace(process.env.HOME ?? '', '~');
+  base.sourceFile = creds.source ?? creds.path.replace(process.env.HOME ?? '', '~');
 
   let oauth = creds.data.claudeAiOauth;
   let fileData = creds.data;
   let refreshed = false;
 
   const doRefresh = async () => {
-    oauth = await refreshToken(creds.path, fileData);
+    oauth = await refreshToken(creds, fileData);
     fileData = { ...fileData, claudeAiOauth: oauth };
     refreshed = true;
   };
@@ -285,5 +311,5 @@ export async function forceRefresh(account) {
   const home = expandHome(account.home);
   const creds = await findCredentials(home);
   if (!creds) throw new Error(`No Claude credentials under ${home}`);
-  await refreshToken(creds.path, creds.data);
+  await refreshToken(creds, creds.data);
 }

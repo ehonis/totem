@@ -3,11 +3,13 @@
  *
  * Auth lives in `~/.config/cursor/auth.json` ({ accessToken, refreshToken }),
  * written by `cursor-agent login`. Quota comes from the same endpoint the
- * editor's usage panel calls.
+ * editor's usage panel calls. On macOS cursor-agent keeps the tokens in the
+ * Keychain instead (`cursor-access-token`), which is used when there is no file.
  */
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readJson, meter, fetchJson, expandHome, toEpochMs } from '../util.mjs';
+import { CURSOR_ACCESS_SERVICE, CURSOR_ACCOUNT, readKeychain } from '../keychain.mjs';
 
 const USAGE_URL = 'https://api2.cursor.sh/auth/usage-summary';
 
@@ -37,6 +39,9 @@ export async function discover() {
   };
 
   await consider(join(homeDir, '.config', 'cursor', 'auth.json'), 'cursor-default');
+  if (!found.length && (await readKeychain(CURSOR_ACCESS_SERVICE, CURSOR_ACCOUNT))) {
+    found.push({ backend: 'cursor', keychain: CURSOR_ACCESS_SERVICE, label: 'cursor-default' });
+  }
 
   let entries = [];
   try {
@@ -56,19 +61,22 @@ export async function discover() {
 }
 
 export async function fetchAccount(account) {
-  const authFile = expandHome(account.authFile);
+  const fromKeychain = Boolean(account.keychain);
+  const authFile = fromKeychain ? null : expandHome(account.authFile);
   const base = {
     id: `cursor:${account.label}`,
     backend: 'cursor',
     label: account.label,
-    sourceFile: authFile.replace(process.env.HOME ?? '', '~'),
+    sourceFile: fromKeychain ? `Keychain: ${account.keychain}` : authFile.replace(process.env.HOME ?? '', '~'),
     fetchedAt: Date.now(),
     detailUrl: 'https://cursor.com/dashboard',
   };
 
-  const auth = await readJson(authFile);
+  const auth = fromKeychain
+    ? { accessToken: await readKeychain(account.keychain, CURSOR_ACCOUNT) }
+    : await readJson(authFile);
   if (!auth?.accessToken) {
-    return { ...base, status: 'error', error: `No accessToken in ${authFile}` };
+    return { ...base, status: 'error', error: `No accessToken in ${fromKeychain ? base.sourceFile : authFile}` };
   }
 
   let data;
