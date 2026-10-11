@@ -328,8 +328,10 @@ So the id is never trusted:
   the server — and keeps only `visibility: "list"` entries in the **newest generation** it
   advertises. That is Sol / Terra / Luna today and follows the CLI's own picker as models ship, with
   no code change. `CODEX_MODEL_ALLOWLIST` overrides it. Claude Code publishes no catalog, so its
-  three aliases (`opus`, `fable`, `sonnet` → Opus 5, Fable 5.1, Sonnet 5) are seeded; aliases always
-  resolve to the current version, so they never go stale either.
+  models are seeded in `MODEL_SEEDS` as full ids (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1), each
+  with a one-line `note` on what it is for and what it costs. The aliases (`opus`, `sonnet`,
+  `haiku`, `fable`) and retired ids (`CLAUDE_SUCCESSORS`: Opus 5, Sonnet 5, Haiku 4.5) are read as
+  their current successor, so an old saved choice keeps working without falling back to Opus.
 - `resolveModelChoice(provider, model, effort)` is the single gate. **Strict** for anything being
   staged or proposed: an unknown id throws with `validModels` attached, so the caller can retry in
   one round trip instead of getting a bare refusal. **Lenient** at run time (`runAgent`, the web
@@ -499,6 +501,22 @@ has no entry, is missing any of the four hints, claims to be both read-only and
 destructive, or declares an `outputSchema` that does not require `fetchedAt`. A
 test would be weaker, because the failure mode here is silent — an unclassified
 tool just quietly inherits the scary defaults.
+
+### 6.11 Screen — **BUILT** (2026-10-07)
+
+`totem_screen_get_status` and `totem_screen_screenshot`, both `readLocal`, registered only when
+`SCREEN_ENABLED` is on. The screenshot is a PNG path on the machine, not inline image content,
+the way `totem_apple_get_photo` hands back `imagePath`. They look and never act. Write-up:
+`docs/screen.md`. `serverInfo.version` is **2.11.0**.
+
+### 6.10 Apple Messages, Contacts and Photos — **BUILT** (2026-10-05)
+
+Nine `totem_apple_*` tools, registered only when `APPLE_ENABLED` is on (on a Mac), so other installs
+never advertise tools that can only fail. Eight read local files (`readLocal`). The ninth,
+`totem_apple_propose_message`, is `stageLocal`: it writes an `imessage` inbox proposal and never
+sends. `totem_resolve_inbox` refuses to accept that kind even with an approval session, so a
+message to another person always needs the owner's click in the dashboard. Full write-up and
+the tool table: `docs/apple.md`. `serverInfo.version` is **2.10.0**.
 
 ### 6.9 Strava — **BUILT** (2026-09-07)
 

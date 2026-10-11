@@ -1,11 +1,13 @@
 // jobs/triggers.mjs — jobs that wake when something changes, not on a clock.
 //
 // A job either runs on its `schedule` (jobs/schedule.mjs) or carries a
-// `trigger`: { type: 'watch', source, everyMinutes }. A watch is checked on the
-// job tick without any AI — one `git ls-remote` or one page fetch — and reduced
-// to a fingerprint. The first check only records a baseline; every later change
-// of fingerprint wakes the job once, with a description of what changed. So a
-// totem can sit idle for a week and still react within minutes of a merge.
+// `trigger`: { type: 'watch', sources, everyMinutes }. A watch is checked on the
+// job tick without any AI — one `git ls-remote` or one page fetch per source —
+// and each source is reduced to a fingerprint. A source's first check only
+// records its baseline; a later change of fingerprint wakes the job once, with a
+// description of everything that changed in that check. So a totem can sit idle
+// for a week and still react within minutes of a merge in any of its repos.
+// The older single `source` field is still read, as a list of one.
 //
 // Sources:
 //   { kind: 'git', repo, ref }   — a branch. `repo` is a remote URL, or a local
@@ -26,6 +28,7 @@ export const WATCH_KINDS = ['git', 'url']
 const MIN_MINUTES = { git: 1, url: 5 }
 const MAX_MINUTES = 24 * 60
 const DEFAULT_MINUTES = 5
+export const MAX_SOURCES = 20
 
 // A ref or repo that starts with "-" would be read by git as an option
 // (`--upload-pack=…` runs a command), so both are refused outright.
@@ -52,28 +55,66 @@ function cleanSource(s) {
   return null
 }
 
-/** A trigger the engine can always check, or null (the job runs on its schedule). */
+/** Identifies a source across checks; a job's watch state keeps a baseline per key. */
+export const sourceKey = (s) => (s.kind === 'git' ? `git ${s.repo} ${s.ref}` : `url ${s.url}${s.contains ? ` ${s.contains}` : ''}`)
+
+const rawSources = (raw) => (Array.isArray(raw?.sources) ? raw.sources : raw?.source ? [raw.source] : [])
+
+/**
+ * A trigger the engine can always check, or null (the job runs on its schedule).
+ * Unusable sources are dropped and duplicates merged; `isCompleteTrigger` says
+ * whether anything was dropped. The interval is clamped to the strictest
+ * minimum among its sources.
+ */
 export function normalizeTrigger(raw) {
   if (!raw || raw.type !== 'watch') return null
-  const source = cleanSource(raw.source)
-  if (!source) return null
+  const sources = []
+  const keys = new Set()
+  for (const s of rawSources(raw)) {
+    const clean = cleanSource(s)
+    if (!clean || keys.has(sourceKey(clean))) continue
+    keys.add(sourceKey(clean))
+    sources.push(clean)
+  }
+  if (!sources.length) return null
+  const kept = sources.slice(0, MAX_SOURCES)
+  const min = Math.max(...kept.map((s) => MIN_MINUTES[s.kind]))
   const n = Math.round(Number(raw.everyMinutes))
-  const everyMinutes = Math.min(Math.max(Number.isFinite(n) ? n : DEFAULT_MINUTES, MIN_MINUTES[source.kind]), MAX_MINUTES)
-  return { type: 'watch', source, everyMinutes }
+  const everyMinutes = Math.min(Math.max(Number.isFinite(n) ? n : DEFAULT_MINUTES, min), MAX_MINUTES)
+  return { type: 'watch', sources: kept, everyMinutes }
+}
+
+/** True when every source it lists is usable, so saving it loses nothing he typed. */
+export function isCompleteTrigger(raw) {
+  const t = normalizeTrigger(raw)
+  const listed = rawSources(raw)
+  return !!t && listed.length <= MAX_SOURCES && listed.every((s) => cleanSource(s))
 }
 
 const shortRepo = (repo) => repo.replace(/^https?:\/\/(www\.)?github\.com\//, '').replace(/\.git$/, '').replace(homedir(), '~')
 const every = (n) => (n === 1 ? 'every minute' : n % 60 === 0 ? `every ${n / 60 === 1 ? 'hour' : `${n / 60} hours`}` : `every ${n} minutes`)
+const host = (url) => new URL(url).host.replace(/^www\./, '')
+
+/** A source in a few words: "main in o/r", "shop.example". */
+export function describeSource(s) {
+  if (s.kind === 'git') return `${s.ref} in ${shortRepo(s.repo)}`
+  return s.contains ? `${host(s.url)} showing “${s.contains}”` : host(s.url)
+}
 
 export function describeTrigger(trigger) {
   const t = normalizeTrigger(trigger)
   if (!t) return ''
-  const s = t.source
-  if (s.kind === 'git') return `When ${s.ref} changes in ${shortRepo(s.repo)} (checked ${every(t.everyMinutes)})`
-  const host = new URL(s.url).host.replace(/^www\./, '')
+  const checked = `(checked ${every(t.everyMinutes)})`
+  if (t.sources.length > 1) {
+    const names = t.sources.map(describeSource)
+    const list = names.length > 4 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more` : `${names.slice(0, -1).join(', ')} or ${names.at(-1)}`
+    return `When ${list} changes ${checked}`
+  }
+  const s = t.sources[0]
+  if (s.kind === 'git') return `When ${s.ref} changes in ${shortRepo(s.repo)} ${checked}`
   return s.contains
-    ? `When ${host} starts or stops showing “${s.contains}” (checked ${every(t.everyMinutes)})`
-    : `When ${host} changes (checked ${every(t.everyMinutes)})`
+    ? `When ${host(s.url)} starts or stops showing “${s.contains}” ${checked}`
+    : `When ${host(s.url)} changes ${checked}`
 }
 
 /** True when a watch is due a check. `state` is the job's saved `watch` record. */
@@ -110,16 +151,13 @@ function visibleText(html) {
 }
 
 /**
- * Check a watch once. Returns { fingerprint, label } where `label` is a short
+ * Check one source. Returns { fingerprint, label } where `label` is a short
  * human description of the current state ("a1b2c3d", "shows “In stock”").
  * Throws with a readable message when the source can't be read.
  *
  * `exec(cmd, args, {cwd, env, timeoutMs})` resolves to stdout; `fetch` is WHATWG.
  */
-export async function checkWatch(trigger, { exec, fetch = globalThis.fetch } = {}) {
-  const t = normalizeTrigger(trigger)
-  if (!t) throw new Error('not a watch trigger')
-  const s = t.source
+export async function checkSource(s, { exec, fetch = globalThis.fetch } = {}) {
   if (s.kind === 'git') {
     const dir = localRepo(s.repo)
     const args = dir
@@ -146,13 +184,30 @@ export async function checkWatch(trigger, { exec, fetch = globalThis.fetch } = {
 }
 
 /**
- * What changed, for the run that a change wakes. For a git branch in a local
- * checkout this fetches and lists the new commits; anywhere else it is the
- * before and after labels.
+ * Check every source of a watch, side by side. One unreadable source doesn't
+ * stop the others: each result is { key, source, fingerprint, label } or
+ * { key, source, error }. With several sources the error names which one.
  */
-export async function describeChange(trigger, before, after, { exec } = {}) {
+export async function checkWatch(trigger, deps = {}) {
   const t = normalizeTrigger(trigger)
-  const s = t?.source
+  if (!t) throw new Error('not a watch trigger')
+  return Promise.all(t.sources.map(async (source) => {
+    const key = sourceKey(source)
+    try {
+      return { key, source, ...(await checkSource(source, deps)) }
+    } catch (e) {
+      const error = e?.message || String(e)
+      return { key, source, error: t.sources.length > 1 ? `${describeSource(source)}: ${error}` : error }
+    }
+  }))
+}
+
+/**
+ * What changed in one source, for the run that a change wakes. For a git branch
+ * in a local checkout this fetches and lists the new commits; anywhere else it is
+ * the before and after labels.
+ */
+export async function describeChange(s, before, after, { exec } = {}) {
   if (!s) return ''
   if (s.kind === 'git') {
     let commits = ''
@@ -166,4 +221,40 @@ export async function describeChange(trigger, before, after, { exec } = {}) {
     return `${s.ref} in ${shortRepo(s.repo)} moved from ${before.label} to ${after.label}.${commits ? `\nNew commits:\n${commits}` : ''}`
   }
   return `${s.url} changed. Before: ${before.label}. Now: ${after.label}.`
+}
+
+/** Every change one check saw, as one event: `changes` is [{ source, before, after }]. */
+export async function describeChanges(changes, deps = {}) {
+  const parts = await Promise.all(changes.map(({ source, before, after }) =>
+    describeChange(source, before, after, deps).catch(() => `${describeSource(source)} moved from ${before.label} to ${after.label}.`)))
+  return parts.join('\n\n')
+}
+
+/**
+ * The saved `watch` record of a job, cleaned: one baseline per source key in
+ * `seen`, plus when it was last checked or changed and the current error.
+ * A record from before watches had several sources (a bare `fingerprint`) is
+ * read as the baseline of the trigger's first source, so upgrading doesn't fire.
+ */
+export function cleanWatchState(w, trigger) {
+  if (!w || typeof w !== 'object') return null
+  const t = normalizeTrigger(trigger)
+  const num = (v) => (Number.isFinite(v) ? v : null)
+  const entry = (e) => ({ fingerprint: String(e.fingerprint).slice(0, 80), label: typeof e.label === 'string' ? e.label.slice(0, 200) : '' })
+  const seen = {}
+  if (w.seen && typeof w.seen === 'object') {
+    for (const [key, e] of Object.entries(w.seen)) if (e && typeof e.fingerprint === 'string') seen[key.slice(0, 800)] = entry(e)
+  } else if (typeof w.fingerprint === 'string' && t) {
+    seen[sourceKey(t.sources[0])] = entry(w)
+  }
+  // Only sources it still watches keep a baseline.
+  if (t) for (const key of Object.keys(seen)) if (!t.sources.some((s) => sourceKey(s) === key)) delete seen[key]
+  return {
+    seen,
+    label: typeof w.label === 'string' ? w.label.slice(0, 1000) : '',
+    checkedAt: num(w.checkedAt),
+    changedAt: num(w.changedAt),
+    error: typeof w.error === 'string' && w.error ? w.error.slice(0, 600) : null,
+    failures: Number(w.failures) || 0,
+  }
 }

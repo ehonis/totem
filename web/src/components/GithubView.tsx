@@ -12,6 +12,7 @@ import {
   ExclamationCircleIcon,
   ArrowsRightLeftIcon,
   WarnIcon,
+  EyeIcon,
 } from '../icons'
 
 // GitHub's linguist colors for the languages that actually show up here, so the
@@ -65,9 +66,15 @@ interface GithubViewProps {
   onAuthError: () => void
   // Optional: seed the search box (e.g. from a deep link). Unused for now.
   initialQuery?: string
+  // Rendered as a section of the Dev tab rather than a page of its own.
+  embedded?: boolean
+  // The Dev tab's watched repos. With onToggleWatch, each row gets a Watch toggle;
+  // without them the list is the plain repository browser it always was.
+  watched?: Set<string>
+  onToggleWatch?: (fullName: string) => void
 }
 
-export default function GithubView({ onAuthError, initialQuery = '' }: GithubViewProps) {
+export default function GithubView({ onAuthError, initialQuery = '', embedded = false, watched, onToggleWatch }: GithubViewProps) {
   const [data, setData] = useState<{ viewer: any; repos: Repo[]; generatedAt?: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -117,10 +124,10 @@ export default function GithubView({ onAuthError, initialQuery = '' }: GithubVie
   }, [repos, query, owner])
 
   return (
-    <div className="view gh-view">
+    <div className={embedded ? 'gh-view gh-embedded' : 'view gh-view'} id={embedded ? 'repositories' : undefined}>
       <div className="view-head">
         <div>
-          <h1 style={{ marginBottom: 2 }}>Code</h1>
+          {embedded ? <h2 style={{ marginBottom: 2 }}>All repositories</h2> : <h1 style={{ marginBottom: 2 }}>Code</h1>}
           <div className="muted" style={{ fontSize: 13 }}>
             {data
               ? `${repos.length} repositories across ${owners.length} owner${owners.length === 1 ? '' : 's'}`
@@ -147,7 +154,7 @@ export default function GithubView({ onAuthError, initialQuery = '' }: GithubVie
                 placeholder="Filter by name, org, or language…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                autoFocus
+                autoFocus={!embedded}
               />
             </label>
           </div>
@@ -197,6 +204,17 @@ export default function GithubView({ onAuthError, initialQuery = '' }: GithubVie
                     </div>
                   </div>
                   <div className="gh-repo-links">
+                    {onToggleWatch && (
+                      <button
+                        type="button"
+                        className={`gh-quick gh-watch${watched?.has(r.fullName) ? ' on' : ''}`}
+                        aria-pressed={Boolean(watched?.has(r.fullName))}
+                        title={watched?.has(r.fullName) ? 'Stop watching in Dev' : 'Watch CI and reviews in Dev'}
+                        onClick={() => onToggleWatch(r.fullName)}
+                      >
+                        <Hi icon={EyeIcon} size={13} /> {watched?.has(r.fullName) ? 'Watching' : 'Watch'}
+                      </button>
+                    )}
                     <a href={r.url} target="_blank" rel="noreferrer" className="gh-quick" title="Open code">
                       <Hi icon={CommandLineIcon} size={13} /> Code
                     </a>

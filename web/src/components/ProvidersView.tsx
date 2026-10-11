@@ -302,7 +302,7 @@ interface ModelRowProps {
 function ModelRow({ model, index, count, saving, onFavorite, onMove, onHide, onRemove }: ModelRowProps) {
   return (
     <div className={`model-row ${model.hidden ? 'is-hidden' : ''}`}>
-      <span className="model-row-name" title={`Model id: ${model.id}`}>
+      <span className="model-row-name" title={`Model id: ${model.id}${model.note ? `\n${model.note}` : ''}`}>
         {model.name}
         {model.recommended && <span className="model-row-tag">recommended</span>}
         {model.current && <span className="model-row-tag">current</span>}

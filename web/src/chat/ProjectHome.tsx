@@ -9,9 +9,10 @@ import { ARTIFACT_PREVIEWABLE, artifactIcon } from './ArtifactPanel'
 import ModelPicker from './ModelPicker'
 import ProjectIcon, { PROJECT_ICONS } from './ProjectIcon'
 import ThreadIcon from './ThreadIcon'
+import { useRowOnScreen, useProjectPage } from './onScreen'
+import { shelve } from './settle'
 import { THREAD_ICONS } from './threadIcons.gen'
-import { normalizeModelSettings } from './models'
-import type { Project, ProjectFile } from './types'
+import type { ChatThread, Project, ProjectFile } from './types'
 import { TI, formatBytes } from './ui'
 import { IconUpload, IconTrash, IconExternalLink, IconPaperclip, IconFolderUp, IconChevronRight } from './icons'
 import { pushError, pushToast } from '../toast'
@@ -39,12 +40,34 @@ function when(ts: number) {
     : d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) })
 }
 
+/** One chat on a project's page; on screen here counts for the running-chats panel. */
+function ChatRow({ t, live, settled }: { t: ChatThread; live: boolean; settled: boolean }) {
+  const ref = useRowOnScreen(t.id)
+  const last = [...t.messages].reverse().find((m) => m.role === 'assistant' && m.content)
+  return (
+    <button ref={ref} type="button" className={`vc-proj-chat ${settled ? 'settled' : ''}`} onClick={() => setActive(t.id)}>
+      <ThreadIcon t={t} size={17} />
+      <span className="vc-proj-chat-text">
+        <span className="vc-proj-chat-title">
+          {threadTitle(t)}
+          {live ? <span className="vc-live-dot" aria-label="Answering" /> : t.needsReply && <span className="vc-reply-dot" aria-label="Waiting on you" />}
+        </span>
+        {last && <span className="vc-proj-chat-sub">{last.content.replace(/[#*_`>|[\]()!]/g, '').replace(/\s+/g, ' ').slice(0, 140)}</span>}
+      </span>
+      <span className="vc-proj-chat-when">{when(t.updatedAt)}</span>
+    </button>
+  )
+}
+
 function ChatsTab({ project }: { project: Project }) {
   const threads = useChat((s) => s.threads)
   const runs = useChat((s) => s.runs)
   const all = useChat((s) => s.projects)
   const folders = useMemo(() => foldersOf(all, project.id), [all, project.id])
   const mine = useMemo(() => threads.filter((t) => t.projectId === project.id && t.messages.length), [threads, project.id])
+  // Parked chats come last, under their own headings, as in the panel (settle.ts).
+  const autoSettleDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
+  const shelves = useMemo(() => shelve(mine, Date.now(), autoSettleDays, (id) => !!runs[id]), [mine, autoSettleDays, runs])
   const folderRows = folders.length > 0 && (
     <div>
       <div className="vc-proj-group">Folders</div>
@@ -69,25 +92,10 @@ function ChatsTab({ project }: { project: Project }) {
   return (
     <div className="vc-proj-chats">
       {folderRows}
-      {groupThreads(mine).map((g) => (
+      {[...groupThreads(shelves.active), ...(shelves.snoozed.length ? [{ label: 'Snoozed', threads: shelves.snoozed }] : []), ...(shelves.settled.length ? [{ label: 'Settled', threads: shelves.settled }] : [])].map((g) => (
         <div key={g.label}>
           <div className="vc-proj-group">{g.label}</div>
-          {g.threads.map((t) => {
-            const last = [...t.messages].reverse().find((m) => m.role === 'assistant' && m.content)
-            return (
-              <button key={t.id} type="button" className="vc-proj-chat" onClick={() => setActive(t.id)}>
-                <ThreadIcon t={t} size={17} />
-                <span className="vc-proj-chat-text">
-                  <span className="vc-proj-chat-title">
-                    {threadTitle(t)}
-                    {runs[t.id] ? <span className="vc-live-dot" aria-label="Answering" /> : t.needsReply && <span className="vc-reply-dot" aria-label="Waiting on you" />}
-                  </span>
-                  {last && <span className="vc-proj-chat-sub">{last.content.replace(/[#*_`>|[\]()!]/g, '').replace(/\s+/g, ' ').slice(0, 140)}</span>}
-                </span>
-                <span className="vc-proj-chat-when">{when(t.updatedAt)}</span>
-              </button>
-            )
-          })}
+          {g.threads.map((t) => <ChatRow key={t.id} t={t} live={!!runs[t.id]} settled={g.label === 'Settled'} />)}
         </div>
       ))}
     </div>
@@ -336,7 +344,7 @@ function SettingsTab({ project }: { project: Project }) {
   const [name, setName] = useState(project.name)
   useEffect(() => setName(project.name), [project.name])
   const choice = threadChoice(null, { provider: project.provider, modelSettings: project.modelSettings })
-  const settings = normalizeModelSettings(project.modelSettings || choice.settings)
+  const settings = choice.settings
 
   const parent = useChat((s) => (project.parentId ? s.projects.find((p) => p.id === project.parentId) : undefined))
   const folderCount = useChat((s) => foldersOf(s.projects, project.id).length)
@@ -388,6 +396,7 @@ export default function ProjectHome({ projectId, composer, maxUploadBytes }: { p
   const summary = useChat((s) => s.projects.find((p) => p.id === projectId))
   const detail = useChat((s) => s.projectDetail[projectId])
   const [tab, setTab] = useState<Tab>('chats')
+  useProjectPage(projectId)
   useEffect(() => { loadProject(projectId) }, [projectId])
   useEffect(() => setTab('chats'), [projectId])
   const parent = useChat((s) => (summary?.parentId ? s.projects.find((p) => p.id === summary.parentId) : undefined))

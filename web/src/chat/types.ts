@@ -29,6 +29,49 @@ export interface ToolPart {
   output?: string
   startedAt?: number
   endedAt?: number
+  /** Another agent this call started, and what it is doing (chat/subagents.mjs). */
+  agent?: AgentInfo
+}
+/** One thing a sub-agent did: thought, said, or called a tool. */
+export interface AgentStep {
+  id: string
+  kind: 'thinking' | 'text' | 'tool'
+  text?: string
+  title?: string
+  detail?: string
+  /** The tool's kind, for its icon. */
+  tool?: string
+  server?: string
+  input?: string
+  output?: string
+  status?: 'running' | 'done' | 'error'
+  at?: number
+  endedAt?: number
+}
+export interface AgentInfo {
+  /** The CLI doing the work: claude, codex, cursor, opencode, gemini. */
+  provider: string
+  /** `subagent`: the agent's own (Claude's Agent tool, Codex collab); `cli`: another CLI run from a shell. */
+  via?: 'subagent' | 'cli'
+  /** Claude's subagent_type (general-purpose, Explore…). */
+  name?: string
+  title?: string
+  prompt?: string
+  model?: string
+  status: 'running' | 'done' | 'error' | 'stopped'
+  /** The latest one-line progress the parent reported. */
+  progress?: string
+  /** What it handed back. */
+  summary?: string
+  tokens?: number
+  toolUses?: number
+  /** `live`: its own log is being read; `none`: only its final output is known. */
+  log?: 'live' | 'none'
+  startedAt?: number
+  endedAt?: number
+  /** Earlier steps not kept (the list is capped). */
+  dropped?: number
+  steps: AgentStep[]
 }
 export interface FilePart { type: 'file'; uploadId: string; name: string; mime: string; size?: number; path?: string; url?: string }
 /** A change to a totem the agent proposed; applied only when the owner accepts. */
@@ -46,8 +89,6 @@ export interface TotemProposalPart {
 export interface SteerPart { type: 'steer'; id: string; text: string; via: 'live' | 'restart'; createdAt: number }
 export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | SteerPart
 
-export type ChatMode = 'chat' | 'task' | 'computer'
-
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
@@ -60,13 +101,18 @@ export interface ChatMessage {
   provider?: string
   model?: string
   durationMs?: number
-  mode?: ChatMode
+  /** Older messages: the composer's retired Task mode / Use this computer toggles. */
+  mode?: 'task' | 'computer'
   voice?: boolean
-  /** Which lane Auto/Instant/Thinking chose for this reply. */
+  /** Older replies: the lane the retired Auto/Instant/Thinking presets chose. */
   route?: 'instant' | 'thinking'
   level?: number
-  /** The Auto power it ran at, 1..5. */
+  /** Older replies: the retired Auto power it ran at, 1..5. */
   power?: number
+  /** The reasoning effort it ran at (Cursor's is inside `model`). */
+  effort?: string
+  /** What the CLI reported for this reply (chat/stats.mjs); absent = not reported. */
+  stats?: TurnStatsData
   /** A totem's scheduled run, posted to its chat. */
   run?: { trigger: string; status: string; notified: boolean }
   /** A message the bridge never received (offline, dropped connection). Kept locally with Retry. */
@@ -74,20 +120,30 @@ export interface ChatMessage {
   sendError?: string
 }
 
-export type Preset = 'auto' | 'instant' | 'thinking' | 'manual'
+export interface TurnStatsData {
+  ttftMs?: number
+  input?: number
+  cached?: number
+  output?: number
+  reasoning?: number
+  apiMs?: number
+  costUsd?: number
+  tps?: number
+  tools?: number
+}
 
 export interface ModelSettings {
   modelId: string
   speed: string
   effort: string
   context: string
-  /** Auto / Instant / Thinking pick the model on the bridge; manual uses the fields above. */
-  preset: Preset
-  /** The Thinking slider, '1'..'4' (Light … Heavy). */
-  level: string
-  /** Auto's power dial, '1'..'5' (Quick … Max): model and effort together. Unset = Auto reads the message. */
-  power?: string
+  /** Set only on settings saved under the retired Auto/Instant/Thinking presets (see `fromPreset`). */
+  preset?: string
+  /** What the agent may do without asking (chat/AccessControl.tsx). Unset = Full access. */
+  access?: Access
 }
+
+export type Access = 'supervised' | 'edits' | 'auto' | 'full'
 
 export interface ChatThread {
   id: string
@@ -104,8 +160,18 @@ export interface ChatThread {
   totemId?: string
   /** A project chat that reads none of the project's instructions, memory or files. */
   projectContextOff?: boolean
-  /** Finished, and not yet answered or marked done. */
+  /** Finished, and not yet answered or marked read. */
   needsReply?: boolean
+  /** He marked it unread to come back to: opening it no longer reads it. Only set with needsReply. */
+  keepUnread?: boolean
+  /** The owner settled it ('settled') or took it back off the shelf ('active', which also keeps auto-settle off it). See settle.ts. */
+  settledOverride?: 'settled' | 'active'
+  settledAt?: number
+  /** When it last came back off the Settled shelf; counts as activity. */
+  unsettledAt?: number
+  /** Hidden in Snoozed until then. A past time that's still set means it woke and hasn't been opened since. */
+  snoozedUntil?: number
+  snoozedAt?: number
   messages: ChatMessage[]
   createdAt: number
   updatedAt: number
@@ -163,6 +229,8 @@ export interface ModelRow {
   favorite?: boolean
   efforts?: string[]
   defaultEffort?: string | null
+  /** One line on what the model is for and what it costs (Claude seeds). */
+  note?: string
 }
 
 export interface ProviderCaps {
@@ -196,9 +264,10 @@ export interface DraftAttachment {
 }
 
 export type StreamEvent =
-  | { type: 'start'; threadId: string; userMessage: ChatMessage; assistantMessage: ChatMessage; provider: string; mode: ChatMode; power?: number; seq: number }
+  | { type: 'start'; threadId: string; userMessage: ChatMessage; assistantMessage: ChatMessage; provider: string; seq: number }
   | { type: 'delta'; text: string; seq: number }
   | { type: 'tool'; tool: any; seq: number }
+  | { type: 'agent'; toolId: string; agent?: Partial<AgentInfo>; step?: AgentStep; seq: number }
   | { type: 'image'; uploadId: string; alt?: string; url?: string; seq: number }
   | ({ type: 'browser'; seq: number } & BrowserFrame)
   | { type: 'file'; file: FilePart; seq: number }

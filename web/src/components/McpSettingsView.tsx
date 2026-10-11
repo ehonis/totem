@@ -4,14 +4,16 @@ import {
   removeMcpConnection, relayMcpCallback,
   setMcpMode, getGatewayStatus, startGatewayOAuth, resetGatewayOAuth, AuthError,
   getCalendarAccounts, renameCalendarAccount, removeCalendarAccount, startCalendarAccountAuth,
+  getGmailAccounts, renameGmailAccount, removeGmailAccount, startGmailAccountAuth,
 } from '../api'
 import { Hi, ArrowPathIcon, CheckCircleIcon, ExclamationTriangleIcon, TrashIcon, WrenchScrewdriverIcon, ChevronDownIcon, BoltIcon } from '../icons'
 import DataConnectionsPanel from './DataConnectionsPanel'
+import ClaudeToolsPanel from './ClaudeToolsPanel'
 import { WhoopConnectionPanel } from './WhoopConnection'
 import { useErrorToast } from '../toast'
 import {
   siLinear, siNotion, siAsana, siAtlassian, siGithub, siSentry, siVercel,
-  siIntercom, siStripe, siPaypal, siAirtable, siHuggingface, siActualbudget,
+  siIntercom, siStripe, siPaypal, siAirtable, siHuggingface, siActualbudget, siGmail,
 } from 'simple-icons'
 import googleCalendarIcon from '../assets/connection-icons/google-calendar.svg'
 import plaudIcon from '../assets/connection-icons/plaud.png'
@@ -46,6 +48,7 @@ const CONNECTION_GLYPHS: Record<string, any> = {
   airtable: siAirtable,
   huggingface: siHuggingface,
   actual: siActualbudget,
+  gmail: siGmail,
 }
 
 // Deterministic accent per id so letter-avatar fallbacks read as distinct
@@ -192,14 +195,36 @@ function ConnectForm({ app, busy, onAdd }: ConnectFormProps) {
   )
 }
 
-interface GoogleAccountsPanelProps {
-  onAuthError: () => void
+// The four calls behind a set of Google accounts. Calendar and Gmail each keep
+// their own token store, so each passes its own.
+interface GoogleAccountsApi {
+  list: () => Promise<any>
+  rename: (from: string, to: string) => Promise<any>
+  remove: (label: string) => Promise<any>
+  start: (label: string) => Promise<any>
+  /** What stops working when an account is disconnected, for the confirm. */
+  removes: string
 }
 
-// Manage the Google accounts saved for the Calendar connection: see each login's
+const CALENDAR_ACCOUNTS: GoogleAccountsApi = {
+  list: getCalendarAccounts, rename: renameCalendarAccount, remove: removeCalendarAccount, start: startCalendarAccountAuth,
+  removes: 'Its calendar stops syncing here.',
+}
+
+const GMAIL_ACCOUNTS: GoogleAccountsApi = {
+  list: getGmailAccounts, rename: renameGmailAccount, remove: removeGmailAccount, start: startGmailAccountAuth,
+  removes: 'Agents lose access to its mail, and Totem asks Google to revoke the grant.',
+}
+
+interface GoogleAccountsPanelProps {
+  onAuthError: () => void
+  accountsApi?: GoogleAccountsApi
+}
+
+// Manage a set of saved Google accounts (Calendar's, or Gmail's): see each login's
 // real email, rename its label, disconnect it, or add another via Google sign-in.
-// Lives inside the Google Calendar row; loads the account list when first shown.
-function GoogleAccountsPanel({ onAuthError }: GoogleAccountsPanelProps) {
+// Loads the account list when first shown.
+function GoogleAccountsPanel({ onAuthError, accountsApi = CALENDAR_ACCOUNTS }: GoogleAccountsPanelProps) {
   const [accounts, setAccounts] = useState<any[] | null>(null)
   const [edits, setEdits] = useState<Record<string, string>>({})       // label -> draft label
   const [newLabel, setNewLabel] = useState('')
@@ -215,10 +240,10 @@ function GoogleAccountsPanel({ onAuthError }: GoogleAccountsPanelProps) {
 
   const load = useCallback(async () => {
     setLoading(true); setErr('')
-    try { apply((await getCalendarAccounts()).accounts) }
+    try { apply((await accountsApi.list()).accounts) }
     catch (e: any) { if (e instanceof AuthError) return onAuthError?.(); setErr(e.message || 'Failed to load accounts') }
     finally { setLoading(false) }
-  }, [apply, onAuthError])
+  }, [apply, onAuthError, accountsApi])
 
   useEffect(() => { load() }, [load])
 
@@ -232,12 +257,12 @@ function GoogleAccountsPanel({ onAuthError }: GoogleAccountsPanelProps) {
   function doRename(label: string) {
     const to = (edits[label] || '').trim()
     if (!to || to === label) return
-    return run(label, () => renameCalendarAccount(label, to))
+    return run(label, () => accountsApi.rename(label, to))
   }
 
   function doRemove(label: string) {
-    if (!window.confirm(`Disconnect Google account "${label}"? Its calendar stops syncing here.`)) return
-    return run(label, () => removeCalendarAccount(label))
+    if (!window.confirm(`Disconnect Google account "${label}"? ${accountsApi.removes}`)) return
+    return run(label, () => accountsApi.remove(label))
   }
 
   async function doAdd(e: React.FormEvent) {
@@ -246,7 +271,7 @@ function GoogleAccountsPanel({ onAuthError }: GoogleAccountsPanelProps) {
     if (!label) return
     setBusy('__add__'); setErr('')
     try {
-      const res = await startCalendarAccountAuth(label)
+      const res = await accountsApi.start(label)
       window.open(res.authUrl, '_blank', 'noopener')
       setAuthMsg({ label, authUrl: res.authUrl })
       setNewLabel('')
@@ -316,6 +341,53 @@ function GoogleAccountsPanel({ onAuthError }: GoogleAccountsPanelProps) {
       </form>
 
       {err && <div className="error settings-error">{err}</div>}
+    </div>
+  )
+}
+
+// Gmail, under "Mail". Not a manifest server: the bridge holds the grant and
+// serves the tools itself (gmail__* through the gateway), so this row only
+// manages accounts. Sending is never a tool; see docs/gmail.md.
+function GmailConnectionPanel({ onAuthError }: { onAuthError: () => void }) {
+  const [expanded, setExpanded] = useState(false)
+  const [info, setInfo] = useState<any>(null)
+  useEffect(() => {
+    getGmailAccounts().then(setInfo).catch((e) => { if (e instanceof AuthError) onAuthError(); else setInfo({ error: e.message }) })
+  }, [onAuthError, expanded])
+  const count = info?.accounts?.length || 0
+  const broken = info?.accounts?.some((a: any) => a.status === 'error')
+  const chip = !info ? '' : info.error ? 'Error' : !info.configured ? 'Not set up' : !count ? 'Not connected' : broken ? 'Reconnect needed' : `${count} account${count === 1 ? '' : 's'}`
+  const tone = info?.configured && count && !broken ? 'on' : broken || info?.error ? 'bad' : 'warn'
+  return (
+    <div className="app-group">
+      <div className="settings-section-title"><span /><strong>Mail</strong></div>
+      <div className="app-list">
+        <section className={`app-row ${expanded ? 'open' : ''} ${tone === 'on' ? '' : 'disabled'}`}>
+          <button className="app-row-head" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+            <ConnectionIcon id="gmail" name="Gmail" size={30} />
+            <span className="app-row-title">
+              <strong>Gmail</strong>
+              <span>Search, read, label, archive, trash and draft. Sending goes through your inbox.</span>
+            </span>
+            <span className="app-row-status">{chip && <span className={`app-row-chip ${tone}`}>{chip}</span>}</span>
+            <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />
+          </button>
+          {expanded && (
+            <div className="app-row-body">
+              <p className="app-row-desc">
+                Agents get <code>gmail__*</code> tools for every account here. They cannot send: an email they write
+                waits in your Inbox, where you send it or save it as a draft. Uses the same Google OAuth client as
+                Calendar, with the Gmail API enabled on its project (<code>docs/gmail.md</code>).
+              </p>
+              {info && !info.configured ? (
+                <p className="app-row-hint">No Google OAuth client yet. Set one up as for Calendar, then come back.</p>
+              ) : (
+                <GoogleAccountsPanel onAuthError={onAuthError} accountsApi={GMAIL_ACCOUNTS} />
+              )}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   )
 }
@@ -1023,6 +1095,8 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
 
             <WhoopConnectionPanel onAuthError={onAuthError} />
 
+            <GmailConnectionPanel onAuthError={onAuthError} />
+
             <DataConnectionsPanel onAuthError={onAuthError} />
 
             {categories.map((cat) => (
@@ -1050,6 +1124,8 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
                 </div>
               </div>
             ))}
+
+            <ClaudeToolsPanel onAuthError={onAuthError} />
 
             <div className="app-group">
               <div className="settings-section-title"><span /><strong>Custom</strong></div>

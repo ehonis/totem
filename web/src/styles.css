@@ -1659,6 +1659,27 @@ a { color: var(--accent); }
 .app-row-chip.bad { color: #ff8080; border-color: rgba(255, 107, 107, .35); background: rgba(255, 107, 107, .08); }
 .custom-row { border-style: dashed; }
 
+/* Settings → Connections › Claude tools (ClaudeToolsPanel.tsx) */
+.claude-tools { display: grid; gap: 8px; }
+.claude-tools-head { display: flex; align-items: flex-start; gap: 14px; }
+.claude-tools-head .app-row-hint { flex: 1; }
+.claude-tools-actions { flex: none; display: flex; gap: 6px; }
+.claude-tools-actions .btn { display: inline-flex; align-items: center; gap: 6px; }
+.claude-tools-error { color: #ff8080; }
+.claude-tools-search {
+  width: 100%; padding: 8px 11px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--text); font: inherit; font-size: 13px;
+}
+.claude-tools-row { display: flex; align-items: center; padding-right: 13px; }
+.claude-tools-row .app-row-head { flex: 1; min-width: 0; }
+.claude-tools .provider-switch { position: static; flex: none; }
+.app-row.disabled .claude-tools-row .app-row-head { opacity: .6; }
+.claude-tools-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 360px; overflow-y: auto; }
+.claude-tools-list li { display: flex; align-items: center; gap: 10px; padding: 5px 4px; border-radius: 6px; }
+.claude-tools-list li:hover { background: rgba(255, 255, 255, .03); }
+.claude-tools-list code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+@media (max-width: 720px) { .claude-tools-head { flex-direction: column; } }
+
 /* --- WHOOP connection --- */
 .whoop-note {
   display: flex; align-items: center; gap: 7px;
@@ -2312,6 +2333,32 @@ a { color: var(--accent); }
 }
 .inbox-issue-body .md { font-size: 13px; }
 
+/* A staged email, shown as it will arrive. */
+.inbox-btn.draft:hover:not(:disabled) {
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.inbox-email {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+}
+.inbox-email-subject { font-size: 16px; font-weight: 600; line-height: 1.3; word-break: break-word; }
+.inbox-email-head {
+  display: grid; grid-template-columns: max-content 1fr; gap: 3px 10px;
+  margin: 0; padding-bottom: 10px; border-bottom: 1px solid var(--line); font-size: 12.5px;
+}
+.inbox-email-head dt { color: var(--muted); }
+.inbox-email-head dd { margin: 0; word-break: break-word; }
+.inbox-email-body {
+  font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  max-height: 480px; overflow-y: auto;
+}
+.inbox-email-quote {
+  font-size: 12.5px; color: var(--muted); line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  border-left: 2px solid var(--line); padding-left: 10px;
+}
+.inbox-email-quote-head { margin-bottom: 2px; }
+
 /* ---------- Habits: in-house GitHub-style daily tracker ---------- */
 .habits-view {
   --hab-cell: 12px;
@@ -2941,6 +2988,49 @@ a { color: var(--accent); }
 }
 .gh-quick:hover { color: var(--text); border-color: #39405280; background: #232838; }
 
+/* Dev tab: one card per repo, health chips above, alerts below. */
+.dev-card { padding: 14px 16px; margin-bottom: 12px; max-width: 860px; }
+.gh-embedded { margin-top: 28px; }
+.dev-card h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+.dev-card h3 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 14px 0 4px; }
+.dev-card p { font-size: 13px; margin: 6px 0; }
+.dev-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dev-card-actions { display: inline-flex; align-items: center; gap: 12px; flex: none; }
+.dev-setup { margin-top: 12px; padding: 10px 12px; border: 1px solid #e3b34144; border-radius: 8px; background: #e3b3410d; }
+.dev-setup h3 { margin-top: 0; color: var(--amber); }
+.dev-setup ul { margin: 4px 0 8px; padding-left: 18px; font-size: 13px; }
+.dev-setup-command { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dev-setup-command code { background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12.5px; user-select: all; overflow-wrap: anywhere; }
+.dev-setup p { font-size: 12px; margin: 6px 0 0; }
+.dev-pr-meta a.muted { color: var(--muted); }
+.gh-watch { cursor: pointer; }
+.gh-watch.on { color: var(--text); border-color: var(--accent); }
+.dev-switch-label { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.dev-pre { background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 12px; overflow-x: auto; }
+.dev-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; min-width: 0; }
+.dev-row a { color: var(--text); text-decoration: none; }
+.dev-row a:hover { text-decoration: underline; }
+.dev-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-alert .dev-grow { white-space: normal; }
+.dev-time { flex: none; font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+.dev-none { font-size: 13px; padding: 4px 0; }
+.dev-pr-meta { display: inline-flex; align-items: center; gap: 12px; flex: none; font-size: 12px; }
+.dev-pr .gh-badge { margin-left: 6px; }
+.dev-inline { display: inline-flex; align-items: center; gap: 6px; }
+.dev-alert { align-items: flex-start; }
+.dev-alert-body { display: block; font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+.dev-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted); }
+.dev-dot-success { background: var(--green); }
+.dev-dot-failure { background: var(--red); }
+.dev-dot-pending { background: var(--amber); }
+.dev-health { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.dev-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; font-size: 12px; }
+@media (max-width: 720px) {
+  .dev-pr { flex-wrap: wrap; }
+  .dev-pr .dev-grow { flex-basis: 100%; white-space: normal; }
+  .dev-pr-meta { flex-wrap: wrap; gap: 10px; }
+}
+
 /* Overview "Repositories" card rows. */
 .ov-repo-list { display: flex; flex-direction: column; }
 .ov-repo {
@@ -3272,10 +3362,9 @@ body.term-resizing .term-resize-handle { pointer-events: auto; }
 }
 .term-foot-btn:hover { color: var(--text); }
 
-/* One global launcher for AI limits, Totem usage, repositories, and terminal.
-   Quick chat remains its own button directly below it. */
+/* One global launcher for AI limits, Totem usage, repositories, and terminal. */
 .action-launcher {
-  position: fixed; right: 22px; bottom: 72px; z-index: 44;
+  position: fixed; right: 22px; bottom: 20px; z-index: 44;
   transition: right .16s ease;
 }
 .action-fab {
@@ -3311,7 +3400,7 @@ body.term-resizing .term-resize-handle { pointer-events: auto; }
   border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px;
 }
 .insight-panel {
-  position: fixed; right: 22px; bottom: 72px; z-index: 48;
+  position: fixed; right: 22px; bottom: 20px; z-index: 48;
   width: min(460px, calc(100vw - 32px));
   max-height: min(680px, calc(100vh - 94px));
   display: flex; flex-direction: column; overflow: hidden;
@@ -3401,7 +3490,6 @@ body.term-resizing .term-resize-handle { pointer-events: auto; }
   /* Dragging a full-bleed sheet wider is meaningless. */
   .term-resize-handle { display: none; }
   /* Nowhere to shift a fixed element to when the panel covers the screen. */
-  .app.term-open .quick-launch, .app.term-open .quick-panel,
   .app.term-open .action-launcher, .app.term-open .insight-panel,
   .app.term-open .todo-new-task { display: none; }
   /* Above the dock, not on it. The dock is fixed now, so a FAB pinned to the
@@ -3416,12 +3504,6 @@ body.term-resizing .term-resize-handle { pointer-events: auto; }
   }
   .repo-quick-search input { font-size: 16px; }
 }
-
-/* The quick-chat pill and panel are position: fixed, so an open terminal would sit
-   on top of them (or them on top of it). Shift both left by the panel's live width,
-   which TerminalPanel publishes as --term-width. */
-.app.term-open .quick-launch,
-.app.term-open .quick-panel { right: calc(22px + var(--term-width, 0px)); }
 
 /* ---------- Logs: approvals, action log, command outputs ---------- */
 /* Three stacked cards. The approvals panel is first and loudest because

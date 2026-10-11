@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { CLAUDE_SERVICE, CURSOR_ACCESS_SERVICE, setKeychainRunner } from './keychain.mjs';
+import { CLAUDE_SERVICE, CURSOR_ACCESS_SERVICE, keychainCanStore, setKeychainRunner, writeKeychain } from './keychain.mjs';
 import * as claude from './providers/claude.mjs';
 import * as cursor from './providers/cursor.mjs';
 
@@ -20,10 +20,11 @@ async function onFakeMac(items, fn) {
       if (!(service in items)) throw Object.assign(new Error('not found'), { code: 44 });
       return `${items[service]}\n`;
     }
-    if (args[0] === 'add-generic-password') {
-      const [first, second] = String(input).split('\n');
-      assert.equal(first, second, 'security asks for the value twice');
-      items[service] = first;
+    if (args[0] === '-i') {
+      // One interactive command on stdin: add-generic-password -U -a "…" -s "…" -X "<hex>"
+      const m = String(input).match(/^add-generic-password -U -a "([^"]*)" -s "([^"]*)" -X "([0-9a-f]*)"\n$/);
+      assert.ok(m, 'one add-generic-password command on stdin');
+      items[m[2]] = Buffer.from(m[3], 'hex').toString('utf8');
       return '';
     }
     throw new Error(`unexpected security call ${args[0]}`);
@@ -66,16 +67,80 @@ test('Claude: a refreshed Keychain login is written back to the Keychain', async
     assert.equal(result.status, 'ok');
     assert.equal(result.tokenRefreshed, true);
     assert.equal(result.sourceFile, `Keychain: ${CLAUDE_SERVICE}`);
-    const write = calls.find((c) => c.args[0] === 'add-generic-password');
+    const write = calls.find((c) => c.args[0] === '-i');
     assert.ok(write, 'the refreshed login must be saved');
-    assert.ok(write.args.includes('-U'), 'it replaces the existing item');
-    assert.equal(write.args[write.args.indexOf('-a') + 1], 'owner');
-    assert.equal(write.args.at(-1), '-w', 'the value goes on stdin, never on the command line');
-    assert.ok(!write.args.join(' ').includes('r-new'), 'no token in the arguments');
+    assert.deepEqual(write.args, ['-i'], 'the value goes on stdin, never on the command line');
+    assert.match(write.input, /^add-generic-password -U -a "owner" -s "Claude Code-credentials" -X /);
     const stored = JSON.parse(items[CLAUDE_SERVICE]);
     assert.equal(stored.claudeAiOauth.refreshToken, 'r-new');
     assert.equal(stored.claudeAiOauth.accessToken, 'new');
     assert.equal(stored.other, 'kept');
+  });
+});
+
+test('Claude: a real-sized refreshed login survives the write intact', async () => {
+  // Regression: `add-generic-password -w` read the value from a prompt capped
+  // at 128 characters and stored the truncated JSON, destroying the login.
+  const login = { claudeAiOauth: { accessToken: 'a'.repeat(108), refreshToken: 'r'.repeat(108), expiresAt: Date.now() - 1000, scopes: ['user:inference', 'user:profile'], subscriptionType: 'max' } };
+  await onFakeMac({ [CLAUDE_SERVICE]: JSON.stringify(login) }, async ({ home, items }) => {
+    globalThis.fetch = async (url) =>
+      String(url).includes('/oauth/token')
+        ? json({ access_token: 'n'.repeat(108), refresh_token: 'm'.repeat(108), expires_in: 3600 })
+        : json({ five_hour: { utilization: 10, resets_at: null } });
+    const result = await claude.fetchAccount({ backend: 'claude', home: join(home, '.claude'), label: 'claude-default' });
+    assert.equal(result.status, 'ok');
+    assert.ok(items[CLAUDE_SERVICE].length > 300);
+    const stored = JSON.parse(items[CLAUDE_SERVICE]);
+    assert.equal(stored.claudeAiOauth.refreshToken, 'm'.repeat(108));
+  });
+});
+
+test('Claude: a login too large to save is never refreshed', async () => {
+  // Refreshing spends the refresh token. If the new one cannot be saved, the
+  // login is gone, so leave the refresh to Claude Code.
+  const login = { claudeAiOauth: { accessToken: 'old', refreshToken: 'r-old', expiresAt: Date.now() - 1000 }, mcpOAuth: { big: 'x'.repeat(3000) } };
+  await onFakeMac({ [CLAUDE_SERVICE]: JSON.stringify(login) }, async ({ home, calls }) => {
+    let tokenCalls = 0;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('/oauth/token')) tokenCalls += 1;
+      return json({});
+    };
+    const result = await claude.fetchAccount({ backend: 'claude', home: join(home, '.claude'), label: 'claude-default' });
+    assert.equal(result.status, 'expired');
+    assert.match(result.error, /too large to save/);
+    assert.equal(tokenCalls, 0);
+    assert.ok(!calls.some((c) => c.args[0] === '-i'));
+  });
+});
+
+test('Claude: an unreadable Keychain login shows as a broken card, not a missing one', async () => {
+  await onFakeMac({ [CLAUDE_SERVICE]: '{"claudeAiOauth":{"accessToken":"trunc' }, async ({ home }) => {
+    const found = await claude.discover();
+    assert.deepEqual(found, [{ backend: 'claude', home: join(home, '.claude'), label: 'claude-default' }]);
+    const result = await claude.fetchAccount(found[0]);
+    assert.equal(result.status, 'expired');
+    assert.match(result.error, /not valid JSON.*claude auth login/);
+  });
+});
+
+test('writeKeychain throws when the stored value does not match', async () => {
+  await onFakeMac({}, async ({ items }) => {
+    const prev = setKeychainRunner(async (args) => {
+      if (args[0] === '-i') { items.svc = 'truncated'; return ''; }
+      return `${items.svc}\n`;
+    });
+    try {
+      await assert.rejects(writeKeychain('svc', 'the-full-value'), /did not round-trip/);
+    } finally {
+      setKeychainRunner(prev);
+    }
+  });
+});
+
+test('keychainCanStore refuses values past the security -i line limit', async () => {
+  await onFakeMac({}, async () => {
+    assert.equal(keychainCanStore(CLAUDE_SERVICE, 'x'.repeat(1500)), true);
+    assert.equal(keychainCanStore(CLAUDE_SERVICE, 'x'.repeat(2500)), false);
   });
 });
 

@@ -1,0 +1,77 @@
+/* The Totems lobby (TotemLobby.tsx): the 3D scene with the Totems tab's own
+   chrome over it (totems.css): same surfaces, buttons and type, one accent. */
+.tm-view.tl-view { padding: 0; overflow: hidden; }
+.tl-root { position: relative; height: 100%; min-height: 480px; overflow: hidden; background: #05060c; isolation: isolate; }
+.tl-stage { position: absolute; inset: 0; }
+.tl-stage .tl-gl { display: block; width: 100%; height: 100%; touch-action: none; }
+.tl-tray { display: none; }
+.tl-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13.5px; }
+
+/* Name tags over heads; scene.ts positions them every frame. */
+.tl-tags { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.tl-hud, .tl-panel, .tl-roster, .tl-hint { z-index: 1; }
+.tl-tag {
+  position: absolute; left: 0; top: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; margin-top: -6px;
+  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+  color: color-mix(in srgb, var(--text) 78%, transparent); font-size: 12px; will-change: transform;
+}
+.tl-tag i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.tl-tag.s-off i { background: var(--muted); }
+.tl-tag.s-error i { background: var(--red); }
+.tl-tag.s-running i { background: var(--accent); }
+.tl-tag.ghost { border-style: dashed; }
+.tl-tag.front, .tl-tag.hover { color: var(--text); border-color: color-mix(in srgb, var(--text) 22%, var(--line)); background: var(--bg-2); }
+.tl-tag.front { font-weight: 500; }
+
+/* Header: the list's, over the scene. */
+.tl-hud { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 26px 28px; pointer-events: none; }
+.tl-hud > * { pointer-events: auto; }
+.tl-hud h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -.01em; color: var(--text); }
+.tl-hud .tm-lede { margin-top: 4px; }
+
+/* The panel: one totem, laid out like its detail page. */
+.tl-panel {
+  position: absolute; top: 92px; right: 24px; width: min(360px, 34vw); max-height: calc(100% - 116px); overflow-y: auto; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 14px; padding: 18px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+}
+.tl-panel .tm-detail-head { gap: 12px; }
+.tl-panel h2 { margin: 0; font-size: 18px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.tl-panel .tm-detail-title .muted { font-size: 12.5px; line-height: 1.4; }
+.tl-panel .tm-actions { margin-top: 0; }
+.tl-desc { margin: 0; font-size: 13.5px; line-height: 1.5; color: color-mix(in srgb, var(--text) 72%, transparent); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.tl-note { align-self: flex-start; }
+.tl-rows { margin: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.tl-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.tl-row dt { color: var(--muted); }
+.tl-row dd { margin: 0; color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
+.tl-row dd.tm-bad { color: var(--red, #f0879e); }
+.tl-last { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--bg-3); font-size: 12.5px; }
+.tl-last p { margin: 0; font-size: 13px; line-height: 1.5; color: color-mix(in srgb, var(--text) 80%, transparent); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.tl-last.bad p { color: var(--red, #f0879e); }
+
+/* Roster along the bottom: every totem, the front one marked. */
+.tl-roster {
+  position: absolute; left: 24px; right: calc(min(360px, 34vw) + 48px); bottom: 20px; display: flex; align-items: center; gap: 4px;
+  padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2);
+}
+.tl-chips { flex: 1; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.tl-chips::-webkit-scrollbar { display: none; }
+.tl-chip {
+  flex: none; display: inline-flex; align-items: center; gap: 7px; max-width: 200px; height: 32px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid transparent; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer;
+}
+.tl-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-chip:hover { color: var(--text); background: var(--bg-3); }
+.tl-chip.on { color: var(--text); background: var(--bg-3); border-color: color-mix(in srgb, var(--text) 18%, var(--line)); }
+.tl-chip.ghost { font-style: normal; }
+.tl-chip.s-off:not(.on) { opacity: .62; }
+.tl-chip.s-error { color: var(--red, #f0879e); }
+.tl-roster .tm-chat-btn { flex: none; }
+.tl-hint { position: absolute; left: 30px; bottom: 70px; margin: 0; font-size: 12px; pointer-events: none; }
+
+@media (max-width: 1100px) {
+  .tl-panel { width: 310px; }
+  .tl-roster { right: 358px; }
+  .tl-hint { display: none; }
+}

@@ -182,7 +182,7 @@ export class Poller extends EventEmitter {
         ? this.accounts.filter((a) => `${a.backend}:${a.label}` === only)
         : this.accounts;
 
-      const results = await Promise.all(targets.map((a) => this.fetchAccount(a)));
+      const results = await Promise.all(targets.map((a) => this.fetchOne(a)));
 
       let accounts = results;
       if (only) {
@@ -217,7 +217,7 @@ export class Poller extends EventEmitter {
     const run = (async () => {
       const targets = this.accounts.filter((a) => a.backend === backend);
       if (!targets.length) return this.snapshot;
-      const results = await Promise.all(targets.map((a) => this.fetchAccount(a)));
+      const results = await Promise.all(targets.map((a) => this.fetchOne(a)));
       const byId = new Map(this.snapshot.accounts.map((a) => [a.id, a]));
       for (const r of results) byId.set(r.id, r);
       return this.publish([...byId.values()]);
@@ -268,6 +268,26 @@ export class Poller extends EventEmitter {
       }
     }, USE_FOLLOWUP_MS);
     this.followupUse.set(backend, handle);
+  }
+
+  /**
+   * Fetch one account, keeping its last good reading through a failed poll.
+   *
+   * The usage endpoints answer a busy poller with the odd 429 or 5xx, and the
+   * next poll usually succeeds. Blanking the card for each of those makes the
+   * meters flicker in and out, so a failure after a good reading keeps the old
+   * meters, marked `stale` with the error and when it happened. A login that
+   * has expired is not transient and replaces the card as before.
+   */
+  async fetchOne(account) {
+    const next = await this.fetchAccount(account);
+    const prev = this.snapshot.accounts.find((a) => a.id === next.id);
+    if (next.status !== 'error') return next;
+    if (next.error !== prev?.error && next.error !== prev?.staleError) {
+      console.error(`[poller] ${next.id}: ${next.error}`);
+    }
+    if (prev?.status !== 'ok' || !prev.meters?.length) return next;
+    return { ...prev, displayName: next.displayName ?? prev.displayName, stale: true, staleError: next.error, staleAt: next.fetchedAt ?? Date.now() };
   }
 
   /** Stable display order: grouped by backend, then by label. */

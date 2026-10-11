@@ -441,6 +441,7 @@ test('a job saved under a renamed id and runner carries over with its settings',
 // ---- watch triggers --------------------------------------------------------
 
 const WATCH = { type: 'watch', source: { kind: 'git', repo: 'https://github.com/o/r.git', ref: 'main' }, everyMinutes: 2 }
+const KEY = 'git https://github.com/o/r.git main'
 
 test('a watch job has no clock-based next run, ever', async () => {
   const store = await freshStore()
@@ -462,19 +463,40 @@ test('switching between schedule and watch recomputes the next run and resets th
   assert.ok(job.nextRunAt)
   const watching = await store.update(job.id, { trigger: WATCH })
   assert.equal(watching.nextRunAt, null)
-  await store.recordWatch(job.id, { fingerprint: 'abc', label: 'abc', checkedAt: 1 })
-  assert.equal((await store.update(job.id, { trigger: { ...WATCH, everyMinutes: 10 } })).watch.fingerprint, 'abc', 'same source keeps its baseline')
+  await store.recordWatch(job.id, { seen: { [KEY]: { fingerprint: 'abc', label: 'abc' } }, checkedAt: 1 })
+  assert.equal((await store.update(job.id, { trigger: { ...WATCH, everyMinutes: 10 } })).watch.seen[KEY].fingerprint, 'abc', 'same source keeps its baseline')
   assert.equal((await store.update(job.id, { trigger: { ...WATCH, source: { ...WATCH.source, ref: 'dev' } } })).watch, null, 'a new source starts over')
   const back = await store.update(job.id, { trigger: null })
   assert.equal(back.trigger, null)
   assert.ok(back.nextRunAt)
 })
 
+test('adding a source keeps the baselines of the ones it already watches, and checks at once', async () => {
+  const store = await freshStore()
+  const job = await store.create({ name: 'Two', prompt: 'x', trigger: WATCH })
+  await store.recordWatch(job.id, { seen: { [KEY]: { fingerprint: 'abc', label: 'abc' } }, checkedAt: 1 })
+  const other = { kind: 'git', repo: 'https://github.com/o/s.git', ref: 'main' }
+  const both = await store.update(job.id, { trigger: { type: 'watch', sources: [WATCH.source, other], everyMinutes: 2 } })
+  assert.deepEqual(Object.keys(both.watch.seen), [KEY])
+  assert.equal(both.watch.checkedAt, null)
+  assert.match(both.scheduleLabel, /^When main in o\/r or main in o\/s changes/)
+  const one = await store.update(job.id, { trigger: { type: 'watch', sources: [other], everyMinutes: 2 } })
+  assert.equal(one.watch, null, 'nothing it still watches had a baseline')
+})
+
+test('a saved single-source watch from before lists of sources keeps its baseline', async () => {
+  const store = await freshStore()
+  const job = await store.create({ name: 'Old', prompt: 'x', trigger: WATCH })
+  await store.recordWatch(job.id, { fingerprint: 'abc', label: 'abc', checkedAt: 1 })
+  const [after] = (await store.list()).filter((j) => j.id === job.id)
+  assert.deepEqual(after.watch.seen, { [KEY]: { fingerprint: 'abc', label: 'abc' } })
+})
+
 test('recordWatch saves check state without counting as an edit, and only for watch jobs', async () => {
   const store = await freshStore()
   const job = await store.create({ name: 'W', prompt: 'x', trigger: WATCH })
-  const saved = await store.recordWatch(job.id, { fingerprint: 'f1', label: 'f1', checkedAt: 5, error: null })
-  assert.deepEqual({ ...saved.watch }, { fingerprint: 'f1', label: 'f1', checkedAt: 5, changedAt: null, error: null, failures: 0 })
+  const saved = await store.recordWatch(job.id, { seen: { [KEY]: { fingerprint: 'f1', label: 'f1' } }, label: 'f1', checkedAt: 5, error: null })
+  assert.deepEqual({ ...saved.watch }, { seen: { [KEY]: { fingerprint: 'f1', label: 'f1' } }, label: 'f1', checkedAt: 5, changedAt: null, error: null, failures: 0 })
   assert.equal(saved.updatedAt, job.updatedAt)
   const plain = await store.create({ name: 'P', prompt: 'x' })
   assert.equal(await store.recordWatch(plain.id, { fingerprint: 'f' }), null)
@@ -486,7 +508,7 @@ test('a seed can ship a watch trigger and a notify mode', async () => {
   })
   const job = (await store.list()).find((j) => j.id === 'deploy')
   assert.equal(job.notify, 'always')
-  assert.equal(job.trigger.source.ref, 'main')
+  assert.equal(job.trigger.sources[0].ref, 'main')
   assert.equal(job.nextRunAt, null)
 })
 

@@ -41,9 +41,13 @@ or an auth proxy in front of it, and its defaults reflect that. Formerly named V
 - **Integrations.** WHOOP (sleep and recovery), Strava (activities, gear, mileage), Plaud
   (voice recorder, via its MCP server), GitHub (App or `gh` CLI), Google Calendar, web push
   notifications, Open-Meteo weather and Google News headlines, and a plug-in-the-camera photo
-  sync to Apple Photos.
+  sync to Apple Photos. On a Mac: your Messages (read and send from the dashboard), Contacts and
+  Photos library (searchable by what is in the picture), with agents limited to drafting messages
+  for you to send.
 - **Operational pieces.** An action log of every mutation, approval leases, an optional web
-  terminal (off by default), and a usage view of what the assistant is actually used for.
+  terminal (off by default), an optional Screen tab that shows and controls the machine's
+  desktop over VNC with a screenshot tool for agents (off by default), and a usage view of
+  what the assistant is actually used for.
 
 ## Architecture
 
@@ -67,7 +71,7 @@ bridge.mjs  (one Node process, port 8787)
 | `ai/` | Settings stored outside `.env` (AI keys, integration credentials) |
 | `todos/`, `goals/`, `lists/` | Local task, goal and list services over SQLite, with HTTP and MCP surfaces |
 | `journal/`, `notify/`, `jobs/`, `skills/`, `logs/` | Voice journal, notifications and web push, job store, prompt skills, action log and approvals |
-| `strava/`, `whoop/`, `camera/`, `ai-usage/`, `providers/`, `terminal/` | Integrations, quota polling, CLI account registry, web terminal |
+| `strava/`, `whoop/`, `camera/`, `apple/`, `ai-usage/`, `providers/`, `terminal/` | Integrations (including Messages, Contacts and Photos on a Mac), quota polling, CLI account registry, web terminal |
 | `mcp-gateway.mjs` | The stdio MCP aggregator each agent CLI registers |
 | `web/` | Vite + React + TypeScript + Tailwind dashboard (PWA) |
 | `brain.example/` | Starter layout for the private notes repo kept at `data/brain` |

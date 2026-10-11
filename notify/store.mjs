@@ -327,7 +327,10 @@ export function createNotifyStore({
     return Array.isArray(parsed?.subscriptions) ? parsed.subscriptions : []
   }
 
-  async function saveSubscription({ subscription, label = null, userAgent = null }) {
+  // A native app registers a device token instead of a Web Push subscription. It is
+  // stored as a subscription too, keyed by `apns:<token>`, so expiry, delivery and
+  // removal work the same for both.
+  async function saveSubscription({ subscription, label = null, userAgent = null, transport = 'webpush', token = null, environment = null }) {
     const endpoint = subscription?.endpoint
     if (!endpoint) throw new Error('subscription has no endpoint')
     return withLock(async () => {
@@ -339,6 +342,7 @@ export function createNotifyStore({
         // which is exactly what pushsubscriptionchange does.
         Object.assign(existing, {
           keys: subscription.keys,
+          ...(transport === 'apns' ? { transport, token, environment } : {}),
           label: label || existing.label,
           userAgent: userAgent || existing.userAgent,
           state: 'active',
@@ -352,6 +356,7 @@ export function createNotifyStore({
         id: `d_${randomUUID().slice(0, 8)}`,
         endpoint,
         keys: subscription.keys || null,
+        ...(transport === 'apns' ? { transport, token, environment } : {}),
         label: label || 'This device',
         userAgent: userAgent || null,
         state: 'active',

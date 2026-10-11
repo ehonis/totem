@@ -194,3 +194,42 @@ test('concurrent pollBackend calls for one backend share a single fetch', async 
   await Promise.all([a, b]);
   assert.equal(started, 1);
 });
+
+test('a failed poll keeps the last good reading, marked stale', async () => {
+  const clock = createClock();
+  let next = { status: 'error', error: 'HTTP 429', fetchedAt: 2000 };
+  const { poller } = pollerWith(clock, {
+    accounts: [account('claude', 'claude-default')],
+    fetch: async (a) => ({ id: `${a.backend}:${a.label}`, backend: a.backend, label: a.label, ...next }),
+  });
+  const good = { id: 'claude:claude-default', backend: 'claude', label: 'claude-default', status: 'ok', fetchedAt: 1000, meters: [{ key: 'session', usedPct: 40 }] };
+  poller.snapshot.accounts = [good];
+
+  await poller.poll();
+  let card = poller.snapshot.accounts[0];
+  assert.equal(card.status, 'ok');
+  assert.equal(card.stale, true);
+  assert.equal(card.staleError, 'HTTP 429');
+  assert.equal(card.fetchedAt, 1000, 'still says when the reading is from');
+  assert.deepEqual(card.meters, good.meters);
+
+  next = { status: 'ok', fetchedAt: 3000, meters: [{ key: 'session', usedPct: 41 }] };
+  await poller.pollBackend('claude');
+  card = poller.snapshot.accounts[0];
+  assert.equal(card.stale, undefined, 'a good read clears it');
+  assert.equal(card.meters[0].usedPct, 41);
+
+  next = { status: 'expired', error: 'Re-login', fetchedAt: 4000 };
+  await poller.poll();
+  assert.equal(poller.snapshot.accounts[0].status, 'expired', 'an expired login is not papered over');
+});
+
+test('a failed first poll still shows the error', async () => {
+  const clock = createClock();
+  const { poller } = pollerWith(clock, {
+    accounts: [account('claude', 'claude-default')],
+    fetch: async (a) => ({ id: `${a.backend}:${a.label}`, backend: a.backend, label: a.label, status: 'error', error: 'HTTP 500' }),
+  });
+  await poller.poll();
+  assert.equal(poller.snapshot.accounts[0].status, 'error');
+});

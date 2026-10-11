@@ -4,7 +4,8 @@ import ProjectIcon from './ProjectIcon'
 import { TI } from './ui'
 import { IconFolderPlus, IconArrowLeft, IconChevronDown, IconChevronRight } from './icons'
 import { pushError } from '../toast'
-import ThreadList, { ThreadItem } from './ThreadList'
+import ThreadList, { ThreadItem, ShelvedChats } from './ThreadList'
+import { isSnoozed, settledAt } from './settle'
 import { useThreadDrop } from './dnd'
 import type { Project } from './types'
 
@@ -20,7 +21,8 @@ const OPEN_FOLDERS_KEY = 'totem.projects.openFolders'
 /** Some chat in these projects is waiting on the owner. */
 function useWaiting(ids: string[]) {
   const key = ids.join(',')
-  return useChat((s) => s.threads.some((t) => t.needsReply && !s.runs[t.id] && !!t.projectId && key.split(',').includes(t.projectId)))
+  // A snoozed chat is out of the way until it wakes.
+  return useChat((s) => s.threads.some((t) => t.needsReply && !s.runs[t.id] && !isSnoozed(t, Date.now()) && !!t.projectId && key.split(',').includes(t.projectId)))
 }
 
 /** A typed-in name that becomes a project or folder on Enter. */
@@ -113,6 +115,9 @@ function FolderRow({ f, open, onToggle, onOpenChat }: { f: Project; open: boolea
   const runs = useChat((s) => s.runs)
   const chats = useMemo(() => allThreads.filter((t) => t.projectId === f.id && (t.messages.length > 0 || t.id === activeId || runs[t.id])), [allThreads, f.id, activeId, runs])
   const waiting = useWaiting([f.id])
+  const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
+  // The count is what's still in play, not what's parked on the folder's shelves.
+  const inPlay = chats.filter((t) => !isSnoozed(t, Date.now()) && !settledAt(t, Date.now(), autoDays, !!runs[t.id])).length
   const drop = useThreadDrop(f.id, f.name)
   return (
     <div className={`vc-folder ${drop.over ? 'drop-over' : ''}`} {...drop.props}>
@@ -124,12 +129,14 @@ function FolderRow({ f, open, onToggle, onOpenChat }: { f: Project; open: boolea
           <ProjectIcon p={f} size={16} />
           <span className="vc-thread-title">{f.name}</span>
           {waiting && !open && <span className="vc-reply-dot" aria-label="A chat is waiting on you" />}
-          {chats.length > 0 && <span className="vc-proj-count">{chats.length}</span>}
+          {inPlay > 0 && <span className="vc-proj-count">{inPlay}</span>}
         </button>
       </div>
       {open && (
         <div className="vc-folder-chats">
-          {chats.map((t) => <ThreadItem key={t.id} t={t} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpenChat} />)}
+          <ShelvedChats threads={chats} scope={f.id} activeId={activeId} onOpen={onOpenChat}>
+            {(active, now) => active.map((t) => <ThreadItem key={t.id} t={t} now={now} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpenChat} />)}
+          </ShelvedChats>
           {!chats.length && <div className="vc-folder-empty">Drag a chat here, or open the folder to start one.</div>}
         </div>
       )}

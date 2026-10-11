@@ -30,6 +30,12 @@ interface Habit {
   archived: boolean
 }
 
+// The WHOOP-synced sleep habit isn't shown here or on the Overview: nobody logs
+// it by hand, and Bushido is where it is read. The habit, its nightly sync and its
+// history stay in the habit store, so agents and search still see every night,
+// and Bushido gets it through /api/whoop/training.
+export const isSyncedSleep = (h: { metric?: { source?: string } | null }) => h.metric?.source === 'whoop-sleep'
+
 interface Entry { count: number; note?: string; value?: number | null; parts?: Record<string, number> }
 type Entries = Record<string, Record<string, Entry>> // date -> habitId -> entry
 
@@ -1255,8 +1261,9 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
 
   useEffect(() => { load() }, [load])
 
-  const active = (data?.habits || []).filter((h) => !h.archived)
+  const active = (data?.habits || []).filter((h) => !h.archived && !isSyncedSleep(h))
   const archived = (data?.habits || []).filter((h) => h.archived)
+  const sleepHidden = (data?.habits || []).some((h) => !h.archived && isSyncedSleep(h))
   const today = data?.today || ''
   const checkinDate = checkinDay === 'today' ? today : addDays(today, -1)
 
@@ -1356,6 +1363,7 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
       ) : !active.length ? (
         <div className="empty">
           No habits yet. Add one here, or just tell Totem — “track a reading habit for me”.
+          {sleepHidden && ' Sleep syncs from WHOOP on its own and shows in Bushido.'}
         </div>
       ) : (
         <>
@@ -1431,6 +1439,10 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
             )
           })}
         </>
+      )}
+
+      {sleepHidden && active.length > 0 && (
+        <p className="muted" style={{ fontSize: 13 }}>Sleep syncs from WHOOP on its own and shows in Bushido.</p>
       )}
 
       {archived.length > 0 && (

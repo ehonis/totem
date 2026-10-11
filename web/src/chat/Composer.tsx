@@ -3,14 +3,16 @@ import { Hi } from '../icons'
 import { getChatCommands, subscribeChatCommands } from '../studio'
 import { pushError } from '../toast'
 import { deleteUpload, transcribe, uploadFile } from './api'
-import { AttachmentChip } from './Message'
+import { AttachmentChip, useMentionSet } from './Message'
+import { insertMention, mentionAtCaret, splitMentions } from './mentions'
 import { micUnavailableReason, openMic, closeMic, recordUntilStopped } from './recorder'
-import type { Attachment, ChatMode, DraftAttachment } from './types'
+import type { Attachment, DraftAttachment } from './types'
 import { TI, useDismiss } from './ui'
 import {
-  IconArrowUp, IconPlayerStopFilled, IconPlus, IconPaperclip, IconPhoto, IconMicrophone, IconWaveSine, IconBolt,
-  IconDeviceDesktop, IconSparkles, IconX, IconCheck, IconLoader2, IconBrain, IconWorld, IconCornerUpRight,
+  IconArrowUp, IconPlayerStopFilled, IconPlus, IconPaperclip, IconPhoto, IconMicrophone, IconWaveSine,
+  IconSparkles, IconX, IconCheck, IconLoader2, IconCornerUpRight, IconPuzzle,
 } from './icons'
+import type { ChatCommand } from '../studio'
 
 // A paste this long becomes a chip instead of filling the box. The text is sent
 // in full either way; the chip is about being able to see your own question.
@@ -27,7 +29,7 @@ export interface ComposerHandle {
 export interface ComposerProps {
   value: string
   onChange: (v: string) => void
-  onSend: (payload: { text: string; attachments: Attachment[]; mode: ChatMode; browser?: boolean }) => void
+  onSend: (payload: { text: string; attachments: Attachment[] }) => void
   onStop: () => void
   /**
    * A message while the reply is still running steers it (T3 Code's follow-up):
@@ -41,36 +43,50 @@ export interface ComposerProps {
   autoFocus?: boolean
   compact?: boolean
   allowCommands?: boolean
-  computerUse?: { available: boolean; reason?: string | null }
   maxUploadBytes?: number
   onAuthError?: () => void
   /** The model chip (T3-style), after the + button. */
   leftSlot?: React.ReactNode
   /** Thinking effort, beside the mic. */
   rightSlot?: React.ReactNode
-  /** "Think longer" in the + menu, the way ChatGPT offers it. */
-  onThinkLonger?: () => void
 }
 
 const coarse = () => window.matchMedia?.('(pointer: coarse)').matches
 
-function commandQuery(value: string) {
-  const m = /^([/$])(\S*)$/.exec(value)
-  return m ? { prefix: m[1], term: m[2].toLowerCase() } : null
-}
-
 let pasteCount = 0
 
+/**
+ * The menu for a `/` or `$` token: Totem's skills with that prefix, then (for `/`)
+ * the owner's agent skills. Names that start with the term come first.
+ */
+function rankCommands(catalog: ChatCommand[], prefix: string, term: string, alone: boolean) {
+  const score = (c: ChatCommand) => {
+    const name = c.cmd.slice(1)
+    if (name.startsWith(term)) return 0
+    if (name.includes(term) || c.title.toLowerCase().includes(term)) return 1
+    return -1
+  }
+  const pick = (list: ChatCommand[]) => list
+    .map((c) => ({ c, s: score(c) })).filter((x) => x.s >= 0)
+    .sort((a, b) => a.s - b.s).map((x) => x.c)
+  const own = pick(catalog.filter((c) => c.kind !== 'agent' && c.cmd.startsWith(prefix) && (alone || c.mode !== 'fill')))
+  const agent = prefix === '/' ? pick(catalog.filter((c) => c.kind === 'agent')) : []
+  return [...own, ...agent].slice(0, 40)
+}
+
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onSend, onStop, onSteer, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, computerUse, maxUploadBytes = 25 * 1024 * 1024, leftSlot, rightSlot, onThinkLonger } = props
+  const { value, onChange, onSend, onStop, onSteer, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, leftSlot, rightSlot } = props
   const ta = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const photoInput = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const marksRef = useRef<HTMLDivElement>(null)
+  const cmdMenuRef = useRef<HTMLDivElement>(null)
+  // Where the caret is, so "/" opens the skills menu mid-sentence, not only at the start.
+  const [caret, setCaret] = useState(0)
+  // The token whose menu Escape closed (its start), so it stays closed while you type on.
+  const [dismissed, setDismissed] = useState<number | null>(null)
   const [drafts, setDrafts] = useState<(DraftAttachment & { progress?: number })[]>([])
-  const [mode, setMode] = useState<ChatMode>('chat')
-  // The browser is opt-in per message: off unless he turns it on (or asks in words).
-  const [browser, setBrowser] = useState(false)
   const [menu, setMenu] = useState(false)
   const [sel, setSel] = useState(0)
   const [dictation, setDictation] = useState<null | { state: 'recording' | 'transcribing'; startedAt: number; level: number }>(null)
@@ -172,28 +188,46 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
 
   function send() {
     if (!canSend) return
-    onSend({ text: value.trim(), attachments: ready, mode, ...(browser ? { browser: true } : {}) })
-    setBrowser(false)
+    onSend({ text: value.trim(), attachments: ready })
     drafts.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl))
     setDrafts([])
-    if (mode === 'computer') setMode('chat')
   }
 
-  // --- skills menu ("/" or "$" at the start) -------------------------------
+  // --- skills menu ("/" or "$" anywhere) -----------------------------------
+  // Picking a skill puts `/name` in the message where you typed it, so you can say
+  // what to use it on; the bridge sends the skill's instructions with your words.
+  // A message that is only a Totem command still runs that skill on its own.
   const catalog = useSyncExternalStore(subscribeChatCommands, getChatCommands, getChatCommands)
-  const query = allowCommands ? commandQuery(value) : null
-  const matches = query
-    ? catalog.filter((c) => c.cmd.startsWith(query.prefix) && (c.cmd.slice(1).startsWith(query.term) || c.title.toLowerCase().includes(query.term))).slice(0, 8)
-    : []
+  const known = useMentionSet()
+  const token = allowCommands && !dictation ? mentionAtCaret(value, caret) : null
+  const query = token && token.start !== dismissed ? token : null
+  // Only the token in an otherwise empty box can take a fill-mode skill's prefix.
+  const alone = !!query && query.start === 0 && !value.slice(query.end).trim()
+  const matches: ChatCommand[] = query ? rankCommands(catalog, query.prefix, query.term, alone) : []
   useEffect(() => { setSel(0) }, [value])
+  useEffect(() => { if (!token) setDismissed(null) }, [token?.start])
+  useEffect(() => {
+    cmdMenuRef.current?.querySelector('.vc-cmd.active')?.scrollIntoView({ block: 'nearest' })
+  }, [sel])
 
-  function chooseCommand(c: any) {
-    if (c.mode === 'fill') {
-      onChange(c.text)
-      requestAnimationFrame(() => { ta.current?.focus(); ta.current?.setSelectionRange(c.text.length, c.text.length) })
-    } else {
-      onSend({ text: c.text, attachments: [], mode: 'chat' })
-    }
+  function placeCaret(next: string, pos: number) {
+    onChange(next)
+    setCaret(pos)
+    requestAnimationFrame(() => { grow(); ta.current?.focus(); ta.current?.setSelectionRange(pos, pos) })
+  }
+
+  function chooseCommand(c: ChatCommand) {
+    if (!query) return
+    if (c.mode === 'fill' && alone) { placeCaret(c.text, c.text.length); return }
+    const { value: next, caret: pos } = insertMention(value, query.start, query.end, c.cmd)
+    placeCaret(next, pos)
+  }
+
+  function startMention() {
+    const sep = value && !/\s$/.test(value) ? ' ' : ''
+    const next = `${value}${sep}/`
+    setDismissed(null)
+    placeCaret(next, next.length)
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -201,7 +235,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
       if (e.key === 'ArrowDown') { e.preventDefault(); setSel((s) => (s + 1) % matches.length); return }
       if (e.key === 'ArrowUp') { e.preventDefault(); setSel((s) => (s - 1 + matches.length) % matches.length); return }
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); chooseCommand(matches[sel]); return }
-      if (e.key === 'Escape') { e.preventDefault(); onChange(''); return }
+      if (e.key === 'Escape') { e.preventDefault(); setDismissed(query!.start); return }
     }
     // On a phone, Return is a newline and the button sends — the way every
     // messaging app on it behaves.
@@ -261,18 +295,27 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   return (
     <div className={`vc-composer ${compact ? 'compact' : ''}`}>
       {matches.length > 0 && (
-        <div className="vc-cmd-menu" role="listbox">
-          <div className="vc-menu-label">Skills</div>
-          {matches.map((c, i) => (
-            <button key={c.cmd} type="button" role="option" aria-selected={i === sel} className={`vc-cmd ${i === sel ? 'active' : ''}`}
-              onMouseDown={(e) => { e.preventDefault(); chooseCommand(c) }} onMouseEnter={() => setSel(i)}>
-              <span className="vc-cmd-icon"><Hi icon={c.icon} size={16} /></span>
-              <span className="vc-cmd-text"><span className="vc-cmd-name">{c.cmd}</span><span className="vc-cmd-desc">{c.desc}</span></span>
-            </button>
-          ))}
+        <div className="vc-cmd-menu" role="listbox" ref={cmdMenuRef}>
+          {matches.map((c, i) => {
+            const group = c.kind === 'agent' ? 'Your agent skills' : 'Totem skills'
+            const prev = i > 0 ? (matches[i - 1].kind === 'agent' ? 'Your agent skills' : 'Totem skills') : ''
+            return (
+              <React.Fragment key={c.cmd}>
+                {group !== prev && <div className="vc-menu-label">{group}</div>}
+                <button type="button" role="option" aria-selected={i === sel} className={`vc-cmd ${i === sel ? 'active' : ''}`}
+                  onMouseDown={(e) => { e.preventDefault(); chooseCommand(c) }} onMouseEnter={() => setSel(i)}>
+                  <span className="vc-cmd-icon">{c.kind === 'agent' ? <TI icon={IconPuzzle} size={16} /> : <Hi icon={c.icon} size={16} />}</span>
+                  <span className="vc-cmd-text">
+                    <span className="vc-cmd-name">{c.cmd}{c.source && <span className="vc-cmd-source">{c.source}</span>}</span>
+                    <span className="vc-cmd-desc">{c.desc}</span>
+                  </span>
+                </button>
+              </React.Fragment>
+            )
+          })}
         </div>
       )}
-      <div className={`vc-box ${mode !== 'chat' ? `mode-${mode}` : ''}`}>
+      <div className="vc-box">
         {drafts.length > 0 && (
           <div className="vc-tray">
             {drafts.map((d) => (
@@ -294,16 +337,25 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
             </span>
           </div>
         ) : (
-          <textarea
-            ref={ta}
-            rows={1}
-            value={value}
-            placeholder={placeholder}
-            onChange={(e) => { onChange(e.target.value); grow() }}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            enterKeyHint={coarse() ? 'enter' : 'send'}
-          />
+          <div className="vc-input">
+            {/* The cited skills, highlighted behind the textarea's own text. */}
+            <div className="vc-input-marks" ref={marksRef} aria-hidden>
+              {splitMentions(value, known).map((p, i) => (p.mention ? <mark key={i}>{p.text}</mark> : <React.Fragment key={i}>{p.text}</React.Fragment>))}
+              {'\n'}
+            </div>
+            <textarea
+              ref={ta}
+              rows={1}
+              value={value}
+              placeholder={placeholder}
+              onChange={(e) => { onChange(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); grow() }}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+              onScroll={(e) => { if (marksRef.current) marksRef.current.scrollTop = e.currentTarget.scrollTop }}
+              onKeyDown={onKeyDown}
+              onPaste={onPaste}
+              enterKeyHint={coarse() ? 'enter' : 'send'}
+            />
+          </div>
         )}
         <div className="vc-box-bar">
           <div className="vc-box-left">
@@ -322,42 +374,11 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
                         <TI icon={IconPhoto} size={17} /><span>Take a photo</span>
                       </button>
                     )}
-                    {onThinkLonger && (
-                      <button type="button" role="menuitem" onClick={() => { setMenu(false); onThinkLonger() }}>
-                        <TI icon={IconBrain} size={17} /><span>Think longer</span>
-                      </button>
-                    )}
-                    <div className="vc-menu-sep" />
-                    <button type="button" role="menuitemcheckbox" aria-checked={mode === 'task'} onClick={() => { setMenu(false); setMode((m) => (m === 'task' ? 'chat' : 'task')) }}>
-                      <TI icon={IconBolt} size={17} />
-                      <span className="vc-menu-text"><span>Task mode</span><small>Hand off a job; it can run for up to an hour</small></span>
-                      {mode === 'task' && <TI icon={IconCheck} size={16} className="vc-menu-check" />}
-                    </button>
-                    <button type="button" role="menuitemcheckbox" aria-checked={browser} onClick={() => { setMenu(false); setBrowser((b) => !b) }}>
-                      <TI icon={IconWorld} size={17} />
-                      <span className="vc-menu-text"><span>Use the browser</span><small>Totem opens pages and shows you what it sees</small></span>
-                      {browser && <TI icon={IconCheck} size={16} className="vc-menu-check" />}
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitemcheckbox"
-                      aria-checked={mode === 'computer'}
-                      disabled={!computerUse?.available}
-                      title={computerUse?.available ? undefined : computerUse?.reason || undefined}
-                      onClick={() => { setMenu(false); setMode((m) => (m === 'computer' ? 'chat' : 'computer')) }}
-                    >
-                      <TI icon={IconDeviceDesktop} size={17} />
-                      <span className="vc-menu-text">
-                        <span>Use this computer</span>
-                        <small>{computerUse?.available ? 'Codex drives the desktop: apps, sites, your logins' : (computerUse?.reason || 'Not available on this machine')}</small>
-                      </span>
-                      {mode === 'computer' && <TI icon={IconCheck} size={16} className="vc-menu-check" />}
-                    </button>
                     {allowCommands && catalog.length > 0 && (
                       <>
                         <div className="vc-menu-sep" />
-                        <button type="button" role="menuitem" onClick={() => { setMenu(false); onChange('/'); requestAnimationFrame(() => ta.current?.focus()) }}>
-                          <TI icon={IconSparkles} size={17} /><span>Run a skill</span>
+                        <button type="button" role="menuitem" onClick={() => { setMenu(false); startMention() }}>
+                          <TI icon={IconSparkles} size={17} /><span>Use a skill</span>
                         </button>
                       </>
                     )}
@@ -366,20 +387,6 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
               </div>
             )}
             {!dictation && leftSlot}
-            {browser && !dictation && (
-              <button type="button" className="vc-mode-chip mode-browser" onClick={() => setBrowser(false)} title="Turn off">
-                <TI icon={IconWorld} size={14} />
-                Browser
-                <TI icon={IconX} size={12} />
-              </button>
-            )}
-            {mode !== 'chat' && !dictation && (
-              <button type="button" className={`vc-mode-chip mode-${mode}`} onClick={() => setMode('chat')} title="Turn off">
-                <TI icon={mode === 'task' ? IconBolt : IconDeviceDesktop} size={14} />
-                {mode === 'task' ? 'Task' : 'Computer'}
-                <TI icon={IconX} size={12} />
-              </button>
-            )}
           </div>
           <div className="vc-box-right">
             {dictation ? (

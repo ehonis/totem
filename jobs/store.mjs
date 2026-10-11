@@ -36,7 +36,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { mkdir, readFile, rename, writeFile, stat, appendFile } from 'node:fs/promises'
 import { normalizeSchedule, nextRunAfter, describeSchedule } from './schedule.mjs'
-import { normalizeTrigger, describeTrigger } from './triggers.mjs'
+import { normalizeTrigger, describeTrigger, cleanWatchState, sourceKey } from './triggers.mjs'
 
 // 'agent' is a totem's own judgement: it notifies when its run says NOTIFY (and
 // on errors). See totems/core.mjs.
@@ -78,19 +78,6 @@ const savedOr = (saved, def, key) =>
 // A watch job never has a clock-based next run; its watch decides.
 const nextFor = (job, from, tz, last) => (job.trigger ? null : nextRunAfter(job.schedule, from, tz, last))
 
-function cleanWatchState(w) {
-  if (!w || typeof w !== 'object') return null
-  const num = (v) => (Number.isFinite(v) ? v : null)
-  return {
-    fingerprint: typeof w.fingerprint === 'string' ? w.fingerprint.slice(0, 80) : null,
-    label: typeof w.label === 'string' ? w.label.slice(0, 200) : '',
-    checkedAt: num(w.checkedAt),
-    changedAt: num(w.changedAt),
-    error: typeof w.error === 'string' && w.error ? w.error.slice(0, 300) : null,
-    failures: Number(w.failures) || 0,
-  }
-}
-
 function hydrate(id, saved, def, tz, runners = {}) {
   const schedule = normalizeSchedule(saved?.schedule ?? def?.schedule, def?.schedule?.time)
   const trigger = normalizeTrigger(savedOr(saved, def, 'trigger'))
@@ -107,7 +94,7 @@ function hydrate(id, saved, def, tz, runners = {}) {
     enabled: typeof saved?.enabled === 'boolean' ? saved.enabled : Boolean(def?.enabled),
     schedule,
     trigger,
-    watch: trigger ? cleanWatchState(saved?.watch) : null,
+    watch: trigger ? cleanWatchState(saved?.watch, trigger) : null,
     scheduleLabel: trigger ? describeTrigger(trigger) : describeSchedule(schedule),
     notify: normalizeNotify(saved?.notify, def?.notify || 'errors'),
     catchUpMinutes: clampCatchUp(saved?.catchUpMinutes ?? def?.catchUpMinutes),
@@ -392,11 +379,16 @@ export function createJobStore({
       // `|| .from` so editing a window's step without resending its times keeps
       // the window where it was, rather than defaulting the hour to 08:00.
       if (patch.schedule !== undefined) next.schedule = normalizeSchedule(patch.schedule, before.schedule.time || before.schedule.from)
-      // `trigger: null` goes back to the schedule. A different watch starts from a
-      // fresh baseline, so switching what it watches can't fire on the switch itself.
+      // `trigger: null` goes back to the schedule. A source it didn't watch before
+      // starts from a fresh baseline, so adding one can't fire on the edit itself;
+      // the sources it still watches keep theirs. A new source is checked at once.
       if (patch.trigger !== undefined) {
         next.trigger = normalizeTrigger(patch.trigger)
-        if (JSON.stringify(next.trigger?.source ?? null) !== JSON.stringify(before.trigger?.source ?? null)) next.watch = null
+        const keys = (t) => (t?.sources || []).map(sourceKey).sort().join('\n')
+        if (keys(next.trigger) !== keys(normalizeTrigger(before.trigger))) {
+          const kept = next.trigger && cleanWatchState(before.watch, next.trigger)
+          next.watch = kept && Object.keys(kept.seen).length ? { ...kept, checkedAt: null, error: null, failures: 0 } : null
+        }
       }
       if (patch.notify !== undefined) next.notify = normalizeNotify(patch.notify, before.notify)
       if (patch.catchUpMinutes !== undefined) next.catchUpMinutes = clampCatchUp(patch.catchUpMinutes)
@@ -545,7 +537,7 @@ export function createJobStore({
       const raw = await ensureStore()
       const saved = raw.jobs[id]
       if (!saved || !normalizeTrigger(saved.trigger)) return null
-      saved.watch = cleanWatchState({ ...(saved.watch || {}), ...state })
+      saved.watch = cleanWatchState({ ...(saved.watch || {}), ...state }, saved.trigger)
       await writeRaw(raw)
       return hydrateJob(id, saved)
     })

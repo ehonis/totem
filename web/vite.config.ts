@@ -16,5 +16,8 @@ export default defineConfig({
       '/health': 'http://localhost:8787',
     },
   },
-  build: { outDir: 'dist', emptyOutDir: true },
+  // noVNC (the Screen view) uses top-level await, which Vite's default target
+  // (Safari 14 era) cannot emit. These are the first versions that run it.
+  build: { outDir: 'dist', emptyOutDir: true, target: ['es2022', 'chrome89', 'edge89', 'firefox89', 'safari15'] },
+  optimizeDeps: { esbuildOptions: { target: 'es2022' } },
 })

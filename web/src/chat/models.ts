@@ -3,17 +3,10 @@
 // with reasoning effort sent alongside.
 import type { ModelRow, ModelSettings, ProviderRow } from './types'
 
-export const DEFAULT_MODEL_SETTINGS: ModelSettings = { modelId: 'composer-2.5', speed: 'fast', effort: 'default', context: 'default', preset: 'auto', level: '2' }
+export const DEFAULT_MODEL_SETTINGS: ModelSettings = { modelId: 'composer-2.5', speed: 'fast', effort: 'default', context: 'default' }
 
-/** Auto's power dial: one overall score (which model and how hard it thinks). Keep in step with chat/route.mjs. */
+/** Names for the retired presets, for older replies' stats. */
 export const POWER_NAMES: Record<string, string> = { '1': 'Quick', '2': 'Light', '3': 'Balanced', '4': 'Strong', '5': 'Max' }
-export const POWER_HINTS: Record<string, string> = {
-  '1': 'Fastest model, for quick answers',
-  '2': 'Fast model that thinks a little',
-  '3': 'Stronger model, a careful answer',
-  '4': 'Top model, thinks hard',
-  '5': 'Top model at full effort; can take minutes',
-}
 export const LEVEL_NAMES: Record<string, string> = { '1': 'Low', '2': 'Medium', '3': 'High', '4': 'Extra high', '5': 'Max' }
 
 export const EFFORT_LABELS: Record<string, string> = {
@@ -21,7 +14,16 @@ export const EFFORT_LABELS: Record<string, string> = {
 }
 
 export function normalizeModelSettings(settings?: Partial<ModelSettings> | null): ModelSettings {
-  return { ...DEFAULT_MODEL_SETTINGS, ...(settings || {}) }
+  const { preset: _p, level: _l, power: _w, ...rest } = (settings || {}) as Partial<ModelSettings> & { level?: string; power?: string }
+  return { ...DEFAULT_MODEL_SETTINGS, ...rest }
+}
+
+/**
+ * Settings saved while Auto, Instant or Thinking was chosen (retired 2026-10-07).
+ * Their model fields were never the owner's pick, so callers treat them as unset.
+ */
+export function fromPreset(settings?: Partial<ModelSettings> | null): boolean {
+  return !!settings?.preset && settings.preset !== 'manual'
 }
 
 /** "composer-2.5[fast=true,effort=high]" → structured settings. */
@@ -50,11 +52,10 @@ export function buildCursorSpec(settings?: Partial<ModelSettings> | null): strin
 }
 
 /** What goes on the wire for this provider: {model, effort}. */
-export function wireModel(driver: string, settings: Partial<ModelSettings> | undefined): { model: string | null; effort: string | null; preset: string; level: number; power?: number } {
+export function wireModel(driver: string, settings: Partial<ModelSettings> | undefined): { model: string | null; effort: string | null } {
   const s = normalizeModelSettings(settings)
-  const routed = { preset: s.preset, level: Number(s.level) || 2, ...(s.preset === 'auto' && Number(s.power) ? { power: Number(s.power) } : {}) }
-  if (driver === 'cursor') return { model: buildCursorSpec(s), effort: null, ...routed }
-  return { model: s.modelId || null, effort: s.effort && s.effort !== 'default' ? s.effort : null, ...routed }
+  if (driver === 'cursor') return { model: buildCursorSpec(s), effort: null }
+  return { model: s.modelId || null, effort: s.effort && s.effort !== 'default' ? s.effort : null }
 }
 
 /** Picker order: hidden dropped, favourites first. */

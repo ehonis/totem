@@ -1,8 +1,10 @@
 import { POWER_NAMES } from './models'
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import Markdown from '../components/Markdown'
 import TotemProposal from './TotemProposal'
 import WorkLog from './WorkLog'
+import { AgentCard } from './AgentsPanel'
+import TurnStats from './TurnStats'
 import type { Attachment, ChatMessage, Part, ProviderRow, SteerPart, ToolPart } from './types'
 import { TI, ProviderLogo, formatBytes, formatDuration } from './ui'
 import { IconAlertCircle,
@@ -13,6 +15,8 @@ import { readMessageAloud, speechSupported } from './speech'
 import { FileCard, ARTIFACT_PREVIEWABLE } from './ArtifactPanel'
 import { openArtifact } from './store'
 import { useSmoothText } from './smooth'
+import { getChatCommands, subscribeChatCommands } from '../studio'
+import { splitMentions } from './mentions'
 import { WorkingLine } from './Spark'
 
 // --- attachments ---------------------------------------------------------------
@@ -75,9 +79,37 @@ function openAttachment(a: Attachment, setLightbox: (s: { src: string; alt: stri
 
 // --- user ----------------------------------------------------------------------
 
+// Messages sent with the retired Task mode / Use this computer toggles keep their badge.
 const MODE_BADGE: Record<string, { icon: any; label: string }> = {
   task: { icon: IconBolt, label: 'Task' },
   computer: { icon: IconDeviceDesktop, label: 'Computer use' },
+}
+
+/**
+ * Every command a message can cite, under both prefixes (the bridge accepts
+ * either), for drawing `/name` as a skill rather than as text.
+ */
+export function useMentionSet() {
+  const catalog = useSyncExternalStore(subscribeChatCommands, getChatCommands, getChatCommands)
+  return useMemo(() => {
+    const set = new Set<string>()
+    for (const c of catalog) { const name = c.cmd.slice(1).toLowerCase(); set.add(`/${name}`); set.add(`$${name}`) }
+    return set
+  }, [catalog])
+}
+
+function MentionText({ text }: { text: string }) {
+  const known = useMentionSet()
+  const commands = useSyncExternalStore(subscribeChatCommands, getChatCommands, getChatCommands)
+  return (
+    <>
+      {splitMentions(text, known).map((p, i) => {
+        if (!p.mention) return <React.Fragment key={i}>{p.text}</React.Fragment>
+        const c = commands.find((x) => x.cmd.slice(1).toLowerCase() === p.mention!.slice(1))
+        return <span key={i} className="vc-mention" title={c ? `${c.title}${c.source ? ` · ${c.source} skill` : ''}\n${c.desc}` : undefined}>{p.text}</span>
+      })}
+    </>
+  )
 }
 
 export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: ChatMessage; canEdit: boolean; onEdit: (text: string) => void; onRetry?: () => void; onDiscard?: () => void }) {
@@ -125,7 +157,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
               {m.voice && <><TI icon={IconMicrophone} size={13} />Voice</>}
             </span>
           )}
-          {m.content}
+          <MentionText text={m.content} />
         </div>
       ) : null}
       {m.unsent && (
@@ -151,7 +183,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
 
 // --- assistant -------------------------------------------------------------------
 
-type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'steer'; part: SteerPart; key: string }
+type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'agent'; tool: ToolPart; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'steer'; part: SteerPart; key: string }
 
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
@@ -161,7 +193,9 @@ function blocks(parts: Part[]): Block[] {
   const out: Block[] = []
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i]
-    if (p.type === 'tool') {
+    // A call that started another agent stands on its own, never folded into the steps.
+    if (p.type === 'tool' && p.agent) out.push({ kind: 'agent', tool: p, key: `a${i}` })
+    else if (p.type === 'tool') {
       const last = out[out.length - 1]
       if (last?.kind === 'tools') last.tools.push(p)
       else out.push({ kind: 'tools', tools: [p], key: `w${i}` })
@@ -232,7 +266,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
   // sentence — gets the working line too, so a live reply never looks stalled.
   const toolRunning = !!m.parts?.some((p) => p.type === 'tool' && p.status === 'running')
   const quiet = useQuiet(live, `${m.content.length}:${m.parts?.length || 0}`)
-  // Auto/Instant/Thinking say which lane answered: "Thought for 14s" reads the
+  // Replies from the retired Auto/Instant/Thinking presets say which lane answered: "Thought for 14s" reads the
   // way ChatGPT's does and tells you the slower answer was deliberate.
   const secs = m.durationMs && m.durationMs > 2000 ? formatDuration(m.durationMs) : null
   const lane = m.power ? [POWER_NAMES[String(m.power)], m.route === 'thinking' && secs ? `thought for ${secs}` : null].filter(Boolean).join(', ')
@@ -244,6 +278,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
       <div className="vc-assistant-body">
         {list.map((b, i) => {
           if (b.kind === 'tools') return <WorkLog key={b.key} tools={b.tools} live={live && i === list.length - 1} />
+          if (b.kind === 'agent') return <AgentCard key={b.key} tool={b.tool} />
           if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
           if (b.kind === 'steer') return <SteerNote key={b.key} part={b.part} />
           if (b.kind === 'file') return <FileCard key={b.key} file={b.part} onOpen={() => openArtifact(b.part)} />
@@ -291,10 +326,10 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
           )}
           {isLast && onRegenerate && <button type="button" className="vc-act" title="Regenerate" onClick={onRegenerate}><TI icon={IconRefresh} size={15} /></button>}
           {meta && (
-            <span className="vc-meta">
+            <TurnStats m={m} modelName={modelName}>
               {provider && <ProviderLogo driver={provider.driver} name={provider.name} size={12} />}
               {meta}
-            </span>
+            </TurnStats>
           )}
         </div>
       )}

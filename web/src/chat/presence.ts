@@ -14,7 +14,7 @@ function deviceId() {
   return id
 }
 
-// One report stream per surface (the chat view, the quick panel), so one going
+// One report stream per surface, so one going
 // off screen never clears the other's presence.
 const last: Record<string, string> = {}
 function report(source: string, threadId: string | null, viewing: boolean, force = false) {

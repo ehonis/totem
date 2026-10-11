@@ -1,0 +1,21 @@
+# EAS uploads the git root when it builds mobile/. This file replaces .gitignore
+# for that upload: only the app goes, with its gitignored app.local.json (the
+# install's bundle id and EAS project), and nothing of the bridge or its data.
+/*
+!/mobile
+
+/mobile/node_modules/
+/mobile/.expo/
+/mobile/dist/
+/mobile/web-build/
+/mobile/ios/
+/mobile/android/
+/mobile/expo-env.d.ts
+/mobile/.env*
+**/*.p8
+**/*.p12
+**/*.key
+**/*.pem
+**/*.jks
+**/*.mobileprovision
+**/.DS_Store

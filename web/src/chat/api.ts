@@ -1,7 +1,7 @@
 // Chat's bridge calls. Streaming endpoints are read as Server-Sent Events over
 // fetch (EventSource cannot send the bearer header).
 import { authHeaders, AuthError, api } from '../api'
-import type { Attachment, ChatCapabilities, ChatMode, Project, StreamEvent } from './types'
+import type { Attachment, ChatCapabilities, Project, StreamEvent } from './types'
 
 export interface SendArgs {
   threadId: string
@@ -16,14 +16,7 @@ export interface SendArgs {
   /** A new project chat that leaves the project's context out. */
   projectContextOff?: boolean
   modelSettings?: any
-  mode?: ChatMode
-  /** The owner asked for the browser on this message (off unless asked). */
-  browser?: boolean
-  /** Auto's power dial, 1..5; absent = read from the message. */
-  power?: number
   voice?: boolean
-  preset?: string
-  level?: number
   regenerate?: boolean
   editMessageId?: string
 }

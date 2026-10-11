@@ -66,6 +66,6 @@ setup; it is not meant to be the steady state.
 
 ## Not covered by this
 
-`/api/github/repos` — the repo picker behind the Code tab — still uses `gh`. It
+`/api/github/repos` — the repo list at the bottom of the Dev tab — still uses `gh`. It
 answers "every repo the owner can touch", which is deliberately wider than the App's
 installation and would shrink if it were moved.

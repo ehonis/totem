@@ -1,23 +1,22 @@
 import React, { useEffect } from 'react'
 import { useChat, ensureModels, savePrefs, providerById, type ChatPrefs } from '../chat/store'
-import { visibleModels, EFFORT_LABELS, LEVEL_NAMES } from '../chat/models'
+import { visibleModels, EFFORT_LABELS } from '../chat/models'
 import { pushError } from '../toast'
 
-// Settings → Chat. The global choices behind the chat's model chip: what a new
-// chat starts on, and which account and model Instant and Thinking use (Auto
-// picks between those two per message). "Pick for me" keeps Totem's own rules.
+// Settings → Chat: when quiet chats settle, and who writes chat titles.
+// "Pick for me" keeps Totem's own rule.
 
-function Lane({ lane, title, hint }: { lane: 'instant' | 'thinking' | 'titles'; title: string; hint: string }) {
+function Lane({ lane, title, hint }: { lane: 'titles'; title: string; hint: string }) {
   const prefs = useChat((s) => s.prefs)
   const providers = useChat((s) => s.providers)
   const models = useChat((s) => s.models)
   const caps = useChat((s) => s.caps)
-  const value = prefs[lane] as ChatPrefs['instant']
+  const value = prefs[lane]
   useEffect(() => { if (value.provider) ensureModels(value.provider) }, [value.provider])
   const row = value.provider ? providerById(value.provider) : null
   const list = value.provider ? visibleModels(models[value.provider]) : []
   const current = list.find((m) => m.id === value.model)
-  const save = (patch: Partial<ChatPrefs['instant']>) => savePrefs({ [lane]: { ...value, ...patch } } as any).catch((e) => pushError(e.message))
+  const save = (patch: Partial<ChatPrefs['titles']>) => savePrefs({ [lane]: { ...value, ...patch } } as any).catch((e) => pushError(e.message))
   return (
     <>
       <div className="setting-row">
@@ -43,9 +42,9 @@ function Lane({ lane, title, hint }: { lane: 'instant' | 'thinking' | 'titles'; 
           </div>
         </div>
       )}
-      {(lane === 'instant' || lane === 'titles') && current?.efforts && current.efforts.length > 0 && (
+      {current?.efforts && current.efforts.length > 0 && (
         <div className="setting-row">
-          <div className="setting-copy"><strong>{lane === 'titles' ? 'Title effort' : 'Instant effort'}</strong><span>Lower is faster.</span></div>
+          <div className="setting-copy"><strong>Title effort</strong><span>Lower is faster.</span></div>
           <div className="setting-control">
             <select className="model-select" value={value.effort} onChange={(e) => save({ effort: e.target.value })}>
               <option value="">Model default</option>
@@ -67,39 +66,20 @@ export default function ChatSettings() {
     <div className="settings-pane">
       <header className="settings-pane-head">
         <h2>Chat</h2>
-        <p>Defaults for new chats and the models behind Auto, Instant and Thinking. A chat keeps the account it started on; start a new chat to switch.</p>
+        <p>How the chat list tidies itself and who names chats. New chats start on your default model (Settings → AI); pick another in the composer.</p>
       </header>
 
-      <div className="settings-section-title"><span /><strong>New chats</strong></div>
+      <div className="settings-section-title"><span /><strong>Chat list</strong></div>
       <div className="setting-list">
         <div className="setting-row">
-          <div className="setting-copy"><strong>Start in</strong><span>Auto decides per message between Instant and Thinking.</span></div>
+          <div className="setting-copy"><strong>Settle quiet chats</strong><span>A chat with no activity for this long moves to its list’s Settled shelf on its own, as in T3 Code. Pinned chats, and chats you un-settle by hand, stay put.</span></div>
           <div className="setting-control">
-            <select className="model-select" value={prefs.defaultPreset} onChange={(e) => save({ defaultPreset: e.target.value as any })}>
-              <option value="auto">Auto</option>
-              <option value="instant">Instant</option>
-              <option value="thinking">Thinking</option>
+            <select className="model-select" value={String(prefs.autoSettleDays ?? 3)} onChange={(e) => save({ autoSettleDays: Number(e.target.value) })}>
+              {[1, 2, 3, 7, 14, 30].map((d) => <option key={d} value={d}>After {d} {d === 1 ? 'day' : 'days'}</option>)}
+              <option value="0">Never</option>
             </select>
           </div>
         </div>
-        <div className="setting-row">
-          <div className="setting-copy"><strong>Thinking effort</strong><span>Where the Thinking slider starts.</span></div>
-          <div className="setting-control">
-            <select className="model-select" value={String(prefs.defaultLevel)} onChange={(e) => save({ defaultLevel: Number(e.target.value) })}>
-              {['1', '2', '3', '4', '5'].map((l) => <option key={l} value={l}>{LEVEL_NAMES[l]}</option>)}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div className="settings-section-title"><span /><strong>Instant</strong></div>
-      <div className="setting-list">
-        <Lane lane="instant" title="Instant account" hint="Quick answers. Pick for me uses the fastest signed-in account." />
-      </div>
-
-      <div className="settings-section-title"><span /><strong>Thinking</strong></div>
-      <div className="setting-list">
-        <Lane lane="thinking" title="Thinking account" hint="Careful answers at the effort you set. Pick for me uses your default account if it reasons, else Codex or Claude." />
       </div>
 
       <div className="settings-section-title"><span /><strong>Titles</strong></div>

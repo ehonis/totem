@@ -190,6 +190,30 @@ plaud-action-items-ingest`, so editing that one file changes both the scheduled 
 and the `$plaud-meetings` chat command. You can also point a second job at the same
 skill on a different schedule.
 
+## Citing skills in chat
+
+`/` or `$` anywhere in a chat message opens the skills menu at the caret, not
+only at the start. Picking one puts `/name` in the text (highlighted in the box,
+drawn as a chip in the sent message) so you can say what to use it on.
+
+- **A message that is only a command** (`/journal`) runs that Totem skill on its
+  own, as before.
+- **A command inside a longer message** is context: the bridge
+  (`chatSkillContext` in `bridge.mjs`) adds the cited skill's instructions to the
+  chat prompt (a Totem skill rendered with its variables, up to six per message)
+  and the agent applies them to what the message asks.
+- **Agent skills** are the owner's Claude Code, Codex, Cursor and OpenCode skills,
+  found by `skills/agent-skills.mjs` under `~/.claude/skills` (or
+  `$CLAUDE_CONFIG_DIR/skills`, including skills synced from claude.ai),
+  `~/.codex/skills` (or `$CODEX_HOME/skills`), `~/.agents/skills`,
+  `~/.cursor/skills`, `~/.config/opencode/skill(s)`, the `.claude/skills` and
+  `.agents/skills` folders of `AGENT_CWD`, and any folders in `AGENT_SKILL_DIRS`
+  (colon-separated, searched first). They are read-only here, listed in
+  `/api/skills` as `agentSkills`, and rescanned every 30 seconds. Totem never
+  runs one on its own: its `SKILL.md` body travels with the message, so every
+  agent CLI can follow it, not only the one that installed it. The first folder
+  wins a name found twice, and a Totem skill wins a name both use.
+
 ## Gotchas
 
 - **Reads hit disk every time.** No cache, so a file you edit in vim while the
@@ -199,7 +223,12 @@ skill on a different schedule.
 - **A deleted skill breaks its job loudly**, not quietly: the run fails with
   `skill "x" no longer exists — pick another one for this job, or restore it`.
 - **`mode: fill` skills only trigger on a bare command.** `/recall something` has
-  already been expanded by the composer and goes through as ordinary chat.
+  already been expanded by the composer and goes through as ordinary chat. The
+  menu offers a fill skill only when the box is otherwise empty.
+- **A mention is a whole token.** `/name` must start the text or follow a space or
+  an opening bracket, and must not run on into more path (`/home/x` is not a
+  mention). `web/src/chat/mentions.ts` and `skills/agent-skills.mjs` share the
+  rule; change both together.
 - **An edited skill runs unattended with Totem's full tool access.** It can create
   tasks, edit the brain, and touch repos. Preview before you save something you
   haven't read back.

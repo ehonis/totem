@@ -8,14 +8,15 @@
 // only an instant-paint cache.
 import { useSyncExternalStore } from 'react'
 import { getThreads, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, api } from '../api'
-import { pushError } from '../toast'
+import { pushError, pushToast } from '../toast'
 import { applyEvent } from './reduce'
 import {
   sendChat, attachRun, stopChat, steerChat, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
   deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
 } from './api'
-import { defaultSettingsFor, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
-import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, StreamEvent } from './types'
+import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
+import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, StreamEvent } from './types'
+import { activeAt, wokeAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
 
 const CACHE_KEY = 'chat_threads_v2'
 const OUTBOX_KEY = 'chat_outbox_v1' // see "outbox" below; up here because the initial state reads it
@@ -26,7 +27,6 @@ export interface RunState {
   seq: number
   activity: string
   startedAt: number
-  mode: ChatMode
   handle: StreamHandle | null
 }
 
@@ -43,7 +43,7 @@ export interface ChatState {
   activeId: string | null
   /** The file open in the canvas panel beside the chat. */
   artifact: Artifact | null
-  /** Settings → Chat (global defaults for new chats and the Auto/Instant/Thinking lanes). */
+  /** Settings → Chat (chat titles, auto-settle). */
   prefs: ChatPrefs
   /** Chats whose title is being rewritten right now (they shimmer). */
   retitling: Record<string, boolean>
@@ -51,6 +51,10 @@ export interface ChatState {
   browser: Record<string, BrowserFrame & { live: boolean }>
   /** The browser panel is open beside the active chat. */
   browserOpen: boolean
+  /** The Agents panel (AgentsPanel.tsx) is open beside the active chat. */
+  agentsOpen: boolean
+  /** The sub-agent it has open: the id of the tool card that started it. */
+  agentFocus: string | null
   /** Chat projects, without their files and memory. */
   projects: Project[]
   /** Projects fetched on their own (files and memory included), by id. */
@@ -60,12 +64,10 @@ export interface ChatState {
 }
 
 export interface ChatPrefs {
-  defaultPreset: 'auto' | 'instant' | 'thinking' | 'manual'
-  defaultLevel: number
-  instant: { provider: string; model: string; effort: string }
-  thinking: { provider: string; model: string }
   /** Who writes chat titles; `off` keeps the first-line title. */
   titles: { provider: string; model: string; effort: string; off: boolean }
+  /** Days without activity before a chat settles on its own; 0 never. */
+  autoSettleDays: number
 }
 
 export interface Artifact { uploadId: string; name: string; mime: string; url?: string; size?: number; path?: string }
@@ -83,11 +85,13 @@ let state: ChatState = {
   artifact: null,
   browser: {},
   browserOpen: false,
+  agentsOpen: false,
+  agentFocus: null,
   retitling: {},
   projects: [],
   projectDetail: {},
   projectId: new URLSearchParams(window.location.search).get('project'),
-  prefs: { defaultPreset: 'auto', defaultLevel: 2, instant: { provider: '', model: '', effort: '' }, thinking: { provider: '', model: '' }, titles: { provider: '', model: '', effort: '', off: false } },
+  prefs: { titles: { provider: '', model: '', effort: '', off: false }, autoSettleDays: 3 },
 }
 
 const subs = new Set<() => void>()
@@ -256,22 +260,20 @@ export function threadChoice(thread: ChatThread | null, draft: { provider?: stri
     ? stored
     : draft.provider && providerById(draft.provider) ? draft.provider : state.defaultProvider
   const row = providerById(provider)
-  // A chat that never saved settings (one started through the API, or an older
-  // chat) carries on with the model that last answered it, not the defaults a
-  // brand-new chat would get: reopening it must not quietly switch models.
-  const lastModel = thread && !thread.modelSettings
+  // Settings saved under the retired Auto/Instant/Thinking presets never named
+  // the model, so they count as unset.
+  const saved = thread ? thread.modelSettings : draft.modelSettings
+  const own = saved && !fromPreset(saved) ? saved : null
+  // A chat that never saved settings (one started through the API, an older
+  // chat, or one that ran on a preset) carries on with the model that last
+  // answered it, not the defaults a brand-new chat would get: reopening it must
+  // not quietly switch models.
+  const lastModel = thread && !own
     ? [...thread.messages].reverse().find((m) => m.role === 'assistant' && m.provider === provider && m.model)?.model
     : undefined
-  // Temporary chats used to be pinned to the default model; with Auto/Instant/
-  // Thinking they choose like any other chat, and only a hand-picked model is
-  // held to the default account.
+  // A brand-new chat starts on the default account's default model.
   let settings = normalizeModelSettings(
-    (thread ? thread.modelSettings : draft.modelSettings) ||
-    (lastModel ? { ...parseModelSpec(lastModel), preset: 'manual', level: String(state.prefs.defaultLevel || 2) } : null) || {
-      ...defaultSettingsFor(row, state.defaultProvider, state.defaultModel),
-      // A brand-new chat starts on Settings → Chat's default.
-      preset: state.prefs.defaultPreset, level: String(state.prefs.defaultLevel || 2),
-    },
+    own || (lastModel ? parseModelSpec(lastModel) : null) || defaultSettingsFor(row, state.defaultProvider, state.defaultModel),
   )
   if (row?.supportsModelPicker && !settings.modelId) {
     const first = visibleModels(state.models[provider])[0]?.id
@@ -284,10 +286,13 @@ export function threadChoice(thread: ChatThread | null, draft: { provider?: stri
 
 export function setActive(id: string | null) {
   if (state.activeId === id) return
+  // Opening a chat that woke from a snooze is seeing it: the "Woke" mark goes.
+  const opened = id ? state.threads.find((x) => x.id === id) : null
+  if (opened && wokeAt(opened, now())) wakeThread(opened.id)
   // The panel follows the chat: opening a project's chat shows that project.
   const t = id ? state.threads.find((x) => x.id === id) : null
   const scope = t ? (t.projectId && state.projects.some((p) => p.id === t.projectId) ? t.projectId : null) : state.projectId
-  set({ activeId: id, artifact: null, browserOpen: false, projectId: scope })
+  set({ activeId: id, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null, projectId: scope })
   if (id && !state.browser[id]) loadBrowser(id)
 }
 
@@ -298,7 +303,7 @@ export function setActive(id: string | null) {
 
 /** Show a project's page (or Home with null) with no chat open. */
 export function openProject(id: string | null) {
-  set({ projectId: id, activeId: null, artifact: null, browserOpen: false })
+  set({ projectId: id, activeId: null, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null })
   if (id) loadProject(id)
 }
 
@@ -437,10 +442,57 @@ export function setProjectContext(threadId: string, on: boolean) {
   putThread({ id: threadId, projectContextOff: !on }).catch(fail)
 }
 
-/** Clear a chat's "waiting on you" mark without replying. */
-export function markDone(threadId: string) {
-  patchThread(threadId, (t) => ({ ...t, needsReply: undefined }))
-  putThread({ id: threadId, needsReply: false }).catch(fail)
+// --- settled and snoozed (settle.ts) ------------------------------------------------
+
+/** Write a settle/snooze change here and on the bridge. A cleared field goes as null (JSON drops undefined). */
+function writeSettle(id: string, change: SettleFields) {
+  patchThread(id, (t) => ({ ...t, ...change }))
+  const wire: Record<string, unknown> = { id }
+  for (const [k, v] of Object.entries(change)) wire[k] = v ?? null
+  putThread(wire as any).catch(fail)
+}
+
+function undoable(id: string, text: string, before: SettleFields) {
+  pushToast(text, 'info', { action: { label: 'Undo', onClick: () => writeSettle(id, before) } })
+}
+
+export function settleThread(id: string) {
+  const t = state.threads.find((x) => x.id === id)
+  if (!t || state.runs[id]) return
+  const before = settleFieldsOf(t)
+  writeSettle(id, settleChange(now()))
+  undoable(id, `Settled “${threadTitle(t)}”`, before)
+}
+
+export function unsettleThread(id: string) {
+  const t = state.threads.find((x) => x.id === id)
+  if (t) writeSettle(id, unsettleChange(now()))
+}
+
+export function snoozeThread(id: string, until: number) {
+  const t = state.threads.find((x) => x.id === id)
+  if (!t || until <= now()) return
+  const before = settleFieldsOf(t)
+  writeSettle(id, snoozeChange(until, now()))
+  undoable(id, `Snoozed “${threadTitle(t)}” until ${wakeDescription(until, now())}`, before)
+}
+
+/** Wake a snoozed chat now, or clear the "Woke" mark on one that already has. */
+export function wakeThread(id: string) {
+  const t = state.threads.find((x) => x.id === id)
+  if (t?.snoozedUntil) writeSettle(id, wakeChange(t, now()))
+}
+
+/** Clear a chat's "waiting on you" mark without replying. Opening the chat does this too (ChatView). */
+export function markRead(threadId: string) {
+  patchThread(threadId, (t) => ({ ...t, needsReply: undefined, keepUnread: undefined }))
+  putThread({ id: threadId, needsReply: false, keepUnread: false }).catch(fail)
+}
+
+/** Put the mark back, to come back to the chat later. Unlike a finished reply, opening it doesn't clear this; replying or Mark as read does. */
+export function markUnread(threadId: string) {
+  patchThread(threadId, (t) => ({ ...t, needsReply: true, keepUnread: true }))
+  putThread({ id: threadId, needsReply: true, keepUnread: true }).catch(fail)
 }
 
 /** Move a chat into a project, or back to Home with null. Its files come with it. */
@@ -469,7 +521,7 @@ async function loadBrowser(threadId: string) {
 function onBrowserFrame(threadId: string, frame: BrowserFrame) {
   set((s) => ({ browser: { ...s.browser, [threadId]: { ...frame, live: true } } }))
   if (state.activeId === threadId && !state.browserOpen && !browserDismissed.has(threadId) && !narrowScreen()) {
-    set({ browserOpen: true, artifact: null })
+    set({ browserOpen: true, artifact: null, agentsOpen: false })
   }
 }
 
@@ -479,7 +531,16 @@ export function showBrowser(open: boolean) {
   const id = state.activeId
   if (id && !open) browserDismissed.add(id)
   if (id && open) browserDismissed.delete(id)
-  set({ browserOpen: open, ...(open ? { artifact: null } : {}) })
+  set({ browserOpen: open, ...(open ? { artifact: null, agentsOpen: false } : {}) })
+}
+
+/** Open the Agents panel (on one sub-agent, by its tool card id) or close it. */
+export function showAgents(open: boolean, focus: string | null = null) {
+  set({ agentsOpen: open, ...(open ? { artifact: null, browserOpen: false, ...(focus ? { agentFocus: focus } : {}) } : {}) })
+}
+
+export function focusAgent(id: string | null) {
+  set({ agentFocus: id })
 }
 
 /** Close the chat's browser for good: tabs, cookies and all. */
@@ -495,7 +556,7 @@ export function requestVoice() { voiceRequested = true; set({ activeId: null, ar
 export function takeVoiceRequest() { const v = voiceRequested; voiceRequested = false; return v }
 
 export function openArtifact(a: Artifact | null) {
-  set({ artifact: a, ...(a ? { browserOpen: false } : {}) })
+  set({ artifact: a, ...(a ? { browserOpen: false, agentsOpen: false } : {}) })
 }
 
 /** Pull server history. A thread with a live local run keeps its live copy. */
@@ -527,7 +588,7 @@ export async function syncThreads() {
 export async function resumeRuns() {
   try {
     const { runs } = await getRuns()
-    for (const r of runs) if (r.status === 'running' && !state.runs[r.threadId]) watchRun(r.threadId, 0, r.mode as ChatMode, r.startedAt)
+    for (const r of runs) if (r.status === 'running' && !state.runs[r.threadId]) watchRun(r.threadId, 0, r.startedAt)
   } catch (e) { fail(e) }
 }
 
@@ -578,6 +639,12 @@ export async function regenerateTitle(id: string) {
 }
 
 export function setPinned(id: string, pinned: boolean) {
+  // A pinned chat is in use: pinning takes it off the Settled shelf and wakes it.
+  const t = state.threads.find((x) => x.id === id)
+  if (pinned && t && (t.settledOverride === 'settled' || t.snoozedUntil)) {
+    writeSettle(id, { pinned, settledOverride: undefined, settledAt: undefined, snoozedUntil: undefined, snoozedAt: undefined })
+    return
+  }
   patchThread(id, (t) => ({ ...t, pinned }))
   putThread({ id, pinned }).catch(fail)
 }
@@ -609,7 +676,7 @@ function setRun(id: string, patch: Partial<RunState> | null) {
   set((s) => {
     const runs = { ...s.runs }
     if (patch === null) delete runs[id]
-    else runs[id] = { ...(runs[id] || { seq: 0, activity: '', startedAt: now(), mode: 'chat', handle: null }), ...patch }
+    else runs[id] = { ...(runs[id] || { seq: 0, activity: '', startedAt: now(), handle: null }), ...patch }
     return { runs }
   })
 }
@@ -655,18 +722,17 @@ function handleEvent(threadId: string, e: StreamEvent) {
         } else {
           msgs.push(e.userMessage, e.assistantMessage)
         }
-        // The account that answered first is the chat's account from now on.
-        // Auto's first pick is the chat's power from now on (the dial shows it).
-        const ms = e.power && (t.modelSettings?.preset || 'auto') === 'auto' && !t.modelSettings?.power
-          ? { modelSettings: { ...(t.modelSettings || {}), preset: 'auto' as const, power: String(e.power) } } : {}
-        return { ...t, messages: msgs, ...ms, ...(!t.provider || t.modelSettings?.preset === 'manual' ? { provider: e.provider } : {}) }
+        // The account that answered is the chat's account from now on.
+        return { ...t, messages: msgs, provider: e.provider }
       })
       break
     case 'steer':
     case 'delta':
     case 'tool':
+    case 'agent':
     case 'image':
-      if (e.type !== 'tool' || (e as any).tool?.phase !== 'end') setRun(threadId, { activity: '' })
+      // A sub-agent's step is not the reply moving on: the activity line stays.
+      if (e.type !== 'agent' && (e.type !== 'tool' || (e as any).tool?.phase !== 'end')) setRun(threadId, { activity: '' })
       patchAssistant(threadId, (m) => applyEvent(m, e))
       break
     case 'activity':
@@ -681,7 +747,7 @@ function handleEvent(threadId: string, e: StreamEvent) {
     case 'done':
       patchAssistant(threadId, (m) => ({ ...e.message, parts: e.message.parts?.length ? e.message.parts : m.parts }))
       // The bridge marks it waiting on him too; this shows it without a sync.
-      if (e.message.status !== 'stopped') patchThread(threadId, (t) => (t.totemId ? t : { ...t, needsReply: true }))
+      if (e.message.status !== 'stopped') patchThread(threadId, (t) => (t.totemId ? t : { ...t, needsReply: true, ...(t.snoozedUntil && t.snoozedUntil > now() ? { snoozedUntil: now() } : {}) }))
       break
     case 'error':
       patchAssistant(threadId, (m) => ({ ...m, status: 'error', error: e.text }))
@@ -697,8 +763,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
   }
 }
 
-function watchRun(threadId: string, since: number, mode: ChatMode, startedAt: number) {
-  setRun(threadId, { seq: since, activity: '', mode, startedAt })
+function watchRun(threadId: string, since: number, startedAt: number) {
+  setRun(threadId, { seq: since, activity: '', startedAt })
   const handle = attachRun(threadId, since, (e) => handleEvent(threadId, e), (err) => {
     if (fail(err)) return
     setRun(threadId, null)
@@ -721,9 +787,7 @@ export interface SendInput {
   kind?: 'regular' | 'temporary'
   provider?: string
   modelSettings?: Partial<ModelSettings>
-  mode?: ChatMode
   voice?: boolean
-  browser?: boolean
   /** Start a new chat inside this project. */
   projectId?: string | null
   /** A new project chat that leaves the project's context out. */
@@ -743,7 +807,6 @@ export function send(input: SendInput): string {
   const userMessage: ChatMessage = {
     id: `local-${newId()}`, role: 'user', content: input.text, createdAt: t0,
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-    ...(input.mode && input.mode !== 'chat' ? { mode: input.mode } : {}),
     ...(input.voice ? { voice: true } : {}),
   }
   const assistant: ChatMessage = { id: `local-${newId()}`, role: 'assistant', content: '', parts: [], status: 'streaming', provider, createdAt: t0 }
@@ -761,14 +824,12 @@ export function send(input: SendInput): string {
     // The bridge keeps this model only when the turn runs on `provider`; a
     // temporary chat held to the default account drops it there.
     model: wire.model, effort: wire.effort, kind,
-    modelSettings: settings, mode: input.mode || 'chat', voice: input.voice, preset: wire.preset, level: wire.level,
-    ...(wire.power ? { power: wire.power } : {}),
-    ...(input.browser ? { browser: true } : {}),
+    modelSettings: settings, voice: input.voice,
     // Only read for a chat the bridge hasn't seen; an existing one keeps its project.
     ...(projectId ? { projectId } : {}),
     ...(contextOff ? { projectContextOff: true } : {}),
   }
-  const { messages: _m, needsReply: _n, ...meta } = thread
+  const { messages: _m, needsReply: _n, keepUnread: _k, ...meta } = thread
   outboxPut(threadId, { args, message: userMessage, thread: { ...meta, updatedAt: t0 }, at: t0 })
   return startRun(threadId, args)
 }
@@ -801,9 +862,12 @@ export function discardUnsent(threadId: string): string {
 }
 
 function startRun(threadId: string, args: SendArgs) {
-  setRun(threadId, { seq: 0, activity: '', mode: args.mode || 'chat', startedAt: now() })
+  setRun(threadId, { seq: 0, activity: '', startedAt: now() })
   // Replying (or regenerating, or editing) is what clears "waiting on you".
-  patchThread(threadId, (t) => (t.needsReply ? { ...t, needsReply: undefined } : t))
+  // So does writing in a settled or snoozed chat, which brings it back (the bridge does the same).
+  patchThread(threadId, (t) => (t.needsReply || t.settledOverride || t.snoozedUntil
+    ? { ...t, needsReply: undefined, keepUnread: undefined, settledOverride: undefined, settledAt: undefined, snoozedUntil: undefined, snoozedAt: undefined, ...(t.settledOverride === 'settled' ? { unsettledAt: now() } : {}) }
+    : t))
   const handle = sendChat(args, (e) => handleEvent(threadId, e), (err: any) => {
     if (fail(err)) { setRun(threadId, null); return }
     // Never reached the bridge: the message stays, marked unsent, with Retry —
@@ -836,7 +900,7 @@ function startRun(threadId: string, args: SendArgs) {
       // still going on the bridge, so attach again from where we were.
       const seq = state.runs[threadId].seq
       setRun(threadId, null)
-      if (seq > 0) watchRun(threadId, seq, args.mode || 'chat', now())
+      if (seq > 0) watchRun(threadId, seq, now())
     }
   })
   return threadId
@@ -877,7 +941,7 @@ export function regenerate(threadId: string, override?: { provider?: string; mod
   })
   startRun(threadId, {
     threadId, text: lastUser?.content || '', provider, model: wire.model, effort: wire.effort,
-    regenerate: true, mode: lastUser?.mode || 'chat', preset: wire.preset, level: wire.level, ...(wire.power ? { power: wire.power } : {}),
+    regenerate: true,
   })
 }
 
@@ -899,7 +963,7 @@ export function editAndResend(threadId: string, messageId: string, text: string)
   }))
   startRun(threadId, {
     threadId, text, attachments: (original.attachments || []).map((a) => a.id), provider,
-    model: wire.model, effort: wire.effort, editMessageId: messageId, mode: original.mode || 'chat', preset: wire.preset, level: wire.level, ...(wire.power ? { power: wire.power } : {}),
+    model: wire.model, effort: wire.effort, editMessageId: messageId,
   })
 }
 
@@ -934,14 +998,16 @@ export function groupThreads(threads: ChatThread[]): { label: string; threads: C
   const groups: { label: string; threads: ChatThread[] }[] = pinned.length ? [{ label: 'Pinned', threads: pinned }] : []
   const rest = threads.filter((t) => !t.pinned)
   const used = new Set<string>()
+  // Coming off the Settled shelf or out of a snooze counts as activity (settle.ts).
+  const at = (t: ChatThread) => activeAt(t, Date.now())
   for (const [label, test] of buckets) {
-    const list = rest.filter((t) => !used.has(t.id) && test(t.updatedAt))
+    const list = rest.filter((t) => !used.has(t.id) && test(at(t)))
     list.forEach((t) => used.add(t.id))
     if (list.length) groups.push({ label, threads: list })
   }
   const byMonth = new Map<string, ChatThread[]>()
   for (const t of rest.filter((t) => !used.has(t.id))) {
-    const d = new Date(t.updatedAt)
+    const d = new Date(at(t))
     const label = d.getFullYear() === new Date().getFullYear()
       ? d.toLocaleDateString([], { month: 'long' })
       : d.toLocaleDateString([], { month: 'long', year: 'numeric' })

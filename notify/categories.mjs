@@ -217,6 +217,18 @@ export const CATEGORIES = {
     dedupeWindowMinutes: 60,
     slot: null,
   },
+  // Production alerts from outside (POST /api/alerts/:source) and the Dev tab's
+  // GitHub watcher (CI failing on main, a runner offline). Shaped like
+  // `job.failed`, but quiet hours override rather than defer: an outage at 2am
+  // is still an outage at 7am, and a deferred alert is one he learns about late.
+  // dev/alerts.mjs collapses repeats within the hour before anything gets here.
+  'alert.external': {
+    label: 'External alerts',
+    quietHours: 'override',
+    defaultEnabled: true,
+    dedupeWindowMinutes: 60,
+    slot: null,
+  },
   'approval.pending': {
     label: 'Approval codes',
     quietHours: 'override',

@@ -1,5 +1,5 @@
 import React from 'react'
-import { useToasts, dismissToast } from '../toast'
+import { useToasts, dismissToast, pauseToast, resumeToast } from '../toast'
 import { Hi, XMarkIcon, ArrowUturnLeftIcon, ExclamationTriangleIcon, CheckCircleIcon, InformationCircleIcon } from '../icons'
 
 // Glyph per toast kind; errors default.
@@ -30,9 +30,19 @@ export default function ToastHost() {
       {toasts.map((t) => (
         <div
           key={t.id}
-          className={`pointer-events-auto flex items-start gap-2.5 pt-[11px] pr-3 pb-[11px] pl-[13px] ${FILL[t.kind] || FILL.error} rounded-[10px] shadow-[0_8px_28px_rgba(0,0,0,0.45)] text-white text-[13px] leading-[1.45] animate-toast-in`}
+          className={`group relative overflow-hidden pointer-events-auto flex items-start gap-2.5 pt-[13px] pr-3 pb-[11px] pl-[13px] ${FILL[t.kind] || FILL.error} rounded-[10px] shadow-[0_8px_28px_rgba(0,0,0,0.45)] text-white text-[13px] leading-[1.45] animate-toast-in`}
           role="alert"
+          onMouseEnter={() => pauseToast(t.id)}
+          onMouseLeave={() => resumeToast(t.id)}
         >
+          {/* Time left on screen, flush with the top edge; holds while hovered. */}
+          {t.duration > 0 && (
+            <span
+              aria-hidden
+              className="absolute top-0 left-0 right-0 h-[3px] bg-white/60 origin-left group-hover:[animation-play-state:paused]"
+              style={{ animation: `toast-timer ${t.duration}ms linear forwards` }}
+            />
+          )}
           <span className="flex-none mt-px">
             <Hi icon={ICONS[t.kind] || ICONS.error} size={16} />
           </span>
@@ -42,7 +52,7 @@ export default function ToastHost() {
               className="flex-none inline-flex items-center gap-1 self-center px-2.5 py-1.5 min-h-[32px] bg-white/15 border-0 rounded-lg text-white text-[12px] font-semibold cursor-pointer hover:bg-white/25"
               onClick={() => { const run = t.action!.onClick; dismissToast(t.id); run() }}
             >
-              <Hi icon={ArrowUturnLeftIcon} size={13} /> {t.action.label}
+              {t.action.icon !== null && <Hi icon={t.action.icon || ArrowUturnLeftIcon} size={13} />} {t.action.label}
             </button>
           )}
           <button

@@ -107,7 +107,10 @@
 .vc-seg button.on { background: var(--vc-raise); color: var(--text); box-shadow: 0 1px 2px #0006; }
 
 /* --- scroll area & log ---------------------------------------------------- */
-.vc-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-padding-bottom: 24px; }
+/* Never a sideways scrollbar: anything wider than the column (code, tables)
+   scrolls inside itself. The scroller is also the container the reply-details
+   panel measures to decide which way it opens. */
+.vc-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scroll-padding-bottom: 24px; container: vc-scroll / inline-size; }
 .vc-log { max-width: var(--vc-col); margin: 0 auto; padding: 12px 24px 40px; display: flex; flex-direction: column; gap: 28px; }
 
 .vc-row { position: relative; display: flex; flex-direction: column; min-width: 0; }
@@ -138,6 +141,37 @@
 .vc-meta { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; color: var(--vc-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
 .vc-meta .vc-logo { opacity: .75; }
 @media (hover: none) { .vc-actions { opacity: 1; } }
+
+/* The reply's details (TurnStats.tsx): hover or tap the meta and they slide out to its side. */
+.vc-turn { position: relative; }
+.vc-turn-chip {
+  display: inline-flex; align-items: center; gap: 6px; margin: -4px -6px; padding: 4px 6px; border-radius: 7px;
+  background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: default;
+  transition: color .15s, background .15s;
+}
+.vc-turn:hover .vc-turn-chip, .vc-turn.open .vc-turn-chip { color: var(--text); background: var(--vc-raise); }
+.vc-turn-panel {
+  position: absolute; z-index: 30; left: calc(100% + 12px); top: 50%;
+  display: grid; grid-template-columns: repeat(2, auto auto); gap: 4px 14px; padding: 10px 14px;
+  white-space: nowrap; font-size: 12px; line-height: 1.35; color: var(--text);
+  background: #1a1d26; border: 1px solid var(--vc-line); border-radius: 12px;
+  box-shadow: 0 12px 36px #00000066, 0 2px 6px #0000004d;
+  opacity: 0; transform: translate(-8px, -50%); clip-path: inset(0 100% 0 0 round 12px); pointer-events: none;
+  transition: clip-path .32s cubic-bezier(.2, .8, .2, 1), transform .32s cubic-bezier(.2, .8, .2, 1), opacity .16s;
+}
+.vc-turn:hover .vc-turn-panel, .vc-turn.open .vc-turn-panel, .vc-turn-chip:focus-visible + .vc-turn-panel {
+  opacity: 1; transform: translate(0, -50%); clip-path: inset(0 0 0 0 round 12px); pointer-events: auto;
+}
+.vc-turn-row { display: contents; }
+.vc-turn-k { color: var(--vc-faint); }
+.vc-turn-v { font-variant-numeric: tabular-nums; padding-right: 6px; }
+/* It needs ~600px beside the chip, which a narrow pane (a laptop with the chats
+   panel open, a phone) doesn't have: there it opens above, still sliding out sideways. */
+@container vc-scroll (max-width: 1100px) {
+  .vc-turn-panel { left: -6px; top: auto; bottom: calc(100% + 10px); grid-template-columns: auto auto; transform: translateX(-8px); }
+  .vc-turn:hover .vc-turn-panel, .vc-turn.open .vc-turn-panel, .vc-turn-chip:focus-visible + .vc-turn-panel { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .vc-turn-panel { transition: opacity .16s; } }
 
 .vc-edit { width: min(100%, 620px); background: var(--vc-bubble); border-radius: 22px; padding: 12px 14px 10px; }
 .vc-edit textarea {
@@ -173,7 +207,10 @@
   background: #262a36; padding: 2px 6px; border-radius: 6px; color: #e9ecf3;
 }
 .vc .md table { border-collapse: collapse; margin: 0 0 16px; font-size: 14px; display: block; overflow-x: auto; max-width: 100%; }
-.vc .md th, .vc .md td { border: 1px solid var(--vc-line); padding: 7px 12px; text-align: left; vertical-align: top; }
+/* `overflow-wrap: anywhere` (inherited from .md) lets a column shrink to one
+   letter, so "Rank" stacks as "R/an/k". `break-word` still wraps a long URL but
+   sizes columns by whole words; a table too wide for the reply scrolls instead. */
+.vc .md th, .vc .md td { border: 1px solid var(--vc-line); padding: 7px 12px; text-align: left; vertical-align: top; overflow-wrap: break-word; }
 .vc .md th { background: #1a1d26; font-weight: 600; color: var(--text); }
 .vc .md img { max-width: 100%; border-radius: 12px; }
 .vc .md-code { margin: 0 0 16px; border-radius: 12px; overflow: hidden; background: #0b0d12; border: 1px solid var(--vc-line); }
@@ -240,7 +277,7 @@
 .vc-tool-head:disabled { cursor: default; }
 .vc-tool-icon { color: var(--vc-soft); display: inline-flex; }
 .vc-tool.error .vc-tool-icon, .vc-tool.error .vc-tool-state { color: #ff7a8f; }
-.vc-tool-title { white-space: nowrap; font-weight: 500; }
+.vc-tool-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; font-weight: 500; }
 .vc-tool-app { flex: none; font-size: 11.5px; color: var(--vc-soft); background: var(--vc-raise); padding: 1px 7px; border-radius: 999px; }
 .vc-tool-detail { color: var(--vc-faint); font: 12.5px ui-monospace, "SF Mono", Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
 .vc-tool-state { margin-left: auto; flex: none; color: var(--vc-faint); font-size: 12px; font-variant-numeric: tabular-nums; display: inline-flex; }
@@ -300,13 +337,25 @@
   transition: border-color .15s;
 }
 .vc-box:focus-within { border-color: #3a4152; }
-.vc-box.mode-computer { border-color: color-mix(in srgb, var(--accent) 45%, var(--vc-line)); }
-.vc-box.mode-task { border-color: color-mix(in srgb, var(--amber) 40%, var(--vc-line)); }
 .vc-box textarea {
   display: block; width: 100%; resize: none; border: 0; outline: none; background: none; color: var(--text);
   font: inherit; font-size: 16px; line-height: 1.5; padding: 6px 6px 4px; min-height: 36px;
 }
 .vc-box textarea::placeholder { color: var(--vc-faint); }
+/* Cited skills are painted on a layer behind the textarea, laid out with the same
+   box and type so each <mark> sits under its own text. */
+.vc-input { position: relative; }
+.vc-input textarea { position: relative; }
+.vc-input-marks {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  font: inherit; font-size: 16px; line-height: 1.5; padding: 6px 6px 4px;
+  white-space: pre-wrap; overflow-wrap: break-word; color: transparent;
+}
+.vc-input-marks mark, .vc-mention {
+  background: color-mix(in srgb, var(--accent) 24%, transparent); border-radius: 5px;
+}
+.vc-input-marks mark { color: transparent; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent); }
+.vc-mention { padding: 1px 5px; color: color-mix(in srgb, var(--accent) 55%, var(--text)); font-weight: 500; }
 .vc-box-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; }
 .vc-box-left, .vc-box-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .vc-send {
@@ -322,12 +371,6 @@
 .vc-tray { display: flex; gap: 10px; flex-wrap: wrap; padding: 4px 2px 10px; }
 .vc-plus-wrap { position: relative; }
 .vc-plus-menu { bottom: calc(100% + 8px); left: -4px; width: 300px; }
-.vc-mode-chip {
-  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent); color: #a9c1ff; border: 0; font-size: 13px; font-weight: 500;
-}
-.vc-mode-chip.mode-task { background: color-mix(in srgb, var(--amber) 16%, transparent); color: #f0cd72; }
-.vc-mode-chip:hover { filter: brightness(1.15); }
 .vc-dictation { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 8px; }
 .vc-rec-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--red); transition: transform .08s; box-shadow: 0 0 0 4px #f0506e26; }
 .vc-dictation-label { color: var(--vc-soft); font-size: 15px; font-variant-numeric: tabular-nums; }
@@ -341,7 +384,8 @@
 .vc-cmd.active { background: var(--vc-raise); }
 .vc-cmd-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: #12141b; color: var(--vc-soft); flex: none; }
 .vc-cmd-text { display: flex; flex-direction: column; min-width: 0; }
-.vc-cmd-name { font: 13px ui-monospace, "SF Mono", Menlo, monospace; }
+.vc-cmd-name { font: 13px ui-monospace, "SF Mono", Menlo, monospace; display: flex; align-items: baseline; gap: 8px; }
+.vc-cmd-source { font: 11px/1 system-ui, sans-serif; color: var(--vc-faint); }
 .vc-cmd-desc { font-size: 12.5px; color: var(--vc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .vc-jump {
@@ -388,7 +432,8 @@
   background: var(--bg); border: 1px solid var(--line); color: var(--text); font: inherit; font-size: 14px; outline: none;
 }
 .vc-threads-search:focus { border-color: #3a4152; }
-.vc-threads-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0 12px; scrollbar-width: thin; }
+.vc-threads-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0 12px; scrollbar-width: thin; display: flex; flex-direction: column; }
+.vc-threads-list > * { flex-shrink: 0; }
 .vc-threads-empty { padding: 10px 12px; color: var(--muted); font-size: 13px; }
 .vc-thread-group { margin-top: 8px; }
 .vc-thread-group-label { padding: 6px 12px 4px; font-size: 12px; color: color-mix(in srgb, var(--muted) 80%, transparent); }
@@ -418,6 +463,68 @@
 .vc-thread-more:hover { color: var(--text); background: #ffffff10; }
 @media (hover: none) { .vc-thread-more { opacity: 1; } }
 .vc-thread-menu { top: calc(100% + 2px); right: 0; min-width: 180px; }
+/* --- settled and snoozed (settle.ts) ----------------------------------------------- */
+/* Quick actions sit where the parked chats' times are, and replace them on hover. */
+.vc-thread-actions { display: none; align-items: center; gap: 1px; flex: none; }
+.vc-thread:hover .vc-thread-actions, .vc-thread:focus-within .vc-thread-actions, .vc-thread.menu-open .vc-thread-actions { display: flex; }
+.vc-thread:hover .vc-thread-meta, .vc-thread:focus-within .vc-thread-meta, .vc-thread.menu-open .vc-thread-meta { display: none; }
+@media (hover: none) { .vc-thread-actions { display: none !important; } .vc-thread-meta { display: inline !important; } }
+.vc-thread-act {
+  display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; flex: none;
+  background: none; border: 0; color: var(--muted);
+}
+.vc-thread-act:hover:not(:disabled) { color: var(--text); background: #ffffff10; }
+.vc-thread-act:disabled { opacity: .35; cursor: default; }
+.vc-thread-meta { flex: none; padding-left: 4px; font-size: 11.5px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--muted) 80%, transparent); }
+.vc-thread-meta.snoozed { color: var(--accent); }
+.vc-woke {
+  flex: none; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 600;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+/* A settled chat recedes until it's pointed at or open. */
+.vc-thread.shelf-settled:not(:hover):not(:focus-within):not(.active):not(.menu-open) .vc-thread-main { color: color-mix(in srgb, var(--muted) 72%, transparent); }
+.vc-thread.shelf-settled:not(:hover):not(:focus-within):not(.active):not(.menu-open) .vc-thread-main > :first-child,
+.vc-thread.shelf-snoozed:not(:hover):not(:focus-within):not(.active):not(.menu-open) .vc-thread-main > :first-child { opacity: .45; filter: grayscale(1); }
+.vc-shelf { margin-top: 10px; }
+/* The shelves sit at the bottom of the panel, under whatever is still in play. */
+.vc-threads-list > .vc-shelf.first { margin-top: auto; padding-top: 14px; }
+.vc-shelf-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px 4px 12px;
+  background: none; border: 0; font-size: 12px; font-weight: 600; color: color-mix(in srgb, var(--muted) 85%, transparent); text-align: left;
+}
+.vc-shelf-snoozed .vc-shelf-head { color: var(--accent); }
+.vc-shelf-head:hover { color: var(--text); }
+.vc-shelf-rule { flex: 1; height: 1px; background: var(--line); }
+.vc-shelf-snoozed .vc-shelf-rule { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.vc-shelf-more {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 12px;
+  background: none; border: 0; border-radius: 9px; color: var(--muted); font-size: 13px; text-align: left;
+}
+.vc-shelf-more:hover { color: var(--text); background: var(--bg-3); }
+.vc-folder-chats .vc-shelf { margin-top: 4px; }
+.vc-folder-chats .vc-shelf-head { padding-left: 12px; font-size: 11.5px; }
+.vc-parked {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 0 auto 6px; max-width: 760px; padding: 4px 4px 4px 14px; border-radius: 12px;
+  background: var(--vc-raise); color: var(--vc-soft); font-size: 13px;
+}
+.vc-snooze-menu { min-width: 230px; }
+.vc-proj-chat.settled:not(:hover) { opacity: .6; }
+/* The shelves are at the bottom of the panel: their menus open upward. */
+.vc-shelf .vc-thread-menu { top: auto; bottom: calc(100% + 2px); }
+.vc-snooze-label { flex: 1; }
+.vc-snooze-when { margin-left: 16px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--vc-soft); }
+.vc-snooze-custom { display: flex; flex-direction: column; gap: 8px; padding: 6px; }
+.vc-snooze-modes { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--bg); }
+.vc-snooze-modes button { flex: 1; height: 26px; border: 0; border-radius: 6px; background: none; color: var(--vc-soft); font-size: 12px; }
+.vc-snooze-modes button.on { background: var(--vc-raise); color: var(--text); }
+.vc-snooze-fields { display: flex; gap: 6px; }
+.vc-snooze-fields input, .vc-snooze-fields select {
+  flex: 1; min-width: 0; height: 32px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--text); font: inherit; font-size: 13px; color-scheme: dark;
+}
+.vc-snooze-error { font-size: 12px; color: #ff7a8f; }
+.vc-snooze-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .vc-thread.editing { padding: 2px 4px; }
 .vc-thread.editing input {
   width: 100%; height: 32px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--accent);
@@ -519,58 +626,7 @@
   .app:has(.vc) .action-launcher { display: none; }
 }
 
-/* --- quick chat (desktop, any tab but Chat) ------------------------------------ */
-.vc-quick-launch {
-  /* Same footprint and column as the utilities launcher above it, so the pair
-     covers no more of a page than that one button did. */
-  position: fixed; right: 22px; bottom: 20px; z-index: 44;
-  display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%;
-  background: var(--text); border: 0; color: #0f1115;
-  box-shadow: 0 8px 28px #00000073;
-  transition: right .16s ease, transform .1s;
-}
-.vc-quick-launch:active { transform: scale(.94); }
-.vc-quick-launch span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-.vc-quick-launch:hover { background: #fff; }
-.vc.vc-quick {
-  position: fixed; right: 22px; bottom: 20px; z-index: 49;
-  width: min(440px, calc(100vw - 44px)); height: min(640px, calc(100vh - 40px));
-  border: 1px solid var(--vc-line); border-radius: 18px; overflow: hidden;
-  box-shadow: 0 24px 70px #0000008c;
-  animation: vc-pop .14s ease-out;
-}
-.vc-quick-head { flex: none; display: flex; align-items: center; gap: 4px; height: 46px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--vc-line); }
-.vc-quick-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.vc-quick-log { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 16px 8px; display: flex; flex-direction: column; gap: 18px; }
-.vc-quick-empty { margin: auto 0; color: var(--vc-faint); font-size: 13.5px; text-align: center; padding: 0 20px; }
-.vc-quick .vc-assistant-body { font-size: 14.5px; line-height: 1.6; }
-.vc-quick .vc-bubble { font-size: 14.5px; max-width: 88%; }
-.vc-quick-dock { flex: none; padding: 0 10px 10px; }
-.vc-quick .vc-box { border-radius: 20px; box-shadow: none; }
-.vc-quick .vc-plus-menu { width: 280px; }
-.app.term-open .vc-quick-launch, .app.term-open .vc.vc-quick { right: calc(22px + var(--term-width, 0px)); }
-@media (max-width: 720px) { .vc-quick-launch, .vc.vc-quick { display: none; } }
-
-/* --- Auto / Instant / Thinking ---------------------------------------------- */
-.vc-think { padding: 4px 14px 10px 40px; }
-.vc-think input[type=range] {
-  -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: none; margin: 0; cursor: pointer;
-}
-.vc-think input[type=range]::-webkit-slider-runnable-track {
-  height: 4px; border-radius: 2px;
-  background: linear-gradient(to right, var(--text) var(--fill), #343a48 var(--fill));
-}
-.vc-think input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; background: #343a48; }
-.vc-think input[type=range]::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--text); }
-.vc-think input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%;
-  background: var(--text); border: 0; box-shadow: 0 1px 4px #000a;
-}
-.vc-think input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--text); border: 0; }
-.vc-think-labels { display: flex; justify-content: space-between; margin: 2px -6px 0; }
-.vc-think-labels button { background: none; border: 0; padding: 2px 6px; font-size: 12px; color: var(--vc-faint); border-radius: 6px; }
-.vc-think-labels button.on { color: var(--text); }
-.vc-think-labels button:hover { color: var(--vc-text); }
+/* --- Model picker extras ------------------------------------------------- */
 .vc-model-more { justify-content: space-between; }
 .vc-model-more .vc-chev { margin-left: auto; }
 .vc-model-manual { display: flex; flex-direction: column; }
@@ -684,11 +740,20 @@
 .vc-effort-list button:hover { background: #2d313c; }
 .vc-effort-list small { color: var(--vc-faint); font-size: 12px; }
 
+/* --- access (after T3 Code) -------------------------------------------------------- */
+.vc-access { position: relative; min-width: 0; }
+.vc-access-pop { width: 320px; padding: 8px; border-radius: 18px; }
+.vc-access-pop .vc-effort-list button { align-items: flex-start; }
+.vc-access-pop .vc-effort-list button > .ti { flex: none; margin-top: 2px; color: var(--vc-soft); }
+.vc-access-pop .vc-effort-list button.current { background: #2d313c; }
+.vc-access-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+
 @media (max-width: 720px) {
   .vc-effort-pop { position: fixed; left: 50%; right: auto; transform: translateX(-50%); bottom: calc(var(--dock-clear) + 110px); }
   .vc-chip { max-width: 150px; padding: 0 8px; }
   .vc-effort .vc-chip-label { display: none; }
   .vc-effort .vc-chip::before { content: 'Effort'; }
+  .vc-access .vc-chip-label { display: none; }
 }
 
 /* The empty chat's composer sits mid-page inside the scroller: popovers that open
@@ -901,6 +966,80 @@
   .vc-browser-chip span { display: none; }
   .vc-browser-body { padding: 4px 10px calc(20px + env(safe-area-inset-bottom)); }
 }
+/* Agents (AgentsPanel): the agents a chat's agent started, beside the chat in
+   the canvas slot, each opening into its own log. Full screen on a phone. */
+.vc-agents-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding-left: 4px; font-size: 15px; font-weight: 600; }
+.vc-agents-count { font-size: 12.5px; font-weight: 400; color: var(--vc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-agents-body { display: flex; flex-direction: column; gap: 8px; padding: 4px 14px 24px; }
+.vc-agents-empty { margin: auto; max-width: 300px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; color: var(--vc-faint); font-size: 13px; line-height: 1.5; }
+.vc-agents-empty p { margin: 0; }
+.vc-agents-empty .vc-agents-empty-title { color: var(--text); font-size: 14px; font-weight: 500; }
+.vc-agent { border: 1px solid var(--vc-line); border-radius: 12px; background: var(--vc-surface); }
+.vc-agent.running { border-color: color-mix(in srgb, #6fa8ff 35%, var(--vc-line)); }
+.vc-agent-head { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 11px 12px; background: none; border: 0; color: var(--text); text-align: left; border-radius: 12px; }
+.vc-agent-head:hover { background: var(--vc-raise); }
+.vc-agent-head .vc-logo { margin-top: 1px; flex: none; }
+.vc-agent-head .vc-chev { margin-top: 3px; flex: none; }
+.vc-agent-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vc-agent-title { font-size: 14px; font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.vc-agent-meta { font-size: 12px; color: var(--vc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-agent-now { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-agent-status { flex: none; display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 12px; color: var(--vc-soft); }
+.vc-agent-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--vc-faint); }
+.vc-agent-status.running i { background: #6fa8ff; animation: vc-breathe 1.4s ease-in-out infinite; }
+.vc-agent-status.done i { background: #6fcf97; }
+.vc-agent-status.error { color: #ff7a8f; }
+.vc-agent-status.error i { background: #ff7a8f; }
+.vc-agent-log { display: flex; flex-direction: column; gap: 4px; padding: 2px 12px 12px 42px; }
+.vc-agent-prompt summary { cursor: pointer; font-size: 12.5px; color: var(--vc-soft); padding: 2px 0 6px; }
+.vc-agent-prompt summary:hover { color: var(--text); }
+.vc-agent-prompt pre, .vc-agent-log .vc-tool-io pre { max-height: 240px; }
+.vc-agent-prompt pre {
+  margin: 0 0 6px; overflow: auto; padding: 10px 12px; border-radius: 10px; background: #0b0d12; border: 1px solid var(--vc-line);
+  color: #cfd4de; font: 12px/1.55 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.vc-agent-note { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12.5px; color: var(--vc-faint); line-height: 1.45; }
+.vc-astep.thinking {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 4px 8px; margin-left: -8px; border-radius: 9px;
+  background: none; border: 0; color: var(--vc-faint); font-size: 13px; font-style: italic; line-height: 1.5; text-align: left;
+}
+.vc-astep.thinking .ti { margin-top: 3px; flex: none; }
+.vc-astep.thinking span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+.vc-astep.thinking.open span { -webkit-line-clamp: unset; }
+.vc-astep.thinking:hover { background: var(--vc-raise); }
+.vc-astep.text { font-size: 13.5px; line-height: 1.55; padding: 2px 0 4px; }
+.vc-astep.text .md > :first-child { margin-top: 0; }
+.vc-astep.text .md > :last-child { margin-bottom: 0; }
+.vc-astep-tool .vc-tool-head { margin-left: -8px; width: calc(100% + 8px); font-size: 13px; min-height: 28px; }
+.vc-astep-tool .vc-tool-head:not(:disabled):hover { background: var(--vc-raise); }
+.vc-astep-tool .vc-tool-body { margin-left: 22px; }
+.vc-agent-result { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--vc-line); font-size: 13.5px; line-height: 1.55; }
+/* In the reply: the call that started an agent, on its own line. */
+.vc-agent-card { align-self: stretch; }
+.vc-agent-card-head {
+  display: flex; align-items: center; gap: 9px; width: 100%; min-height: 40px; padding: 7px 10px; border-radius: 11px;
+  border: 1px solid var(--vc-line); background: var(--vc-surface); color: var(--vc-soft); font-size: 13.5px; text-align: left;
+}
+.vc-agent-card-head:hover { background: var(--vc-raise); color: var(--text); }
+.vc-agent-card.running .vc-agent-card-head { border-color: color-mix(in srgb, #6fa8ff 35%, var(--vc-line)); }
+.vc-agent-card.error .vc-agent-card-state { color: #ff7a8f; }
+.vc-agent-card-name { flex: none; color: var(--text); font-weight: 500; }
+.vc-agent-card-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-agent-card-state { flex: none; display: inline-flex; align-items: center; gap: 6px; color: var(--vc-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.vc-agent-card-open { flex: none; font-size: 12px; color: var(--accent); }
+.vc-agents-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; margin-right: 4px; border-radius: 999px;
+  border: 1px solid var(--vc-line); background: none; color: var(--vc-soft); font-size: 12px;
+}
+.vc-agents-chip:hover { background: var(--vc-raise); color: var(--text); }
+.vc-agents-chip.live { border-color: color-mix(in srgb, #6fa8ff 45%, transparent); color: #b7d2ff; }
+@media (max-width: 720px) {
+  .vc-agents-chip span { display: none; }
+  .vc-agents-chip { padding: 0 7px; }
+  .vc-agents-body { padding: 4px 10px calc(24px + env(safe-area-inset-bottom)); }
+  .vc-agent-log { padding-left: 12px; }
+  .vc-agent-card-open { display: none; }
+}
 /* Images in replies (shared screenshots): fit the column, framed like the browser's. */
 .vc .md img { display: block; max-width: 100%; height: auto; margin: 10px 0; border-radius: 10px; border: 1px solid var(--vc-line); }
 .vc .md img[data-pending] { width: 100%; aspect-ratio: 16 / 10; background: linear-gradient(100deg, #1a1d26 30%, #222634 50%, #1a1d26 70%) 0 0 / 200% 100%; animation: vc-pending-shot 1.4s linear infinite; }
@@ -919,28 +1058,6 @@
    widen its column and squeeze the rest of the table into one-letter lines. */
 .vc .md td img { width: 168px; max-width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: #fff; margin: 0; }
 
-/* Auto's power pill (PowerControl): the model it will use and the power, live. */
-.vc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.vc-model-chip.compact { padding: 0 9px; }
-.vc-power-chip { gap: 6px; max-width: 260px; }
-.vc-power-chip .vc-chip-label { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
-.vc-power-model { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.vc-power-name { color: var(--vc-soft); white-space: nowrap; }
-.vc-power-name small { color: var(--vc-faint); font-size: 11.5px; }
-.vc-power-chip.pending .vc-power-name { color: var(--vc-faint); }
-.vc-power-pop { width: 300px; }
-.vc-power-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
-.vc-effort-name.as-text { cursor: default; padding: 0; }
-.vc-power-hint { font-size: 12.5px; color: var(--vc-faint); }
-.vc-power-ends { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11.5px; color: var(--vc-faint); }
-.vc-power-uses { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 9px 10px; border-radius: 10px; background: #1a1d26; font-size: 13px; color: var(--vc-soft); }
-.vc-power-uses strong { color: var(--text); font-weight: 600; }
-.vc-power-note { margin: 10px 0 0; font-size: 12px; line-height: 1.45; color: var(--vc-faint); }
-.vc-power-reset { margin-top: 10px; background: none; border: 0; padding: 0; color: var(--accent); font-size: 13px; cursor: pointer; }
-@media (max-width: 720px) {
-  .vc-power-chip { max-width: 190px; }
-  .vc-power-pop { width: min(300px, calc(100vw - 32px)); }
-}
 /* A message the bridge never got (store.ts › outbox). */
 .vc-user.unsent .vc-bubble { opacity: .75; border: 1px dashed color-mix(in srgb, #f0cd72 55%, transparent); }
 .vc-unsent { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 6px; font-size: 12.5px; color: #f0cd72; }
@@ -1096,3 +1213,65 @@
 .vc-mem-entry:hover { background: var(--vc-raise); }
 .vc-mem-entry.picked { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .vc-mem-entry input { margin-top: 4px; accent-color: var(--accent); }
+
+/* --- running chats (RunningChats.tsx) ------------------------------------------
+   Bottom-right, just above the utilities launcher (right 22px, bottom 20px, 44px),
+   so it never covers it. Lives outside .vc, so it brings the colours. */
+.vc-runs, .vc-runs-pill {
+  --vc-soft: color-mix(in srgb, var(--text) 62%, transparent);
+  --vc-faint: color-mix(in srgb, var(--text) 40%, transparent);
+  --vc-raise: #1f2330;
+  --vc-line: #2a2f3c;
+  position: fixed; right: 22px; bottom: 76px; z-index: 47;
+  background: #171a22; border: 1px solid var(--vc-line); color: var(--text);
+  box-shadow: 0 18px 50px #0000008c;
+  transition: right .16s ease;
+}
+.vc-runs .ti, .vc-runs-pill .ti { display: block; flex: none; }
+.vc-runs {
+  width: min(340px, calc(100vw - 44px));
+  display: flex; flex-direction: column;
+  border-radius: 14px; font-size: 13px;
+  animation: vc-pop .14s ease-out;
+}
+.vc-runs-head { flex: none; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 6px 0 14px; border-bottom: 1px solid var(--vc-line); }
+.vc-runs-title { flex: 1; min-width: 0; font-weight: 600; }
+.vc-runs-count { margin-left: 6px; font-weight: 400; color: var(--vc-soft); }
+.vc-runs-body { max-height: min(46vh, 420px); overflow-y: auto; padding: 2px 6px 6px; }
+.vc-runs-group { display: flex; align-items: center; gap: 6px; padding: 9px 6px 3px; font-size: 11.5px; color: var(--vc-faint); }
+.vc-runs-group span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-runs-row { display: flex; align-items: center; gap: 1px; padding-right: 4px; border-radius: 9px; }
+.vc-runs-row:hover { background: var(--vc-raise); }
+.vc-runs-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+  padding: 7px 6px; background: none; border: 0; color: inherit; text-align: left; cursor: pointer;
+}
+.vc-runs-main > .ti { color: var(--vc-soft); }
+.vc-runs-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.vc-runs-name { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-runs-status { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--vc-soft); font-variant-numeric: tabular-nums; }
+.vc-runs-status span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-runs-status.done { color: #6fcf8a; }
+.vc-runs-status.failed { color: #ff7a8f; }
+.vc-runs-act {
+  flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px;
+  background: none; border: 0; color: var(--vc-soft); cursor: pointer;
+}
+.vc-runs-act:hover:not(:disabled) { background: var(--vc-line); color: var(--text); }
+.vc-runs-act:disabled { opacity: .35; cursor: default; }
+/* The body scrolls, so the snooze menu hangs off the panel itself, above it. */
+.vc-runs .vc-snooze-menu { top: auto; right: 0; bottom: calc(100% + 6px); }
+.vc-runs-pill {
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px;
+  border-radius: 17px; font-size: 12.5px; cursor: pointer;
+}
+.vc-runs-pill:hover { background: var(--vc-raise); }
+.vc-runs-pill .ti { color: #6fcf8a; }
+.app.term-open .vc-runs, .app.term-open .vc-runs-pill { right: calc(22px + var(--term-width, 0px)); }
+@media (max-width: 720px) {
+  /* Above the voice and new-chat buttons, and out of the way of the drawer. */
+  .vc-runs, .vc-runs-pill { right: 16px; bottom: calc(var(--dock-clear) + 146px); }
+  .vc-runs { width: calc(100vw - 32px); }
+  .vc-runs-body { max-height: 38vh; }
+  .app.shell.drawer-open .vc-runs, .app.shell.drawer-open .vc-runs-pill { opacity: 0; pointer-events: none; }
+}

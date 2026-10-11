@@ -13,10 +13,12 @@ when a vendor tightens a screw.
 
 - **Settings → Connections → Wearables** — status, granted scopes, the redirect URI,
   and Reconnect. This is the home for it.
-- **Productivity → Habits**, on the sleep chart — Reconnect sits next to Sync, with
-  a one-line health note when the grant needs attention.
+- **Bushido** shows the nights (score, time asleep, stages, bedtime and wake). It
+  reads them from `GET /api/whoop/training` (`sleep[]`, below).
 
-Both read the same `state` from the same endpoint, so they cannot disagree.
+The sleep habit is hidden from Totem's Habits tab and Overview (`isSyncedSleep` in
+`HabitsView.tsx`): nobody logs it by hand. The habit, this sync and every night's
+history stay in the habit store, so agents and search still read them.
 
 ## What the graph shows
 
@@ -189,7 +191,13 @@ may hold it. A second copy of the credentials would mean two grants for one memb
 and one of them dying silently — and for this sync, dying silently means a quiet
 gap in a habit rather than an error anybody sees.
 
-- `GET /api/whoop/training?days=N` → `{ok, fetchedAt, days, maxHeartRate, workouts[], recovery[]}`
+- `GET /api/whoop/training?days=N` → `{ok, fetchedAt, days, maxHeartRate, workouts[], recovery[], sleep[]}`
+
+`sleep[]` is one night per wake date, newest first, on the same calendar as
+`recovery[]`: `{date, score, asleepMin, inBedMin, neededMin, debtMin, efficiency,
+consistency, respiratoryRate, disturbances, stages: {deep, rem, light, awake},
+bedtime, wake}` (minutes; `bedtime`/`wake` are local wall-clock `YYYY-MM-DDTHH:MM`).
+It is built from the same record as the habit (`whoopNightFromRecord`), so the two agree.
 
 `whoopTraining` in `bridge.mjs` fans out over four collections — workouts, cycles,
 recoveries and the body measurement — and normalizes them: milliseconds become

@@ -1,0 +1,63 @@
+/* Screen view: a thin toolbar over the remote desktop, which gets every other pixel. */
+.scr { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+
+.scr-bar {
+  display: flex; align-items: center; gap: 6px; padding: 7px 10px 7px 14px;
+  border-bottom: 1px solid var(--line); font-size: 13px; min-height: 44px;
+}
+.scr-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.scr-dot.connected { background: var(--green); }
+.scr-dot.connecting, .scr-dot.login { background: var(--amber); }
+.scr-title { font-weight: 600; white-space: nowrap; }
+.scr-msg { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.scr-spacer { flex: 1; }
+.scr-warn { color: var(--amber); font-size: 12px; margin-right: 6px; white-space: nowrap; cursor: help; }
+
+.scr-tool {
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+}
+.scr-tool:hover:not(:disabled) { background: var(--bg-3); color: var(--text); }
+.scr-tool.on { color: var(--accent); }
+.scr-tool:disabled { opacity: .35; cursor: default; }
+
+.scr-stage { position: relative; flex: 1; min-height: 0; background: #000; overflow: auto; }
+.scr-canvas { width: 100%; height: 100%; }
+/* noVNC sizes its own screen div; in fit mode it has to fill the stage exactly. */
+.scr-stage.fit { overflow: hidden; }
+.scr:fullscreen .scr-bar { display: none; }
+
+.scr-login {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(340px, calc(100% - 40px)); padding: 22px; border-radius: var(--radius);
+  background: var(--bg-2); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px;
+  text-align: center;
+}
+.scr-login h2 { margin: 4px 0 0; font-size: 16px; font-weight: 600; }
+.scr-login p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.scr-login .scr-login-error { color: var(--red); }
+.scr-login-icon { margin: 0 auto; color: var(--muted); }
+.scr-login input {
+  width: 100%; box-sizing: border-box; padding: 9px 11px; border-radius: 8px; font: inherit; font-size: 14px;
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+}
+.scr-login input:focus { outline: none; border-color: var(--accent); }
+.scr-remember { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); text-align: left; }
+.scr-remember select {
+  flex: 1; padding: 7px 9px; border-radius: 8px; font: inherit; font-size: 13px;
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+}
+.scr-login .scr-login-note { font-size: 12px; }
+.scr-saved { color: var(--muted); font-size: 12px; white-space: nowrap; margin-right: 2px; }
+
+.scr-state { flex: 1; display: grid; place-items: center; padding: 32px 20px; overflow: auto; }
+.scr-state-card { max-width: 460px; text-align: center; }
+.scr-state-card h2 { margin: 12px 0 8px; font-size: 17px; font-weight: 600; }
+.scr-state-card p { margin: 0 0 12px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.scr-state-card code { font-size: 13px; padding: 1px 5px; border-radius: 5px; background: var(--bg-3); }
+.scr-state-icon { margin: 0 auto; color: var(--muted); }
+.scr-state-fix {
+  text-align: left; padding: 11px 13px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--text) !important; font-size: 13.5px; overflow-wrap: anywhere; user-select: all;
+}
+.scr-state .btn { display: inline-flex; align-items: center; gap: 6px; }
