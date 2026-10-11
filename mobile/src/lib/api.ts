@@ -326,6 +326,8 @@ export const deleteHabit = (id: string) => sendJSON('/api/habits', 'DELETE', { i
 // { start, end } local "YYYY-MM-DDTHH:MM" span, replaced whole. Passing only
 // stats/window leaves value and parts untouched.
 export const logHabit = (fields: any) => sendJSON('/api/habits/log', 'POST', fields)
+/** The morning check-in opened today (on any device), so it does not pop up again. */
+export const markHabitCheckin = (date: string) => sendJSON('/api/habits/checkin', 'POST', { date })
 // Run the WHOOP sleep + recovery sync now instead of waiting for its scheduled slot.
 // `days` may be 1–90; scheduled runs keep their small default window.
 // Resolves to { updated, enriched, skipped, errors, checked, habits } — `enriched`

@@ -8,9 +8,10 @@ import { COMMANDS } from '../shortcuts'
 import { useCommand } from '../useShortcuts'
 import {
   Hi, PlusIcon, MinusIcon, ArrowPathIcon, XMarkIcon, TrashIcon,
-  PencilSquareIcon, CheckIcon, ChatBubbleLeftEllipsisIcon, FireIcon, ArchiveBoxIcon, Bars3Icon,
+  PencilSquareIcon, CheckIcon, ChatBubbleLeftEllipsisIcon, FireIcon, ArchiveBoxIcon, Bars3Icon, ArrowTopRightOnSquareIcon,
 } from '../icons'
 import { useErrorToast, pushToast } from '../toast'
+import { OPEN_HABIT_CHECKIN } from './HabitCheckin'
 import {
   MetricChart, MetricStatsStrip, metricSeries, metricStats, fmtMetric,
   type MetricConfig, type MetricPart,
@@ -26,8 +27,31 @@ interface Habit {
   cadence: Cadence
   target: number // completions per cadence period (day / Sun–Sat week / calendar month)
   metric: MetricConfig | null // optional number tracked alongside the check mark
+  /** When it is answered: 'night' habits are done late and logged the next morning. */
+  when?: HabitWhen
+  /** A sibling app fills it in (Krakatoa, Bushido); it is never ticked by hand here. */
+  linkedApp?: LinkedApp | null
+  /** That app's address, from the bridge's env. */
+  appUrl?: string | null
   createdAt: string
   archived: boolean
+}
+
+type HabitWhen = 'any' | 'morning' | 'night'
+type LinkedApp = 'krakatoa' | 'bushido'
+const APP_NAME: Record<LinkedApp, string> = { krakatoa: 'Krakatoa', bushido: 'Bushido' }
+
+/** In place of a check mark or a number box: where the habit is really logged. */
+export function LinkedAppButton({ habit, compact }: { habit: Pick<Habit, 'linkedApp' | 'appUrl' | 'name'>; compact?: boolean }) {
+  const name = APP_NAME[habit.linkedApp as LinkedApp] || 'its app'
+  if (!habit.appUrl) {
+    return <span className="habit-linked off" title={`${habit.name} is filled in by ${name}; set ${habit.linkedApp?.toUpperCase()}_URL to link to it`}>From {name}</span>
+  }
+  return (
+    <a className="habit-linked" href={habit.appUrl} target="_blank" rel="noreferrer" title={`${habit.name} is filled in by ${name}`}>
+      {compact ? name : `Open ${name}`}<Hi icon={ArrowTopRightOnSquareIcon} size={13} />
+    </a>
+  )
 }
 
 // The WHOOP-synced sleep habit isn't shown here or on the Overview: nobody logs
@@ -222,6 +246,8 @@ function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDel
     target: initial?.target || 1,
     color: initial?.color || '', // '' = auto-assign on create
     archived: initial?.archived || false,
+    when: (initial?.when || 'any') as HabitWhen,
+    linkedApp: (initial?.linkedApp || '') as LinkedApp | '',
   })
   const [metric, setMetric] = useState<MetricDraft>(() => metricDraftFrom(initial?.metric))
   const setMetricField = (k: keyof MetricDraft, v: any) => setMetric((m) => ({ ...m, [k]: v }))
@@ -250,6 +276,8 @@ function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDel
         target: Math.max(1, Number(form.target) || 1),
         archived: form.archived,
         metric: metricFromDraft(metric, initial?.metric?.parts),
+        when: form.when,
+        linkedApp: form.linkedApp || null,
       }
       if (form.color) fields.color = form.color
       await onSubmit(fields)
@@ -296,6 +324,33 @@ function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDel
               <input type="number" min={1} max={50} value={form.target} onChange={(e) => set('target', e.target.value)} />
             </label>
           </div>
+          <div className="field-row">
+            <label className="field">
+              <span>When</span>
+              <select value={form.when} onChange={(e) => set('when', e.target.value as HabitWhen)}>
+                <option value="any">Any time</option>
+                <option value="morning">Morning</option>
+                <option value="night">Night, logged next morning</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Filled by</span>
+              <select value={form.linkedApp} onChange={(e) => set('linkedApp', e.target.value)}>
+                <option value="">Me</option>
+                <option value="krakatoa">Krakatoa</option>
+                <option value="bushido">Bushido</option>
+              </select>
+            </label>
+          </div>
+          <span className="habit-field-hint">
+            {form.linkedApp
+              ? `${APP_NAME[form.linkedApp as LinkedApp]} fills this in on its own; here it links to the app instead of a check mark.`
+              : form.when === 'night'
+                ? 'The morning check-in asks about it the next day and logs it to the night before.'
+                : form.when === 'morning'
+                  ? 'The morning check-in asks about it for that day.'
+                  : 'The morning check-in asks about it if yesterday went unanswered.'}
+          </span>
           <span className="habit-field-hint">
             {form.cadence === 'daily'
               ? '1 = simple yes/no. Higher (e.g. 8 glasses of water) shades the day darker the closer you get.'
@@ -772,6 +827,14 @@ export function HabitMetricInput({ habit, entry, busy, onValue }: {
 }) {
   const metric = habit.metric!
   const [draft, setDraft] = useState<string | null>(null)
+  if (habit.linkedApp) {
+    return (
+      <span className="habit-metric-input readonly" title={`${metric.label}, from ${APP_NAME[habit.linkedApp]}`}>
+        <span style={entry?.value != null ? { color: habit.color } : undefined}>{entry?.value != null ? entry.value.toLocaleString() : '—'}</span>
+        {metric.unit && <small>{metric.unit}</small>}
+      </span>
+    )
+  }
   const saved = entry?.value != null ? String(entry.value) : ''
   const shown = draft ?? saved
 
@@ -821,6 +884,7 @@ interface HabitCheckButtonProps {
 }
 
 export function HabitCheckButton({ habit, count, periodCount, busy, onLog }: HabitCheckButtonProps) {
+  if (habit.linkedApp) return <LinkedAppButton habit={habit} compact />
   const capped = habit.cadence !== 'daily'
   const target = Math.max(1, habit.target)
   const ratio = capped ? Math.min(1, periodCount / target) : count > 0 ? 1 : 0
@@ -1201,14 +1265,16 @@ function CheckRow({ habit, entry, periodCount, busy, onLog, onValue, onNote, dra
       </div>
       {habit.cadence !== 'daily' && <QuotaDots habit={habit} count={periodCount} compact />}
       {habit.metric && <HabitMetricInput habit={habit} entry={entry} busy={busy} onValue={onValue} />}
-      <button
-        className={`icon-btn habit-note-btn ${entry?.note ? 'has-note' : ''}`}
-        title={entry?.note ? `Note: ${entry.note}` : 'Add a note'}
-        onClick={() => onNote(habit)}
-      >
-        <Hi icon={ChatBubbleLeftEllipsisIcon} size={17} />
-      </button>
-      {habit.cadence === 'daily' && habit.target > 1 ? (
+      {!habit.linkedApp && (
+        <button
+          className={`icon-btn habit-note-btn ${entry?.note ? 'has-note' : ''}`}
+          title={entry?.note ? `Note: ${entry.note}` : 'Add a note'}
+          onClick={() => onNote(habit)}
+        >
+          <Hi icon={ChatBubbleLeftEllipsisIcon} size={17} />
+        </button>
+      )}
+      {habit.cadence === 'daily' && habit.target > 1 && !habit.linkedApp ? (
         <div className="habit-stepper">
           <button className="habit-step" onClick={() => onLog(habit, -1)} disabled={busy || count <= 0} aria-label={`Undo one ${habit.name}`}>
             <Hi icon={MinusIcon} size={16} />
@@ -1226,6 +1292,8 @@ function CheckRow({ habit, entry, periodCount, busy, onLog, onValue, onNote, dra
     </div>
   )
 }
+
+const openLinkedApp = (h: Habit) => { if (h.appUrl) window.open(h.appUrl, '_blank', 'noopener') }
 
 // ---------- the view ----------
 interface HabitsViewProps { onAuthError: () => void }
@@ -1260,6 +1328,12 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
   }, [auth])
 
   useEffect(() => { load() }, [load])
+  // The morning check-in logs from outside this view.
+  useEffect(() => {
+    const on = () => { load() }
+    window.addEventListener('totem:habits-changed', on)
+    return () => window.removeEventListener('totem:habits-changed', on)
+  }, [load])
 
   const active = (data?.habits || []).filter((h) => !h.archived && !isSyncedSleep(h))
   const archived = (data?.habits || []).filter((h) => h.archived)
@@ -1351,6 +1425,7 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
       <div className="view-head">
         <h1>Habits {active.length ? <span className="muted">· {active.length}</span> : null}</h1>
         <div className="todo-head-actions">
+          <button className="btn compact" onClick={() => window.dispatchEvent(new Event(OPEN_HABIT_CHECKIN))} title="Morning check-in: yesterday and this morning">Check in</button>
           <button className="btn compact" onClick={load} title="Refresh"><Hi icon={ArrowPathIcon} size={15} /></button>
           <button className="btn primary compact" onClick={() => setModal({ type: 'add' })}>
             <Hi icon={PlusIcon} size={16} /> New
@@ -1424,8 +1499,9 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
                   habit={h}
                   entries={data!.entries}
                   today={today}
-                  onPick={(date) => setModal({ type: 'day', habit: h, date })}
-                  onPickPeriod={({ start, end, title }) => setModal({ type: 'period', habit: h, start, end, title })}
+                  // A linked habit's days are the app's to change; a tap goes there instead.
+                  onPick={(date) => (h.linkedApp ? openLinkedApp(h) : setModal({ type: 'day', habit: h, date }))}
+                  onPickPeriod={({ start, end, title }) => (h.linkedApp ? openLinkedApp(h) : setModal({ type: 'period', habit: h, start, end, title }))}
                 />
                 {h.metric && (
                   <HabitMetricSection

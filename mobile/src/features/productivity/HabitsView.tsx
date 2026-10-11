@@ -15,13 +15,14 @@ import { Hi, ArchiveBoxIcon, ArrowPathIcon, FireIcon, PencilSquareIcon, PlusIcon
 import { logHabit, updateHabit } from '../../lib/api'
 import { pushToast } from '../../lib/toast'
 import {
-  addDays, dayLabel, isSyncedSleep, periodTotal, streakOf, totalFor, type Habit,
+  APP_NAME, addDays, dayLabel, isSyncedSleep, periodTotal, streakOf, totalFor, type Habit,
 } from '../habits/logic'
 import { loadHabits, mutate, useHabits } from '../habits/store'
 import { CheckRow, QuotaDots, st as rowSt } from '../habits/CheckRow'
 import HabitGrid from '../habits/HabitGrid'
 import { HabitMetricSection } from '../habits/MetricChart'
 import { SegSwitch } from '../habits/form'
+import { openLinkedApp } from '../habits/LinkedApp'
 
 export default function HabitsView({ active: shown }: { active: boolean }) {
   const { data, loading } = useHabits()
@@ -50,8 +51,9 @@ export default function HabitsView({ active: shown }: { active: boolean }) {
     try { await run() } catch (e: any) { pushToast(e.message) } finally { setBusyKeys((b) => ({ ...b, [key]: false })) }
   }
 
-  // One-tap logging; the bridge answers with the refreshed payload.
-  const logDelta = (habit: Habit, delta: number) => withBusy(habit, async () => {
+  // One-tap logging; the bridge answers with the refreshed payload. A habit an
+  // app fills in (linkedApp) never gets here: its row links to the app instead.
+  const logDelta = (habit: Habit, delta: number) => habit.linkedApp ? undefined : withBusy(habit, async () => {
     if (delta > 0) success()
     await mutate(() => logHabit({ id: habit.id, date: checkinDate, delta }))
     if (delta < 0) pushToast(`Undid ${habit.name}.`, 'info', { duration: 2500 })
@@ -59,7 +61,7 @@ export default function HabitsView({ active: shown }: { active: boolean }) {
 
   // A number is evidence the habit happened, so it ticks the day off too; clearing
   // it leaves the check alone.
-  const logValue = (habit: Habit, value: number | null) => withBusy(habit, async () => {
+  const logValue = (habit: Habit, value: number | null) => habit.linkedApp ? undefined : withBusy(habit, async () => {
     await mutate(() => logHabit({ id: habit.id, date: checkinDate, value, complete: value !== null }))
   })
 
@@ -70,7 +72,9 @@ export default function HabitsView({ active: shown }: { active: boolean }) {
   // note button, plus archive, without scrolling down to the habit's card.
   const rowMenu = (habit: Habit) => showMenu([
     { label: 'Edit habit', onPress: () => openEdit(habit) },
-    { label: data?.entries[checkinDate]?.[habit.id]?.note ? 'Edit note' : 'Add a note', onPress: () => openDay(habit, checkinDate) },
+    habit.linkedApp
+      ? { label: `Open ${APP_NAME[habit.linkedApp]}`, onPress: () => openLinkedApp(habit) }
+      : { label: data?.entries[checkinDate]?.[habit.id]?.note ? 'Edit note' : 'Add a note', onPress: () => openDay(habit, checkinDate) },
     {
       label: 'Archive',
       onPress: () => mutate(() => updateHabit(habit.id, { archived: true }))
@@ -98,6 +102,8 @@ export default function HabitsView({ active: shown }: { active: boolean }) {
         count={active.length || null}
         right={
           <>
+            {/* The morning check-in, whether or not anything is waiting. */}
+            <Btn compact title="Check in" onPress={() => router.push('/habit/checkin')} style={{ minHeight: 34 }} />
             <IconBtn icon={ArrowPathIcon} size={15} box={34} bordered color={colors.text} label="Refresh" onPress={() => void loadHabits()} />
             <Btn compact kind="primary" icon={PlusIcon} title="New" onPress={() => router.push('/habit/new')} style={{ minHeight: 34 }} />
           </>
@@ -175,8 +181,10 @@ export default function HabitsView({ active: shown }: { active: boolean }) {
                   habit={h}
                   entries={data.entries}
                   today={today}
-                  onPick={(date) => openDay(h, date)}
-                  onPickPeriod={({ start, end, title }) => router.push({ pathname: '/habit/period', params: { id: h.id, start, end, title } })}
+                  onPick={(date) => (h.linkedApp ? openLinkedApp(h) : openDay(h, date))}
+                  onPickPeriod={({ start, end, title }) => (h.linkedApp
+                    ? openLinkedApp(h)
+                    : router.push({ pathname: '/habit/period', params: { id: h.id, start, end, title } }))}
                 />
                 {h.metric && <HabitMetricSection habit={h} entries={data.entries} today={today} />}
               </Card>

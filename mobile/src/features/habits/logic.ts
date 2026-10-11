@@ -14,11 +14,22 @@ export interface Habit {
   cadence: Cadence
   target: number // completions per cadence period
   metric: MetricConfig | null
+  /** When it is answered: 'night' habits are done late and logged the next morning. */
+  when?: HabitWhen
+  /** A sibling app fills it in (Krakatoa, Bushido); it is never ticked by hand here. */
+  linkedApp?: LinkedApp | null
+  /** That app's address, from the bridge's env. */
+  appUrl?: string | null
   createdAt: string
   archived: boolean
 }
 
-export interface Entry { count: number; note?: string; value?: number | null; parts?: Record<string, number> }
+export type HabitWhen = 'any' | 'morning' | 'night'
+export type LinkedApp = 'krakatoa' | 'bushido'
+export const APP_NAME: Record<LinkedApp, string> = { krakatoa: 'Krakatoa', bushido: 'Bushido' }
+
+/** `skipped`: answered "no" in the morning check-in (count stays 0). */
+export interface Entry { count: number; skipped?: boolean; note?: string; value?: number | null; parts?: Record<string, number> }
 export type Entries = Record<string, Record<string, Entry>> // date -> habitId -> entry
 
 export interface HabitsPayload {
@@ -26,6 +37,8 @@ export interface HabitsPayload {
   habits: Habit[]
   entries: Entries
   palette: string[]
+  apps?: Record<LinkedApp, string | null>
+  checkin?: { lastShown: string | null }
 }
 
 // The WHOOP-synced sleep habit isn't shown on the Habits tab: nobody logs it by

@@ -2485,6 +2485,35 @@ a { color: var(--accent); }
 }
 .habit-metric-input input:focus { border-color: var(--accent); outline: none; }
 .habit-metric-input input:disabled { opacity: .5; }
+.habit-metric-input.readonly { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); }
+/* A habit another app fills in: a link to the app where the check mark would be. */
+.habit-linked {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 11px;
+  border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, .04);
+  color: var(--text); font-size: 12.5px; font-weight: 600; text-decoration: none; white-space: nowrap;
+}
+.habit-linked:hover { background: rgba(255, 255, 255, .08); }
+.habit-linked.off { color: var(--muted); font-weight: 500; }
+
+/* Morning check-in (components/HabitCheckin.tsx). */
+.habit-ci-modal { width: min(480px, calc(100vw - 24px)); max-height: min(720px, calc(100dvh - 40px)); overflow-y: auto; }
+.habit-ci-part + .habit-ci-part { margin-top: 18px; }
+.habit-ci-title { font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--muted); margin: 4px 0 6px; }
+.habit-ci-row { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 6px 0; border-top: 1px solid var(--line); }
+.habit-ci-part .habit-ci-row:first-of-type { border-top: 0; }
+.habit-ci-name { flex: 1; min-width: 0; font-size: 15px; }
+.habit-ci-name small { margin-left: 8px; font-size: 12px; color: var(--muted); }
+.habit-ci-row.answered .habit-ci-name { color: var(--muted); }
+.habit-ci-answer { display: flex; gap: 6px; flex: none; }
+.habit-ci-btn {
+  min-width: 56px; height: 38px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .03); color: var(--text); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.habit-ci-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .08); }
+.habit-ci-btn.on.no { background: var(--bg-3); border-color: #3a4152; color: var(--muted); }
+.habit-ci-btn.on.yes { color: #0f1115; }
+.habit-ci-empty { color: var(--muted); font-size: 14px; padding: 8px 0 4px; }
+.habit-ci-left { margin-right: auto; color: var(--muted); font-size: 13px; }
 /* Spinners steal width at this size and the value is typed, not nudged. */
 .habit-metric-input input::-webkit-outer-spin-button,
 .habit-metric-input input::-webkit-inner-spin-button { appearance: none; margin: 0; }

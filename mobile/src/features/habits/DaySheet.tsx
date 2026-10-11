@@ -12,12 +12,20 @@ import { Field, FieldInput, Sheet, closeSheet } from './form'
 import { Stepper } from './CheckRow'
 import { CADENCE_NOUN, dayLabel, type Entry, type Habit } from './logic'
 import { mutate, useHabits } from './store'
+import { LinkedDaySummary } from './LinkedApp'
 
 export default function DaySheet() {
   const { id, date } = useLocalSearchParams<{ id: string; date: string }>()
   const { data } = useHabits()
   const habit = data?.habits.find((h) => h.id === id)
   if (!habit || !date) return <Sheet title="Habit"><Empty title="That habit is gone." /></Sheet>
+  if (habit.linkedApp) {
+    return (
+      <Sheet kicker={<HabitKicker habit={habit} />} title={dayLabel(date)} footer={<Btn title="Done" onPress={closeSheet} />}>
+        <LinkedDaySummary habit={habit} entry={data?.entries[date]?.[habit.id]} />
+      </Sheet>
+    )
+  }
   return <DayForm habit={habit} date={date} entry={data?.entries[date]?.[habit.id]} />
 }
 

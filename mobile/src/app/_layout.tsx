@@ -64,6 +64,8 @@ const ROUTES: { name: string; options: object }[] = [
   { name: 'habit/edit', options: sheet([1]) },
   { name: 'habit/day', options: sheet([0.75, 1]) },
   { name: 'habit/period', options: sheet([0.75, 1]) },
+  // The morning check-in: a page of rows, full height like WHOOP's journal.
+  { name: 'habit/checkin', options: sheet([1]) },
   { name: 'overview/habit-day', options: sheet([0.75, 1]) },
   // Goals
   { name: 'goal/new', options: sheet([1]) },

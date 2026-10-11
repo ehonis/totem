@@ -198,16 +198,17 @@ export default function OverviewScreen() {
   }, [habitBusy])
 
   const habitDay: string = data.habits?.today || ''
+  // A habit an app fills in (linkedApp) is never logged by hand; its row links out instead.
   const logDelta = useCallback((h: any, delta: number) => {
-    if (!habitDay) return
+    if (!habitDay || h.linkedApp) return
     if (delta > 0) success(); else tap()
     habitWrite(h.id, { date: habitDay, delta })
   }, [habitDay, habitWrite])
   const logValue = useCallback((h: any, value: number | null) => {
-    if (habitDay) habitWrite(h.id, { date: habitDay, value, complete: value !== null })
+    if (habitDay && !h.linkedApp) habitWrite(h.id, { date: habitDay, value, complete: value !== null })
   }, [habitDay, habitWrite])
   const openNote = useCallback((habit: any) => {
-    if (!habitDay) return
+    if (!habitDay || habit.linkedApp) return
     openHabitDay({
       habit,
       date: habitDay,

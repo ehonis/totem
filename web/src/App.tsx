@@ -31,6 +31,7 @@ import ShortcutOverlay from './components/ShortcutOverlay'
 import NotificationCenter from './components/NotificationCenter'
 import { getNotificationHistory } from './push'
 import ToastHost from './components/ToastHost'
+import HabitCheckin from './components/HabitCheckin'
 import RunningChats from './chat/RunningChats'
 import {
   Hi,
@@ -392,6 +393,7 @@ export default function App() {
       <RunningChats onOpenChat={openChat} onShowPanel={showPanel} narrow={narrow} />
       <ShortcutOverlay chord={chord} />
       <ToastHost />
+      <HabitCheckin onAuthError={onAuthError} />
     </div>
   )
 }

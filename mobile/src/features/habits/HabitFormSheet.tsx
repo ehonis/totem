@@ -5,14 +5,17 @@ import { StyleSheet, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
-import { Btn, Empty, Press } from '../../ui/kit'
+import { Btn, Empty, Press, Segmented } from '../../ui/kit'
 import { confirm } from '../../ui/menu'
 import { success } from '../../ui/haptics'
 import { TrashIcon } from '../../lib/icons'
 import { createHabit, deleteHabit, updateHabit } from '../../lib/api'
 import { pushToast } from '../../lib/toast'
 import { CheckField, Field, FieldInput, FieldRow, Select, Sheet, closeSheet } from './form'
-import { CADENCE_NOUN, metricDraftFrom, metricFromDraft, periodLabel, type Cadence, type MetricDraft } from './logic'
+import {
+  APP_NAME, CADENCE_NOUN, metricDraftFrom, metricFromDraft, periodLabel,
+  type Cadence, type HabitWhen, type LinkedApp, type MetricDraft,
+} from './logic'
 import { mutate, useHabits } from './store'
 
 export default function HabitFormSheet({ editing }: { editing?: boolean }) {
@@ -34,6 +37,8 @@ function HabitForm({ initial, palette, usedColors }: { initial: import('./logic'
     target: String(initial?.target || 1),
     color: initial?.color || '', // '' = auto-assign on create
     archived: initial?.archived || false,
+    when: (initial?.when || 'any') as HabitWhen,
+    linkedApp: (initial?.linkedApp || '') as LinkedApp | '', // '' = filled in by hand
   })
   const [metric, setMetric] = useState<MetricDraft>(() => metricDraftFrom(initial?.metric))
   const setM = <K extends keyof MetricDraft>(k: K, v: MetricDraft[K]) => setMetric((m) => ({ ...m, [k]: v }))
@@ -50,6 +55,8 @@ function HabitForm({ initial, palette, usedColors }: { initial: import('./logic'
         cadence: form.cadence,
         target: Math.max(1, Number(form.target) || 1),
         archived: form.archived,
+        when: form.when,
+        linkedApp: form.linkedApp || null,
         metric: metricFromDraft(metric, initial?.metric?.parts),
       }
       if (form.color) fields.color = form.color
@@ -98,6 +105,30 @@ function HabitForm({ initial, palette, usedColors }: { initial: import('./logic'
           <FieldInput value={form.target} onChangeText={(v) => set('target', v.replace(/[^0-9]/g, ''))} keyboardType="numbers-and-punctuation" returnKeyType="done" maxLength={2} />
         </Field>
       </FieldRow>
+      {/* The web's two selects; three short choices each read better as segments on a phone. */}
+      <Field label="When">
+        <Segmented
+          value={form.when}
+          onChange={(v) => set('when', v)}
+          options={[{ value: 'any', label: 'Any time' }, { value: 'morning', label: 'Morning' }, { value: 'night', label: 'Night' }]}
+        />
+      </Field>
+      <Field label="Filled by">
+        <Segmented
+          value={form.linkedApp || 'me'}
+          onChange={(v) => set('linkedApp', v === 'me' ? '' : v)}
+          options={[{ value: 'me', label: 'Me' }, { value: 'krakatoa', label: 'Krakatoa' }, { value: 'bushido', label: 'Bushido' }]}
+        />
+      </Field>
+      <T size={11} muted>
+        {form.linkedApp
+          ? `${APP_NAME[form.linkedApp]} fills this in on its own; here it links to the app instead of a check mark.`
+          : form.when === 'night'
+            ? 'Night: logged the next morning. The morning check-in asks about it the next day and logs it to the night before.'
+            : form.when === 'morning'
+              ? 'The morning check-in asks about it for that day.'
+              : 'The morning check-in asks about it if yesterday went unanswered.'}
+      </T>
       <T size={11} muted>
         {form.cadence === 'daily'
           ? '1 = simple yes/no. Higher (e.g. 8 glasses of water) shades the day darker the closer you get.'
