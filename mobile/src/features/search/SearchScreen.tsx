@@ -46,7 +46,7 @@ export default function SearchScreen() {
   const results = res?.results || []
 
   return (
-    <Screen title="Search">
+    <Screen title="Search" glow="search">
       <ScrollView
         contentContainerStyle={{ padding: 16, paddingBottom: FAB_CLEARANCE }}
         keyboardShouldPersistTaps="handled"

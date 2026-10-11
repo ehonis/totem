@@ -263,7 +263,7 @@ export default function InboxScreen() {
   }, [])
 
   return (
-    <Screen title="Inbox">
+    <Screen title="Inbox" glow="inbox">
       <ScrollView
         ref={scroll}
         contentContainerStyle={{ padding: 16, paddingBottom: FAB_CLEARANCE }}

@@ -17,14 +17,7 @@
   --ovx-bar: color-mix(in srgb, var(--text) 70%, transparent);
   height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
   color: var(--ovx-text);
-  /* Dark from the top, violet rising from the bottom corners. On a scroll
-     container the default attachment pins this to the visible box, so the
-     content scrolls over it (and iOS, which ignores attachment: fixed, agrees).
-     The centre is --bg rather than black so it meets the rail and top bar
-     without a seam. */
-  background-color: var(--bg);
-  background-image: radial-gradient(125% 125% at 50% 10%, var(--bg) 40%, #63e 100%);
-  background-image: radial-gradient(in oklab 125% 125% at 50% 10%, var(--bg) 40%, #63e 100%);
+  /* The violet glow behind the page is <main>'s (glow.css). */
 }
 .ovx-card, .ovx-attn, .ovx-ask, .ovx-app-ico, .ovx-sys {
   -webkit-backdrop-filter: var(--ovx-glass); backdrop-filter: var(--ovx-glass);

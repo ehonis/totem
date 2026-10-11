@@ -71,7 +71,7 @@ export default function ProductivityScreen() {
   useEffect(() => { reveal(index) }, [index, reveal])
 
   return (
-    <Screen title="Productivity">
+    <Screen title="Productivity" glow="productivity">
       <View style={st.tabsBand}>
         <ScrollView
           ref={strip}
