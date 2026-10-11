@@ -264,6 +264,11 @@ row counts, ids and foreign keys, and run it twice.
 - **A message part type the thread store does not know is dropped on save.** `normalizePart` in `chat/store.mjs` lists them; a new part type goes there as well as in both `applyEvent`s.
 - **`claude -p` cannot ask for permission.** A write the prompt asks for is refused unless the bridge allows that path (`allowWrite` → `--allowedTools Edit(…)`), and a small model may still tell the owner it saved. Any new "keep this file updated" rule needs its path added there.
 - **Codex's sandbox has no network.** `workspace-write` blocks it, so a Codex run that must fetch the web (a totem watching a page) needs `network: true` on `runAgent`, which adds `sandbox_workspace_write.network_access=true`. Without it the run reports a DNS failure rather than erroring.
+- **A custom Codex provider loses Codex's hosted tools.** Through a proxy (`model_provider` other
+  than `openai`), Codex leaves out image generation and web search unless the provider entry
+  sets `requires_openai_auth = true` and `supports_standalone_web_search = true`; it still goes
+  through the proxy. Generated images land in `<CODEX_HOME>/generated_images/<session id>/`, not
+  in the `--json` stream, so `emitCodexImages` reads that run's folder and shows them in the reply.
 - **`codex exec` refuses MCP writes.** Its approval policy is `never`, so any tool without
   `readOnlyHint` fails with "requires approval". `spawnCodexStream` adds
   `default_tools_approval_mode="approve"` for the gateway (`codexGatewayApprovalArgs`), but only

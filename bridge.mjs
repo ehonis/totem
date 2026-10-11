@@ -3925,7 +3925,7 @@ function codexActivity(item, phase) {
 // `resume` continues the thread with `codex exec resume <id>`. That subcommand
 // has no -C or --sandbox flag, so the sandbox goes in as a config override and
 // the working directory comes from the spawn's cwd, which is AGENT_CWD anyway.
-async function spawnCodexStream(text, { label = 'request', onActivity, onTool, onText, onSession, onAgent, signal, model, effort, sandbox, access = null, instance, resume, images = [], features = [], extraArgs = [], browser = null, timeoutMs = TIMEOUT } = {}) {
+async function spawnCodexStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, onAgent, signal, model, effort, sandbox, access = null, instance, resume, images = [], features = [], extraArgs = [], browser = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('codex')
   // Entries added to the shared home since the last run (a new skill, a new MCP
   // server in config.toml) only reach this account once they're linked in.
@@ -3988,6 +3988,7 @@ async function spawnCodexStream(text, { label = 'request', onActivity, onTool, o
       emitSafe(onAgent, { toolId: child.toolId, agent: { status: state === 'completed' ? 'done' : state === 'interrupted' || state === 'shutdown' ? 'stopped' : 'error', endedAt: Date.now(), ...(st.message ? { summary: st.message } : {}) } }, 'agent')
     }
   }
+  const startedAt = Date.now()
   return spawnJsonStream(account.cli, args, {
     input: text, label, signal, timeoutMs, env: codexEnv,
     onEvent: (event) => {
@@ -4054,8 +4055,28 @@ async function spawnCodexStream(text, { label = 'request', onActivity, onTool, o
     },
   }).then(async (res) => {
     await Promise.all([...childLogs.values()].map((c) => c.watcher.stop().catch(() => {})))
+    if (onImage && sessionId) await emitCodexImages(codexEnv.CODEX_HOME || join(homedir(), '.codex'), sessionId, startedAt, onImage)
     return { ...res, result: lastMessage || [...messages.values()].filter(Boolean).pop() || '', turnError, turnFailed, sessionId }
   })
+}
+
+// Codex's image tool saves what it makes under <CODEX_HOME>/generated_images/<session
+// id>/ and its --json stream does not carry the picture, so after a run the images
+// this session made are read from there and shown in the reply, like a screenshot.
+// The session's own folder means another chat's images can never be picked up.
+async function emitCodexImages(home, sessionId, since, onImage) {
+  const dir = join(home, 'generated_images', sessionId)
+  let names = []
+  try { names = await readdir(dir) } catch { return }
+  for (const name of names.filter((n) => /\.(png|jpe?g|webp)$/i.test(n)).sort().slice(0, 8)) {
+    const path = join(dir, name)
+    try {
+      const st = await stat(path)
+      if (!st.isFile() || st.mtimeMs < since - 1000 || st.size > 20 * 1024 * 1024) continue
+      const ext = name.split('.').pop().toLowerCase()
+      await onImage({ buffer: await readFile(path), mime: ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`, name })
+    } catch (e) { log('codex: generated image not shown', path, e?.message || e) }
+  }
 }
 
 function chatToolFromOpenCode(part, phase) {
@@ -9834,9 +9855,9 @@ async function handleChatSend(req, res) {
               },
               onAgent: (ev) => forwardAgent(tag && ev.toolId ? { ...ev, toolId: `${ev.toolId}${tag}` } : ev),
               onSession: (id) => { sessionId = id },
-              onImage: async ({ buffer, mime }) => {
+              onImage: async ({ buffer, mime, name }) => {
                 const ext = (mime.split('/')[1] || 'png').replace('jpeg', 'jpg')
-                const up = await chatUploads.save({ buffer, name: `screenshot-${Date.now()}.${ext}`, mime })
+                const up = await chatUploads.save({ buffer, name: name || `screenshot-${Date.now()}.${ext}`, mime })
                 forward({ type: 'image', uploadId: up.id, url: up.url })
               },
             }).then((res) => { usage = addUsage(usage, res.usage); return res }),
