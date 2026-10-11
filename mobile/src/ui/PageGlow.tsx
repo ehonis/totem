@@ -53,29 +53,52 @@ function useDrift(steps: number[][], seconds: number, w: number, h: number) {
 }
 
 /**
- * While `live` (an agent replying) the lights wobble and brighten (glow.css's
- * .live). The wobble pauses where it is when the reply ends, so nothing snaps.
+ * While `live` (an agent replying) the lights swing, slide and pulse (glow.css's
+ * --glow-amp). Three phases loop at different speeds and `amp` scales how far
+ * they move, rising when a reply starts and falling after, so the motion swells
+ * in and dies away rather than switching.
  */
-function useWobble(live: boolean) {
+function useLiveSwing(live: boolean) {
   const reduced = useReducedMotion()
+  const amp = useSharedValue(0)
   const w = useSharedValue(0)
-  const glow = useSharedValue(0)
+  const v = useSharedValue(0)
+  const p = useSharedValue(0)
   useEffect(() => {
-    glow.value = withTiming(live ? 1 : 0, { duration: 1200 })
-    if (live && !reduced) w.value = withRepeat(withTiming(w.value < 0.5 ? 1 : 0, { duration: 1300, easing: Easing.inOut(Easing.sin) }), -1, true)
-    else cancelAnimation(w)
-  }, [live, reduced, w, glow])
-  const wobble = useAnimatedStyle(() => ({
+    amp.value = withTiming(live ? 1 : 0, { duration: 1100 })
+    if (reduced) return
+    const loop = (sv: typeof w, from: number, to: number, ms: number) => {
+      sv.value = from
+      sv.value = withRepeat(withTiming(to, { duration: ms, easing: Easing.inOut(Easing.sin) }), -1, true)
+    }
+    if (live) {
+      loop(w, -1, 1, 1700); loop(v, 1, -1, 2300); loop(p, 0, 1, 1100)
+      return
+    }
+    // Let the swing die away with amp, then stop the loops.
+    const t = setTimeout(() => { cancelAnimation(w); cancelAnimation(v); cancelAnimation(p) }, 1200)
+    return () => clearTimeout(t)
+  }, [live, reduced, amp, w, v, p])
+  const { width, height } = useWindowDimensions()
+  const swingA = useAnimatedStyle(() => ({
     transform: [
-      { scale: interpolate(w.value, [0, 0.5, 1], [1, 1.08, 0.97]) },
-      { rotate: `${interpolate(w.value, [0, 0.5, 1], [-1.5, 2.5, -1])}deg` },
+      { translateX: amp.value * 0.09 * v.value * width },
+      { translateY: amp.value * -0.07 * w.value * height },
+      { scale: 1 + amp.value * 0.22 * w.value },
+      { rotate: `${amp.value * 8 * v.value}deg` },
     ],
   }))
-  const lightA = useAnimatedStyle(() => ({ opacity: interpolate(glow.value, [0, 1], [0.95, 1]) }))
-  const lightB = useAnimatedStyle(() => ({ opacity: interpolate(glow.value, [0, 1], [0.8, 1]) }))
-  // A third, brighter copy of the main light fades in while live: brightness without a filter.
-  const boost = useAnimatedStyle(() => ({ opacity: glow.value * 0.45 }))
-  return { wobble, lightA, lightB, boost }
+  const swingB = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: amp.value * -0.1 * w.value * width },
+      { translateY: amp.value * -0.06 * v.value * height },
+      { scale: 1 - amp.value * 0.2 * v.value },
+      { rotate: `${amp.value * -9 * w.value}deg` },
+    ],
+  }))
+  // A brighter copy of the main light pulses in while live: brightness without a filter.
+  const boost = useAnimatedStyle(() => ({ opacity: amp.value * (0.3 + 0.5 * p.value) }))
+  return { swingA, swingB, boost }
 }
 
 export function PageGlow({ page, colors, live = false }: {
@@ -90,18 +113,22 @@ export function PageGlow({ page, colors, live = false }: {
   const { width, height } = useWindowDimensions()
   const driftA = useDrift(DRIFT_A, speed, width, height)
   const driftB = useDrift(DRIFT_B, speed * 1.3, width, height)
-  const { wobble, lightA, lightB, boost } = useWobble(live)
+  const { swingA, swingB, boost } = useLiveSwing(live)
   const key = `${page || 'chat'}-${a.slice(1)}-${b.slice(1)}`
   return (
     <View style={st.frame} pointerEvents="none">
-      <Animated.View style={[st.fill, wobble]}>
-        <Animated.View style={[st.light, lightA, driftA]}>
+      <Animated.View style={[st.light, { opacity: 0.95 }, driftA]}>
+        <Animated.View style={[st.fill, swingA]}>
           <Light id={`glow-a-${key}`} color={a} cx={0.28} cy={1} rx={0.78} ry={0.66} />
         </Animated.View>
-        <Animated.View style={[st.light, { mixBlendMode: 'screen' }, lightB, driftB]}>
+      </Animated.View>
+      <Animated.View style={[st.light, { opacity: 0.8, mixBlendMode: 'screen' }, driftB]}>
+        <Animated.View style={[st.fill, swingB]}>
           <Light id={`glow-b-${key}`} color={b} cx={0.76} cy={1.02} rx={0.7} ry={0.6} />
         </Animated.View>
-        <Animated.View style={[st.light, { mixBlendMode: 'screen' }, boost, driftA]}>
+      </Animated.View>
+      <Animated.View style={[st.light, { mixBlendMode: 'screen' }, boost, driftA]}>
+        <Animated.View style={[st.fill, swingA]}>
           <Light id={`glow-c-${key}`} color={a} cx={0.28} cy={1} rx={0.6} ry={0.5} />
         </Animated.View>
       </Animated.View>
