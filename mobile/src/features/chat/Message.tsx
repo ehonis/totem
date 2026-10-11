@@ -20,6 +20,7 @@ import { alpha, colors, fonts } from '../../theme'
 import { authHeaders } from '../../lib/api'
 import { bridgeUrl } from '../../lib/connection'
 import { useSmoothText } from '../../lib/chat/smooth'
+import { useTextTicks } from '../../lib/chat/ticks'
 import { POWER_NAMES } from '../../lib/chat/models'
 import { splitMentions } from '../../lib/chat/mentions'
 import type { Attachment, ChatMessage, Part, ProviderRow, SteerPart, ToolPart } from '../../lib/chat/types'
@@ -353,6 +354,7 @@ function useQuiet(live: boolean, signature: string) {
 /** The reply's last text block while it streams: released word by word. */
 function StreamingText({ text }: { text: string }) {
   const shown = useSmoothText(text, true)
+  useTextTicks(shown)
   return <Markdown text={shown} size={16} />
 }
 

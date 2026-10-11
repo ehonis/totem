@@ -44,6 +44,8 @@ import { threadMenu } from './threadMenu'
 import { markRead, unsettleThread, wakeThread } from './threadOps'
 import { useChatPresence } from './presence'
 import { TI, vc } from './ui'
+import { PageGlow } from '../../ui/PageGlow'
+import { chatGlow } from '../../lib/chat/glow'
 import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconFolder, IconFolderOff, IconSparkles, IconChevronDown } from './icons'
 
 function greeting(name: string) {
@@ -329,6 +331,8 @@ export default function ChatScreen() {
 
   return (
     <View style={[st.screen, { paddingTop: insets.top }]}>
+      {/* This chat's own colours; they wobble while the agent is replying. */}
+      <PageGlow colors={chatGlow(activeId)} live={busy} />
       <View style={st.top}>
         <Press style={st.iconBtn} onPress={() => { tap(); openDrawer(navigation) }} accessibilityLabel="Menu" hitSlop={6}>
           <TI icon={IconMenu} size={22} color={colors.text} />
@@ -403,7 +407,8 @@ export default function ChatScreen() {
         renderItem={renderItem}
         extraData={`${busy}|${run?.activity || ''}|${lastAssistantId}|${providers.length}|${Object.keys(models).length}`}
         empty={emptyEl}
-        dockBottom={Math.max(insets.bottom, 14) + 4}
+        // Low, into the home-indicator gap, as ChatGPT sits.
+        dockBottom={Math.max(insets.bottom - 12, 10)}
         onAtEndChange={setAtEnd}
         dock={
           <View style={st.dock}>

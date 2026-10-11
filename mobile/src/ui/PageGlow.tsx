@@ -5,7 +5,7 @@
 import React, { useEffect } from 'react'
 import { StyleSheet, useWindowDimensions, View } from 'react-native'
 import Animated, {
-  Easing, interpolate, useAnimatedStyle, useReducedMotion, useSharedValue, withRepeat, withTiming,
+  cancelAnimation, Easing, interpolate, useAnimatedStyle, useReducedMotion, useSharedValue, withRepeat, withTiming,
 } from 'react-native-reanimated'
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg'
 
@@ -52,18 +52,58 @@ function useDrift(steps: number[][], seconds: number, w: number, h: number) {
   })
 }
 
-export function PageGlow({ page }: { page: GlowPage }) {
-  const { a, b, speed } = GLOWS[page]
+/**
+ * While `live` (an agent replying) the lights wobble and brighten (glow.css's
+ * .live). The wobble pauses where it is when the reply ends, so nothing snaps.
+ */
+function useWobble(live: boolean) {
+  const reduced = useReducedMotion()
+  const w = useSharedValue(0)
+  const glow = useSharedValue(0)
+  useEffect(() => {
+    glow.value = withTiming(live ? 1 : 0, { duration: 1200 })
+    if (live && !reduced) w.value = withRepeat(withTiming(w.value < 0.5 ? 1 : 0, { duration: 1300, easing: Easing.inOut(Easing.sin) }), -1, true)
+    else cancelAnimation(w)
+  }, [live, reduced, w, glow])
+  const wobble = useAnimatedStyle(() => ({
+    transform: [
+      { scale: interpolate(w.value, [0, 0.5, 1], [1, 1.08, 0.97]) },
+      { rotate: `${interpolate(w.value, [0, 0.5, 1], [-1.5, 2.5, -1])}deg` },
+    ],
+  }))
+  const lightA = useAnimatedStyle(() => ({ opacity: interpolate(glow.value, [0, 1], [0.95, 1]) }))
+  const lightB = useAnimatedStyle(() => ({ opacity: interpolate(glow.value, [0, 1], [0.8, 1]) }))
+  // A third, brighter copy of the main light fades in while live: brightness without a filter.
+  const boost = useAnimatedStyle(() => ({ opacity: glow.value * 0.45 }))
+  return { wobble, lightA, lightB, boost }
+}
+
+export function PageGlow({ page, colors, live = false }: {
+  page?: GlowPage
+  /** A chat's own pair (lib/chat/glow.ts) instead of a page's. */
+  colors?: { a: string; b: string }
+  live?: boolean
+}) {
+  const preset = page ? GLOWS[page] : GLOWS.overview
+  const { a, b } = colors || preset
+  const speed = preset.speed
   const { width, height } = useWindowDimensions()
   const driftA = useDrift(DRIFT_A, speed, width, height)
   const driftB = useDrift(DRIFT_B, speed * 1.3, width, height)
+  const { wobble, lightA, lightB, boost } = useWobble(live)
+  const key = `${page || 'chat'}-${a.slice(1)}-${b.slice(1)}`
   return (
     <View style={st.frame} pointerEvents="none">
-      <Animated.View style={[st.light, { opacity: 0.95 }, driftA]}>
-        <Light id={`glow-a-${page}`} color={a} cx={0.28} cy={1} rx={0.78} ry={0.66} />
-      </Animated.View>
-      <Animated.View style={[st.light, { opacity: 0.8, mixBlendMode: 'screen' }, driftB]}>
-        <Light id={`glow-b-${page}`} color={b} cx={0.76} cy={1.02} rx={0.7} ry={0.6} />
+      <Animated.View style={[st.fill, wobble]}>
+        <Animated.View style={[st.light, lightA, driftA]}>
+          <Light id={`glow-a-${key}`} color={a} cx={0.28} cy={1} rx={0.78} ry={0.66} />
+        </Animated.View>
+        <Animated.View style={[st.light, { mixBlendMode: 'screen' }, lightB, driftB]}>
+          <Light id={`glow-b-${key}`} color={b} cx={0.76} cy={1.02} rx={0.7} ry={0.6} />
+        </Animated.View>
+        <Animated.View style={[st.light, { mixBlendMode: 'screen' }, boost, driftA]}>
+          <Light id={`glow-c-${key}`} color={a} cx={0.28} cy={1} rx={0.6} ry={0.5} />
+        </Animated.View>
       </Animated.View>
     </View>
   )
@@ -71,5 +111,6 @@ export function PageGlow({ page }: { page: GlowPage }) {
 
 const st = StyleSheet.create({
   frame: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden' },
+  fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   light: { position: 'absolute', top: '-30%', left: '-30%', right: '-30%', bottom: '-30%' },
 })
