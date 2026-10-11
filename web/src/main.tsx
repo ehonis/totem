@@ -9,6 +9,7 @@ import { registerServiceWorker, reportNotificationOpen } from './push'
 import './tailwind.css'
 import './styles.css'
 import './shell.css'
+import './glow.css'
 
 // Registered on every load, not only when push is switched on: iOS keeps the
 // service worker alive with the installed web app, and a registration that only

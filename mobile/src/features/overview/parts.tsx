@@ -3,7 +3,6 @@
 // these tokens are kept here instead of in theme.ts.
 import React, { useEffect, useRef } from 'react'
 import { Animated, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native'
-import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg'
 import { alpha, colors, textAlpha } from '../../theme'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
@@ -32,28 +31,6 @@ export const ov = {
 
 type Tabler = React.ComponentType<any>
 
-/**
- * The page's backdrop (.ovx): radial-gradient(in oklab 125% 125% at 50% 10%,
- * --bg 40%, #63e 100%). Dark from the top, violet rising from the bottom corners.
- * It fills the screen under the top bar and stays put while the page scrolls over
- * it. The middle stops are the oklab mix, which SVG cannot interpolate in.
- */
-export function Backdrop() {
-  return (
-    <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
-      <Defs>
-        <RadialGradient id="ovx-bg" cx="0.5" cy="0.1" r="1.25" fx="0.5" fy="0.1">
-          <Stop offset="0.4" stopColor={colors.bg} />
-          <Stop offset="0.55" stopColor="#211e45" />
-          <Stop offset="0.7" stopColor="#362879" />
-          <Stop offset="0.85" stopColor="#4d2fb2" />
-          <Stop offset="1" stopColor="#6633ee" />
-        </RadialGradient>
-      </Defs>
-      <Rect width="100%" height="100%" fill="url(#ovx-bg)" />
-    </Svg>
-  )
-}
 
 /** The web's <TI>: a Tabler glyph at the chat's 1.75 stroke. */
 export function TI({ icon: Icon, size = 18, stroke = 1.75, color = ov.text }: { icon: Tabler; size?: number; stroke?: number; color?: string }) {

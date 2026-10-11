@@ -87,6 +87,9 @@ const SCREEN_TAB_DEF: TabDef = { id: 'screen', label: 'Screen', icon: ComputerDe
 // It isn't in the tab arrays because it's pinned separately — except on a phone,
 // where it folds into the More flyout with everything else that doesn't fit.
 const SETTINGS_TAB = 'settings'
+// Pages drawn over a moving colour glow (glow.css). The chat, editors and the
+// Totems scene keep a plain background.
+const GLOW_TABS = new Set(['overview', 'productivity', 'inbox', 'search', 'messages', SETTINGS_TAB])
 const SETTINGS_TAB_DEF: TabDef = { id: SETTINGS_TAB, label: 'Settings', icon: Cog6ToothIcon }
 
 // The bottom bar fits five items with a readable label under each; past that the
@@ -308,7 +311,8 @@ export default function App() {
       {!narrow && panelOpen && (
         <SidePanel onOpenChat={openChat} onNotifications={() => setNotificationsOpen(true)} unread={unreadNotifications} onCollapse={() => setPanelOpen(false)} />
       )}
-      <main className="main">
+      <main className="main" data-glow={GLOW_TABS.has(tab) ? tab : undefined}>
+        {GLOW_TABS.has(tab) && <div className="page-glow" aria-hidden />}
         {/* The chat draws its own top bar; every other screen gets ChatGPT's. */}
         {narrow && tab !== 'chat' && (
           <MobileBar

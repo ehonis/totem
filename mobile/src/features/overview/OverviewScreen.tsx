@@ -28,7 +28,7 @@ import {
 } from '../../lib/components/overview/icons'
 import IconSearch from '@tabler/icons-react-native/dist/esm/icons/IconSearch.mjs'
 import { clock, dueDiff, dueLabel, periodTotal, startOfDay, until } from '../../lib/components/overview/time'
-import { ov, Backdrop, TI, Section, Quiet, Failed, Loading, Bar, Subhead, More } from './parts'
+import { ov, TI, Section, Quiet, Failed, Loading, Bar, Subhead, More } from './parts'
 import { HabitRow } from './HabitRow'
 import { HabitMetricSection } from './MetricTile'
 import { openHabitDay, type DaySave } from './HabitDaySheet'
@@ -321,8 +321,7 @@ export default function OverviewScreen() {
   const openHabits = () => navigateTo({ tab: 'productivity', app: 'habits' })
 
   return (
-    <Screen title="Overview">
-      <Backdrop />
+    <Screen title="Overview" glow="overview">
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={st.inner}

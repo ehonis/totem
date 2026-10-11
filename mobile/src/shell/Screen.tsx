@@ -11,6 +11,7 @@ import { IconBtn, Press } from '../ui/kit'
 import { Hi } from '../lib/icons'
 import { IconEdit, IconMenu, IconWaveSine } from '../lib/chat/icons'
 import { newChat, openDrawer, startVoice } from './nav'
+import { PageGlow, type GlowPage } from '../ui/PageGlow'
 import { impact } from '../ui/haptics'
 
 export function MobileBar({ title, right }: { title: string; right?: React.ReactNode }) {
@@ -58,8 +59,10 @@ export function NewChatFab({ bottomOffset = 0 }: { bottomOffset?: number }) {
  * A drawer screen's frame. The content scrolls itself (a ScrollView or FlatList),
  * and should pad its foot by FAB_CLEARANCE so the last row clears the buttons.
  */
-export function Screen({ title, children, fab = true, barRight, style }: {
+export function Screen({ title, children, fab = true, barRight, glow, style }: {
   title: string
+  /** Draw the page over its colour glow (PageGlow). */
+  glow?: GlowPage
   children: React.ReactNode
   fab?: boolean
   barRight?: React.ReactNode
@@ -69,7 +72,10 @@ export function Screen({ title, children, fab = true, barRight, style }: {
   return (
     <View style={[st.screen, { paddingTop: insets.top }, style]}>
       <MobileBar title={title} right={barRight} />
-      <View style={{ flex: 1 }}>{children}</View>
+      <View style={{ flex: 1 }}>
+        {glow ? <PageGlow page={glow} /> : null}
+        {children}
+      </View>
       {fab ? <NewChatFab /> : null}
     </View>
   )

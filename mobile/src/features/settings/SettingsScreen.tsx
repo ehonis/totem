@@ -58,7 +58,7 @@ export default function SettingsScreen() {
   }, [sub])
 
   return (
-    <Screen title="Settings">
+    <Screen title="Settings" glow="settings">
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: FAB_CLEARANCE }}>
         <Group panes={PANES.filter((p) => p.group === 0)} counts={{ 'notification-history': unread }} />
         <Group title="AI workshop" panes={PANES.filter((p) => p.group === 1)} />
