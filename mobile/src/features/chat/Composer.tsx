@@ -9,7 +9,7 @@
 // browser and computer use are no longer switches: every run may use them and
 // the agent decides, so a message is always sent as mode 'chat'.
 import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState, useEffect, useSyncExternalStore } from 'react'
-import { ActivityIndicator, Platform, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
+import { ActivityIndicator, Keyboard, Platform, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import Animated, { FadeIn, FadeOut, useAnimatedStyle, withTiming } from 'react-native-reanimated'
 import { MenuView, type MenuAction } from '@react-native-menu/menu'
 import * as ImagePicker from 'expo-image-picker'
@@ -226,6 +226,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     impact()
     const text = value.trim()
     onChange('')
+    Keyboard.dismiss()
     const ok = await onSteer(text)
     // Not sent: give the words back, unless he has started typing something else.
     if (!ok && !valueRef.current.trim()) onChange(text)
@@ -236,6 +237,8 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     impact()
     onSend({ text: value.trim(), attachments: ready, mode: 'chat' })
     setDrafts([])
+    // Sent: put the keyboard away so the reply has the screen, as ChatGPT does.
+    Keyboard.dismiss()
   }
 
   const d = dictation.state
