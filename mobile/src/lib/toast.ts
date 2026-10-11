@@ -22,7 +22,15 @@ export interface Toast {
   action?: ToastAction
   /** How long it stays, in ms; 0 until dismissed. The bar along its top counts this down. */
   duration: number
+  /** How many times this same message arrived; repeats join one toast (×3) instead of stacking. */
+  count: number
 }
+
+// Toasts are a deck, as in T3 Code: the newest in front, a couple peeking behind,
+// spread out while hovered or tapped. Short-lived, and errors a little longer.
+const DEFAULT_MS = { error: 5000, success: 3500, info: 3500 } as const
+/** Older toasts past this are dropped rather than piling up behind the deck. */
+const KEEP = 5
 
 let toasts: Toast[] = []
 const listeners = new Set<() => void>()
@@ -38,23 +46,49 @@ function emit() {
 export function pushToast(
   message: any,
   kind: ToastKind = 'error',
-  { duration = 6000, action }: { duration?: number; action?: ToastAction } = {},
+  { duration, action }: { duration?: number; action?: ToastAction } = {},
 ): number | null {
   const text = typeof message === 'string' ? message : (message && message.message) || String(message || '')
   if (!text) return null
+  const ms = duration ?? DEFAULT_MS[kind]
+  // The same message again joins the toast already showing it, back at the front.
+  const same = !action && toasts.find((t) => t.text === text && t.kind === kind && !t.action)
+  if (same) {
+    const timer = timers.get(same.id)
+    if (timer?.handle) clearTimeout(timer.handle)
+    toasts = [...toasts.filter((t) => t.id !== same.id), { ...same, count: same.count + 1, duration: ms }]
+    startTimer(same.id, ms)
+    emit()
+    return same.id
+  }
   const id = ++seq
-  toasts = [...toasts, { id, text, kind, action, duration }]
+  toasts = [...toasts, { id, text, kind, action, duration: ms, count: 1 }]
+  for (const old of toasts.slice(0, Math.max(0, toasts.length - KEEP))) dismissToast(old.id, false)
+  startTimer(id, ms)
   emit()
-  if (duration) timers.set(id, { handle: setTimeout(() => dismissToast(id), duration), endsAt: Date.now() + duration, left: duration })
   return id
 }
 
-export function dismissToast(id: number) {
+let held = false
+function startTimer(id: number, ms: number) {
+  if (!ms) { timers.delete(id); return }
+  timers.set(id, held
+    ? { handle: null, endsAt: 0, left: ms }
+    : { handle: setTimeout(() => dismissToast(id), ms), endsAt: Date.now() + ms, left: ms })
+}
+
+export function dismissToast(id: number, notify = true) {
   const timer = timers.get(id)
   if (timer?.handle) clearTimeout(timer.handle)
   timers.delete(id)
   toasts = toasts.filter((t) => t.id !== id)
-  emit()
+  if (notify) emit()
+}
+
+/** Hold every toast while the deck is hovered or spread open, and let them go after. */
+export function holdToasts(on: boolean) {
+  held = on
+  for (const t of toasts) (on ? pauseToast : resumeToast)(t.id)
 }
 
 /** Hold a toast while it is touched (its countdown bar stops too). */

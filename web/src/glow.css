@@ -1,7 +1,8 @@
 /* ==========================================================================
    Page glows. A dark top and two slow-drifting colour lights rising from the
    bottom corners, behind a page's content. Each page that has one gets its own
-   pair of colours (App.tsx sets data-glow on <main> and adds a .page-glow layer); the rest stay plain --bg.
+   pair of colours (App.tsx sets data-glow on <main> and adds a .page-glow layer; a chat draws its
+   own, coloured per thread, in ChatView); the rest stay plain --bg.
    The lights are transformed pseudo-elements, so the motion stays on the GPU.
    ========================================================================== */
 
@@ -28,7 +29,7 @@
     color-mix(in oklab, var(--glow-a) 3%, transparent) 84%,
     transparent 100%);
   opacity: .95;
-  animation: glow-drift-a var(--glow-speed, 28s) ease-in-out infinite alternate;
+  animation: glow-drift-a var(--glow-speed, 28s) ease-in-out infinite alternate, glow-wobble 2.6s ease-in-out infinite alternate;
 }
 .page-glow::after {
   background: radial-gradient(70% 60% at 76% 102%,
@@ -41,8 +42,26 @@
     color-mix(in oklab, var(--glow-b) 3%, transparent) 84%,
     transparent 100%);
   opacity: .8;
-  animation: glow-drift-b calc(var(--glow-speed, 28s) * 1.3) ease-in-out infinite alternate;
+  animation: glow-drift-b calc(var(--glow-speed, 28s) * 1.3) ease-in-out infinite alternate, glow-wobble 3.3s ease-in-out infinite alternate-reverse;
 }
+/* Registered so a chat switching colours fades between them instead of jumping. */
+@property --glow-a { syntax: '<color>'; inherits: true; initial-value: #6633ee; }
+@property --glow-b { syntax: '<color>'; inherits: true; initial-value: #4f46e5; }
+.page-glow { transition: filter 1.2s ease, --glow-a 1.4s ease, --glow-b 1.4s ease; }
+
+/* While an agent is replying the lights wobble and brighten. The wobble runs on
+   the separate scale and rotate properties, so it rides on top of the drift; it
+   pauses rather than stops when the reply ends, so nothing snaps back. */
+.page-glow::before, .page-glow::after { animation-play-state: running, paused; }
+.page-glow.live::before, .page-glow.live::after { animation-play-state: running, running; }
+.page-glow.live { filter: brightness(1.35) saturate(1.2); }
+@keyframes glow-wobble {
+  0%   { scale: 1;    rotate: 0deg; }
+  30%  { scale: 1.08; rotate: 2.5deg; }
+  65%  { scale: .96;  rotate: -2deg; }
+  100% { scale: 1.05; rotate: 1.2deg; }
+}
+
 @keyframes glow-drift-a {
   0%   { transform: translate3d(-7%, 3%, 0) scale(1); }
   50%  { transform: translate3d(4%, -4%, 0) scale(1.12); }

@@ -8,6 +8,7 @@ import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import { ScrollView, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native'
 import { KeyboardAvoidingView, KeyboardStickyView } from 'react-native-keyboard-controller'
 import { KeyboardAwareLegendList } from '@legendapp/list/keyboard'
+import { LinearGradient } from 'expo-linear-gradient'
 import type { LegendListRef } from '@legendapp/list/react-native'
 
 export interface ChatFrameHandle { scrollToEnd: (animated?: boolean) => void }
@@ -88,12 +89,17 @@ function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, d
           onLayout={(e) => setDockHeight(Math.round(e.nativeEvent.layout.height))}
           style={{ paddingBottom: dockBottom }}
         >
+          {/* A scrim under the composer, so it stands off the chat's glow and the text behind it. */}
+          <LinearGradient pointerEvents="none" colors={SCRIM} locations={[0, 0.4, 1]} style={st.scrim} />
           {dock}
         </View>
       </KeyboardStickyView>
     </View>
   )
 }
+
+const SCRIM = ['rgba(15, 17, 21, 0)', 'rgba(15, 17, 21, 0.74)', 'rgba(15, 17, 21, 0.94)'] as const
+const st = { scrim: { position: 'absolute', left: 0, right: 0, top: -56, bottom: 0 } } as const
 
 const Inner = forwardRef(Frame) as <T>(p: ChatFrameProps<T> & { ref?: React.Ref<ChatFrameHandle> }) => React.ReactElement
 

@@ -15,6 +15,7 @@ import { readMessageAloud, speechSupported } from './speech'
 import { FileCard, ARTIFACT_PREVIEWABLE } from './ArtifactPanel'
 import { openArtifact } from './store'
 import { useSmoothText } from './smooth'
+import { useTextTicks } from './ticks'
 import { getChatCommands, subscribeChatCommands } from '../studio'
 import { splitMentions } from './mentions'
 import { WorkingLine } from './Spark'
@@ -243,6 +244,7 @@ function useQuiet(live: boolean, signature: string) {
 /** The reply's last text block while it streams: released word by word. */
 function StreamingText({ text }: { text: string }) {
   const shown = useSmoothText(text, true)
+  useTextTicks(shown)
   return <Markdown text={shown} className="vc-streaming" />
 }
 

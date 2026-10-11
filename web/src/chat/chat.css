@@ -13,7 +13,7 @@
   --vc-surface: #171a22;
   --vc-raise: #1f2330;
   --vc-line: #2a2f3c;
-  position: relative;
+  position: relative; isolation: isolate; /* its .page-glow paints above this background */
   display: flex; flex-direction: column;
   height: 100%; min-height: 0;
   background: var(--bg);
@@ -321,11 +321,20 @@
 @keyframes vc-fade { from { opacity: 0; } }
 
 /* --- composer ------------------------------------------------------------------ */
-.vc-dock { flex: none; position: relative; z-index: 2; padding: 0 16px 18px; }
+.vc-dock { flex: none; position: relative; z-index: 2; padding: 0 16px 10px; }
+/* A scrim under the composer, so it stands off the chat's glow and the text behind it. */
 .vc-dock::before {
-  /* The log fades out under the composer instead of being cut by it. */
-  content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 28px; pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--bg));
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; top: -56px; z-index: -1; pointer-events: none;
+  background: linear-gradient(to bottom,
+    transparent,
+    color-mix(in srgb, var(--bg) 74%, transparent) 40%,
+    color-mix(in srgb, var(--bg) 94%, transparent));
+}
+/* The log fades out above the composer instead of being cut by it. A mask, not a
+   gradient to --bg painted over it, so the glow behind shows through. */
+.vc-scroll:not(:has(.vc-empty)) {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+          mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
 }
 .vc-composer { position: relative; max-width: var(--vc-col); margin: 0 auto; }
 .vc-dock .vc-composer { padding: 0 8px; }
@@ -606,7 +615,7 @@
   .vc-log { padding: 8px 16px 24px; gap: 24px; }
   .vc-bubble { max-width: 86%; }
   .vc-assistant-body { font-size: 16px; }
-  .vc-dock { padding: 0 10px calc(var(--dock-clear) + 6px); }
+  .vc-dock { padding: 0 10px max(8px, calc(var(--dock-clear) - 8px)); }
   .vc-dock .vc-composer { padding: 0; }
   .vc-box { border-radius: 24px; padding: 8px 8px 6px 10px; }
   .vc-empty { padding: 0 20px 6vh; justify-content: flex-end; }
@@ -616,8 +625,6 @@
   .vc-plus-menu { position: fixed; left: 10px; right: 10px; width: auto; bottom: calc(var(--dock-clear) + 92px); }
   .vc-jump { bottom: calc(var(--dock-clear) + 104px); }
   .vc-orb { width: 170px; height: 170px; }
-  /* The dock's fade belongs to .app::after on a phone. */
-  .vc-dock::before { display: none; }
 }
 
 @media (max-width: 720px) {

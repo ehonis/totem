@@ -30,6 +30,7 @@ import { TI } from '../chat/ui'
 import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconPaperclip, IconLayoutSidebar, IconSparkles, IconFolder, IconFolderOff } from '../chat/icons'
 import type { Attachment, ModelSettings } from '../chat/types'
 import '../chat/chat.css'
+import { chatGlow } from '../chat/glow'
 import { useOwnerName } from '../useOwnerName'
 
 function greeting(name: string) {
@@ -188,6 +189,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   }, [])
 
   const busy = activeId ? !!runs[activeId] : false
+  const glow = chatGlow(activeId)
   const run = activeId ? runs[activeId] : undefined
   // The chat's project (or, for a new chat, the one the panel is in).
   const project = active ? threadProject(active) : scopeProject
@@ -357,6 +359,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   return (
     <div className={`vc-split${artifact || browserShown || agentsShown ? ' has-artifact' : ''}${artifact && artifactWide ? ' artifact-wide' : ''}`}>
     <div className="vc" onDragEnter={onDragEnter} onDragOver={(e) => e.preventDefault()} onDragLeave={onDragLeave} onDrop={onDrop}>
+      {/* This chat's own colours; they wobble while the agent is replying. */}
+      <div className={`page-glow${busy ? ' live' : ''}`} style={{ '--glow-a': glow.a, '--glow-b': glow.b } as React.CSSProperties} aria-hidden />
       <header className="vc-top">
         {narrow && (
           <button type="button" className="vc-icon-btn" onClick={onOpenMenu} aria-label="Menu"><TI icon={IconMenu} size={21} /></button>
