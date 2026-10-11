@@ -569,9 +569,14 @@ const HABIT_RULES =
   'Schema: { "habits": [ { "id": "<kebab-case slug>", "name": "<display name>", "description": "<optional>", ' +
   '"color": "<hex like #40c463>", "cadence": "daily"|"weekly"|"monthly", "target": <completions per cadence ' +
   'period, usually 1 — e.g. gym 3x/week is cadence "weekly", target 3>, ' +
-  '"createdAt": "<ISO>", "archived": false, "metric": <optional, see below> } ], ' +
+  '"createdAt": "<ISO>", "archived": false, "metric": <optional, see below>, ' +
+  '"when": "any"|"morning"|"night" (when he answers it: "night" habits are done late and logged the next ' +
+  'morning against the day before), "linkedApp": null|"krakatoa"|"bushido" (that app fills the habit in itself: ' +
+  'never log, tick or undo a linked habit; say it comes from that app) } ], ' +
   '"entries": { "YYYY-MM-DD": { "<habitId>": { "count": <int >= 1>, ' +
-  '"note": "<optional short note>", "value": <optional number>, "parts": <optional {"<partKey>": number}> } } } }. ' +
+  '"note": "<optional short note>", "value": <optional number>, "parts": <optional {"<partKey>": number}>, ' +
+  '"skipped": <optional true: he answered "no" in the check-in; count stays 0> } } }, ' +
+  '"checkin": { "lastShown": "YYYY-MM-DD" } }. ' +
   'A habit may carry ONE number per day — the thing it is really about (sleep score, weight, pages read). ' +
   'Its config is "metric": { "label": "Sleep score", "unit": "", "min": 0, "max": 100, "goal": 85, ' +
   '"decimals": 0, "direction": "higher"|"lower", "chart": "line"|"bar", "source": "manual"|"whoop-sleep", ' +
@@ -1444,6 +1449,18 @@ const HABIT_STAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/
 // calendar month. Completions are still logged per-day; cadence only changes what
 // "on track" means (and how the UI shades/streaks).
 const HABIT_CADENCES = ['daily', 'weekly', 'monthly']
+// When the owner usually answers a habit. 'morning' is asked in the morning
+// check-in for that day; 'night' is done late and answered the next morning,
+// so the check-in logs it against the day before; 'any' is today, any time.
+const HABIT_WHEN = ['any', 'morning', 'night']
+// A sibling app that fills the habit in by posting to /api/habits/log (Krakatoa
+// with the day's food, Bushido with sessions). The dashboard does not let the
+// owner tick it by hand and links to the app instead; the URLs come from env.
+const HABIT_APPS = ['krakatoa', 'bushido']
+function habitAppUrls() {
+  const clean = (v) => String(v || '').trim().replace(/\/+$/, '') || null
+  return { krakatoa: clean(process.env.KRAKATOA_URL), bushido: clean(BUSHIDO_URL) }
+}
 
 // A habit can carry one number per day alongside the check mark — the thing the
 // habit is really about (sleep score, body weight, minutes read). The optional
@@ -1590,6 +1607,8 @@ async function readHabitsState() {
       cadence: HABIT_CADENCES.includes(h?.cadence) ? h.cadence : 'daily',
       target,
       metric: normalizeHabitMetric(h?.metric),
+      when: HABIT_WHEN.includes(h?.when) ? h.when : 'any',
+      linkedApp: HABIT_APPS.includes(h?.linkedApp) ? h.linkedApp : null,
       createdAt: typeof h?.createdAt === 'string' ? h.createdAt : new Date().toISOString(),
       archived: h?.archived === true,
     })
@@ -1606,10 +1625,13 @@ async function readHabitsState() {
         const { value, parts, stats, window, source } = normalizeEntryMetric(e)
         const hasParts = Object.keys(parts).length > 0
         const hasStats = Object.keys(stats).length > 0
+        // An explicit "no" from the check-in: answered, not done.
+        const skipped = !count && e?.skipped === true
         // A day with only a number and no check still matters — a logged sleep
         // score is a data point even if the habit itself was never ticked.
-        if (!count && !note && value === null && !hasParts && !hasStats && !window) continue
+        if (!count && !note && value === null && !hasParts && !hasStats && !window && !skipped) continue
         clean[habitId] = { count }
+        if (skipped) clean[habitId].skipped = true
         if (note) clean[habitId].note = note
         if (value !== null) clean[habitId].value = value
         if (hasParts) clean[habitId].parts = parts
@@ -1620,7 +1642,9 @@ async function readHabitsState() {
       if (Object.keys(clean).length) entries[date] = clean
     }
   }
-  return { habits, entries }
+  // The day the morning check-in last opened, on any device, so it pops up once.
+  const lastShown = HABIT_DATE_RE.test(raw.checkin?.lastShown || '') ? raw.checkin.lastShown : null
+  return { habits, entries, checkin: { lastShown } }
 }
 
 async function writeHabitsState(state) {
@@ -1628,6 +1652,7 @@ async function writeHabitsState(state) {
   await writeJsonAtomic(HABITS_FILE, {
     habits: state.habits,
     entries: state.entries,
+    checkin: state.checkin || { lastShown: null },
     updatedAt: new Date().toISOString(),
   })
 }
@@ -1635,7 +1660,7 @@ async function writeHabitsState(state) {
 // App-facing payload: definitions + the last `days` of entries (enough for a
 // year-long contribution grid) + the palette so pickers match auto-assignment.
 async function buildHabitsPayload({ days = 371 } = {}) {
-  const { habits, entries } = await readHabitsState()
+  const { habits, entries, checkin } = await readHabitsState()
   const today = localISODate()
   const window = Math.min(Math.max(Math.round(days) || 371, 7), 1100)
   const floor = new Date()
@@ -1649,7 +1674,10 @@ async function buildHabitsPayload({ days = 371 } = {}) {
     for (const [habitId, e] of Object.entries(day)) if (knownIds.has(habitId)) clean[habitId] = e
     if (Object.keys(clean).length) visibleEntries[date] = clean
   }
-  return { source: HABITS_FILE, today, habits, entries: visibleEntries, palette: HABIT_COLORS, generatedAt: new Date().toISOString() }
+  const apps = habitAppUrls()
+  // A linked habit carries its app's address, so any view can link to it.
+  const shown = habits.map((h) => (h.linkedApp ? { ...h, appUrl: apps[h.linkedApp] || null } : h))
+  return { source: HABITS_FILE, today, habits: shown, entries: visibleEntries, palette: HABIT_COLORS, apps, checkin, generatedAt: new Date().toISOString() }
 }
 
 async function createHabitRecord(body = {}) {
@@ -1673,6 +1701,8 @@ async function createHabitRecord(body = {}) {
     cadence: HABIT_CADENCES.includes(body.cadence) ? body.cadence : 'daily',
     target: Math.min(Math.max(Math.round(Number(body.target)) || 1, 1), 50),
     metric: normalizeHabitMetric(body.metric),
+    when: HABIT_WHEN.includes(body.when) ? body.when : 'any',
+    linkedApp: HABIT_APPS.includes(body.linkedApp) ? body.linkedApp : null,
     createdAt: new Date().toISOString(),
     archived: false,
   })
@@ -1703,7 +1733,25 @@ async function updateHabitRecord(id, fields = {}) {
   // `metric: null` drops the metric; the logged numbers stay in the file but stop
   // being read, so re-adding a metric brings the history back.
   if (fields.metric !== undefined) habit.metric = normalizeHabitMetric(fields.metric)
+  if (fields.when !== undefined) {
+    if (!HABIT_WHEN.includes(fields.when)) throw new Error('when must be any, morning, or night')
+    habit.when = fields.when
+  }
+  if (fields.linkedApp !== undefined) {
+    if (fields.linkedApp !== null && !HABIT_APPS.includes(fields.linkedApp)) throw new Error(`linkedApp must be null or one of ${HABIT_APPS.join(', ')}`)
+    habit.linkedApp = fields.linkedApp
+  }
   if (fields.archived !== undefined) habit.archived = fields.archived === true
+  await writeHabitsState(state)
+  return buildHabitsPayload()
+}
+
+// The morning check-in opened on some device today: don't pop it up again.
+async function markHabitCheckinShown(date) {
+  const day = String(date || localISODate())
+  if (!HABIT_DATE_RE.test(day)) throw new Error('date must be YYYY-MM-DD')
+  const state = await readHabitsState()
+  state.checkin = { lastShown: day }
   await writeHabitsState(state)
   return buildHabitsPayload()
 }
@@ -1747,7 +1795,7 @@ async function deleteHabitRecord(id) {
 // scraper and a nightly check-in write through exactly the same path.
 // `complete: true` ticks the habit off when a number arrives without a count —
 // the number is itself the evidence the habit happened.
-async function logHabitRecord({ id, date, count, delta, note, value, parts, stats, window, complete, source } = {}) {
+async function logHabitRecord({ id, date, count, delta, note, value, parts, stats, window, complete, source, skipped } = {}) {
   const state = await readHabitsState()
   const habit = state.habits.find((h) => h.id === id)
   if (!habit) throw new Error('unknown habit')
@@ -1822,9 +1870,13 @@ async function logHabitRecord({ id, date, count, delta, note, value, parts, stat
   const hasParts = Object.keys(nextParts).length > 0
   const hasStats = Object.keys(nextStats).length > 0
   if (complete === true && (nextValue !== null || hasParts) && nextCount < 1) nextCount = 1
+  // `skipped: true` is the check-in's "no": answered, count 0. Any completion clears it.
+  if (skipped === true) nextCount = 0
+  const nextSkipped = nextCount > 0 ? false : skipped === undefined ? existing.skipped === true : skipped === true
 
-  if (nextCount > 0 || nextNote || nextValue !== null || hasParts || hasStats || nextWindow) {
+  if (nextCount > 0 || nextNote || nextValue !== null || hasParts || hasStats || nextWindow || nextSkipped) {
     const entry = { count: nextCount }
+    if (nextSkipped) entry.skipped = true
     if (nextNote) entry.note = nextNote
     if (nextValue !== null) entry.value = nextValue
     if (hasParts) entry.parts = nextParts
@@ -14324,6 +14376,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && path === '/api/habits/log') {
         return send(res, 200, await logHabitRecord(await readJsonBody(req)))
+      }
+      if (req.method === 'POST' && path === '/api/habits/checkin') {
+        const { date } = await readJsonBody(req)
+        return send(res, 200, await markHabitCheckinShown(date))
       }
       // WHOOP connection state for the Habits tab (is it configured, connected?).
       if (req.method === 'GET' && path === '/api/habits/whoop/status') {

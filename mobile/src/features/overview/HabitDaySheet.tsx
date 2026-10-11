@@ -13,6 +13,7 @@ import { Hi, MinusIcon, PlusIcon } from '../../lib/icons'
 import { isoToDate } from '../../lib/components/overview/time'
 import { success } from '../../ui/haptics'
 import { pushError } from '../../lib/toast'
+import { LinkedDaySummary } from '../habits/LinkedApp'
 
 export interface DaySave {
   count: number
@@ -54,6 +55,22 @@ export default function HabitDaySheet() {
   if (!p || !habit) {
     // Reached without a habit (a cold deep link): nothing to edit.
     return <View style={{ flex: 1, backgroundColor: colors.bg2 }} />
+  }
+
+  // An app fills this habit in; the Overview row links out, so this is only a fallback.
+  if (habit.linkedApp) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.bg2, padding: 20, gap: 16 }}>
+        <View style={{ gap: 4 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: habit.color }} />
+            <T size={12} muted>{habit.name}</T>
+          </View>
+          <T size={20} weight={600}>{dayLabel(p.date)}</T>
+        </View>
+        <LinkedDaySummary habit={habit} entry={entry} />
+      </View>
+    )
   }
 
   const save = async () => {

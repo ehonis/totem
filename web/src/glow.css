@@ -19,7 +19,7 @@
   mix-blend-mode: screen;
 }
 .page-glow::before {
-  background: radial-gradient(78% 66% at 28% 100%,
+  background: radial-gradient(78% 66% at 28% var(--glow-y, 100%),
     var(--glow-a) 0%,
     color-mix(in oklab, var(--glow-a) 78%, transparent) 14%,
     color-mix(in oklab, var(--glow-a) 55%, transparent) 28%,
@@ -32,7 +32,7 @@
   animation: glow-drift-a var(--glow-speed, 28s) ease-in-out infinite alternate;
 }
 .page-glow::after {
-  background: radial-gradient(70% 60% at 76% 102%,
+  background: radial-gradient(70% 60% at 76% calc(var(--glow-y, 100%) + 2%),
     var(--glow-b) 0%,
     color-mix(in oklab, var(--glow-b) 78%, transparent) 14%,
     color-mix(in oklab, var(--glow-b) 55%, transparent) 28%,
@@ -60,20 +60,22 @@
 @property --glow-v { syntax: '<number>'; inherits: true; initial-value: 0; }
 @property --glow-p { syntax: '<number>'; inherits: true; initial-value: 0; }
 .vc .page-glow {
-  animation: glow-phase-w 1.7s ease-in-out infinite alternate, glow-phase-v 2.3s ease-in-out infinite alternate, glow-phase-p 1.1s ease-in-out infinite alternate;
+  animation: glow-phase-w 2.6s ease-in-out infinite alternate, glow-phase-v 3.4s ease-in-out infinite alternate, glow-phase-p 1.1s ease-in-out infinite alternate;
   transition: --glow-amp 1.1s ease, --glow-a 1.4s ease, --glow-b 1.4s ease;
   filter: brightness(calc(1 + var(--glow-amp) * (.3 + .55 * var(--glow-p)))) saturate(calc(1 + var(--glow-amp) * .12));
 }
 .vc .page-glow.live { --glow-amp: 1; }
+/* In a chat the lights sit lower, their brightest at the page's foot under the composer. */
+.vc .page-glow { --glow-y: 84%; }
 .vc .page-glow::before {
-  scale: calc(1 + var(--glow-amp) * .22 * var(--glow-w));
-  rotate: calc(var(--glow-amp) * 8deg * var(--glow-v));
-  translate: calc(var(--glow-amp) * 9% * var(--glow-v)) calc(var(--glow-amp) * -7% * var(--glow-w));
+  scale: calc(1 + var(--glow-amp) * .1 * var(--glow-w));
+  rotate: calc(var(--glow-amp) * 3deg * var(--glow-v));
+  translate: calc(var(--glow-amp) * 4% * var(--glow-v)) calc(var(--glow-amp) * -3% * var(--glow-w));
 }
 .vc .page-glow::after {
-  scale: calc(1 - var(--glow-amp) * .2 * var(--glow-v));
-  rotate: calc(var(--glow-amp) * -9deg * var(--glow-w));
-  translate: calc(var(--glow-amp) * -10% * var(--glow-w)) calc(var(--glow-amp) * -6% * var(--glow-v));
+  scale: calc(1 - var(--glow-amp) * .09 * var(--glow-v));
+  rotate: calc(var(--glow-amp) * -3.5deg * var(--glow-w));
+  translate: calc(var(--glow-amp) * -4.5% * var(--glow-w)) calc(var(--glow-amp) * -2.5% * var(--glow-v));
 }
 @keyframes glow-phase-w { from { --glow-w: -1; } to { --glow-w: 1; } }
 @keyframes glow-phase-v { from { --glow-v: 1; } to { --glow-v: -1; } }

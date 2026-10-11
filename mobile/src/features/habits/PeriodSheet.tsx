@@ -15,6 +15,7 @@ import { Stepper } from './CheckRow'
 import { HabitKicker } from './DaySheet'
 import { addDays, dayLabel, periodGauge, periodLabel, toDate } from './logic'
 import { mutate, useHabits } from './store'
+import { LinkedAppButton } from './LinkedApp'
 
 export default function PeriodSheet() {
   const { id, start, end, title } = useLocalSearchParams<{ id: string; start: string; end: string; title: string }>()
@@ -58,7 +59,9 @@ export default function PeriodSheet() {
       title={title || ''}
       footer={
         <>
-          <T size={12} muted style={{ flex: 1 }}>Notes save when you tap away.</T>
+          {habit.linkedApp
+            ? <View style={{ flex: 1, alignItems: 'flex-start' }}><LinkedAppButton habit={habit} /></View>
+            : <T size={12} muted style={{ flex: 1 }}>Notes save when you tap away.</T>}
           <Btn title="Done" onPress={closeSheet} />
         </>
       }
@@ -91,11 +94,15 @@ export default function PeriodSheet() {
                 onChangeText={(v) => setDrafts((d) => ({ ...d, [date]: v }))}
                 onBlur={() => { void commitNote(date) }}
               />
-              <Stepper
-                size={28} count={count} color={habit.color} busy={busyDate === date}
-                onStep={(delta) => { void run(date, { delta }) }}
-                labelLess={`One less on ${dayLabel(date)}`} labelMore={`One more on ${dayLabel(date)}`}
-              />
+              {habit.linkedApp ? (
+                <T size={14} weight={600} color={count > 0 ? habit.color : colors.muted} style={{ minWidth: 20, textAlign: 'right' }}>{count}</T>
+              ) : (
+                <Stepper
+                  size={28} count={count} color={habit.color} busy={busyDate === date}
+                  onStep={(delta) => { void run(date, { delta }) }}
+                  labelLess={`One less on ${dayLabel(date)}`} labelMore={`One more on ${dayLabel(date)}`}
+                />
+              )}
             </View>
           )
         })}

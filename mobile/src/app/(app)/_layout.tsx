@@ -7,6 +7,7 @@ import AppDrawer from '../../shell/AppDrawer'
 import { useQuickActions } from '../../shell/quickActions'
 import { usePush } from '../../shell/push'
 import { useAccessReauth } from '../../shell/accessReauth'
+import { useMorningCheckin } from '../../shell/morningCheckin'
 import { navigateTo } from '../../shell/nav'
 import { getSettings } from '../../lib/settings'
 import { colors } from '../../theme'
@@ -16,6 +17,7 @@ export default function AppLayout() {
   useQuickActions()
   usePush()
   useAccessReauth()
+  useMorningCheckin()
   // Settings → General → Default tab. The app always opens on "/", so a different
   // landing tab is one navigation on first mount. (A quick action, handled a tick
   // later, still wins.)

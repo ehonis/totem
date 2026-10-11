@@ -10,6 +10,7 @@ import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { Hi, ChatBubbleLeftEllipsisIcon, CheckIcon, MinusIcon, PlusIcon } from '../../lib/icons'
 import { mixHex, periodGauge, periodLabel, type Entry, type Habit } from './logic'
+import { LinkedAppButton, LinkedMetricValue } from './LinkedApp'
 
 const CHECK = 46
 
@@ -31,6 +32,7 @@ export function HabitCheckButton({ habit, count, periodCount, busy, onLog }: {
   busy: boolean
   onLog: (habit: Habit, delta: number) => void
 }) {
+  if (habit.linkedApp) return <LinkedAppButton habit={habit} compact />
   const capped = habit.cadence !== 'daily'
   const target = Math.max(1, habit.target)
   const ratio = capped ? Math.min(1, periodCount / target) : count > 0 ? 1 : 0
@@ -134,6 +136,7 @@ export function HabitMetricInput({ habit, entry, busy, onValue }: {
 }) {
   const metric = habit.metric!
   const [draft, setDraft] = useState<string | null>(null)
+  if (habit.linkedApp) return <LinkedMetricValue habit={habit} value={entry?.value} />
   const saved = entry?.value != null ? String(entry.value) : ''
   const shown = draft ?? saved
 
@@ -201,15 +204,17 @@ export function CheckRow({ habit, entry, periodCount, busy, onLog, onValue, onNo
       </Press>
       {habit.cadence !== 'daily' && <QuotaDots habit={habit} count={periodCount} compact />}
       {habit.metric && <HabitMetricInput habit={habit} entry={entry} busy={busy} onValue={onValue} />}
-      <Press
-        haptic
-        onPress={() => onNote(habit)}
-        accessibilityLabel={entry?.note ? `Note: ${entry.note}` : 'Add a note'}
-        style={st.noteBtn}
-      >
-        <Hi icon={ChatBubbleLeftEllipsisIcon} size={17} color={entry?.note ? colors.accent : colors.muted} />
-      </Press>
-      {habit.cadence === 'daily' && habit.target > 1 ? (
+      {!habit.linkedApp && (
+        <Press
+          haptic
+          onPress={() => onNote(habit)}
+          accessibilityLabel={entry?.note ? `Note: ${entry.note}` : 'Add a note'}
+          style={st.noteBtn}
+        >
+          <Hi icon={ChatBubbleLeftEllipsisIcon} size={17} color={entry?.note ? colors.accent : colors.muted} />
+        </Press>
+      )}
+      {habit.cadence === 'daily' && habit.target > 1 && !habit.linkedApp ? (
         <Stepper
           count={count} target={habit.target} color={habit.color} busy={busy}
           onStep={(d) => onLog(habit, d)}

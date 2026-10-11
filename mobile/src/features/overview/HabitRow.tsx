@@ -10,6 +10,7 @@ import { Press } from '../../ui/kit'
 import { Hi, CheckIcon } from '../../lib/icons'
 import { IconMessageCircle, IconMinus, IconPlus } from '../../lib/components/overview/icons'
 import { ov, TI } from './parts'
+import { LinkedAppButton, LinkedMetricValue } from '../habits/LinkedApp'
 
 const periodLabel = (cadence: string) => (cadence === 'weekly' ? 'this week' : 'this month')
 
@@ -123,16 +124,21 @@ export function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValu
         {entry?.note ? <T size={12.5} color={ov.faint} numberOfLines={1}>{entry.note}</T> : null}
       </View>
       {habit.cadence !== 'daily' && <QuotaNum habit={habit} count={periodCount} />}
-      {habit.metric && <HabitMetricInput habit={habit} entry={entry} busy={busy} onValue={onValue} />}
-      <Press
-        onPress={() => onNote(habit)}
-        accessibilityLabel={entry?.note ? `Edit note for ${habit.name}` : `Add a note to ${habit.name}`}
-        hitSlop={4}
-        style={st.iconBtn}
-      >
-        <TI icon={IconMessageCircle} size={17} color={entry?.note ? ov.soft : ov.faint} />
-      </Press>
-      {habit.cadence === 'daily' && habit.target > 1 ? (
+      {habit.metric && (habit.linkedApp
+        ? <LinkedMetricValue habit={habit} value={entry?.value} />
+        : <HabitMetricInput habit={habit} entry={entry} busy={busy} onValue={onValue} />)}
+      {/* A habit an app fills in links to that app instead: nothing here is typed or ticked. */}
+      {habit.linkedApp ? <LinkedAppButton habit={habit} compact /> : (
+        <Press
+          onPress={() => onNote(habit)}
+          accessibilityLabel={entry?.note ? `Edit note for ${habit.name}` : `Add a note to ${habit.name}`}
+          hitSlop={4}
+          style={st.iconBtn}
+        >
+          <TI icon={IconMessageCircle} size={17} color={entry?.note ? ov.soft : ov.faint} />
+        </Press>
+      )}
+      {habit.linkedApp ? null : habit.cadence === 'daily' && habit.target > 1 ? (
         <View style={st.stepper}>
           <Press onPress={() => onLog(habit, -1)} disabled={busy || count <= 0} accessibilityLabel={`Undo one ${habit.name}`} style={st.step}>
             <TI icon={IconMinus} size={15} color={ov.soft} />

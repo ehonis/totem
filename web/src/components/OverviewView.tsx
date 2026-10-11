@@ -141,16 +141,18 @@ function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValue, onNo
       </div>
       {habit.cadence !== 'daily' && <QuotaDots habit={habit} count={periodCount} compact />}
       {habit.metric && <HabitMetricInput habit={habit} entry={entry} busy={busy} onValue={onValue} />}
-      <button
-        type="button"
-        className={`ovx-icon-btn${entry?.note ? ' on' : ''}`}
-        title={entry?.note ? `Note: ${entry.note}` : 'Add a note'}
-        aria-label={entry?.note ? `Edit note for ${habit.name}` : `Add a note to ${habit.name}`}
-        onClick={() => onNote(habit)}
-      >
-        <TI icon={IconMessageCircle} size={17} />
-      </button>
-      {habit.cadence === 'daily' && habit.target > 1 ? (
+      {!habit.linkedApp && (
+        <button
+          type="button"
+          className={`ovx-icon-btn${entry?.note ? ' on' : ''}`}
+          title={entry?.note ? `Note: ${entry.note}` : 'Add a note'}
+          aria-label={entry?.note ? `Edit note for ${habit.name}` : `Add a note to ${habit.name}`}
+          onClick={() => onNote(habit)}
+        >
+          <TI icon={IconMessageCircle} size={17} />
+        </button>
+      )}
+      {habit.cadence === 'daily' && habit.target > 1 && !habit.linkedApp ? (
         <div className="ovx-stepper">
           <button type="button" onClick={() => onLog(habit, -1)} disabled={busy || count <= 0} aria-label={`Undo one ${habit.name}`}>
             <TI icon={IconMinus} size={15} />
@@ -219,6 +221,12 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
     setData(d); setErrs(e); setDoneIds(new Set()); setLoaded(true); setRefreshing(false)
   }, [onAuthError])
   useEffect(() => { load() }, [load])
+  // The morning check-in logs from outside this view.
+  useEffect(() => {
+    const on = () => { load() }
+    window.addEventListener('totem:habits-changed', on)
+    return () => window.removeEventListener('totem:habits-changed', on)
+  }, [load])
 
   const ask = useCallback((text: string) => {
     const id = send({ text, kind: 'regular' })
