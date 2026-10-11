@@ -2375,6 +2375,20 @@ a { color: var(--accent); }
 .habit-checkin-title { font-weight: 600; font-size: 14px; }
 .habit-checkin-sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
 .habit-dayswitch .seg { padding: 5px 12px; font-size: 12px; }
+/* The check-in's day: step back and forward a day at a time, "Today" to jump back. */
+.habit-daynav { display: flex; align-items: center; gap: 4px; flex: none; }
+.habit-daynav-step {
+  display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer;
+}
+.habit-daynav-step:hover:not(:disabled) { background: var(--bg-3); }
+.habit-daynav-step:disabled { opacity: .35; cursor: default; }
+.habit-daynav-label { min-width: 96px; text-align: center; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.habit-daynav-today {
+  height: 30px; padding: 0 10px; margin-right: 4px; border-radius: 8px; border: 1px solid var(--line);
+  background: none; color: var(--accent); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.habit-daynav-today:hover { background: var(--bg-3); }
 
 .habit-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px 10px 16px; }
 .habit-row + .habit-row { border-top: 1px solid var(--line); }
@@ -2414,6 +2428,10 @@ a { color: var(--accent); }
 .habit-check:hover:not(.on):not(:disabled) { border-color: var(--muted); }
 .habit-check:active:not(:disabled) { transform: scale(.92); }
 .habit-check:disabled { opacity: .6; cursor: default; }
+/* A linked habit's circle: shows the day, can't be pressed. */
+.habit-check.readonly { display: inline-grid; place-items: center; cursor: default; }
+.habit-check.readonly:active { transform: none; }
+.habit-linked-pair { display: inline-flex; align-items: center; gap: 8px; flex: none; }
 
 /* Capped weekly/monthly habits: the button itself is the quota gauge — a pie
    filled clockwise from 12 o'clock, one slice per completion in the period. It
