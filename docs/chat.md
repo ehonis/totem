@@ -25,8 +25,8 @@ turn starts, then takes the bridge's copy: `start` carries the real message ids,
 
 | Route | Body / query | Returns |
 |---|---|---|
-| `POST /api/chat` | `{threadId, text, attachments: [uploadId], preset?, level?, provider?, model?, effort?, kind?, modelSettings?, mode?: 'chat'\|'task'\|'computer', voice?, regenerate?, editMessageId?}` | SSE stream (below). 409 if the thread is already answering. |
-| `GET /api/chat/runs` | | `{runs: [{threadId, status, mode, startedAt, …}]}` — what to re-attach to after a reload. |
+| `POST /api/chat` | `{threadId, text, attachments: [uploadId], preset?, level?, provider?, model?, effort?, kind?, modelSettings?, voice?, regenerate?, editMessageId?}` | SSE stream (below). 409 if the thread is already answering. Older clients' `mode` (`'task'\|'computer'`) and `browser: true` are still accepted: hints, never errors (see What a chat run gets). |
+| `GET /api/chat/runs` | | `{runs: [{threadId, status, mode, startedAt, …}]}` — what to re-attach to after a reload. `mode` is always `chat` now. |
 | `GET /api/chat/runs/:threadId/stream?since=N` | | SSE: every event after `seq` N, then live ones. |
 | `POST /api/chat/stop` | `{threadId}` | `{ok}`. The only way to end a run early. |
 | `POST /api/chat/steer` | `{threadId, text}` | `{ok, steer: {id, text, via: 'live'\|'restart'}}`. A message for the running reply (see Steering). 409 if nothing is running, the run is wrapping up, or it is a skill command. |
@@ -35,7 +35,7 @@ turn starts, then takes the bridge's copy: `start` carries the real message ids,
 | `DELETE /api/chat/uploads/:id` | | Removes an attachment nobody has sent yet. |
 | `POST /api/chat/transcribe` | raw audio (`audio/webm`, `audio/mp4`, …) | `{text}` |
 | `GET /api/chat/capabilities` | | Per enabled account: `{driver, state, fix, images: 'native'\|'file', resume, computerUse}`; `transcription`; `maxUploadBytes`. |
-| `POST /api/chat/capabilities/probe` | | Re-asks each Codex account for computer-use tools; caches in `data/chat-capabilities.json`. |
+| `POST /api/chat/capabilities/probe` | | Re-asks each Codex account for computer-use tools; caches in `data/chat-capabilities.json`. A chat run on that account gets computer use when its entry says `available`. |
 
 `/api/threads*` is unchanged in shape, but a PUT of an existing thread now merges
 only `title`, `kind`, `provider`, `modelSettings`, `pinned`.
@@ -46,7 +46,7 @@ Every event has a `seq`. Viewers replay with `since`.
 
 | `type` | Fields | Meaning |
 |---|---|---|
-| `start` | `userMessage`, `assistantMessage`, `provider`, `mode` | The turn as the bridge stored it. |
+| `start` | `userMessage`, `assistantMessage`, `provider` | The turn as the bridge stored it. |
 | `delta` | `text` | Reply text. |
 | `tool` | `tool: {id, phase: 'start'\|'end', kind, title, detail, server?, tool?, input?, status?, output?}` | A card opens on `start` and settles on `end`. |
 | `image` | `uploadId`, `url` | A screenshot from a tool result. |
@@ -71,9 +71,11 @@ Every event has a `seq`. Viewers replay with `since`.
   "messages": [
     {"id": "…", "role": "user", "content": "…", "createdAt": 0,
      "attachments": [{"id": "…", "name": "receipt.pdf", "mime": "application/pdf", "size": 1, "kind": "file"}],
-     "mode": "task", "voice": true},
+     "voice": true, "mode": "task"},   // mode: only on messages sent with the retired toggles
     {"id": "…", "role": "assistant", "content": "…", "status": "done" | "error" | "stopped" | "streaming",
-     "provider": "claude", "model": "opus", "durationMs": 0, "error": "…",
+     "provider": "claude", "model": "opus", "effort": "high", "durationMs": 0, "error": "…",
+     "route": "thinking", "level": 3, "power": 4,
+     "stats": {"ttftMs": 0, "input": 0, "cached": 0, "output": 0, "reasoning": 0, "apiMs": 0, "tps": 0, "costUsd": 0, "tools": 0},
      "parts": [{"type": "text", "text": "…"},
                {"type": "tool", "id": "…", "kind": "mcp", "title": "Looked up tasks", "server": "tasks",
                 "status": "done", "output": "…", "startedAt": 0, "endedAt": 0},
@@ -85,6 +87,15 @@ Every event has a `seq`. Viewers replay with `since`.
 
 URLs are never stored; `signThread` adds them on the way out.
 
+`stats` is what the agent CLI reported for the reply, read from its stream by `chat/stats.mjs`
+(Claude's and Cursor's `result` event, Codex's `turn.completed`, OpenCode's `step_finish`) and summed
+across a steered or retried run. `input` counts every prompt token, `cached` the part read from
+cache; `output` every generated token, `reasoning` the thinking among them. `tps` is output over
+the CLI's API time when it reports one (Claude, Cursor), else over the run after the first token,
+tool waits included. A field the CLI did not report is absent, never zero. The dashboard shows it,
+with the turn's setting and effort, when the owner hovers or taps the line under a reply
+(`web/src/chat/TurnStats.tsx`).
+
 ## Resume
 
 `through` is how many messages the provider's session has seen. On a turn,
@@ -94,7 +105,7 @@ URLs are never stored; `signThread` adds them on the way out.
   `messages[through:userIndex]` as text (turns another provider answered);
 - otherwise → fresh session with the whole transcript (newest-first, 16k chars).
 
-A resumed turn sends only `temporalContext()`, the mode rules, the replay, the
+A resumed turn sends only `temporalContext()`, the standing chat rules, the replay, the
 attachments and the request. Regenerate and edit delete `sessions`. A resume that
 produces nothing is retried once fresh.
 
@@ -130,38 +141,78 @@ the text before and after it.
 T3 Code also queues follow-ups (send after the run ends) and steers Codex live
 through `codex app-server`'s `turn/steer`; Totem does neither yet.
 
-## Power (Auto)
+## Choosing a model
 
-In Auto the composer offers one dial, Quick → Max, that moves the model and its effort together
-(`LADDER` in `chat/route.mjs`). `POST /api/chat/route` `{threadId?, text, power?}` answers what a
-send would do right now (`provider`, `modelName`, `effort`, `power`, `powerAuto`, `reason`); the
-composer calls it as you type. The first message's power is stored on the thread
-(`modelSettings.power`) and reused until changed.
+The composer's model picker (`web/src/chat/ModelPicker.tsx`) is the only way a chat picks its
+account and model: favourites, then one tab per account, with search. A new chat starts on the
+default account's default model (Settings → AI), or a project's default model inside a project.
+Once a chat has a reply it stays on that account; the picker then offers only that account's
+models. A temporary chat is held to the default account. A model that takes an effort level
+shows the effort control beside the picker.
 
-## Auto / Instant / Thinking
+Auto, Instant and Thinking (Totem picking the model from the message, with a power dial) were
+retired on 2026-10-07. Settings saved under one of them (`modelSettings.preset` other than
+`manual`) never named the model, so they are treated as unset: such a chat carries on with the
+model that last answered it, and the bridge drops them on the next write. Older replies keep
+their `route`/`level`/`power` fields so their stats still say how they ran.
 
-`modelSettings.preset` is `auto` (default), `instant`, `thinking` or `manual`; `level` is the
-Thinking effort slider, 1–5 (Low, Medium, High, Extra high, Max). The browser sends `{preset, level}` and the bridge's `pickRoute`
-(`chat/route.mjs`) chooses the account, model and effort for that one turn, skipping accounts
-whose health is `missing`/`logged-out`/`error`:
+## What a chat run gets
 
-| Preset | Account | Model / effort |
-|---|---|---|
-| instant | first of claude → cursor → codex → opencode | sonnet at `low` / `composer-2.5[fast=true]` / default at `low` |
-| thinking | default if codex/claude, else first codex/claude | the account's default model at low/medium/high/xhigh/max (slider 1–5) |
-| auto | `wantsThinking(text, attachments, mode)` picks one of the two | thinking level 2, or 3 for tasks and very long messages |
-| manual | the thread's own provider and model | as chosen |
+There are no modes. The composer used to have "Task mode", "Use the browser" and "Use this
+computer" toggles; since 2026-10-09 every chat run has what they turned on, and the agent
+decides per request whether it needs them. `chatReach` in `chat/reach.mjs` is the one place
+that decides:
 
-A routed turn does not overwrite the thread's hand-picked `provider`. Temporary chats route like
-any other; only a manual choice on a temporary chat is held to the default account.
+| Run | Browser | Computer use | Time budget |
+|---|---|---|---|
+| Dashboard or app chat (`POST /api/chat`) | Offered, when Chromium is installed and `BROWSER_ENABLED` isn't `false` (Cursor and OpenCode also need the gateway on, their only way to it) | When the chat's account is Codex and its probe found desktop tools; any other account simply has none (no error, no switch to Codex) | An hour (`CHAT_TASK_TIMEOUT_MS`) |
+| Voice turn (`voice: true`) | No | No | 15 minutes (`CHAT_TIMEOUT_MS`) |
+| Phone shortcut (`/ask`, `http` channel) | Never (`limitReach` in `runAgent` drops it) | Never | `AGENT_TIMEOUT_MS` |
+| Jobs and totems | Only a totem whose own `browser` switch is on (docs/totems.md) | Never | Their own `timeoutMs` |
 
-## Modes
+The prompt leaves the choice to the agent (`chatPrompt` extras, from `chat/reach.mjs`):
 
-- **chat** — 15 minutes (`CHAT_TIMEOUT_MS`).
-- **task** — `TASK_RULES`, an hour (`CHAT_TASK_TIMEOUT_MS`). For "go do this".
-- **computer** — `COMPUTER_RULES`, an hour, codex `--enable computer_use`. Moves the
-  turn to the first enabled Codex account. Never types passwords, cards or codes;
-  confirms anything irreversible.
+- `WORK_RULES`: a request to do something is a job to carry out end to end; finish with a
+  short summary. (This was Task mode's prompt.)
+- `reachRules`: only for what the run actually has. Prefer an API, a Totem tool, a connected
+  service or a plain search or fetch; drive the browser or the desktop only when the request
+  needs it; **if unsure whether the owner wants that, ask one short question first and stop**.
+- `BROWSER_RULES` and `COMPUTER_RULES`: how to use each, and never type passwords, cards or
+  codes or do anything irreversible without asking.
+
+Older clients still send `mode` and `browser`. They gate nothing. `browser: true`, or
+`mode: 'computer'` on an account that has computer use, adds one line saying the owner turned it
+on for this message, so the agent uses it without asking. `mode: 'task'` does nothing (every
+run already gets the hour). New messages no longer store `mode`; old ones keep their badge.
+
+## Access
+
+The composer's access control (`chat/AccessControl.tsx`, stored as
+`modelSettings.access` on the thread or project) sets what the agent may do without
+asking. Unset means **Full access**. Every CLI runs in print mode and cannot stop to
+ask, so "ask" means "refuse". Only chats pass an access mode; jobs and phone
+requests keep each CLI's defaults.
+
+| Access | Claude Code | Codex | Cursor |
+|---|---|---|---|
+| Supervised | default mode (writes only to the paths the prompt names) | `--sandbox read-only` | no `--force` |
+| Auto-accept edits | `--permission-mode acceptEdits` | `AGENT_SANDBOX` | `--force` |
+| Auto | `--permission-mode auto` (falls back to default where the account lacks it) | `AGENT_SANDBOX` | `--force` |
+| Full access | `--permission-mode bypassPermissions` | `--sandbox danger-full-access` | `--force` |
+
+OpenCode has no switch and ignores it.
+
+### Claude tools
+
+Settings → Connections › Claude tools lists the connectors each Claude account
+brings with it (claude.ai connectors, its MCP servers, plugins), with a switch per
+server and per tool. "Pull tools" spawns Claude Code, reads its `system/init` line
+and kills it before any model call (`providers/claude-tools.mjs`). The result and
+the owner's choices live in `data/claude-tools.json`. On every Claude run, each
+pulled server that is on is allowed as `mcp__<server>` (so a print-mode run may
+call it in any access mode, even tools a server only lists once connected) and
+anything off is denied. Deny rules hold in every mode, bypassPermissions included.
+Until the first pull there are no rules, so a fresh install behaves as before.
 
 ## Voice
 
@@ -193,9 +244,15 @@ turn decisions (`smart-turn p=0.14 in 450ms`, `end of turn: complete (0.97)`) fo
 
 ## Browser
 
-**Opt-in only.** A run is handed the browser only when the message asks for it (the + menu's "Use the browser", or words
-like "use the browser", "browse to", "screenshot" — `BROWSER_ASK`), or the chat already has one open from an earlier ask.
-It is groundwork for computer use on the Mac mini, not a default way to look things up.
+Every dashboard or app chat run is offered the browser (see What a chat run gets); the agent
+uses it only when a request needs it, and asks first when unsure. Voice turns, the phone
+shortcut and jobs never get it; a totem only with its own switch.
+
+**Offering it is free, and must stay that way.** `grantBrowserAccess` only mints a token for
+the run. The CLI connects to `/agent-mcp` and lists the tools, answered from static
+descriptors. Chromium starts only when a `preview_*` call needs a page
+(`browser()` in `browser/manager.mjs`, reached through `session(key, {create: true})`);
+`preview_status` reads without starting it. The process closes after 10 idle minutes.
 
 The agents' browser is T3 Code's, rebuilt: the same `preview_*` tools, inputs and
 snapshot shape, served per run from `/agent-mcp` with a token bound to the chat.
@@ -205,7 +262,8 @@ snapshot shape, served per run from `/agent-mcp` with a token bound to the chat.
 | Playwright sessions, one BrowserContext per chat | `browser/manager.mjs` |
 | MCP tool descriptors and results (text + PNG) | `browser/tools.mjs` |
 | `![…](/path.png)` in a reply → upload | `browser/shots.mjs` |
-| Endpoint, tokens, CLI flags, `BROWSER_RULES` | "Agent browser" block in `bridge.mjs` |
+| Endpoint, tokens, CLI flags | "Agent browser" block in `bridge.mjs` |
+| Who gets it, and the prompt rules (`browserRules`, `reachRules`) | `chat/reach.mjs` |
 | Gateway path for Cursor / OpenCode | `browser` builtin in `mcp-gateway.mjs` |
 | Live panel and header chip | `web/src/chat/BrowserPanel.tsx` |
 
@@ -255,9 +313,10 @@ Totem runs on the Mac mini:
 
 1. Install the Codex app and its Computer Use plugin, and grant Screen Recording
    and Accessibility to it.
-2. Run the probe: `curl -X POST …/api/chat/capabilities/probe` (or reopen Chat —
-   the composer's + menu shows the reason while it is unavailable).
-3. "Use this computer" in the composer's + menu then turns on.
+2. Run the probe: `curl -X POST …/api/chat/capabilities/probe`. `GET
+   /api/chat/capabilities` shows the reason while it is unavailable.
+3. Every chat on that Codex account then has computer use (`--enable computer_use`), and
+   uses it when a request needs the desktop.
 
 The probe asks Codex for its desktop tool names and treats "NONE" as unavailable;
 it never guesses from the platform.
@@ -324,8 +383,44 @@ back arrow (Home) moves it there; on a phone the chat menu's "Move to…" does t
 A finished or failed run sets `needsReply` on the thread (not a stopped one, and never
 a totem's chat). The panel shows a steady dot and a bold title, and project and folder
 rows show a dot when a chat inside is waiting. Sending in the chat (a reply, a
-regenerate, an edit) clears it, and so does "Mark as done" in the chat's menu
-(`PUT /api/threads/:id {needsReply:false}`). Opening the chat does not.
+regenerate, an edit) clears it, so does "Mark as read" in the chat's menu
+(`PUT /api/threads/:id {needsReply:false}`), and so does opening the chat while the tab is
+visible (a reply that finishes while the chat is open is read on arrival).
+
+"Mark as unread" in the menu puts the mark back with `keepUnread`, for a chat to come back
+to. Opening it then leaves it unread; only replying, Mark as read or Settle clear it. The
+bridge drops `keepUnread` whenever `needsReply` is cleared.
+
+### Settled and snoozed
+
+T3 Code's way of parking threads; the rules are in `web/src/chat/settle.ts`. Every chat
+list (Home, a project, each folder) ends with its own folding **Snoozed** and **Settled**
+shelves, so a parked chat stays where it lives. The shelves start folded (which are open
+is remembered per list in localStorage). Settled shows 10 chats, then "Show N more" in
+pages of 25. The open chat always shows, even on a folded shelf.
+
+- **Settle** (✓ on hover, the chat menu, or the leader shortcut `c s`) shelves a chat
+  until the owner writes in it. Settling unpins it, ends its snooze, and clears
+  "waiting on you". A toast offers Undo. A running chat can't be settled.
+- **Auto-settle**: a chat with no activity for `autoSettleDays` (Settings → Chat, default
+  3, 0 = never) is shown as settled at its last activity. This is worked out on read and
+  never written, so changing the setting re-sorts every list. Pinned chats, running
+  chats, and chats the owner un-settled by hand (`settledOverride: 'active'`, which lasts
+  until his next message) are left alone.
+- **Snooze** (the clock on hover, or the menu) offers In 1 hour, In 3 hours, This evening
+  (18:00, while that is over an hour away), Tomorrow (9:00), Next week (Monday 9:00,
+  left out on Sundays) and Custom… (a date and time, or a duration). Snoozed rows show
+  the time left. Waking is also worked out on read: a chat whose time has passed is back
+  in its list with a **Woke** mark until it is opened. A reply that finishes while the
+  chat is snoozed wakes it early (the bridge sets `snoozedUntil` to that moment).
+- Sending a message in a settled or snoozed chat brings it back, on the bridge and in
+  the browser. Pinning does too.
+
+The thread fields are `settledOverride` (`'settled'` | `'active'`), `settledAt`,
+`unsettledAt` (coming off the shelf counts as activity), `snoozedUntil` and `snoozedAt`.
+The browser sends every field a change touches (`null` clears one), and `PUT
+/api/threads/:id` stores them as given, with no side effects, so Undo can put back
+exactly what was there.
 
 | Route | Body | Returns |
 |---|---|---|
@@ -339,6 +434,84 @@ regenerate, an edit) clears it, and so does "Mark as done" in the chat's menu
 | `PUT /api/chat/projects/:id/memory` | `{memory}` | `{memory}` |
 | `POST /api/chat/projects/:id/files` | `{uploadIds}` (uploaded via `/api/chat/uploads` first) | `{added, project}` |
 | `DELETE /api/chat/projects/:id/files[/:uploadId]` | `{ids}` without a path id | `{removed, project}` |
+
+### Agents panel
+
+When a chat's agent hands work to another agent, the reply shows the call as its own card
+("Claude sub-agent · …", "Asked Codex · …"), never folded into the step list, and the chat
+header gets an Agents chip. Either opens the Agents panel (`web/src/chat/AgentsPanel.tsx`)
+in the canvas slot beside the chat, full screen on a phone. It lists every agent the chat
+started, in order, with its status, model, elapsed time, tokens and step count, and what it
+is doing right now. A row opens into that agent's own log: the prompt it was given, its
+visible thinking, what it said, each tool call with input and output, and what it handed
+back. The log is live while the agent runs and is saved with the reply.
+
+`chat/subagents.mjs` does the work, in two cases:
+
+- **The agent's own sub-agents.** Claude Code's Agent/Task tool: every stream event the
+  sub-agent produces carries `parent_tool_use_id`, so `spawnClaudeStream` routes it to the
+  card that started it instead of the reply. A background launch (`async_launched`) keeps the
+  card open until Claude's `task_notification`. `task_progress` gives the progress line and
+  token count. Codex's collab tools (`spawn_agent`, …) name the child thread, and its rollout
+  file is tailed by thread id.
+- **Another CLI run from a shell.** For example, Claude running `codex exec "make an icon"` to
+  use Codex's image generation. Every command card is checked with `detectAgentCli` (`codex
+  exec`, `claude -p`, `cursor-agent`, `opencode run`, `gemini -p`, including inside
+  `zsh -lc '…'`). For Codex and Claude, `watchSessionLog` finds the child's own session log
+  (a `~/.codex/sessions/<date>/rollout-*.jsonl` or `~/.claude/projects/<cwd>/*.jsonl` created
+  after the command started whose first prompt matches the command's) and tails it. It reads
+  `CODEX_HOME`/`CLAUDE_CONFIG_DIR` from the parent account's environment, the same one the
+  child inherits. Cursor, OpenCode and Gemini keep no log Totem reads, so their card shows only
+  what they printed.
+
+Each part is a tool part with an `agent` field (steps capped at 400). `agent` stream events
+fold into it through `foldAgent`, which has a browser twin in `web/src/chat/reduce.ts`. Each
+delegation writes one `agent.delegate` line to the action log when it ends.
+
+### Running chats panel
+
+A panel in the bottom-right corner (`web/src/chat/RunningChats.tsx`, mounted once in
+`App.tsx`) lists the chats that are answering, and the finished ones not yet read
+(`needsReply`), where the owner can't see them, grouped by where they live (Home, a project,
+"Project › Folder"). A chat counts as seen when it is open in the chat view, or when at least half of its row is on screen in the
+chats panel or on a project page (`web/src/chat/onScreen.ts`, one IntersectionObserver over
+every row). So with a folder unfolded in the panel, its running chats stay out of the
+corner; open another project and they appear there. A chat joins after 500 ms, so a row
+still mounting doesn't flash in. The panel starts as a pill showing the counts, on every
+load, and stays folded until the owner opens it; Minimise folds it again.
+
+Each row shows the elapsed time and the run's activity, and offers Stop, Snooze and Settle
+(Settle once the reply finishes). Clicking a row opens the chat, shows the chats panel and
+switches it to the chat's project and folder, which takes the row out of the corner. An
+unread chat shows as a "Done" or "Failed" row whenever it is out of sight, until the owner
+replies, marks it read (the row's Mark as read button), settles or snoozes it. Totem chats
+are left out.
+
+On a phone, a project or folder page (a new chat in that place) lists the place's own
+recent chats, and the panel would cover them. While one is showing (`useProjectPage` in
+`onScreen.ts`), the panel leaves out unread chats from elsewhere and folds to its pill;
+running chats still count in the pill.
+
+A finished or failed reply also raises a toast with an Open button, unless that chat is
+open in front of the owner. A stopped run does not. Every timed toast has a bar along its
+top edge counting down its time on screen, and hovering it holds both the bar and the
+timer (`pauseToast`/`resumeToast` in `web/src/toast.ts`).
+
+## Other chats
+
+An agent can look at the owner's other chats, for the turn where he says "another thread
+is working on this" or "we sorted that out in the other chat". It is deliberately not a
+habit: with the gateway on, every chat turn gets one line (`threadsRule` in
+`chat/thread-tools.mjs`) giving the chat its own id and project and telling it to use
+these tools only when the owner points at another chat, or when the turn cannot be done
+well without context that clearly lives in one. The tool descriptions say the same.
+
+| Tool (gateway name) | Does |
+|---|---|
+| `totem_threads_list` (`threads__list`) | Other chats with title, `project` ("Work / Hiring"), `running`, `waitingOnOwner`, `shelf` (active/snoozed/settled, auto-settle included), last request and reply. Filters: `project` (an id, its folders included, or `home`), `status` (`running`, `waiting`, `active`), `query` (titles plus the search index's chat messages, best first, with `matches` snippets), `exclude` (the calling chat), `limit`. |
+| `totem_threads_read` (`threads__read`) | One chat's last `last` messages (default 12) or a page from `from`, each clipped to `maxChars`, with one line per tool call so a running chat shows what it is doing. |
+
+Both are read-only and local (`ANN.readLocal`), so ChatGPT and Claude on `/mcp` get them too.
 
 ## Testing
 

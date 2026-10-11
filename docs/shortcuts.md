@@ -110,7 +110,7 @@ it.
 | Todos | `g t` | Settings | `g ,` |
 | Calendar | `g a` | Settings · Providers | `g , p` |
 | Habits | `g h` | Settings · Shortcuts | `g , s` |
-| Code | `g e` | New todo | `g t t` |
+| Dev (CI, reviews, repos) | `g d` | New todo | `g t t` |
 | Inbox | `g i` | New chat | `g c c` |
 | Logs | `g l` | AI usage limits | `g u` |
 | Brain | `g b` | Totem usage | `g u a` |

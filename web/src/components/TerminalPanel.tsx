@@ -344,8 +344,8 @@ export default function TerminalPanel({ open, onClose }: TerminalPanelProps) {
   useEffect(() => {
     localStorage.setItem(WIDTH_STORAGE_KEY, String(width))
     setFitToken((n) => n + 1)
-    // Published so the app's fixed-position affordances (the quick-chat pill and
-    // panel) can shift clear of the dock instead of sitting on top of it.
+    // Published so the app's fixed-position affordances (the utilities launcher
+    // and the running-chats panel) can shift clear of the dock instead of sitting on top of it.
     document.documentElement.style.setProperty('--term-width', `${width}px`)
   }, [width])
 

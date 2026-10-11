@@ -153,3 +153,39 @@ export function describeMcpCall({ name, server, input }) {
 export function describeCommand(command, description) {
   return { kind: 'command', title: description ? truncate(description, 120) : 'Ran a command', detail: truncate(command || '', 400), input: truncate(command || '', 4000) }
 }
+
+export function genericToolDetail(input) {
+  if (!input || typeof input !== 'object') return ''
+  const d = input.command || input.file_path || input.filePath || input.path ||
+    input.pattern || input.query || input.url || input.prompt || input.description
+  return typeof d === 'string' ? truncate(d.trim(), 400) : ''
+}
+
+// Friendly titles for Claude Code's built-in tools (PascalCase). MCP tools arrive
+// as mcp__<server>__<tool>; everything unmapped falls back to a humanized name.
+const CLAUDE_TOOL_TITLES = {
+  Read: 'Read a file',
+  Edit: 'Edited a file',
+  MultiEdit: 'Edited a file',
+  Write: 'Wrote a file',
+  Glob: 'Found files',
+  Grep: 'Searched files',
+  LS: 'Listed a folder',
+  WebSearch: 'Searched the web',
+  WebFetch: 'Opened a page',
+  Task: 'Ran a sub-agent',
+  Agent: 'Ran a sub-agent',
+  TodoWrite: 'Updated the plan',
+  NotebookEdit: 'Edited a notebook',
+  ToolSearch: 'Looked for a tool',
+  Skill: 'Used a skill',
+}
+
+export function chatToolFromClaude(block) {
+  const raw = block.name || 'tool'
+  let tool
+  if (raw === 'Bash') tool = describeCommand(block.input?.command, block.input?.description)
+  else if (raw.startsWith('mcp__')) tool = describeMcpCall({ name: raw, input: block.input })
+  else tool = { kind: raw, title: CLAUDE_TOOL_TITLES[raw] || humanizeTool(raw), detail: genericToolDetail(block.input), input: stringifyInput(block.input) }
+  return { id: block.id, phase: 'start', ...tool }
+}

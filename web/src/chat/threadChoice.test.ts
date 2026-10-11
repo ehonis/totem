@@ -9,7 +9,6 @@ beforeEach(() => {
   s.defaultProvider = 'codex'
   s.defaultModel = null
   s.models = { codex: [{ id: 'gpt-6-luna' }, { id: 'gpt-6.1-sol' }] }
-  s.prefs = { ...(s.prefs || {}), defaultPreset: 'auto', defaultLevel: 2 }
 })
 
 function thread(patch: Partial<ChatThread>): ChatThread {
@@ -27,18 +26,22 @@ describe('threadChoice', () => {
   it('keeps a chat with no saved settings on the model that last answered it', () => {
     const { provider, settings } = threadChoice(thread({ modelSettings: undefined }))
     expect(provider).toBe('codex')
-    expect(settings.preset).toBe('manual')
     expect(settings.modelId).toBe('gpt-6.1-sol')
   })
 
-  it('leaves a chat that chose Auto on Auto', () => {
-    const { settings } = threadChoice(thread({ modelSettings: { preset: 'auto', modelId: 'gpt-6-luna' } }))
-    expect(settings.preset).toBe('auto')
+  it('moves a chat saved on a retired preset to the model that last answered it', () => {
+    const { settings } = threadChoice(thread({ modelSettings: { preset: 'auto', modelId: 'composer-2.5' } as any }))
+    expect(settings.modelId).toBe('gpt-6.1-sol')
+    expect(settings.preset).toBeUndefined()
+  })
+
+  it('starts a draft saved on a retired preset on the default model', () => {
+    const { settings } = threadChoice(null, { provider: 'codex', modelSettings: { preset: 'thinking', modelId: 'composer-2.5' } as any })
+    expect(settings.modelId).toBe('gpt-6-luna')
   })
 
   it('gives a brand-new chat the defaults', () => {
     const { settings } = threadChoice(null)
-    expect(settings.preset).toBe('auto')
     expect(settings.modelId).toBe('gpt-6-luna')
   })
 })

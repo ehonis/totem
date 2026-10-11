@@ -13,6 +13,8 @@
 //                      browser has a TypeScript twin (web/src/chat/reduce.ts);
 //                      keep the two in step.
 
+import { foldAgent } from './subagents.mjs'
+
 // How the owner's lines are labelled when a transcript is replayed to an agent.
 const OWNER_LABEL = String(process.env.OWNER_NAME || '').trim() || 'Owner'
 
@@ -184,6 +186,13 @@ export function applyEvent(msg, event, now = Date.now()) {
       })
       break
     }
+    case 'agent': {
+      // Another agent this one started (chat/subagents.mjs), folded into the
+      // card of the call that started it.
+      const target = event.toolId ? msg.parts.find((p) => p.type === 'tool' && p.id === event.toolId) : null
+      if (target) target.agent = foldAgent(target.agent, event)
+      break
+    }
     case 'image':
       if (event.uploadId) msg.parts.push({ type: 'image', uploadId: event.uploadId, alt: event.alt || '' })
       break
@@ -215,12 +224,35 @@ export function finalizeMessage(msg, { status, error, finalText, startedAt, now 
   if (settled && !streamed) applyEvent(msg, { type: 'delta', text: settled }, now)
   for (const p of msg.parts) {
     if (p.type === 'tool' && p.status === 'running') { p.status = status === 'error' ? 'error' : 'done'; p.endedAt = now }
+    if (p.type === 'tool' && p.agent?.status === 'running') {
+      p.agent = { ...p.agent, status: status === 'error' ? 'error' : status === 'stopped' ? 'stopped' : 'done', endedAt: now }
+      for (const st of p.agent.steps || []) if (st.status === 'running') st.status = 'done'
+    }
   }
   msg.status = status
   if (error) msg.error = error
   else delete msg.error
   if (startedAt) msg.durationMs = Math.max(0, now - startedAt)
   return msg
+}
+
+/**
+ * Why a reply failed, in words for the owner. A provider's raw error can be a
+ * JSON body ({"error":{"message":…}}); a 429 is its usage limit, said plainly,
+ * with the provider's own words kept after it.
+ */
+export function failureText(raw, providerName = 'The agent') {
+  let text = String(raw || '').trim()
+  try {
+    const body = JSON.parse(text)
+    const inner = body?.error?.message || body?.message
+    if (typeof inner === 'string' && inner.trim()) text = inner.trim()
+  } catch { /* not JSON */ }
+  if (!text) return ''
+  if (/\b429\b|too many requests|usage limit|rate limit/i.test(text)) {
+    return `${providerName} hit its usage limit, so the reply stopped here. (${text})`
+  }
+  return text
 }
 
 /** A short, human title from the first request, for when no AI title arrives. */

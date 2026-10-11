@@ -1,0 +1,81 @@
+{
+  "expo": {
+    "name": "Totem",
+    "slug": "vesper-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "totem",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0f1115",
+    "ios": {
+      "bundleIdentifier": "com.example.totem",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        },
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSMicrophoneUsageDescription": "Totem records your voice for dictation, voice chat and the journal.",
+        "NSPhotoLibraryUsageDescription": "Totem attaches photos you pick to a chat.",
+        "NSCameraUsageDescription": "Totem attaches photos you take to a chat."
+      }
+    },
+    "android": {
+      "package": "com.example.totem",
+      "adaptiveIcon": {
+        "backgroundColor": "#000000",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0f1115",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 96
+        }
+      ],
+      "expo-secure-store",
+      "expo-notifications",
+      "expo-sqlite",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Totem records your voice for dictation, voice chat and the journal.",
+          "enableBackgroundRecording": true
+        }
+      ],
+      "expo-web-browser",
+      "expo-font",
+      "expo-asset",
+      "expo-quick-actions",
+      "@config-plugins/react-native-webrtc"
+    ],
+    "experiments": {
+      "typedRoutes": false,
+      "reactCompiler": false
+    },
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    }
+  }
+}

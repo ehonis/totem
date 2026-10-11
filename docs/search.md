@@ -43,7 +43,9 @@ and reported in `/api/search/status`; it never takes search down.
 - **MCP**: `totem_search_everything` and `totem_search_read` on `/mcp`, and as
   `search__everything` / `search__read` through the gateway (`mcp-gateway.mjs` slices them
   from the bridge, so the gateway needs `BRIDGE_SECRET`, as with Strava). Snippets mark
-  matches with `[brackets]`. The older `totem_search_brain` is unchanged.
+  matches with `[brackets]`. The older `totem_search_brain` is unchanged. To browse or read
+  whole chats rather than single messages, agents use `threads__list`/`threads__read`
+  (`docs/chat.md` → Other chats), which use this index for their `query`.
 
 ## Adding a source
 

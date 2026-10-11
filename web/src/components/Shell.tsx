@@ -202,10 +202,12 @@ export function MobileBar({ title, onMenu, onNewChat }: { title: string; onMenu:
   )
 }
 
-export function MobileDrawer({ open, onClose, tabs, active, onSelect, onOpenChat, badges, onNotifications, unread }: {
+export function MobileDrawer({ open, onClose, tabs, bottom, active, onSelect, onOpenChat, badges, onNotifications, unread }: {
   open: boolean
   onClose: () => void
   tabs: TabDef[]
+  /** Settings: an icon pinned to the drawer's bottom right, not a row in the list. */
+  bottom: TabDef
   active: string
   onSelect: (id: string) => void
   onOpenChat: () => void
@@ -250,6 +252,11 @@ export function MobileDrawer({ open, onClose, tabs, active, onSelect, onOpenChat
             ))}
           </div>
           <ChatsNav onOpenChat={() => { onOpenChat(); onClose() }} searchSignal={search} />
+        </div>
+        <div className="sh-drawer-foot">
+          <button type="button" className={`sh-icon sh-drawer-bottom ${active === bottom.id ? 'on' : ''}`} onClick={() => go(bottom.id)} aria-label={bottom.label} title={bottom.label} aria-current={active === bottom.id ? 'page' : undefined}>
+            <Hi icon={bottom.icon} size={22} />
+          </button>
         </div>
       </aside>
     </>

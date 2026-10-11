@@ -1,0 +1,237 @@
+/* ==========================================================================
+   Messages (messages/). Conversations | thread on a desktop, one pane on a
+   phone. Built on the app's own variables (styles.css :root) so it follows
+   whatever the theme is; namespaced msgs-* so nothing leaks.
+   ========================================================================== */
+
+.msgs {
+  --msgs-soft: color-mix(in srgb, var(--text) 62%, transparent);
+  --msgs-faint: color-mix(in srgb, var(--text) 42%, transparent);
+  --msgs-theirs: color-mix(in srgb, var(--text) 9%, var(--bg));
+  --msgs-sms: var(--green);
+  display: grid; grid-template-columns: 320px minmax(0, 1fr);
+  flex: 1 1 auto; height: 100%; min-height: 0;
+  background: var(--bg);
+}
+.msgs .hi { display: block; }
+
+/* --- conversation list ---------------------------------------------------- */
+.msgs-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+.msgs-list-head { display: flex; align-items: center; justify-content: space-between; height: 58px; padding: 0 10px 0 18px; flex: none; }
+.msgs-list-head h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+
+.msgs-icon-btn {
+  display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; flex: none;
+  background: none; border: 0; color: var(--msgs-soft);
+}
+.msgs-icon-btn:hover { background: var(--bg-3); color: var(--text); }
+
+.msgs-search {
+  display: flex; align-items: center; gap: 8px; margin: 0 12px 8px; padding: 0 10px; height: 36px; flex: none;
+  border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); color: var(--msgs-faint);
+}
+.msgs-search:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.msgs-search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 14px; }
+.msgs-search input::-webkit-search-cancel-button { display: none; }
+.msgs-search button { display: grid; place-items: center; background: none; border: 0; padding: 4px; border-radius: 6px; color: var(--msgs-faint); }
+.msgs-search button:hover { color: var(--text); }
+
+.msgs-list-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px 16px; }
+.msgs-list-note { color: var(--muted); font-size: 13.5px; line-height: 1.55; padding: 18px 10px; margin: 0; text-align: center; }
+.msgs-section { margin: 14px 10px 4px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+
+.msgs-rows { list-style: none; margin: 0; padding: 0; }
+.msgs-row {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px; border-radius: 10px;
+  background: none; border: 0; color: var(--text); text-align: left;
+}
+.msgs-row:hover { background: color-mix(in srgb, var(--bg-3) 70%, transparent); }
+.msgs-row.on { background: var(--bg-3); }
+.msgs-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.msgs-row-top, .msgs-row-bottom { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.msgs-row-title { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msgs-row-time { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.msgs-row-preview {
+  flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.msgs-row.unread .msgs-row-title { font-weight: 650; }
+.msgs-row.unread .msgs-row-preview { color: var(--msgs-soft); }
+.msgs-hit .msgs-row-preview { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.msgs-unread {
+  flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.msgs-sms {
+  flex: none; font-size: 10px; font-weight: 600; letter-spacing: .04em; line-height: 1;
+  padding: 3px 5px; border-radius: 5px;
+  color: var(--msgs-sms); background: color-mix(in srgb, var(--msgs-sms) 14%, transparent);
+}
+
+.msgs-avatar {
+  flex: none; display: grid; place-items: center; border-radius: 50%;
+  background: var(--bg-3); color: var(--msgs-soft); font-weight: 600; letter-spacing: .02em;
+  border: 1px solid var(--line);
+}
+
+/* --- thread --------------------------------------------------------------- */
+.msgs-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.msgs-detail-empty { margin: auto; font-size: 14px; }
+.msgs-thread { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.msgs-thread-head {
+  display: flex; align-items: center; gap: 10px; height: 58px; padding: 0 14px; flex: none;
+  border-bottom: 1px solid var(--line);
+}
+.msgs-thread-title { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.msgs-thread-title strong { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msgs-thread-title .muted { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.msgs-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.msgs-log { max-width: 760px; margin: 0 auto; padding: 14px 20px 18px; display: flex; flex-direction: column; }
+
+.msgs-older {
+  align-self: center; margin: 4px 0 12px; padding: 5px 12px; border-radius: 999px;
+  background: none; border: 1px solid var(--line); color: var(--msgs-soft); font-size: 12.5px;
+}
+.msgs-older:hover:not(:disabled) { color: var(--text); background: var(--bg-2); }
+.msgs-older:disabled { opacity: .6; cursor: default; }
+
+.msgs-divider {
+  align-self: center; margin: 18px 0 8px; font-size: 11.5px; color: var(--muted); font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.msgs-divider:first-child { margin-top: 4px; }
+
+.msgs-msg { display: flex; flex-direction: column; gap: 3px; max-width: min(72%, 560px); margin-top: 2px; }
+.msgs-msg.first { margin-top: 10px; }
+.msgs-divider + .msgs-msg.first { margin-top: 0; }
+.msgs-msg.mine { align-self: flex-end; align-items: flex-end; }
+.msgs-msg.theirs { align-self: flex-start; align-items: flex-start; }
+.msgs-sender { font-size: 11.5px; color: var(--muted); margin: 0 12px 1px; }
+
+.msgs-bubble {
+  padding: 7px 13px; border-radius: 18px;
+  font-size: 15px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.msgs-msg.mine .msgs-bubble { background: var(--accent); color: #fff; }
+.msgs-msg.theirs .msgs-bubble { background: var(--msgs-theirs); color: var(--text); }
+/* The tail corner sits on the last bubble of a run, toward its sender. */
+.msgs-msg.mine:not(.last) .msgs-bubble { border-bottom-right-radius: 6px; }
+.msgs-msg.mine:not(.first) .msgs-bubble { border-top-right-radius: 6px; }
+.msgs-msg.theirs:not(.last) .msgs-bubble { border-bottom-left-radius: 6px; }
+.msgs-msg.theirs:not(.first) .msgs-bubble { border-top-left-radius: 6px; }
+.msgs-msg.mine .msgs-bubble a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.msgs-msg.theirs .msgs-bubble a { color: var(--accent); }
+
+.msgs-media { display: block; border-radius: 16px; overflow: hidden; background: var(--bg-2); line-height: 0; }
+.msgs-media img { display: block; max-width: min(280px, 100%); max-height: 320px; width: auto; height: auto; object-fit: cover; }
+.msgs-media.sticker { background: none; border-radius: 0; }
+.msgs-media.sticker img { max-width: 120px; max-height: 120px; }
+.msgs-video { max-width: min(320px, 100%); max-height: 320px; }
+.msgs-file {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 8px 12px; border-radius: 14px;
+  background: var(--msgs-theirs); color: var(--text); text-decoration: none; font-size: 13.5px;
+}
+.msgs-file:hover { background: var(--bg-3); }
+.msgs-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msgs-file-size { flex: none; color: var(--muted); font-size: 12px; }
+
+.msgs-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin: 1px 4px 0; }
+.msgs-msg.mine .msgs-reactions { justify-content: flex-end; }
+.msgs-reaction {
+  font-size: 11.5px; line-height: 1; padding: 4px 8px; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--msgs-soft);
+}
+.msgs-receipt { font-size: 11px; color: var(--muted); margin: 0 6px; }
+.msgs-receipt.failed { color: var(--red); }
+
+/* --- composer -------------------------------------------------------------- */
+.msgs-compose { flex: none; padding: 8px 16px max(12px, env(safe-area-inset-bottom)); }
+/* On a desktop the utilities launcher floats in the bottom-right
+   corner (right 22px, 44px wide). Keep the send button out from under them. */
+@media (min-width: 721px) {
+  .msgs-compose { padding-right: 80px; }
+  .msgs-scroll { padding-right: 64px; }
+}
+.msgs-compose-box {
+  display: flex; align-items: flex-end; gap: 8px; max-width: 760px; margin: 0 auto;
+  padding: 5px 5px 5px 14px; border-radius: 22px;
+  background: var(--bg-2); border: 1px solid var(--line);
+}
+.msgs-compose-box:focus-within { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.msgs-compose-box textarea {
+  flex: 1; min-width: 0; resize: none; border: 0; outline: none; background: none; color: var(--text);
+  font: inherit; font-size: 15px; line-height: 1.45; padding: 5px 0; max-height: 180px;
+}
+.msgs-compose-box textarea::placeholder { color: var(--msgs-faint); }
+.msgs-compose-box textarea:disabled { opacity: .6; }
+.msgs-send {
+  flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--accent); color: #fff; border: 0; transition: opacity .12s, transform .1s;
+}
+.msgs-send.sms { background: var(--msgs-sms); }
+.msgs-send:active:not(:disabled) { transform: scale(.93); }
+.msgs-send:disabled { opacity: .35; cursor: default; }
+
+.msgs-send-error, .msgs-inline-error {
+  max-width: 760px; margin: 0 auto 8px; padding: 9px 12px; border-radius: 10px;
+  font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--text); background: color-mix(in srgb, var(--red) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+}
+.msgs-inline-error { margin: 8px 4px; }
+
+/* --- new message ------------------------------------------------------------ */
+.msgs-to {
+  position: relative; display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 18px; flex: none;
+  border-bottom: 1px solid var(--line);
+}
+.msgs-to label { color: var(--muted); font-size: 14px; }
+.msgs-to input { flex: 1; min-width: 0; height: 34px; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 15px; }
+.msgs-to-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 4px 4px 10px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); font-size: 14px;
+}
+.msgs-to-chip .muted { font-size: 12.5px; }
+.msgs-to-chip button { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: none; border: 0; color: var(--msgs-soft); }
+.msgs-to-chip button:hover { background: var(--bg-3); color: var(--text); }
+.msgs-to-options {
+  position: absolute; top: calc(100% + 4px); left: 12px; right: 12px; z-index: 20; max-width: 420px;
+  list-style: none; margin: 0; padding: 4px; max-height: 300px; overflow-y: auto;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px #0006;
+}
+.msgs-to-options button {
+  display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 7px 10px; border-radius: 8px;
+  background: none; border: 0; color: var(--text); text-align: left; font-size: 14px;
+}
+.msgs-to-options button .muted { font-size: 12px; }
+.msgs-to-options button.on { background: var(--bg-3); }
+
+/* --- states (off, no access) ----------------------------------------------- */
+.msgs-state { flex: 1; display: grid; place-items: center; padding: 32px 20px; overflow: auto; }
+.msgs-state-card { max-width: 460px; text-align: center; }
+.msgs-state-card h2 { margin: 12px 0 8px; font-size: 17px; font-weight: 600; }
+.msgs-state-card p { margin: 0 0 12px; color: var(--msgs-soft, var(--muted)); font-size: 14px; line-height: 1.6; }
+.msgs-state-card code { font-size: 13px; padding: 1px 5px; border-radius: 5px; background: var(--bg-3); }
+.msgs-state-icon { margin: 0 auto; color: var(--muted); }
+.msgs-state-fix {
+  text-align: left; padding: 11px 13px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line);
+  color: var(--text) !important; font-size: 13.5px; overflow-wrap: anywhere; user-select: all;
+}
+.msgs-state .btn { display: inline-flex; align-items: center; gap: 6px; }
+
+/* --- phone: one pane at a time ---------------------------------------------- */
+@media (max-width: 720px) {
+  .msgs { grid-template-columns: minmax(0, 1fr); }
+  .msgs-list { border-right: 0; }
+  /* The shell's top bar already says "Messages"; keep only the compose button. */
+  /* The shell's top bar carries the title and the new-message pencil. */
+  .msgs-list-head { display: none; }
+  .msgs-list-head h1 { display: none; }
+  .msgs.has-detail .msgs-list { display: none; }
+  .msgs:not(.has-detail) .msgs-detail { display: none; }
+  .msgs-msg { max-width: 82%; }
+  .msgs-log { padding: 10px 12px 14px; }
+  .msgs-compose { padding-left: 10px; padding-right: 10px; }
+}

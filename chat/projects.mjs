@@ -36,10 +36,15 @@ export const MEMORY_MAX = 40_000
 const FILE_SOURCES = new Set(['upload', 'chat', 'agent'])
 const FILE_KINDS = new Set(['image', 'file', 'text'])
 
+const LEGACY_PRESETS = new Set(['auto', 'instant', 'thinking'])
+
 function normalizeModelSettings(settings) {
   if (!settings || typeof settings !== 'object') return null
+  // Auto, Instant and Thinking are gone; a choice saved under one of them never
+  // named the model, so drop it and let the chat fall back to the default.
+  if (LEGACY_PRESETS.has(settings.preset)) return null
   const out = {}
-  for (const key of ['modelId', 'speed', 'effort', 'context', 'preset', 'level', 'power']) {
+  for (const key of ['modelId', 'speed', 'effort', 'context', 'access']) {
     if (typeof settings[key] === 'string' && settings[key].length <= 80) out[key] = settings[key]
   }
   return Object.keys(out).length ? out : null

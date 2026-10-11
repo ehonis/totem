@@ -88,6 +88,12 @@ export const getCalendarAccounts = () => getJSON('/api/calendar/accounts') // { 
 export const renameCalendarAccount = (from: string, to: string) => sendJSON('/api/calendar/accounts/rename', 'POST', { from, to })
 export const removeCalendarAccount = (label: string) => sendJSON('/api/calendar/accounts/remove', 'POST', { label })
 export const startCalendarAccountAuth = (label: string) => sendJSON('/api/calendar/accounts/auth', 'POST', { label })
+// Gmail accounts: the same shape as Calendar's, in their own token store
+// (data/gmail-tokens.json). `configured` is false until the Google OAuth client exists.
+export const getGmailAccounts = () => getJSON('/api/gmail/accounts') // { configured, accounts: [...] }
+export const renameGmailAccount = (from: string, to: string) => sendJSON('/api/gmail/accounts/rename', 'POST', { from, to })
+export const removeGmailAccount = (label: string) => sendJSON('/api/gmail/accounts/remove', 'POST', { label })
+export const startGmailAccountAuth = (label: string) => sendJSON('/api/gmail/accounts/auth', 'POST', { label })
 
 export const getBrain = () => getJSON('/api/brain')
 
@@ -363,6 +369,37 @@ export const setAiUsageConfig = (patch: any) => sendJSON('/api/ai-usage/config',
 // Backed by a cached `gh` fetch on the bridge; refresh=true forces a live refetch.
 // Returns { generatedAt, viewer, repos, cached, ageMs }.
 export const getGithubRepos = (refresh = false) => getJSON(`/api/github/repos${refresh ? '?refresh=1' : ''}`)
+
+// ---- Dev tab (dev/ on the bridge; docs/dev-tab.md) ---------------------------
+export type DevRunState = 'success' | 'failure' | 'pending' | 'cancelled' | 'neutral'
+export interface DevCiRun { workflow: string; runId: number; state: DevRunState; conclusion: string | null; url: string; createdAt: string }
+export interface DevPull {
+  number: number; title: string; url: string; draft: boolean; sha: string
+  checks: 'passing' | 'failing' | 'pending' | 'none'; checkCount: number
+  claude: 'none' | 'queued' | 'running' | 'success' | 'failure'; claudeUrl: string | null; codex: boolean
+}
+/** What AI review on a repo still needs. `ciSecret` is null when the secret list can't be read. */
+export interface DevSetup {
+  reviewWorkflow: boolean; runner: boolean; ciSecret: boolean | null
+  missing: Array<'reviewWorkflow' | 'runner' | 'ciSecret'>
+}
+export interface DevRunner { name: string; status: string; busy: boolean }
+export interface DevRepo {
+  repo: string; defaultBranch?: string; ci: DevCiRun[]; prs: DevPull[]; runners: DevRunner[]
+  runnersError?: string; aiReview: 'on' | 'off' | null; setup?: DevSetup | null; error?: string
+}
+export interface DevHealth { name: string; url: string; ok: boolean; status: number | null; ms: number; error?: string }
+export interface DevAlert { id: string; source: string; title: string; body: string; url: string | null; key: string; at: string; delivered: boolean }
+export interface DevStatus { enabled: boolean; watched: string[]; repos?: DevRepo[]; health?: DevHealth[]; alerts: DevAlert[]; fetchedAt?: string }
+
+export const getDevStatus = (refresh = false) => getJSON<DevStatus>(`/api/dev${refresh ? '?refresh=1' : ''}`)
+const devRepoPath = (repo: string) => repo.split('/').map(encodeURIComponent).join('/')
+export const setDevAiReview = (repo: string, enabled: boolean) =>
+  sendJSON(`/api/dev/repos/${devRepoPath(repo)}/ai-review`, 'PUT', { enabled }) as Promise<{ repo: string; aiReview: 'on' | 'off' }>
+export const setDevWatch = (repo: string, watch: boolean) =>
+  sendJSON('/api/dev/repos', 'PUT', { repo, watch }) as Promise<{ repo: string; watch: boolean; watched: string[] }>
+export const requestDevReview = (repo: string, pr: number) =>
+  sendJSON(`/api/dev/repos/${devRepoPath(repo)}/pulls/${pr}/review`, 'POST', {}) as Promise<{ queued: boolean }>
 
 export const closeTodo = (id: string) => sendJSON('/api/todos/close', 'POST', { id })
 

@@ -16,6 +16,7 @@
 //   totemChatBlock   — what a chat with a totem knows about it.
 //   builderPrompt    — the builder's brief: draft a totem and recommend models.
 //   parseBuilderReply— the builder's JSON, validated against the live catalog.
+//                     (totems/drafts.mjs keeps an unfinished design between visits.)
 //   costTier         — a model's rough price class, for "cheapest that works".
 //   totemsRule / parseProposals — how any chat proposes a change to a totem.
 
@@ -176,13 +177,21 @@ export function appendMemoryNote(memory, note, date = new Date()) {
 /**
  * `catalog` is [{provider, driver, name, models: [{id, name}]}] for every enabled
  * account. The builder must pick models from it, so a recommendation can always run.
+ *
+ * The builder is a short conversation. The first turn designs from `description`;
+ * later turns pass the `draft` as it stands now (with the owner's own edits), the
+ * `conversation` so far ([{role: 'owner'|'builder', text}]) and his new `message`,
+ * and the builder returns the whole draft again, revised.
  */
-export function builderPrompt({ description, catalog = [], timezone = 'UTC' }) {
+export function builderPrompt({ description, catalog = [], timezone = 'UTC', draft = null, conversation = [], message = '' }) {
   const accounts = catalog.map((a) => {
-    const models = (a.models || []).slice(0, 25).map((m) => `${m.id}${m.name && m.name !== m.id ? ` (${m.name})` : ''} [cost ${costTier(m.id, a.driver)}]`)
+    const models = (a.models || []).slice(0, 25).map((m) => `${m.id}${m.name && m.name !== m.id ? ` (${m.name})` : ''} [cost ${costTier(m.id, a.driver)}]${m.note ? ` — ${m.note}` : ''}`)
     return `- account "${a.provider}" (${a.name}, ${a.driver}): ${models.length ? models.join(', ') : '(its default model only; use model "")'}`
   }).join('\n')
-  return `You design "totems": standing AI agents that wake on a schedule to do one job for the owner, keep their own memory between runs, and notify his phone only when something matters. He described the totem he wants below. Design it.
+  const revising = !!(draft && String(message || '').trim())
+  return `You design "totems": standing AI agents that wake on a schedule to do one job for the owner, keep their own memory between runs, and notify his phone only when something matters. ${revising ? 'You are designing one with him in a short conversation: he described it, you drafted it and may have asked questions, and he has now replied. Revise the draft to match what he said.' : 'He described the totem he wants below. Design it.'}
+
+You may look around this machine read-only to ground the design (find a repository he names, check a path exists, read a config) but never change anything. Totem runs on this one machine: if the job touches other machines, use how he says they are reached (an ssh host alias, a URL) and ask when he has not said.
 
 Choose:
 - name: 2-4 words, Title Case.
@@ -191,11 +200,12 @@ Choose:
 - taskType: one of ${TASK_TYPES.join(', ')}.
 - instructions: the totem's standing brief in second person ("You watch…"), specific and complete: what to check, where, what counts as worth telling him, and what to keep in memory so the next run can tell what changed. 4-12 sentences.
 - schedule: one of {"type":"interval","everyMinutes":N} (N ≥ 15), {"type":"daily","time":"HH:MM"}, {"type":"weekly","time":"HH:MM","days":[0-6, Sunday=0]}, {"type":"window","from":"HH:MM","to":"HH:MM","everyMinutes":N,"days":[...]}. Times are ${timezone}. Pick the least frequent schedule that still does the job: a stock watch every 30-60 minutes, a daily digest once a day.
-- trigger: null, or a watch when the job is "when X changes, do Y" and X is a git branch or one web page. A watch is checked without AI every few minutes and wakes the totem only when the thing changes, which is far cheaper than polling with a model. {"type":"watch","everyMinutes":N,"source":{"kind":"git","repo":"<absolute checkout path or https/ssh remote URL>","ref":"<branch>"}} (a local checkout watches its origin remote; N ≥ 1), or {"type":"watch","everyMinutes":N,"source":{"kind":"url","url":"https://…","contains":"<text whose appearance or disappearance matters, optional>"}} (N ≥ 5). With a trigger, schedule is ignored. Use the paths and URLs he gave; never invent one (leave trigger null and ask in questions instead). If he wants Totem itself redeployed when its main branch changes, do not design an agent for it: the built-in "Deploy Totem" totem does that (an agent restarting Totem would cut off its own run); say so in questions.
+- trigger: null, or a watch when the job is "when X changes, do Y" and X is one or more git branches or web pages. A watch is checked without AI every few minutes and wakes the totem only when something it watches changes, which is far cheaper than polling with a model. {"type":"watch","everyMinutes":N,"sources":[…]} where each source is {"kind":"git","repo":"<absolute checkout path or https/ssh remote URL>","ref":"<branch>"} (a local checkout watches its origin remote) or {"kind":"url","url":"https://…","contains":"<text whose appearance or disappearance matters, optional>"}. List every repo or page he named as its own source (up to 20) in one watch; never drop some to fit. N ≥ 1, or ≥ 5 when any source is a page. One check covers them all and a run is told which ones changed. With a trigger, schedule is ignored. Use the paths and URLs he gave; never invent one (leave trigger null and ask in questions instead). If he wants Totem itself redeployed when its main branch changes, do not design an agent for it: the built-in "Deploy Totem" totem does that (an agent restarting Totem would cut off its own run); say so in questions.
 - browser: true only if the job needs pages that load with JavaScript (store pages, dashboards); plain fetches and web search cover most things.
 - notify: "agent" (the totem decides when to notify; right for watchers), "always" (every run sends its report; right for digests), or "errors".
 - recommendations: 2-4 model choices from the accounts below, cheapest first, that can do THIS job well. The goal is the lowest cost that still gets it right: a simple check or a short digest needs a small fast model; deep analysis or long writing needs a stronger one. For each: {"provider": account id, "model": model id exactly as listed (or "" for the account default), "effort": "low"|"medium"|"high"|"", "why": one short sentence}.
-- questions: anything genuinely ambiguous that he should answer (at most 2), else [].
+- questions: what you need him to answer to get the job right (at most 3, each one short and concrete, e.g. "Which machines have it checked out, and what ssh alias reaches each?"). Ask when the scope is genuinely unclear or a detail would otherwise be guessed (a path, a host, a threshold, what counts as worth telling him); fill in sensible defaults for the rest. Do not ask again what he already answered. [] when nothing is open.
+- reply: one to three sentences to him, plain text: ${revising ? 'what you changed in response to his message' : 'what you designed'}, and, if you have questions, that the draft assumes defaults until he answers.
 
 Accounts and models:
 ${accounts || '(none listed: use provider "default" and model "")'}
@@ -203,7 +213,24 @@ ${accounts || '(none listed: use provider "default" and model "")'}
 Reply with only a JSON object with exactly those keys, no prose and no code fence.
 
 His description:
-${String(description || '').slice(0, 4000)}`
+${String(description || '').slice(0, 4000)}${revising ? revisionContext({ draft, conversation, message }) : ''}`
+}
+
+// The draft is re-sent as JSON so his own edits (a renamed totem, rewritten
+// instructions, a changed schedule) survive the revision.
+function revisionContext({ draft, conversation, message }) {
+  const { recommendations, questions, reply, ...design } = draft || {}
+  const turns = (conversation || []).slice(-12).map((m) => `${m.role === 'owner' ? 'Owner' : 'You'}: ${String(m.text || '').slice(0, 2000)}${m.questions?.length ? `\n  (you asked: ${m.questions.join(' / ')})` : ''}`).join('\n')
+  return `
+
+The conversation so far:
+${turns || '(none)'}
+
+The draft as it stands now, including any edits he made himself (keep those unless his message changes them):
+${JSON.stringify(design, null, 2).slice(0, 12000)}
+
+His new message:
+${String(message).slice(0, 4000)}`
 }
 
 function extractJson(text) {
@@ -266,6 +293,7 @@ export function parseBuilderReply(text, { catalog = [], description = '' } = {})
     browser: j.browser === true,
     notify,
     recommendations: recs.slice(0, 4),
-    questions: (Array.isArray(j.questions) ? j.questions : []).map((q) => str(q, 300)).filter(Boolean).slice(0, 2),
+    questions: (Array.isArray(j.questions) ? j.questions : []).map((q) => str(q, 300)).filter(Boolean).slice(0, 3),
+    reply: str(j.reply, 1000).trim(),
   }
 }

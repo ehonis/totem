@@ -45,3 +45,10 @@
     }
   }
 }
+
+/* A toast's countdown bar: full width when it appears, empty when it goes. The
+   length is set per toast (its duration), and hovering pauses it with the timer. */
+@keyframes toast-timer {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}

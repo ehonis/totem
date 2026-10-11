@@ -1,0 +1,8 @@
+{
+  "repos": ["owner/repo", "owner/another-repo"],
+  "health": [
+    { "name": "LLM proxy", "url": "http://host:port/v1/models", "expect": [200, 401] },
+    { "name": "Website", "url": "https://example.com/" }
+  ],
+  "pollMinutes": 5
+}

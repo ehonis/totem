@@ -6,17 +6,20 @@ import Markdown from './Markdown'
 import {
   Hi, ArrowPathIcon, CheckCircleIcon, XMarkIcon, InboxStackIcon, CalendarDaysIcon,
   DocumentTextIcon, CircleStackIcon, ChevronRightIcon, WarnIcon, TrophyIcon,
-  CommandLineIcon,
+  CommandLineIcon, ChatBubbleOvalLeftIcon, EnvelopeIcon, PaperAirplaneIcon, PencilSquareIcon,
 } from '../icons'
 
 // Per-kind glyph for the destination chip, so "where is this going" reads at a
 // glance. Unknown kinds (future sources) fall back to the generic inbox icon.
 // `agent` is a retired kind that now files a plain issue, same as `github`.
-const KIND_ICON = { todo: DocumentTextIcon, calendar: CalendarDaysIcon, agent: CircleStackIcon, github: CircleStackIcon, goal: TrophyIcon, command: CommandLineIcon, prompt: CommandLineIcon }
+const KIND_ICON = { todo: DocumentTextIcon, calendar: CalendarDaysIcon, agent: CircleStackIcon, github: CircleStackIcon, goal: TrophyIcon, command: CommandLineIcon, prompt: CommandLineIcon, imessage: ChatBubbleOvalLeftIcon, email: EnvelopeIcon }
 
 // Chips summarise the line; anything long or verbatim (the issue body, the gh
 // command, the raw inbox line) belongs in the details drop-down instead.
-const CHIP_SKIP = new Set(['when', 'src', 'prompt', 'prompt_ref', 'issue', 'source', 'goal', 'metric'])
+// For a drafted message, `recipient` is the chip; `to` (a chat guid) and the text
+// file path are noise.
+// An email's file path is noise too; the email itself is shown in full below.
+const CHIP_SKIP = new Set(['when', 'src', 'prompt', 'prompt_ref', 'issue', 'source', 'goal', 'metric', 'to', 'message', 'email'])
 
 function metaEntries(item) {
   const out = []
@@ -31,16 +34,43 @@ function metaEntries(item) {
   return out
 }
 
+// A staged email laid out the way it will arrive: subject, the address lines,
+// the body exactly as written, and the message it answers quoted underneath, as
+// a mail client would. Plain text only, so this is precisely what is sent.
+function EmailPreview({ email }: { email: any }) {
+  const q = email.inReplyTo
+  return (
+    <div className="inbox-email">
+      <div className="inbox-email-subject">{email.subject}</div>
+      <dl className="inbox-email-head">
+        <dt>From</dt><dd>{email.from || email.account}</dd>
+        <dt>To</dt><dd>{email.to}</dd>
+        {email.cc && <><dt>Cc</dt><dd>{email.cc}</dd></>}
+        {email.bcc && <><dt>Bcc</dt><dd>{email.bcc}</dd></>}
+      </dl>
+      <div className="inbox-email-body">{email.body}</div>
+      {q && (
+        <div className="inbox-email-quote">
+          <div className="inbox-email-quote-head">On {q.date || 'an earlier date'}, {q.from || 'they'} wrote:</div>
+          {q.snippet}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Everything the bridge says accepting will actually do: the payload fields, the
 // literal gh command for issues, and the finished issue body rendered as it will
 // appear on GitHub. Expanded on demand so the list stays scannable.
 function InboxDetails({ item }: { item: any }) {
   const p = item.preview || {}
-  const isIssue = Boolean(p.body)
+  const isMessage = item.kind === 'imessage'
+  const isIssue = Boolean(p.body) && !isMessage
   return (
     <div className="inbox-details">
       {p.summary && <div className="inbox-details-lede">{p.summary}</div>}
       {p.error && <div className="inbox-details-err inline-warn"><WarnIcon /> {p.error}</div>}
+      {p.email && <EmailPreview email={p.email} />}
       {p.fields?.length > 0 && (
         <dl className="inbox-fields">
           {p.fields.map(([k, v]: [string, string]) => (
@@ -55,6 +85,12 @@ function InboxDetails({ item }: { item: any }) {
         <div className="inbox-detail-block">
           <div className="inbox-detail-label">Runs on accept</div>
           <pre className="inbox-command">{p.command}</pre>
+        </div>
+      )}
+      {isMessage && p.body && (
+        <div className="inbox-detail-block">
+          <div className="inbox-detail-label">Message, exactly as it will be sent</div>
+          <pre className="inbox-command" style={{ whiteSpace: 'pre-wrap' }}>{p.body}</pre>
         </div>
       )}
       {isIssue && (
@@ -84,8 +120,10 @@ function InboxCard({ item, busy, focused, onResolve }: InboxCardProps) {
   const KindIcon = KIND_ICON[item.kind] || InboxStackIcon
   // A card arrived at from a notification opens with its details already showing:
   // the whole point of the deep link is to read what will run before saying yes.
-  const [open, setOpen] = useState(focused)
-  const detailLabel = item.preview?.body ? 'proposed issue' : 'details'
+  // An email opens showing itself: reading it is the decision.
+  const isEmail = item.kind === 'email'
+  const [open, setOpen] = useState(focused || isEmail)
+  const detailLabel = item.kind === 'imessage' ? 'message' : isEmail ? 'email' : item.preview?.body ? 'proposed issue' : 'details'
   return (
     <div className={`inbox-card${open ? ' open' : ''}${focused ? ' focused' : ''}`} id={`inbox-${item.id}`}>
       <div className="inbox-card-row">
@@ -102,7 +140,7 @@ function InboxCard({ item, busy, focused, onResolve }: InboxCardProps) {
             {metaEntries(item).map(([k, v]) => (
               <span key={k} className="inbox-meta-chip"><span className="inbox-meta-key">{k}</span> {v}</span>
             ))}
-            {!item.when && item.kind !== 'github' && item.kind !== 'agent' && (
+            {!item.when && item.kind !== 'github' && item.kind !== 'agent' && !isEmail && (
               <span className="inbox-meta-chip muted">no date</span>
             )}
           </div>
@@ -120,11 +158,24 @@ function InboxCard({ item, busy, focused, onResolve }: InboxCardProps) {
           <button
             className="inbox-btn accept"
             disabled={busy}
-            title={`Accept - add to ${item.destination}`}
+            title={item.kind === 'imessage' ? `Send this message to ${item.meta?.recipient || 'them'}`
+              : isEmail ? `Send this email to ${item.meta?.recipient || 'them'} now` : `Accept - add to ${item.destination}`}
+            aria-label={isEmail ? 'Send email' : 'Accept'}
             onClick={() => onResolve(item, 'accept')}
           >
-            <Hi icon={CheckCircleIcon} size={20} />
+            <Hi icon={isEmail ? PaperAirplaneIcon : CheckCircleIcon} size={20} />
           </button>
+          {isEmail && (
+            <button
+              className="inbox-btn draft"
+              disabled={busy}
+              title={`Save as a draft in ${item.meta?.account || 'Gmail'} instead, to finish and send from Gmail`}
+              aria-label="Save as draft"
+              onClick={() => onResolve(item, 'draft')}
+            >
+              <Hi icon={PencilSquareIcon} size={19} />
+            </button>
+          )}
           <button
             className="inbox-btn deny"
             disabled={busy}
@@ -198,8 +249,10 @@ export default function InboxView({ onAuthError, focusId = null }: InboxViewProp
       notifyInboxChanged()
       setNotice({
         text: action === 'accept'
-          ? `Accepted “${item.title}” - ${res.note || `added to ${item.destination}`}`
-          : `Skipped “${item.title}”`,
+          ? `${item.kind === 'email' ? 'Sent' : 'Accepted'} “${item.title}” - ${res.note || `added to ${item.destination}`}`
+          : action === 'draft'
+            ? `Saved “${item.title}” as a draft - ${res.note}`
+            : `Skipped “${item.title}”`,
       })
     } catch (e) {
       if (e instanceof AuthError) return onAuthError()

@@ -58,7 +58,7 @@ const RECONNECT_MAX_MS = 15_000
  * base64url so any secret is a legal HTTP token. Mirrors `protocolsAuthorized`
  * in terminal/ws.mjs.
  */
-function bearerProtocol(secret: string): string {
+export function bearerProtocol(secret: string): string {
   const bytes = new TextEncoder().encode(secret)
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)

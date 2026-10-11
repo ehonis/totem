@@ -60,8 +60,8 @@ function safeEqual(a, b) {
   return bufA.length === bufB.length && timingSafeEqual(bufA, bufB)
 }
 
-/** Pull the bearer out of the offered subprotocols and check it. */
-function protocolsAuthorized(protocolHeader, secret) {
+/** Pull the bearer out of the offered subprotocols and check it. Also screen/relay.mjs's handshake. */
+export function protocolsAuthorized(protocolHeader, secret) {
   if (!secret) return false
   const offered = String(protocolHeader || '').split(',').map((p) => p.trim()).filter(Boolean)
   for (const protocol of offered) {

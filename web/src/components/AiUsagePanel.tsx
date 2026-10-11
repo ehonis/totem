@@ -97,6 +97,11 @@ function AccountCard({ account, backendLabel }: { account: any; backendLabel: st
       ) : (
         <div className="muted quota-empty">No windows reported.</div>
       )}
+      {!failed && account.stale && (
+        <div className="muted inline-warn">
+          <WarnIcon /> As of {new Date(account.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}; the latest read failed ({account.staleError})
+        </div>
+      )}
 
       {account.notes?.length > 0 && (
         <div className="quota-notes muted">{account.notes.join(' · ')}</div>

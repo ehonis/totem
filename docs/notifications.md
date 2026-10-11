@@ -27,6 +27,27 @@ Step 3 has one shot. iOS asks for notification permission once, and a refusal
 sticks until the web app is removed from the Home Screen and re-added. The panel
 says so rather than leaving you with a toggle that does nothing.
 
+## The native iPhone app
+
+The native app (Totem for iPhone, a separate Expo project) cannot use Web Push:
+iOS delivers to an installed app only through Apple's push service, APNs. So the
+notifier has a second transport, and nothing else changes. Every category, quiet
+hour, plan and the bell are upstream of it, and the app gets exactly what the Home
+Screen web app gets.
+
+1. On developer.apple.com → Keys, create a key with **Apple Push Notifications
+   service (APNs)** ticked (Sandbox & Production) and download the `.p8`.
+2. Set `APNS_KEY_FILE` (or `APNS_KEY`), `APNS_KEY_ID`, `APNS_TEAM_ID` and
+   `APNS_TOPIC` (the app's bundle id) in `.env`, and restart the bridge.
+3. Open the app and allow notifications. It registers its device token with
+   `POST /api/push/native`; it shows up in Settings → Notifications as an APNs device.
+
+`notify/apns.mjs` signs an ES256 provider token with `node:crypto` and sends over
+`node:http2`, no dependencies. A device stores its environment: TestFlight and App
+Store builds use the production host, debug builds the sandbox, and a token sent to
+the wrong one comes back `BadDeviceToken`. `410 Unregistered` (the app was deleted)
+expires the device, the same as a removed Home Screen app.
+
 ## Where things live
 
 | Thing | Location |
@@ -40,6 +61,7 @@ says so rather than leaving you with a toggle that does nothing.
 | Is it still true, seconds before sending? | `notify/revalidate.mjs` |
 | Queue, devices, ledger, feedback log | `notify/store.mjs` |
 | RFC 8291 encryption + RFC 8292 VAPID, no dependencies | `notify/push.mjs` |
+| APNs for the native app (ES256 token, HTTP/2), no dependencies | `notify/apns.mjs` |
 | The single place a push goes out | `notify/notifier.mjs` |
 | The receipt + answer summary for a phone request | `notify/shortcut.mjs` |
 | `/api/push*` routes | `notify/http.mjs` |
@@ -87,13 +109,13 @@ rules (title is a label, body is the content) are the same ones in
 The summariser is **not** `runAgent`, and that is not an oversight:
 
 - `runAgent` resolves the configured default provider and model, and an id
-  outside the catalog is quietly replaced by Opus — Haiku is deliberately absent
-  from the picker, so asking for it through there gets you the expensive model.
+  outside the catalog is quietly replaced by Opus, and a summary should never
+  depend on what the owner's default happens to be.
 - It renders Totem's persona and the memory/inbox rules in front of the prompt
   and hands the model the whole toolbox. The last thing a summariser should be
   able to do is *act* on what it's summarising.
 
-So it spawns `claude -p --model haiku` directly, with `--strict-mcp-config`,
+So it spawns `claude -p --model claude-haiku-5-5 --effort low` directly, with `--strict-mcp-config`,
 `--no-session-persistence`, `--setting-sources user` and the write tools denied,
 from `$HOME` rather than the repo — everything else is cold-start latency it
 doesn't need. Same bargain as the digest's wording call: if it fails, times out,

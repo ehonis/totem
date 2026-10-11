@@ -3,7 +3,7 @@ import { DRIVER_LOGOS } from '../providers'
 import {
   IconBrandGithub, IconBrandStrava, IconCalendarEvent, IconChecklist, IconDeviceDesktop, IconFileText, IconListCheck,
   IconMicrophone, IconTarget, IconTerminal2, IconTool, IconWorld, IconBrain, IconMail, IconNotebook, IconPhoto,
-  IconSearch, IconPencil, IconDatabase,
+  IconSearch, IconPencil, IconDatabase, IconRobot,
 } from './icons'
 
 type TablerIcon = React.ComponentType<{ size?: number; stroke?: number; className?: string; style?: React.CSSProperties }>
@@ -51,7 +51,16 @@ const KINDS: Record<string, TablerIcon> = {
   grep: IconSearch,
   glob: IconSearch,
   view_image: IconPhoto,
+  image_generation: IconPhoto,
+  // A call that starts another agent (Claude's Agent/Task tool, Codex collab).
+  agent: IconRobot,
+  Agent: IconRobot,
+  Task: IconRobot,
 }
+
+const AGENT_NAMES: Record<string, string> = { codex: 'Codex', claude: 'Claude', cursor: 'Cursor', opencode: 'OpenCode', gemini: 'Gemini' }
+/** The name a sub-agent's CLI goes by. */
+export const agentName = (provider?: string) => AGENT_NAMES[provider || ''] || provider || 'Agent'
 
 export function toolApp(server?: string) {
   if (!server) return null

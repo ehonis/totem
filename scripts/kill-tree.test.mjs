@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { descendants, killTree } from './kill-tree.mjs'
+import { AGENT_SPAWN, descendants, killTree } from './kill-tree.mjs'
 
 test('descendants walks the whole tree, odd process names included', () => {
   const proc = mkdtempSync(join(tmpdir(), 'proc-'))
@@ -17,7 +17,7 @@ test('descendants walks the whole tree, odd process names included', () => {
   assert.deepEqual(descendants(20, { proc }), [])
 })
 
-test('killTree takes a grandchild in its own session with it', { skip: process.platform !== 'linux' }, async () => {
+test('killTree takes a grandchild in its own session with it', { skip: process.platform === 'win32' }, async () => {
   // The shape cursor-agent leaves behind: a command in a new session under the CLI.
   const child = spawn(process.execPath, ['-e', `
     const { spawn } = require('node:child_process')
@@ -29,4 +29,31 @@ test('killTree takes a grandchild in its own session with it', { skip: process.p
   killTree(child)
   await new Promise((r) => setTimeout(r, 200))
   assert.throws(() => process.kill(grandchild, 0))
+})
+
+test('descendants falls back to ps where there is no /proc', { skip: process.platform === 'win32' }, async () => {
+  const child = spawn('sleep', ['30'])
+  try {
+    assert.ok(descendants(process.pid, { proc: '/no/such/proc' }).includes(child.pid))
+  } finally { child.kill('SIGKILL') }
+})
+
+test('killTree reaches what a dead launcher left holding its pipes, and the run closes', { skip: process.platform === 'win32' }, async () => {
+  // The shape npm's `codex` has: a launcher that starts the real binary with
+  // inherited stdio. Here the launcher dies first, so the binary is reparented
+  // and no longer anyone's descendant, yet still holds our stdout open.
+  const child = spawn(process.execPath, ['-e', `
+    const { spawn } = require('node:child_process')
+    const g = spawn('sleep', ['30'], { stdio: 'inherit' })
+    console.log(g.pid)
+    setTimeout(() => process.kill(process.pid, 'SIGKILL'), 100)
+  `], { ...AGENT_SPAWN })
+  const orphan = await new Promise((resolve) => child.stdout.once('data', (d) => resolve(Number(String(d).trim()))))
+  await new Promise((r) => child.once('exit', r))
+  process.kill(orphan, 0) // still running, launcher gone
+  const closed = new Promise((r) => child.once('close', r))
+  killTree(child)
+  await closed
+  await new Promise((r) => setTimeout(r, 100))
+  assert.throws(() => process.kill(orphan, 0))
 })

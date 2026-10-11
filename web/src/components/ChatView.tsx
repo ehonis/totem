@@ -6,27 +6,29 @@ import { setChatCommands } from '../studio'
 import {
   useChat, initChat, send, stop, steer, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
-  openProject, threadProject, projectById, setProjectContext,
+  openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead,
 } from '../chat/store'
+import { isSnoozed, settledAt, wakeDescription } from '../chat/settle'
 import ProjectHome from '../chat/ProjectHome'
 import ProjectIcon from '../chat/ProjectIcon'
 import Composer, { type ComposerHandle } from '../chat/Composer'
 import { UserMessage, AssistantMessage } from '../chat/Message'
 import ModelPicker from '../chat/ModelPicker'
 import ThinkingControl, { hintFor } from '../chat/ThinkingControl'
-import PowerControl, { useRoutePreview } from '../chat/PowerControl'
-import { EFFORT_LABELS, LEVEL_NAMES, visibleModels } from '../chat/models'
+import AccessControl from '../chat/AccessControl'
+import { EFFORT_LABELS, visibleModels } from '../chat/models'
 import VoiceMode from '../chat/VoiceMode'
-import QuickChat from '../chat/QuickChat'
 import ArtifactPanel from '../chat/ArtifactPanel'
 import BrowserPanel, { BrowserChip } from '../chat/BrowserPanel'
+import AgentsPanel, { AgentsChip } from '../chat/AgentsPanel'
 import UsageChips from '../chat/UsageChips'
 import ThreadIcon from '../chat/ThreadIcon'
 import { useChatPresence } from '../chat/presence'
+import { useViewing } from '../chat/onScreen'
 import { contextVersion, subscribeContext, takeContext } from '../chat/pendingContext'
 import { TI } from '../chat/ui'
 import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconPaperclip, IconLayoutSidebar, IconSparkles, IconFolder, IconFolderOff } from '../chat/icons'
-import type { Attachment, ChatMode, ModelSettings } from '../chat/types'
+import type { Attachment, ModelSettings } from '../chat/types'
 import '../chat/chat.css'
 import { useOwnerName } from '../useOwnerName'
 
@@ -65,8 +67,6 @@ function useNarrow() {
 interface ChatViewProps {
   onAuthError: () => void
   visible?: boolean
-  /** Bring the Chat tab forward (quick chat's "Open in chat"). */
-  onOpenChat?: () => void
   /** Phone: open the app drawer (tabs + chats). */
   onOpenMenu?: () => void
   /** Desktop: whether the chats panel is showing, and a way to bring it back. */
@@ -74,7 +74,7 @@ interface ChatViewProps {
   onShowPanel?: () => void
 }
 
-export default function ChatView({ onAuthError, visible = true, onOpenChat, onOpenMenu, panelOpen = true, onShowPanel }: ChatViewProps) {
+export default function ChatView({ onAuthError, visible = true, onOpenMenu, panelOpen = true, onShowPanel }: ChatViewProps) {
   const ownerName = useOwnerName()
   const narrow = useNarrow()
   const threads = useChat((s) => s.threads)
@@ -83,6 +83,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   const caps = useChat((s) => s.caps)
   const artifact = useChat((s) => s.artifact)
   const browserShown = useChat((s) => s.browserOpen && !!(s.activeId && s.browser[s.activeId]))
+  const agentsShown = useChat((s) => s.agentsOpen && !!s.activeId)
   const retitling = useChat((s) => !!(s.activeId && s.retitling[s.activeId]))
   const [artifactWide, setArtifactWide] = useState(false)
   const providers = useChat((s) => s.providers)
@@ -105,11 +106,13 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   useEffect(() => { initChat(onAuthError) }, [onAuthError])
   // Finished replies push to the phone unless this chat is on screen.
   useChatPresence(activeId, visible)
+  // and the running-chats panel leaves it out.
+  useViewing('main', visible ? activeId : null)
 
   // The "/" skill menu is whatever skills the bridge has; refreshed on focus so a
   // skill renamed in Studio shows up here without a reload.
   useEffect(() => {
-    const load = () => getSkills().then((p) => setChatCommands(p.skills || [])).catch((e) => { if (e instanceof AuthError) onAuthError() })
+    const load = () => getSkills().then((p) => setChatCommands(p.skills || [], p.agentSkills || [])).catch((e) => { if (e instanceof AuthError) onAuthError() })
     load()
     window.addEventListener('focus', load)
     return () => window.removeEventListener('focus', load)
@@ -141,12 +144,25 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   }, [visible])
 
   const active = threads.find((t) => t.id === activeId) || null
+  const autoSettleDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   // An id in the URL that isn't a thread (deleted, expired) is a new chat —
   // but only once the bridge's list has arrived, not against a cold cache.
   const loaded = useChat((s) => s.loaded)
   useEffect(() => {
     if (loaded && activeId && !active && !runs[activeId]) setActive(null)
   }, [loaded, activeId, active, runs])
+
+  // Looking at a finished chat reads it, including a reply that lands while it's
+  // open, but only while the tab is in front of him. One he marked unread to
+  // come back to stays unread until he replies or marks it read.
+  const unread = !!(active?.needsReply && !active.keepUnread)
+  useEffect(() => {
+    if (!visible || !activeId || !unread) return
+    const read = () => { if (document.visibilityState === 'visible') markRead(activeId) }
+    read()
+    document.addEventListener('visibilitychange', read)
+    return () => document.removeEventListener('visibilitychange', read)
+  }, [visible, activeId, unread])
 
   // Mirror the open chat into the address bar while this tab is showing, so a
   // reload or a shared link lands on it.
@@ -226,9 +242,17 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
     requestAnimationFrame(() => composer.current?.focus())
   }
   useCommand(COMMANDS.chatNew, () => newChat('regular'))
+  // T3's settle toggle, on the leader (`g c s`).
+  useCommand(COMMANDS.chatSettle, () => {
+    const id = getState().activeId
+    const t = id ? getState().threads.find((x) => x.id === id) : null
+    if (!t || !t.messages.length) return
+    if (t.settledOverride === 'settled') unsettleThread(t.id)
+    else settleThread(t.id)
+  })
 
-  function onSend({ text, attachments, mode, browser }: { text: string; attachments: Attachment[]; mode: ChatMode; browser?: boolean }) {
-    const id = send({ threadId: activeId, text, attachments, mode, browser, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff })
+  function onSend({ text, attachments }: { text: string; attachments: Attachment[] }) {
+    const id = send({ threadId: activeId, text, attachments, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff })
     setInput('')
     if (id !== activeId) {
       setDrafts((d) => { const n = { ...d }; delete n[draftKey]; return n })
@@ -239,6 +263,9 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   }
 
   function changeModel(patch: { provider: string; modelSettings: ModelSettings }) {
+    // Picking a model builds its settings afresh; the chat's access stays.
+    const access = patch.modelSettings.access ?? choice.settings.access
+    if (access) patch = { ...patch, modelSettings: { ...patch.modelSettings, access } }
     if (active) setThreadModel(active.id, patch)
     else setDraftModel(patch)
   }
@@ -257,42 +284,11 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
     if (e.dataTransfer.files?.length) composer.current?.addFiles(e.dataTransfer.files)
   }
 
-  // Computer use moves the turn to Codex, so any enabled Codex account that can
-  // do it counts; otherwise show why the first Codex account can't.
-  const capList = Object.values(caps?.providers || {})
-  const computerAny = capList.find((p) => p.computerUse?.available)?.computerUse
-    || capList.find((p) => p.driver === 'codex')?.computerUse
-    || { available: false, reason: 'Computer use runs on Codex. Enable a Codex account in Settings → Providers.' }
   const providerState = caps?.providers?.[choice.provider]?.state
 
-  // ChatGPT's "Thinking effort": the Thinking preset's five levels, or — for a
-  // hand-picked reasoning model — that model's own effort levels.
-  // Auto: say what it will use before you send, live as you type.
-  const isAuto = choice.settings.preset === 'auto'
-  const preview = useRoutePreview({ enabled: isAuto, threadId: empty ? null : activeId, text: input, attachments: 0, mode: 'chat', power: choice.settings.power })
-
+  // ChatGPT's "Thinking effort": the picked reasoning model's own effort levels.
   const effortEl = (() => {
     const st = choice.settings
-    if (st.preset === 'auto') {
-      return (
-        <PowerControl
-          power={st.power || ''}
-          preview={preview}
-          onChange={(v) => changeModel({ provider: choice.provider, modelSettings: { ...st, power: v || undefined } })}
-        />
-      )
-    }
-    if (st.preset === 'thinking') {
-      const efforts = ['low', 'medium', 'high', 'xhigh', 'max']
-      return (
-        <ThinkingControl
-          stops={['1', '2', '3', '4', '5'].map((v, i) => ({ value: v, label: LEVEL_NAMES[v], hint: hintFor(efforts[i]) }))}
-          value={st.level || '2'}
-          onChange={(v) => changeModel({ provider: choice.provider, modelSettings: { ...st, level: v } })}
-        />
-      )
-    }
-    if (st.preset !== 'manual') return null
     const m = visibleModels(models[choice.provider]).concat(models[choice.provider] || []).find((x) => x.id === st.modelId)
     if (!m?.efforts?.length) return null
     return (
@@ -306,9 +302,11 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
 
   const composerEl = (
     <Composer
-      leftSlot={<ModelPicker provider={choice.provider} settings={choice.settings} onChange={changeModel} locked={!empty} compact={isAuto} />}
-      rightSlot={effortEl}
-      onThinkLonger={choice.settings.preset === 'thinking' || (!empty && choice.settings.preset === 'manual') ? undefined : () => changeModel({ provider: choice.provider, modelSettings: { ...choice.settings, preset: 'thinking' } })}
+      leftSlot={<ModelPicker provider={choice.provider} settings={choice.settings} onChange={changeModel} locked={!empty} />}
+      rightSlot={<>
+        <AccessControl value={choice.settings.access} onChange={(v) => changeModel({ provider: choice.provider, modelSettings: { ...choice.settings, access: v } })} />
+        {effortEl}
+      </>}
       ref={composer}
       value={input}
       onChange={setInput}
@@ -320,13 +318,33 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
       autoFocus={visible}
       placeholder={temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
       allowCommands={!temporary}
-      computerUse={computerAny}
       maxUploadBytes={caps?.maxUploadBytes}
       onAuthError={onAuthError}
     />
   )
 
-  if (!visible) return narrow ? null : <QuickChat onOpenChat={() => onOpenChat?.()} />
+  // A settled or snoozed chat says so above the composer, as T3 does.
+  const parkedEl = (() => {
+    if (!active || empty || busy) return null
+    const at = Date.now()
+    if (isSnoozed(active, at)) {
+      return (
+        <div className="vc-parked">
+          <span>Snoozed until {wakeDescription(active.snoozedUntil!, at)}. Send a message to wake it.</span>
+          <button type="button" className="vc-btn sm ghost" onClick={() => wakeThread(active.id)}>Wake now</button>
+        </div>
+      )
+    }
+    if (!settledAt(active, at, autoSettleDays)) return null
+    return (
+      <div className="vc-parked">
+        <span>This chat is settled. Send a message to bring it back.</span>
+        <button type="button" className="vc-btn sm ghost" onClick={() => unsettleThread(active.id)}>Un-settle</button>
+      </div>
+    )
+  })()
+
+  if (!visible) return null
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
   // A raw id ("gpt-6.1-sol", "composer-2.5[fast=true]") is shown as its catalog name.
@@ -337,7 +355,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
   }
 
   return (
-    <div className={`vc-split${artifact || browserShown ? ' has-artifact' : ''}${artifact && artifactWide ? ' artifact-wide' : ''}`}>
+    <div className={`vc-split${artifact || browserShown || agentsShown ? ' has-artifact' : ''}${artifact && artifactWide ? ' artifact-wide' : ''}`}>
     <div className="vc" onDragEnter={onDragEnter} onDragOver={(e) => e.preventDefault()} onDragLeave={onDragLeave} onDrop={onDrop}>
       <header className="vc-top">
         {narrow && (
@@ -403,6 +421,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
               <TI icon={contextOff ? IconFolderOff : IconFolder} size={19} />
             </button>
           )}
+          <AgentsChip threadId={activeId} />
           <BrowserChip threadId={activeId} />
           <UsageChips compact={narrow} />
           {temporary && active && (
@@ -432,7 +451,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
           <div className="vc-empty">
             <h1 className="vc-greet">{temporary ? 'Temporary chat' : greeting(ownerName)}</h1>
             {temporary && <p className="vc-empty-note">This chat won’t be kept after midnight.</p>}
-            {choice.settings.preset === 'manual' && providerState && providerState !== 'ready' && providerState !== 'unknown' && (
+            {providerState && providerState !== 'ready' && providerState !== 'unknown' && (
               <p className="vc-empty-warn">{providerById(choice.provider)?.name} is {providerState === 'missing' ? 'not installed on this machine' : providerState === 'logged-out' ? 'signed out' : 'not responding'}. Pick another account above{caps?.providers?.[choice.provider]?.fix ? `, or run ${caps.providers[choice.provider].fix}` : ''}.</p>
             )}
             {!narrow && <div className="vc-empty-composer">{composerEl}</div>}
@@ -441,7 +460,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
                 {STARTERS.map((s) => (
                   <button key={s.text} type="button" className="vc-starter" onClick={() => {
                     if (s.fill) { setInput(s.text); requestAnimationFrame(() => composer.current?.focus()) }
-                    else onSend({ text: s.text, attachments: [], mode: 'chat' })
+                    else onSend({ text: s.text, attachments: [] })
                   }}>
                     {s.text}{s.fill ? '…' : ''}
                   </button>
@@ -479,7 +498,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
       {!empty && !atBottom && (
         <button type="button" className="vc-jump" onClick={() => scrollToBottom()} aria-label="Scroll to the latest message"><TI icon={IconArrowDown} size={18} /></button>
       )}
-      {(!empty || (narrow && !project)) && <div className="vc-dock">{composerEl}</div>}
+      {(!empty || (narrow && !project)) && <div className="vc-dock">{parkedEl}{composerEl}</div>}
 
       {dragging && (
         <div className="vc-drop">
@@ -497,6 +516,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenChat, onOp
       )}
     </div>
     {artifact && <ArtifactPanel threadId={activeId} expanded={artifactWide} onExpand={setArtifactWide} />}
+    {!artifact && <AgentsPanel threadId={activeId} />}
     {!artifact && <BrowserPanel threadId={activeId} />}
     </div>
   )

@@ -56,8 +56,12 @@ const deviceDto = (sub) => ({
   lastError: sub.lastError || null,
   // Enough to recognise a device in a list, not enough to send to it.
   endpointHint: `${String(sub.endpoint).slice(0, 40)}…`,
-  host: safeHost(sub.endpoint),
+  host: sub.transport === 'apns' ? 'APNs' : safeHost(sub.endpoint),
+  transport: sub.transport || 'webpush',
 })
+
+// An APNs device token is 32 bytes as hex today; allow for Apple lengthening it.
+const APNS_TOKEN = /^[0-9a-f]{64,200}$/i
 
 function safeHost(endpoint) {
   try { return new URL(endpoint).host } catch { return null }
@@ -79,6 +83,8 @@ export function createPushHttpHandler({ store, notifier, vapidPublicKey = null, 
         send(res, 200, {
           publicKey: vapidPublicKey,
           configured: notifier.configured(),
+          // Whether the native app can be reached (APNS_* set on the bridge).
+          native: Boolean(notifier.nativeConfigured?.()),
         })
         return true
       }
@@ -106,6 +112,28 @@ export function createPushHttpHandler({ store, notifier, vapidPublicKey = null, 
           userAgent: body.userAgent || req.headers['user-agent'] || null,
         })
         send(res, 200, { device: deviceDto(saved) })
+        return true
+      }
+
+      // The native iPhone app registers its APNs device token here. Registering the
+      // same token again revives it and updates its label, like a re-subscribe.
+      if (req.method === 'POST' && path === '/api/push/native') {
+        const body = await readJson(req)
+        const token = String(body.token || '').trim()
+        if (!APNS_TOKEN.test(token)) {
+          send(res, 400, { error: 'token must be an APNs device token (hex)' })
+          return true
+        }
+        const environment = body.environment === 'sandbox' ? 'sandbox' : 'production'
+        const saved = await store.saveSubscription({
+          subscription: { endpoint: `apns:${token}` },
+          label: body.label || null,
+          userAgent: req.headers['user-agent'] || null,
+          transport: 'apns',
+          token,
+          environment,
+        })
+        send(res, 200, { device: deviceDto(saved), native: Boolean(notifier.nativeConfigured?.()) })
         return true
       }
 

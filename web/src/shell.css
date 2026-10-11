@@ -93,7 +93,7 @@
   transform: translateX(-102%); transition: transform .24s cubic-bezier(.2, .8, .2, 1);
 }
 .sh-drawer.open { transform: none; box-shadow: 20px 0 60px #0009; }
-.sh-drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; }
+.sh-drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 12px; display: flex; flex-direction: column; }
 .sh-drawer-scroll .vc-threads { flex: none; }
 .sh-drawer-scroll .vc-threads-list { overflow: visible; }
 .sh-drawer-nav { display: flex; flex-direction: column; padding: 2px 0 6px; border-bottom: 1px solid var(--line); }
@@ -105,6 +105,13 @@
 .sh-drawer-item .sh-badge { position: static; margin-left: auto; }
 .sh-drawer .vc-thread-main { height: 42px; font-size: 15px; }
 .sh-drawer .sh-new { height: 44px; font-size: 15.5px; }
+/* Settings, pinned bottom right below the chats, as the rail pins it on desktop. */
+.sh-drawer-foot {
+  flex: none; display: flex; justify-content: flex-end; padding: 6px 4px calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+}
+.sh-drawer-bottom { width: 44px; height: 44px; }
+.sh-drawer-bottom.on { background: #252a37; color: var(--text); }
 
 @media (max-width: 720px) {
   /* No bottom dock any more. Everything that used to clear it now just keeps a

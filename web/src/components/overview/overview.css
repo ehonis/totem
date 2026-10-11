@@ -8,12 +8,26 @@
   --ovx-text: color-mix(in srgb, var(--text) 94%, transparent);
   --ovx-soft: color-mix(in srgb, var(--text) 62%, transparent);
   --ovx-faint: color-mix(in srgb, var(--text) 40%, transparent);
-  --ovx-surface: #171a22;
-  --ovx-raise: #1f2330;
-  --ovx-line: #2a2f3c;
+  /* Glass rather than slabs, so the backdrop's glow comes through the cards.
+     Over the dark top of the page these land on the old solid colours. */
+  --ovx-surface: rgb(23 26 34 / .68);
+  --ovx-raise: rgb(255 255 255 / .06);
+  --ovx-line: rgb(255 255 255 / .085);
+  --ovx-glass: blur(18px) saturate(140%);
   --ovx-bar: color-mix(in srgb, var(--text) 70%, transparent);
   height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
-  background: var(--bg); color: var(--ovx-text);
+  color: var(--ovx-text);
+  /* Dark from the top, violet rising from the bottom corners. On a scroll
+     container the default attachment pins this to the visible box, so the
+     content scrolls over it (and iOS, which ignores attachment: fixed, agrees).
+     The centre is --bg rather than black so it meets the rail and top bar
+     without a seam. */
+  background-color: var(--bg);
+  background-image: radial-gradient(125% 125% at 50% 10%, var(--bg) 40%, #63e 100%);
+  background-image: radial-gradient(in oklab 125% 125% at 50% 10%, var(--bg) 40%, #63e 100%);
+}
+.ovx-card, .ovx-attn, .ovx-ask, .ovx-app-ico, .ovx-sys {
+  -webkit-backdrop-filter: var(--ovx-glass); backdrop-filter: var(--ovx-glass);
 }
 .ovx .ti { display: block; flex: none; }
 .ovx button { font: inherit; color: inherit; }
@@ -49,7 +63,7 @@
   background: var(--ovx-surface); border: 1px solid var(--ovx-line);
   transition: border-color .15s, background .15s;
 }
-.ovx-ask:focus-within { border-color: #3a4152; background: #191c25; }
+.ovx-ask:focus-within { border-color: rgb(255 255 255 / .16); background: rgb(25 28 37 / .82); }
 .ovx-ask textarea {
   flex: 1; min-width: 0; resize: none; border: 0; outline: 0; background: none;
   color: var(--text); font: inherit; font-size: 16px; line-height: 24px;
@@ -103,7 +117,7 @@
   background: var(--ovx-surface); border: 1px solid var(--ovx-line); color: var(--ovx-soft);
   transition: color .12s, border-color .12s;
 }
-.ovx-app:hover .ovx-app-ico { color: var(--text); border-color: #384055; }
+.ovx-app:hover .ovx-app-ico { color: var(--text); border-color: rgb(255 255 255 / .16); }
 .ovx-app-label { font-size: 12.5px; color: var(--ovx-soft); white-space: nowrap; }
 
 /* --- cards ----------------------------------------------------------------- */
@@ -207,7 +221,7 @@
 .ovx-habit-name { font-size: 14.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ovx-habit.done .ovx-habit-name { color: var(--ovx-soft); }
 .ovx-habit-note { font-size: 12.5px; color: var(--ovx-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ovx-habit .habit-check { width: 34px; height: 34px; border-color: #394052; background: transparent; }
+.ovx-habit .habit-check { width: 34px; height: 34px; border-color: rgb(255 255 255 / .16); background: transparent; }
 .ovx-habit .habit-check:hover:not(.on):not(:disabled) { border-color: var(--ovx-soft); }
 .ovx-habit .ovx-icon-btn { width: 32px; height: 32px; }
 .ovx-stepper { display: inline-flex; align-items: center; gap: 2px; flex: none; }
@@ -240,7 +254,7 @@
   border-radius: 999px; border: 1px solid var(--ovx-line); background: var(--ovx-raise); cursor: pointer;
   font-size: 13px; color: var(--text) !important;
 }
-.ovx-pill-btn:hover { background: #262b39; }
+.ovx-pill-btn:hover { background: rgb(255 255 255 / .1); }
 
 .ovx-bar { display: block; height: 4px; border-radius: 2px; background: var(--ovx-raise); overflow: hidden; flex: 1; min-width: 0; }
 .ovx-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--ovx-bar); transition: width .3s; }
@@ -257,7 +271,7 @@
 .ovx-sys {
   display: flex; flex-direction: column; gap: 8px; min-width: 0;
   padding: 14px 16px; border-radius: 18px; text-align: left; cursor: pointer;
-  background: none; border: 1px solid var(--ovx-line);
+  background: rgb(15 17 21 / .4); border: 1px solid var(--ovx-line);
   transition: background .12s;
 }
 .ovx-sys:hover { background: var(--ovx-surface); }

@@ -31,6 +31,8 @@ export const ACTION_STATUSES = ['ok', 'error', 'denied', 'skipped']
  * string here would become forty spellings of "chatgpt" within a week.
  */
 export const ACTORS = ['ethan', 'chatgpt', 'claude', 'cursor', 'agent', 'job', 'system', 'unknown']
+/** The owner acting in person (dashboard, phone, inbox). Stored as the first actor id. */
+export const OWNER_ACTOR = ACTORS[0]
 
 const MAX_BYTES = 8 * 1024 * 1024   // ~8MB, then trim to the newest half
 const KEEP_LINES = 8000
@@ -121,7 +123,8 @@ export function createActionLog({ file, log = () => {}, now = Date.now } = {}) {
     if (entry.target) row.target = clip(redactText(entry.target), 200)
     if (entry.summary) row.summary = clip(redactText(entry.summary), 600)
     if (entry.why) row.why = clip(redactText(entry.why), 800)
-    if (entry.detail !== undefined && entry.detail !== null) row.detail = clip(redactText(entry.detail))
+    // An object detail is kept as its JSON, not String()'d into "[object Object]".
+    if (entry.detail !== undefined && entry.detail !== null) row.detail = clip(redactText(typeof entry.detail === 'string' ? entry.detail : JSON.stringify(entry.detail)))
     if (entry.error) row.error = clip(redactText(entry.error), 1200)
     if (entry.provider) row.provider = String(entry.provider)
     if (entry.correlationId) row.correlationId = String(entry.correlationId)

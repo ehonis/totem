@@ -5,12 +5,12 @@ import { costTier, totemRunPrompt, parseRunReply, totemsRule, parseProposals, ap
 
 const catalog = [
   { provider: 'codex', driver: 'codex', name: 'Codex', models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna' }, { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }] },
-  { provider: 'claude', driver: 'claude', name: 'Claude', models: [{ id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5' }, { id: 'claude-opus-5-5', name: 'Opus 5.5' }, { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' }] },
+  { provider: 'claude', driver: 'claude', name: 'Claude', models: [{ id: 'claude-haiku-5-5', name: 'Haiku 5.5', note: 'Fastest and cheapest.' }, { id: 'claude-opus-5-5', name: 'Opus 5.5' }, { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' }] },
 ]
 
 test('cost tiers order small, standard and frontier models', () => {
   assert.equal(costTier('gpt-6-luna'), 1)
-  assert.equal(costTier('claude-haiku-4-5-20251001'), 1)
+  assert.equal(costTier('claude-haiku-5-5'), 1)
   assert.equal(costTier('composer-2.5[fast=true]', 'cursor'), 1)
   assert.equal(costTier('claude-sonnet-5-5'), 2)
   assert.equal(costTier('claude-opus-5-5'), 3)
@@ -69,6 +69,7 @@ test('the builder prompt lists every account and model with its cost', () => {
   const p = builderPrompt({ description: 'Watch a jacket', catalog, timezone: 'America/Chicago' })
   assert.match(p, /account "codex".*gpt-6-luna \(GPT-6 Luna\) \[cost 1\]/)
   assert.match(p, /claude-opus-5-5 \(Opus 5\.5\) \[cost 3\]/)
+  assert.match(p, /claude-haiku-5-5 \(Haiku 5\.5\) \[cost 1\] — Fastest and cheapest\./)
   assert.match(p, /America\/Chicago/)
 })
 
@@ -117,8 +118,31 @@ test('the builder can design a watch, and an unusable one falls back to the sche
     name: 'Bushido Deployer', instructions: 'Deploy it.', schedule: { type: 'daily', time: '09:00' },
     trigger: { type: 'watch', everyMinutes: 2, source: { kind: 'git', repo: '/srv/bushido', ref: 'main' } },
   }), { catalog: [] })
-  assert.deepEqual(watch.trigger, { type: 'watch', source: { kind: 'git', repo: '/srv/bushido', ref: 'main' }, everyMinutes: 2 })
+  assert.deepEqual(watch.trigger, { type: 'watch', sources: [{ kind: 'git', repo: '/srv/bushido', ref: 'main' }], everyMinutes: 2 })
   const bad = parseBuilderReply(JSON.stringify({ name: 'X', instructions: 'y', trigger: { type: 'watch', source: { kind: 'git', repo: 'somewhere' } } }), { catalog: [] })
   assert.equal(bad.trigger, null)
   assert.match(builderPrompt({ description: 'x' }), /"kind":"git"/)
+})
+
+test('a builder revision carries the conversation, his edits and his new message, and asks for a reply', () => {
+  const draft = { name: 'Skills Sync', instructions: 'You keep the skills repo in sync on every machine.', schedule: { type: 'daily', time: '09:00' }, recommendations: [{ provider: 'codex', model: 'gpt-6-luna' }], questions: ['Which machines?'], reply: 'Drafted it.' }
+  const p = builderPrompt({
+    description: 'Sync my skills repo to every machine', catalog, draft,
+    conversation: [{ role: 'owner', text: 'Sync my skills repo to every machine' }, { role: 'builder', text: 'Drafted it.', questions: ['Which machines?'] }],
+    message: 'This box and the one ssh calls lp-dev.',
+  })
+  assert.match(p, /Revise the draft/)
+  assert.match(p, /you asked: Which machines\?/)
+  assert.match(p, /"name": "Skills Sync"/)
+  assert.doesNotMatch(p, /"recommendations"/, 'the old suggestions are re-made, not echoed back')
+  assert.match(p, /His new message:\nThis box and the one ssh calls lp-dev\./)
+  assert.match(p, /- reply: /)
+  // A first design has no revision block.
+  assert.doesNotMatch(builderPrompt({ description: 'Watch a jacket', catalog }), /His new message/)
+})
+
+test('a builder reply keeps its message to the owner and at most three questions', () => {
+  const d = parseBuilderReply(JSON.stringify({ name: 'X', instructions: 'Do x.', reply: 'Set it to run daily.', questions: ['a', 'b', 'c', 'd'] }), { catalog })
+  assert.equal(d.reply, 'Set it to run daily.')
+  assert.deepEqual(d.questions, ['a', 'b', 'c'])
 })

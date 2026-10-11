@@ -2,7 +2,33 @@
 // applyEvent in chat/turn.mjs — the bridge runs the same fold to persist the
 // reply, so what the browser shows mid-stream is what the file will hold. Keep
 // the two in step.
-import type { ChatMessage, ToolPart } from './types'
+import type { AgentInfo, AgentStep, ChatMessage, ToolPart } from './types'
+
+const MAX_AGENT_STEPS = 400
+const AGENT_KEYS = ['provider', 'via', 'name', 'title', 'prompt', 'model', 'status', 'progress', 'summary', 'tokens', 'toolUses', 'log', 'startedAt', 'endedAt'] as const
+
+/** Twin of foldAgent in chat/subagents.mjs: one `agent` event into a card's agent. */
+export function foldAgent(current: AgentInfo | undefined, event: { agent?: Partial<AgentInfo>; step?: AgentStep }): AgentInfo {
+  const next: AgentInfo = { status: 'running', steps: [], provider: '', ...(current || {}) } as AgentInfo
+  const patch = event.agent || {}
+  for (const k of AGENT_KEYS) {
+    const v = patch[k]
+    if (v !== undefined && v !== null && v !== '') (next as any)[k] = v
+  }
+  const step = event.step
+  if (step?.id || step?.kind) {
+    const steps = next.steps.slice()
+    const at = step.id ? steps.findIndex((s) => s.id === step.id) : -1
+    if (at >= 0) steps[at] = { ...steps[at], ...step }
+    else if (step.kind) steps.push({ ...step, id: step.id || `s${steps.length}` })
+    if (steps.length > MAX_AGENT_STEPS) {
+      next.dropped = (next.dropped || 0) + steps.length - MAX_AGENT_STEPS
+      steps.splice(0, steps.length - MAX_AGENT_STEPS)
+    }
+    next.steps = steps
+  }
+  return next
+}
 
 export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): ChatMessage {
   const parts = (msg.parts || []).slice()
@@ -38,6 +64,14 @@ export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): Chat
         detail: t.detail || '', status: 'running', startedAt: now,
         ...(t.server ? { server: t.server } : {}), ...(t.tool ? { tool: t.tool } : {}), ...(t.input ? { input: t.input } : {}),
       })
+      return next
+    }
+    case 'agent': {
+      // Another agent this one started, folded into the card that started it.
+      const i = event.toolId ? parts.findIndex((p) => p.type === 'tool' && p.id === event.toolId) : -1
+      if (i < 0) return msg
+      const p = parts[i] as ToolPart
+      parts[i] = { ...p, agent: foldAgent(p.agent, event) }
       return next
     }
     case 'image':

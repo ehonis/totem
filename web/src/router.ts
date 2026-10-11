@@ -26,7 +26,7 @@ export interface Route {
 export type NavTarget = string | Partial<Route>
 
 export const TAB_IDS = [
-  'overview', 'search', 'chat', 'productivity', 'totems', 'code', 'inbox', 'logs', 'brain', 'settings',
+  'overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'inbox', 'logs', 'brain', 'settings',
 ]
 
 // Todos/Calendar/Habits are apps *inside* Productivity, but their ids still turn
@@ -54,6 +54,8 @@ export function toRoute(target: NavTarget): Route {
     if (partial.sub === 'skills' || partial.sub === 'connections') return toRoute({ ...partial, tab: 'settings' })
     return toRoute({ tab: 'totems', hash: partial.hash })
   }
+  // The Code tab folded into Dev, whose last section is the same repo list.
+  if (partial.tab === 'code') return toRoute({ ...partial, tab: 'dev' })
   const app = productivityApp(partial.tab) || productivityApp(partial.app)
   const tab = productivityApp(partial.tab) ? 'productivity' : (partial.tab || 'overview')
   return {
@@ -106,7 +108,11 @@ export function buildPath(route: Route, search = ''): string {
   const parts = [route.tab]
   if (route.tab === 'productivity' && route.app) parts.push(route.app)
   if (route.sub) parts.push(route.sub)
-  const query = route.tab === 'chat' ? threadQuery(search) : route.tab === 'totems' ? totemQuery(search) : route.tab === 'search' ? searchQuery(search) : ''
+  const query = route.tab === 'chat' ? threadQuery(search)
+    : route.tab === 'totems' ? totemQuery(search)
+    : route.tab === 'search' ? searchQuery(search)
+    : route.tab === 'messages' ? messagesQuery(search)
+    : ''
   return `/${parts.join('/')}${query}${route.hash ? `#${route.hash}` : ''}`
 }
 
@@ -114,6 +120,12 @@ export function buildPath(route: Route, search = ''): string {
 function searchQuery(search: string): string {
   const q = new URLSearchParams(search).get('q')
   return q ? `?q=${encodeURIComponent(q)}` : ''
+}
+
+/** On /messages, ?chat=<id> opens that conversation. */
+function messagesQuery(search: string): string {
+  const chat = new URLSearchParams(search).get('chat')
+  return chat && /^\d+$/.test(chat) ? `?chat=${chat}` : ''
 }
 
 /** On /totems, ?totem=<id> opens that totem. */

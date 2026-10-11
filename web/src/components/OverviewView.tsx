@@ -4,7 +4,7 @@ import {
   closeTodo, logHabit, AuthError,
 } from '../api'
 import { useAiUsageLive } from '../useAiUsageLive'
-import { DayModal, HabitCheckButton, HabitMetricInput, HabitMetricSection, QuotaDots, type DaySave } from './HabitsView'
+import { DayModal, HabitCheckButton, HabitMetricInput, HabitMetricSection, QuotaDots, isSyncedSleep, type DaySave } from './HabitsView'
 import { send, setActive } from '../chat/store'
 import { TI, ProviderLogo } from '../chat/ui'
 import type { NavTarget } from '../router'
@@ -34,7 +34,7 @@ const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'goals', label: 'Goals', icon: IconTarget, to: { tab: 'productivity', app: 'goals' } },
   { id: 'lists', label: 'Lists', icon: IconListCheck, to: { tab: 'productivity', app: 'lists' } },
   { id: 'journal', label: 'Journal', icon: IconMicrophone2, to: { tab: 'productivity', app: 'journal' } },
-  { id: 'code', label: 'Code', icon: IconBrandGithub, to: 'code' },
+  { id: 'dev', label: 'Dev', icon: IconBrandGithub, to: 'dev' },
   { id: 'brain', label: 'Brain', icon: IconBrain, to: 'brain' },
   { id: 'logs', label: 'Logs', icon: IconHistory, to: { tab: 'settings', sub: 'logs' } },
   { id: 'studio', label: 'Skills', icon: IconWand, to: { tab: 'settings', sub: 'skills' } },
@@ -298,7 +298,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
 
   // ---- habits ----------------------------------------------------------
   const entries = data.habits?.entries || {}
-  const habits: any[] = (data.habits?.habits || []).filter((h: any) => !h.archived)
+  const habits: any[] = (data.habits?.habits || []).filter((h: any) => !h.archived && !isSyncedSleep(h))
   const habitsLeft = habits.filter((h) => periodTotal(h, entries, habitDay) < h.target && !(entries[habitDay]?.[h.id]?.count > 0))
   const habitsDoneToday = habits.length - habitsLeft.length
   const pinned = habits.filter((h) => h.metric?.pinned)

@@ -13,6 +13,7 @@
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { normalizeAgent } from './subagents.mjs'
 
 export const validThreadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
 
@@ -20,6 +21,7 @@ const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '')
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0)
 
 const MESSAGE_STATUSES = new Set(['streaming', 'done', 'error', 'stopped'])
+const STAT_KEYS = ['ttftMs', 'input', 'cached', 'output', 'reasoning', 'apiMs', 'costUsd', 'tps', 'tools']
 const TOOL_STATUSES = new Set(['running', 'done', 'error'])
 const ATTACHMENT_KINDS = new Set(['image', 'file', 'text'])
 
@@ -77,6 +79,9 @@ export function normalizePart(p, i = 0) {
   if (p.output) out.output = str(p.output, 8000)
   if (num(p.startedAt)) out.startedAt = num(p.startedAt)
   if (num(p.endedAt)) out.endedAt = num(p.endedAt)
+  // The agent this call started, and what it did (chat/subagents.mjs).
+  const agent = normalizeAgent(p.agent)
+  if (agent) out.agent = agent
   return out
 }
 
@@ -104,10 +109,17 @@ export function normalizeMessage(m, i = 0) {
     if (m.provider) out.provider = str(m.provider, 80)
     if (m.model) out.model = str(m.model, 120)
     if (num(m.durationMs)) out.durationMs = num(m.durationMs)
-    // Which lane Auto/Instant/Thinking chose, so the reply can say so.
+    // Older replies: which lane the retired Auto/Instant/Thinking presets chose, so the reply can say so.
     if (m.route === 'instant' || m.route === 'thinking') out.route = m.route
     if (num(m.level)) out.level = Math.min(5, Math.round(num(m.level)))
     if (num(m.power)) out.power = Math.min(5, Math.round(num(m.power)))
+    // The effort it ran at and what it cost (chat/stats.mjs), for the reply's stats panel.
+    if (m.effort) out.effort = str(m.effort, 20)
+    if (m.stats && typeof m.stats === 'object') {
+      const stats = {}
+      for (const k of STAT_KEYS) if (typeof m.stats[k] === 'number' && Number.isFinite(m.stats[k]) && m.stats[k] >= 0) stats[k] = m.stats[k]
+      if (Object.keys(stats).length) out.stats = stats
+    }
   }
   // A totem's scheduled run, posted to its chat.
   if (m.run && typeof m.run === 'object') out.run = { trigger: str(m.run.trigger, 20), status: str(m.run.status, 20), notified: m.run.notified === true }
@@ -116,11 +128,15 @@ export function normalizeMessage(m, i = 0) {
   return out
 }
 
+const LEGACY_PRESETS = new Set(['auto', 'instant', 'thinking'])
+
 function normalizeModelSettings(settings) {
   if (!settings || typeof settings !== 'object') return null
+  // Auto, Instant and Thinking are gone; a choice saved under one of them never
+  // named the model, so drop it and let the chat fall back to the default.
+  if (LEGACY_PRESETS.has(settings.preset)) return null
   const out = {}
-  // preset: auto | instant | thinking | manual; level: the Thinking slider, 1-4.
-  for (const key of ['modelId', 'speed', 'effort', 'context', 'preset', 'level', 'power']) {
+  for (const key of ['modelId', 'speed', 'effort', 'context', 'access']) {
     if (typeof settings[key] === 'string' && settings[key].length <= 80) out[key] = settings[key]
   }
   return Object.keys(out).length ? out : null
@@ -140,7 +156,7 @@ function normalizeSessions(raw) {
   return Object.keys(out).length ? out : null
 }
 
-const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'projectContextOff', 'needsReply']
+const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'projectContextOff', 'needsReply', 'keepUnread', 'settledOverride', 'settledAt', 'unsettledAt', 'snoozedUntil', 'snoozedAt']
 
 function applyMetadata(thread, body, now) {
   if (body.kind === 'temporary' || body.kind === 'regular') thread.kind = body.kind
@@ -189,11 +205,35 @@ function applyMetadata(thread, body, now) {
     if (body.projectContextOff) thread.projectContextOff = true
     else delete thread.projectContextOff
   }
-  // A finished reply the owner hasn't answered or marked done yet.
+  // A finished reply the owner hasn't answered or marked read yet.
   if ('needsReply' in body) {
     if (body.needsReply) thread.needsReply = true
     else delete thread.needsReply
   }
+  // Marked unread by hand, to come back to: opening the chat leaves it unread.
+  // Means nothing on a chat that isn't unread, so it goes with needsReply.
+  if ('keepUnread' in body) {
+    if (body.keepUnread) thread.keepUnread = true
+    else delete thread.keepUnread
+  }
+  if (!thread.needsReply) delete thread.keepUnread
+  // Settled and snoozed, the way T3 Code parks threads (web/src/chat/settle.ts
+  // reads them). `settledOverride` is the owner's word: 'settled' shelves the
+  // chat, 'active' un-shelves it and keeps auto-settle off it until his next
+  // message. The client sends every field a change touches, so an undo can put
+  // back exactly what was there; nothing here has side effects.
+  if ('settledOverride' in body) {
+    if (body.settledOverride === 'settled' || body.settledOverride === 'active') thread.settledOverride = body.settledOverride
+    else delete thread.settledOverride
+  }
+  for (const key of ['settledAt', 'unsettledAt', 'snoozedUntil', 'snoozedAt']) {
+    if (!(key in body)) continue
+    if (num(body[key])) thread[key] = num(body[key])
+    else delete thread[key]
+  }
+  if (thread.settledOverride !== 'settled') delete thread.settledAt
+  if (!thread.snoozedUntil) delete thread.snoozedAt
+  else if (!thread.snoozedAt) thread.snoozedAt = now
   if (thread.kind === 'temporary') thread.expiresAt = num(body.expiresAt) || thread.expiresAt || now
   else delete thread.expiresAt
 }

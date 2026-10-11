@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createThreadStore } from './store.mjs'
 import { createUploadStore } from './uploads.mjs'
 import { createChatRuns } from './runs.mjs'
-import { planHistory, renderTranscript, attachmentBlock, applyEvent, finalizeMessage, fallbackTitle } from './turn.mjs'
+import { planHistory, renderTranscript, attachmentBlock, applyEvent, finalizeMessage, fallbackTitle, failureText } from './turn.mjs'
 import { parseToolName, describeMcpCall, humanizeTool, resultText } from './tools.mjs'
 import { parseTitleReply, cleanIcon, THREAD_ICONS } from './thread-icons.mjs'
 
@@ -161,47 +161,7 @@ test('stop aborts the run and reports stopped', async () => {
   assert.equal(runs.get('t').status, 'stopped')
 })
 
-import { manualModelFor, pickRoute, wantsThinking } from './route.mjs'
-
-const ACCOUNTS = [
-  { id: 'cursor', driver: 'cursor', state: 'ready', isDefault: true },
-  { id: 'codex', driver: 'codex', state: 'ready', isDefault: false },
-  { id: 'claude', driver: 'claude', state: 'ready', isDefault: false },
-]
-
-test('auto sends a quick question to the fast lane and a plan to a thinker', () => {
-  const quick = pickRoute({ preset: 'auto', text: "what's on my calendar today?", accounts: ACCOUNTS })
-  assert.equal(quick.route, 'instant')
-  assert.equal(quick.provider, 'claude')
-  assert.equal(quick.model, 'claude-haiku-4-5-20251001')
-  assert.equal(pickRoute({ preset: 'instant', text: 'x', accounts: [ACCOUNTS[0], ACCOUNTS[1]] }).cursorModel, 'composer-2.5[fast=true]')
-  const plan = pickRoute({ preset: 'auto', text: 'plan my week around my calendar and goals', accounts: ACCOUNTS })
-  assert.equal(plan.route, 'thinking')
-  assert.equal(plan.provider, 'codex')
-  assert.equal(plan.effort, 'medium')
-})
-
-test('thinking follows the slider and skips accounts that are signed out', () => {
-  const heavy = pickRoute({ preset: 'thinking', level: 5, text: 'hi', accounts: [{ ...ACCOUNTS[1], state: 'logged-out' }, ACCOUNTS[0], ACCOUNTS[2]] })
-  assert.equal(heavy.provider, 'claude')
-  assert.equal(heavy.effort, 'max')
-  assert.equal(pickRoute({ preset: 'thinking', level: 4, text: 'x', accounts: ACCOUNTS }).effort, 'xhigh')
-  assert.equal(pickRoute({ preset: 'thinking', level: 1, text: 'x', accounts: ACCOUNTS }).effort, 'low')
-})
-
-test('instant prefers the fastest signed-in account and falls back in order', () => {
-  const r = pickRoute({ preset: 'instant', text: 'hello', accounts: ACCOUNTS })
-  assert.equal(r.provider, 'claude')
-  assert.equal(pickRoute({ preset: 'instant', text: 'hello', accounts: [{ ...ACCOUNTS[2], state: 'logged-out' }, ACCOUNTS[0]] }).provider, 'cursor')
-  assert.equal(pickRoute({ preset: 'instant', text: 'hello', accounts: [ACCOUNTS[1]] }).provider, 'codex')
-})
-
-test('auto thinks for tasks and attachments, and stays fast in voice', () => {
-  assert.equal(wantsThinking({ text: 'x', mode: 'task' }).think, true)
-  assert.equal(wantsThinking({ text: 'what is this', attachments: 1 }).think, true)
-  assert.equal(pickRoute({ preset: 'auto', voice: true, text: 'plan my week for me', accounts: ACCOUNTS }).route, 'instant')
-  assert.equal(pickRoute({ preset: 'manual', text: 'x', accounts: ACCOUNTS }), null)
-})
+import { manualModelFor } from './route.mjs'
 
 import { toRealtimeParameters } from './voice.mjs'
 
@@ -210,31 +170,6 @@ test('realtime tool schemas are flattened to a plain top-level object', () => {
   assert.equal(p.oneOf, undefined)
   assert.deepEqual(Object.keys(p.properties).sort(), ['a', 'b', 'x'])
   assert.deepEqual(p.required, ['x'])
-})
-
-test('chat settings choose the instant and thinking models', () => {
-  const prefs = { instant: { provider: 'cursor', model: 'composer-2.5[fast=true]' }, thinking: { provider: 'claude', model: 'claude-opus-5-5' } }
-  const i = pickRoute({ preset: 'instant', text: 'x', accounts: ACCOUNTS, prefs })
-  assert.equal(i.provider, 'cursor')
-  assert.equal(i.cursorModel, 'composer-2.5[fast=true]')
-  const t = pickRoute({ preset: 'thinking', level: 3, text: 'x', accounts: ACCOUNTS, prefs })
-  assert.deepEqual([t.provider, t.model, t.effort], ['claude', 'claude-opus-5-5', 'high'])
-  // A chosen account that is signed out falls back to the automatic pick.
-  assert.equal(pickRoute({ preset: 'thinking', text: 'x', accounts: [ACCOUNTS[0], ACCOUNTS[1], { ...ACCOUNTS[2], state: 'logged-out' }], prefs }).provider, 'codex')
-})
-
-test('a started chat stays on its account; Auto picks that account\'s lanes', () => {
-  const fast = pickRoute({ preset: 'auto', text: 'what time is it', accounts: ACCOUNTS, lockTo: 'codex' })
-  assert.deepEqual([fast.provider, fast.model, fast.effort], ['codex', 'gpt-6-luna', 'low'])
-  const slow = pickRoute({ preset: 'auto', text: 'plan my week around my calendar', accounts: ACCOUNTS, lockTo: 'codex' })
-  assert.deepEqual([slow.route, slow.provider], ['thinking', 'codex'])
-  const claudeFast = pickRoute({ preset: 'instant', text: 'hi', accounts: ACCOUNTS, lockTo: 'claude' })
-  assert.equal(claudeFast.model, 'claude-haiku-4-5-20251001')
-  const cursorThink = pickRoute({ preset: 'thinking', text: 'hi', accounts: ACCOUNTS, lockTo: 'cursor' })
-  assert.deepEqual([cursorThink.provider, cursorThink.cursorModel], ['cursor', 'composer-2.5[fast=false]'])
-  // The settings' model applies only when it's on the locked account.
-  const prefs = { thinking: { provider: 'claude', model: 'claude-opus-5-5' } }
-  assert.equal(pickRoute({ preset: 'thinking', text: 'x', accounts: ACCOUNTS, prefs, lockTo: 'codex' }).provider, 'codex')
 })
 
 test('the title model picks a title and an icon from the list', () => {
@@ -271,20 +206,6 @@ test('a finished chat is summed up by its answer, not the narration before it', 
   assert.equal(finalAnswer({ content: 'Just an answer.', parts: [{ type: 'text', text: 'Just an answer.' }] }), 'Just an answer.')
 })
 
-test("Auto's power dial picks the model and effort together, and a chat keeps its account", async () => {
-  const { pickRoute } = await import('./route.mjs')
-  const accounts = [{ id: 'claude', driver: 'claude', state: 'ok' }, { id: 'codex', driver: 'codex', state: 'ok', isDefault: true }]
-  const quick = pickRoute({ preset: 'auto', text: 'hi', accounts })
-  assert.equal(quick.power, 1)
-  assert.equal(quick.model, 'claude-haiku-4-5-20251001')
-  const careful = pickRoute({ preset: 'auto', text: 'Recommend 3 gravel bikes', accounts })
-  assert.equal(careful.power, 3)
-  assert.equal(careful.powerAuto, true)
-  // A chosen power wins over the message, and a started chat stays on its account.
-  const max = pickRoute({ preset: 'auto', text: 'hi', accounts, power: 5, lockTo: 'claude' })
-  assert.deepEqual([max.provider, max.model, max.effort, max.powerAuto], ['claude', 'claude-opus-5-5', 'max', false])
-})
-
 test('a hand-picked model only runs on the account it was picked on', () => {
   // Same account: kept.
   assert.deepEqual(manualModelFor({ requested: 'codex', provider: 'codex', model: 'gpt-6.1-sol', effort: 'high' }), { model: 'gpt-6.1-sol', effort: 'high' })
@@ -292,4 +213,14 @@ test('a hand-picked model only runs on the account it was picked on', () => {
   assert.deepEqual(manualModelFor({ requested: 'codex', provider: 'cursor', model: 'gpt-6.1-sol', effort: 'high' }), { model: null, effort: null })
   // A request that names no account keeps its model, as before.
   assert.deepEqual(manualModelFor({ requested: '', provider: 'cursor', model: 'composer-2.5', effort: null }), { model: 'composer-2.5', effort: null })
+})
+
+test('failureText says a usage limit plainly and unwraps JSON error bodies', () => {
+  assert.equal(
+    failureText('exceeded retry limit, last status: 429 Too Many Requests', 'Codex'),
+    'Codex hit its usage limit, so the reply stopped here. (exceeded retry limit, last status: 429 Too Many Requests)',
+  )
+  assert.equal(failureText('{"error":{"code":"model_not_found","message":"unknown provider for model x"}}', 'Codex'), 'unknown provider for model x')
+  assert.equal(failureText('', 'Codex'), '')
+  assert.equal(failureText('something broke'), 'something broke')
 })

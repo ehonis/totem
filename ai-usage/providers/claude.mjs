@@ -13,7 +13,7 @@
 import { readdir, stat } from 'node:fs/promises';
 import { join, basename, dirname } from 'node:path';
 import { readJson, writeJsonAtomic, meter, fetchJson, expandHome } from '../util.mjs';
-import { CLAUDE_SERVICE, readKeychain, writeKeychain } from '../keychain.mjs';
+import { CLAUDE_SERVICE, keychainCanStore, readKeychain, writeKeychain } from '../keychain.mjs';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
@@ -62,17 +62,29 @@ async function findCredentials(home) {
     const raw = await readKeychain(CLAUDE_SERVICE);
     let data = null;
     try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+    const found = {
+      path: join(home, '.credentials.json'), // .claude.json sits beside it, as for a file login
+      source: `Keychain: ${CLAUDE_SERVICE}`,
+    };
     if (hasOauth(data)) {
       return {
-        path: join(home, '.credentials.json'), // .claude.json sits beside it, as for a file login
-        source: `Keychain: ${CLAUDE_SERVICE}`,
+        ...found,
         data,
         save: (next) => writeKeychain(CLAUDE_SERVICE, JSON.stringify(next)),
+        canSave: (json) => keychainCanStore(CLAUDE_SERVICE, json),
       };
     }
+    // An item that is there but unreadable is a broken login, not a missing
+    // one: show it on the card rather than letting the account vanish.
+    if (raw) return { ...found, broken: true };
   }
   return null;
 }
+
+const BROKEN_KEYCHAIN = `Claude Code's Keychain login (${CLAUDE_SERVICE}) is not valid JSON. Sign in again in a desktop session: claude auth login`;
+
+// Room for a rotated token pair to come back longer than the one it replaces.
+const REFRESH_HEADROOM = 512;
 
 /**
  * Config-file path (`.claude.json`) matching a given credentials location.
@@ -133,6 +145,11 @@ export async function discover() {
 async function refreshToken(creds, fileData) {
   const oauth = fileData.claudeAiOauth ?? {};
   if (!oauth.refreshToken) throw new Error('no refresh token stored');
+  // Spending the refresh token is irreversible, so first make sure the result
+  // can be saved. Otherwise leave the refresh to Claude Code itself.
+  if (creds.canSave && !creds.canSave(JSON.stringify(fileData) + ' '.repeat(REFRESH_HEADROOM))) {
+    throw new Error('login is too large to save back to the Keychain safely; run Claude Code once to refresh it');
+  }
 
   const res = await fetchJson(TOKEN_URL, {
     method: 'POST',
@@ -232,6 +249,7 @@ export async function fetchAccount(account) {
     return { ...base, status: 'error', error: `No Claude credentials under ${home}` };
   }
   base.sourceFile = creds.source ?? creds.path.replace(process.env.HOME ?? '', '~');
+  if (creds.broken) return { ...base, status: 'expired', error: BROKEN_KEYCHAIN };
 
   let oauth = creds.data.claudeAiOauth;
   let fileData = creds.data;
@@ -311,5 +329,6 @@ export async function forceRefresh(account) {
   const home = expandHome(account.home);
   const creds = await findCredentials(home);
   if (!creds) throw new Error(`No Claude credentials under ${home}`);
+  if (creds.broken) throw new Error(BROKEN_KEYCHAIN);
   await refreshToken(creds, creds.data);
 }

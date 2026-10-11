@@ -28,7 +28,7 @@ errors).
 |---|---|
 | Prompts, parsers, cost tiers (pure, tested) | `totems/core.mjs`, `totems/core.test.mjs` |
 | Engine and routes | `bridge.mjs`, the "Totems" block beside the job engine |
-| UI | `web/src/components/TotemsView.tsx`, `totems.css`; proposal card `web/src/chat/TotemProposal.tsx` |
+| UI | `web/src/components/TotemsView.tsx` (list, builder, detail), `totems.css`; 3D lobby `web/src/totems/` (`TotemLobby.tsx`, `scene.ts`, `figure.ts`, `lobbyModel.ts`); proposal card `web/src/chat/TotemProposal.tsx` |
 | Memory | `data/totems/<jobId>/memory.md` (`TOTEMS_DIR`) |
 | Chat | thread `totem-<jobId>`, carrying `totemId`; kept out of Recents |
 
@@ -52,8 +52,10 @@ for the totem's thread and the session is closed when it ends.
 ## Waking on a change
 
 A totem can carry a watch trigger instead of a schedule (`docs/jobs.md` → Watch
-triggers): a git branch or a web page, checked without AI. The run it wakes gets a
-`WHAT WOKE YOU` section with the change (the new commits, for a local checkout); a
+triggers): any number of git branches and web pages (up to 20), checked without AI.
+The editor lists them with "Watch another"; each shows the state it last saw. The run
+it wakes gets a `WHAT WOKE YOU` section with every change that check saw (the new
+commits, for a local checkout), so several repos merging at once is one run; a
 hand-started run of a watcher is told to check the current state anyway. Creating a
 watcher does not run it: its first check only records a baseline.
 
@@ -71,7 +73,8 @@ run the restart (Codex's sandbox and `claude -p` without allowed Bash will refus
 ## Builder and model recommendations
 
 `POST /api/totems/build {description}` runs one read-only `builderPrompt` on the
-default account. The prompt lists every enabled account that passes the same health
+default account. The builder may read this machine (find a repository he names,
+check a path) but never change it. The prompt lists every enabled account that passes the same health
 check a scheduled run's preflight does, with its models and a cost tier from
 `costTier` (1 small/fast, 2 standard, 3 frontier). The reply (`parseBuilderReply`) is
 validated before anything is created:
@@ -82,15 +85,46 @@ validated before anything is created:
 - `notify` defaults to `agent`.
 
 The builder may also return a `trigger` (a watch) when the job is "when X changes,
-do Y" and he named X; an unusable one is dropped and the schedule applies.
+do Y" and he named X, with one source per repo or page he listed; unusable sources
+are dropped, and if none is left the schedule applies.
+
+**The builder is a conversation.** Its reply carries a `reply` sentence and up to
+three `questions` about scope it would otherwise guess (a host, a path, a
+threshold). The builder page shows them in a chat panel beside the draft; each
+message he sends is one more builder turn (`POST /api/totems/build {draftId,
+draft, message}`) that gets the conversation, the draft as it stands (his own
+edits included, so a rename or rewritten instructions survive) and his message,
+and returns the whole draft revised. The form is locked while a turn runs.
+
+**Drafts.** A designed totem he has not created is a draft in
+`data/totem-drafts/<id>.json` (`totems/drafts.mjs`): description, draft, model
+choice and conversation. The bridge writes each builder turn into the draft
+itself, with `pending` while it runs, so leaving the page mid-turn loses nothing;
+the page polls a pending draft until it finishes (a turn older than six minutes
+counts as dead). The page autosaves his edits with `PUT`, which never creates a
+draft, so a late autosave cannot revive a discarded one. Drafts are listed above
+the totems; creating one (`POST /api/totems {draftId}`) deletes its draft.
 
 The owner edits the draft and picks a recommendation, or any model through the
-chat model picker (`ModelPicker` with `modelsOnly`: concrete models across every
-account, no Auto/Instant/Thinking, since a scheduled run has nobody to route
-for) plus an effort. `POST /api/totems` creates the job, its memory file and its
+chat model picker (`ModelPicker`: concrete models across every account) plus an
+effort. `POST /api/totems` creates the job, its memory file and its
 chat, posts an intro, and starts the first run (not for a watcher). A totem's
 settings offer the same picker.
 `POST /api/totems/:id/recommend` re-asks for models for an existing totem.
+
+## The lobby
+
+On a desktop the tab opens as a 3D lobby (three.js, its own lazy chunk): every
+totem stands on a ring, drafts as holograms, and the last plinth is empty for a
+new one, seen from above like a board, every figure turned to face you. Each figure is carved from its id (`figure.ts`), so it looks the same
+every visit. Colour says its task type, the headpiece says what it does (an eye
+for watchers, a gear for built-ins), and the eyes show its state: closed with
+drifting z's when paused, flickering red after a failure, under a beam of light
+while it runs. Hovering previews a totem in the side panel. Clicking brings it to
+the front and clicking the front one opens it; arrows, the wheel, a drag and the
+roster do the same. Phones (≤720 px), browsers without WebGL and anyone who picks
+the list button get the list; the choice is kept in `localStorage`
+(`totems.view`). `prefers-reduced-motion` stills the scene.
 
 ## Chats and proposals
 
@@ -104,8 +138,10 @@ settings offer the same picker.
 
 | Route | Body | Returns |
 |---|---|---|
-| `POST /api/totems/build` | `{description}` | `{draft}` |
-| `POST /api/totems` | `{draft, choice?: {provider, model, effort, label}, recommendation?, enabled?, runNow?}` (`choice` wins) | `{job, threadId}` |
+| `POST /api/totems/build` | `{description, draftId?, draft?, message?, choice?}`; with `draft` and `message` it revises | `{draft, messages, draftId}`; 409 while that draft has a turn running |
+| `GET /api/totems/drafts` | | `{drafts}`, newest first |
+| `GET/PUT/DELETE /api/totems/drafts/:id` | PUT: `{description?, draft?, choice?}` | `{draft}`; PUT is 404 for a draft that is gone |
+| `POST /api/totems` | `{draft, choice?: {provider, model, effort, label}, recommendation?, enabled?, runNow?, draftId?}` (`choice` wins) | `{job, threadId}` |
 | `POST /api/totems/proposal` | `{threadId, messageId, partId, action: 'accept'\|'dismiss'}` | `{ok, status}`; 409 if already handled |
 | `GET/PUT /api/totems/:id/memory` | `{memory}` | `{memory}` |
 | `POST /api/totems/:id/thread` | | `{threadId}` |

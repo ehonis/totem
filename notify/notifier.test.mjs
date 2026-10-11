@@ -303,3 +303,44 @@ test('the ledger keeps the fact kind, so a notification stays ratable after its 
   const { items } = await store.ledger()
   assert.equal(items[0].factKind, 'habit.streak-ending')
 })
+
+test('the native app is reached through APNs, alongside Web Push devices', async () => {
+  const native = []
+  const apns = { send: async (args) => { native.push(args); return { ok: true, status: 200, gone: false } } }
+  const { store, sent } = await harness()
+  const notifier = createNotifier({ store, vapid: VAPID, sendImpl: async ({ subscription }) => { sent.push({ endpoint: subscription.endpoint }); return { ok: true } }, apns })
+  await store.saveSubscription({ subscription: sub('https://push/1'), label: 'Home Screen' })
+  await store.saveSubscription({ subscription: { endpoint: 'apns:abc' }, label: 'iPhone app', transport: 'apns', token: 'abc', environment: 'production' })
+
+  const result = await notifier.deliver({ title: 'Due', body: 'Pay rent', url: '/inbox', tag: 'job:x' })
+  assert.equal(result.delivered, 2)
+  assert.deepEqual(sent.map((s) => s.endpoint), ['https://push/1'])
+  assert.equal(native[0].deviceToken, 'abc')
+  assert.equal(native[0].collapseId, 'job:x')
+  assert.deepEqual(native[0].payload.aps.alert, { title: 'Due', body: 'Pay rent' })
+  assert.equal(native[0].payload.url, '/inbox')
+})
+
+test('without Web Push keys the native app still gets its notifications', async () => {
+  const native = []
+  const apns = { send: async (args) => { native.push(args); return { ok: true, status: 200 } } }
+  const { store, sent } = await harness({ vapid: null })
+  const notifier = createNotifier({ store, vapid: null, sendImpl: async () => { sent.push(1); return { ok: true } }, apns })
+  await store.saveSubscription({ subscription: sub('https://push/1') })
+  await store.saveSubscription({ subscription: { endpoint: 'apns:abc' }, transport: 'apns', token: 'abc' })
+
+  const result = await notifier.deliver({ title: 'x' })
+  assert.equal(result.ok, true)
+  assert.equal(native.length, 1)
+  assert.equal(sent.length, 0)
+})
+
+test('a deleted app expires its device', async () => {
+  const apns = { send: async () => ({ ok: false, status: 410, gone: true, retryable: false, error: 'Unregistered' }) }
+  const { store } = await harness()
+  const notifier = createNotifier({ store, vapid: VAPID, apns })
+  await store.saveSubscription({ subscription: { endpoint: 'apns:abc' }, transport: 'apns', token: 'abc' })
+  await notifier.deliver({ title: 'x' })
+  const [device] = await store.listSubscriptions()
+  assert.equal(device.state, 'expired')
+})

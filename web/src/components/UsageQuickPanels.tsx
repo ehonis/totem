@@ -452,9 +452,9 @@ export default function UsageQuickPanels({
             <button
               type="button"
               className="ov-card-link"
-              onClick={open === 'repositories' ? () => { setOpen(null); onNavigate('code') } : goToUsage}
+              onClick={open === 'repositories' ? () => { setOpen(null); onNavigate('dev') } : goToUsage}
             >
-              {open === 'repositories' ? 'Open Code' : 'Open full usage'} <Hi icon={ChevronRightIcon} size={13} />
+              {open === 'repositories' ? 'Open Dev' : 'Open full usage'} <Hi icon={ChevronRightIcon} size={13} />
             </button>
           </footer>
         </section>

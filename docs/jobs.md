@@ -158,25 +158,35 @@ and resets on success.
 ## Watch triggers
 
 A job can wake when something changes instead of on its schedule:
-`trigger: { type: 'watch', source, everyMinutes }` (`jobs/triggers.mjs`, pure and
-tested). Sources:
+`trigger: { type: 'watch', sources, everyMinutes }` (`jobs/triggers.mjs`, pure and
+tested). `sources` lists up to 20 things to watch, all checked at the same interval;
+the older single `source` field is still read as a list of one. Each source is one of:
 
-| `source` | Check | Fingerprint |
+| source | Check | Fingerprint |
 |---|---|---|
 | `{ kind: 'git', repo, ref }` | `git ls-remote`. A local checkout path watches its `origin`, so it wakes on what was merged upstream, not local commits. Min 1 minute. | branch SHA |
-| `{ kind: 'url', url, contains? }` | One GET, scripts/styles/tags stripped. Min 5 minutes. | with `contains`: whether the text is there; without: a hash of the visible text |
+| `{ kind: 'url', url, contains? }` | One GET, scripts/styles/tags stripped. Min 5 minutes, which then applies to the whole watch. | with `contains`: whether the text is there; without: a hash of the visible text |
 
 Every tick, each enabled watch job that is due and not running gets a background
-check (`startDueWatches` in `bridge.mjs`, one at a time per job). The first check
-only records a baseline in the job's `watch` field; a later change of fingerprint
-runs the job once with `trigger: 'watch'` and an `event` describing the change
-(for a local checkout, the new commits from `git log`), which agent totems get in
-their prompt and the run record keeps. Three failed checks in a row notify once.
+check (`startDueWatches` in `bridge.mjs`, one at a time per job) that reads all its
+sources side by side. The job's `watch` field keeps a baseline per source in `seen`,
+keyed by `sourceKey`. A source's first check only records its baseline. When one or
+more sources changed, the job runs **once** with `trigger: 'watch'` and an `event`
+listing every change (for a local checkout, the new commits from `git log`); agent
+totems get it in their prompt and the run record keeps it. An unreadable source keeps
+its old baseline and doesn't stop the others; a check where any source failed counts
+towards the streak, and three in a row notify once.
+
+Editing the list keeps the baselines of sources it still watches and checks at once,
+so adding a repo can't fire on the edit and doesn't reset the others. A record saved
+before watches had several sources (a bare `fingerprint`) is read as the first
+source's baseline.
 
 Hardening: a repo or ref starting with `-` is refused (git would read it as an
 option such as `--upload-pack`), commands run without a shell, and git runs with
-`GIT_TERMINAL_PROMPT=0` and `protocol.ext.allow=never`. Changing what a job
-watches resets its baseline; `trigger: null` puts it back on its schedule.
+`GIT_TERMINAL_PROMPT=0` and `protocol.ext.allow=never`. The API refuses a watch with
+any unusable source (`isCompleteTrigger`) rather than quietly dropping it;
+`trigger: null` puts the job back on its schedule.
 
 ## AI selection and health
 
@@ -285,7 +295,7 @@ and fails with a message saying so, rather than silently falling through.
 | `journal-ingest` | 07:00 | `journal-ingest` + the `journal-ingest` skill. Needs Plaud |
 | `plaud-meetings-ingest` | 08:00 | `plaud-meetings-ingest` + the `plaud-action-items-ingest` skill. Needs Plaud |
 | `whoop-sleep-ingest` | 11:00 | `whoop-sleep`. See `docs/whoop-sleep-ingest.md` |
-| `self-update` ("Deploy Totem") | watch: this checkout's `main`, every 2 min | `self-update`: refuse a dirty tree or another branch, `pull --ff-only`, `npm install` if a `package*.json` changed, `npm run build`, then restart `TOTEM_SERVICE_NAME` once no chat or job is running. Off unless `TOTEM_SELF_UPDATE_ENABLED` |
+| `self-update` ("Deploy Totem") | watch: this checkout's `main`, every 2 min | `self-update`: refuse a dirty tree or another branch, `pull --ff-only`, `npm install` if a `package*.json` changed, `npm run build`, then restart the service once no chat or job is running (systemd's `TOTEM_SERVICE_NAME`, or on macOS the launchd label it runs under, via `launchctl kickstart -k`). Off unless `TOTEM_SELF_UPDATE_ENABLED` |
 
 These are **seeds, not built-ins**. `SEED_JOB_DEFS` is read on first boot and when
 a genuinely new id ships; it is never re-applied to a job that already exists, so

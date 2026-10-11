@@ -7,15 +7,28 @@
 // Delivery is fan-out across devices and is deliberately forgiving: one dead phone
 // must not stop a live one from being told, and a device the push service says is
 // gone is expired rather than retried forever.
+//
+// Two transports, one fan-out: a browser on the Home Screen is a Web Push
+// subscription, the native iPhone app is an APNs device token (apns.mjs). Every
+// category, quiet hour and queue rule is upstream of this, so both get the same
+// notifications.
 import { sendPush, pushPayload } from './push.mjs'
+import { apnsPayload } from './apns.mjs'
 
 export function createNotifier({
   store,
   vapid = null,
   sendImpl = sendPush,
+  // createApnsSender(...) when APNS_* is set; null keeps the native app off.
+  apns = null,
   log = () => {},
 }) {
-  const configured = () => Boolean(vapid?.publicKey && vapid?.privateKey && vapid?.subject)
+  const webConfigured = () => Boolean(vapid?.publicKey && vapid?.privateKey && vapid?.subject)
+  const configured = () => webConfigured() || Boolean(apns)
+  const isNative = (sub) => sub.transport === 'apns'
+  // A device whose transport has no keys is skipped, not failed: Web Push keys
+  // missing says nothing about whether the iPhone app can be reached.
+  const reachable = (sub) => (isNative(sub) ? Boolean(apns) : webConfigured())
 
   // Send one message to every active device. Returns a per-device report rather
   // than a boolean, because "it went to the iPhone but the iPad is gone" is the
@@ -29,7 +42,7 @@ export function createNotifier({
     }
 
     const all = await store.listSubscriptions()
-    const targets = all.filter((s) => s.state === 'active' && (!endpoint || s.endpoint === endpoint))
+    const targets = all.filter((s) => s.state === 'active' && reachable(s) && (!endpoint || s.endpoint === endpoint))
     if (!targets.length) {
       if (record) await store.record({ category, title, body, url, entryId, factKind, level: 'info' })
       return { ok: false, reason: 'no-devices', results: [] }
@@ -37,18 +50,21 @@ export function createNotifier({
 
     const unread = record ? (await store.ledger({ limit: 1 })).unread + 1 : 0
     const payload = pushPayload({ title, body, url, entryId, badge: unread, category, declarative })
+    const nativePayload = apnsPayload({ title, body, url, entryId, badge: unread, category })
 
     const results = await Promise.all(targets.map(async (sub) => {
       let result
       try {
-        result = await sendImpl({
-          subscription: { endpoint: sub.endpoint, keys: sub.keys },
-          payload,
-          vapid,
-          // A topic lets the push service collapse an undelivered message with its
-          // replacement, which is what a moved reminder should do.
-          topic: tag || undefined,
-        })
+        result = isNative(sub)
+          ? await apns.send({ deviceToken: sub.token, environment: sub.environment || 'production', payload: nativePayload, collapseId: tag || null })
+          : await sendImpl({
+            subscription: { endpoint: sub.endpoint, keys: sub.keys },
+            payload,
+            vapid,
+            // A topic lets the push service collapse an undelivered message with its
+            // replacement, which is what a moved reminder should do.
+            topic: tag || undefined,
+          })
       } catch (e) {
         result = { ok: false, gone: false, retryable: true, status: 0, error: e.message || String(e) }
       }
@@ -56,7 +72,8 @@ export function createNotifier({
       if (result.ok) {
         await store.markDelivered(sub.endpoint)
       } else if (result.gone) {
-        // On iOS this means the web app was removed from the Home Screen.
+        // On iOS this means the web app was removed from the Home Screen, or the
+        // native app was deleted.
         await store.expireSubscription(sub.endpoint, `http ${result.status}`)
         log('push subscription gone', sub.label, result.status)
       } else {
@@ -168,7 +185,7 @@ export function createNotifier({
     return { sent, expired: expired.length, claimed: claimed.length }
   }
 
-  return { deliver, drain, configured }
+  return { deliver, drain, configured, nativeConfigured: () => Boolean(apns) }
 }
 
 function verdictSuffix(entry, at) {

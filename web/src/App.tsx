@@ -12,8 +12,14 @@ import LogsView from './components/LogsView'
 import ProductivityView from './components/ProductivityView'
 import BrainView from './components/BrainView'
 import SearchView from './components/SearchView'
-import GithubView from './components/GithubView'
+import DevView from './components/DevView'
 import ChatView from './components/ChatView'
+import MessagesView from './messages/MessagesView'
+import { useAppleStatus } from './messages/useAppleStatus'
+import { appleEnabled } from './messages/api'
+import ScreenView from './screen/ScreenView'
+import { useScreenStatus } from './screen/useScreenStatus'
+import { screenEnabled } from './screen/api'
 import { Rail, SidePanel, MobileBar, MobileDrawer, NewChatFab, usePanelOpen, useEdgeSwipe } from './components/Shell'
 import { setActive, requestVoice } from './chat/store'
 import TotemsView from './components/TotemsView'
@@ -25,10 +31,13 @@ import ShortcutOverlay from './components/ShortcutOverlay'
 import NotificationCenter from './components/NotificationCenter'
 import { getNotificationHistory } from './push'
 import ToastHost from './components/ToastHost'
+import RunningChats from './chat/RunningChats'
 import {
   Hi,
   Squares2X2Icon,
   ChatBubbleLeftRightIcon,
+  ChatBubbleOvalLeftIcon,
+  ComputerDesktopIcon,
   CalendarDaysIcon,
   CircleStackIcon,
   ShieldCheckIcon,
@@ -38,6 +47,7 @@ import {
   MagnifyingGlassIcon,
   ChevronDownIcon,
   EllipsisHorizontalIcon,
+  WrenchScrewdriverIcon,
 } from './icons'
 
 interface TabDef {
@@ -54,12 +64,24 @@ const PRIMARY_TABS: TabDef[] = [
   { id: 'chat', label: 'Chat', icon: ChatBubbleLeftRightIcon },
   { id: 'productivity', label: 'Productivity', icon: CalendarDaysIcon },
   { id: 'inbox', label: 'Inbox', icon: InboxArrowDownIcon },
+  // CI, reviews and runners across the repos in data/dev.json, plus outside alerts.
+  { id: 'dev', label: 'Dev', icon: WrenchScrewdriverIcon },
 ]
 
-// No longer on the nav: Code and Brain open from the Overview's app row, and the
-// AI workshop (Studio's skills/jobs/connections, and Logs) lives in Settings.
+// No longer on the nav: Brain opens from the Overview's app row, Code is the last
+// section of Dev, and the AI workshop (Studio's skills/jobs/connections, and Logs)
+// lives in Settings.
 // Their routes still work, so links and shortcuts to them keep landing.
 const MORE_TABS: TabDef[] = []
+
+// Messages from the Mac Totem runs on. On the rail only when the bridge says
+// Apple data is on (APPLE_ENABLED on a Mac); the route works either way and
+// explains itself. Chat's double bubble is taken, so this is the single oval.
+const MESSAGES_TAB_DEF: TabDef = { id: 'messages', label: 'Messages', icon: ChatBubbleOvalLeftIcon }
+
+// The desktop of the machine Totem runs on (SCREEN_ENABLED). On the desktop rail
+// only, never in the phone drawer; /screen on a phone explains itself.
+const SCREEN_TAB_DEF: TabDef = { id: 'screen', label: 'Screen', icon: ComputerDesktopIcon }
 
 // Settings lives at the bottom of the sidebar (replacing the old Disconnect link).
 // It isn't in the tab arrays because it's pinned separately — except on a phone,
@@ -85,6 +107,13 @@ function useNarrow() {
     return () => mq.removeEventListener('change', onChange)
   }, [])
   return narrow
+}
+
+/** The tab list with Messages after Chat, when the bridge reads Messages. */
+function withMessages(tabs: TabDef[], on: boolean): TabDef[] {
+  if (!on) return tabs
+  const at = tabs.findIndex((t) => t.id === 'chat')
+  return [...tabs.slice(0, at + 1), MESSAGES_TAB_DEF, ...tabs.slice(at + 1)]
 }
 
 const safeDecode = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
@@ -207,6 +236,10 @@ export default function App() {
     return () => { cancelled = true }
   }, [unlocked])
 
+  // Apple Messages: asked once after sign-in, like the terminal above.
+  const { status: appleStatus, refresh: refreshAppleStatus } = useAppleStatus(unlocked, onAuthError)
+  const { status: screenStatus, refresh: refreshScreenStatus } = useScreenStatus(unlocked, onAuthError)
+
   const toggleTerminal = useCallback(() => {
     setTerminalOpen((prev) => {
       localStorage.setItem(TERMINAL_OPEN_KEY, String(!prev))
@@ -249,11 +282,13 @@ export default function App() {
 
   // Every tab is on the rail (desktop) or in the drawer (phone); nothing is
   // folded under "More" any more.
-  const allTabs = [...PRIMARY_TABS, ...MORE_TABS]
+  const allTabs = withMessages([...PRIMARY_TABS, ...MORE_TABS], appleEnabled(appleStatus))
+  const railTabs = screenEnabled(screenStatus) ? [...allTabs, SCREEN_TAB_DEF] : allTabs
   const badges = inboxOpen ? { inbox: { count: inboxOpen, title: describeInboxCount(inboxOpen, inboxByKind) } } : {}
-  const tabLabel = [...allTabs, SETTINGS_TAB_DEF].find((t) => t.id === tab)?.label || 'Totem'
+  const tabLabel = [...allTabs, MESSAGES_TAB_DEF, SCREEN_TAB_DEF, SETTINGS_TAB_DEF].find((t) => t.id === tab)?.label || 'Totem'
   const openChat = () => selectTab('chat')
   const newChat = () => { setActive(null); selectTab('chat') }
+  const showPanel = useCallback(() => { if (!narrow) setPanelOpen(true) }, [narrow, setPanelOpen])
 
   if (!unlocked) return <AuthGate onUnlock={unlock} />
 
@@ -261,7 +296,7 @@ export default function App() {
     <div className={`app shell${terminalVisible ? ' term-open' : ''}${!narrow && panelOpen ? ' panel-open' : ''}${narrow && drawerOpen ? ' drawer-open' : ''}`}>
       {!narrow && (
         <Rail
-          tabs={allTabs}
+          tabs={railTabs}
           bottom={SETTINGS_TAB_DEF}
           active={tab}
           onSelect={selectTab}
@@ -275,9 +310,16 @@ export default function App() {
       )}
       <main className="main">
         {/* The chat draws its own top bar; every other screen gets ChatGPT's. */}
-        {narrow && tab !== 'chat' && <MobileBar title={tabLabel} onMenu={() => setDrawerOpen(true)} onNewChat={newChat} />}
+        {narrow && tab !== 'chat' && (
+          <MobileBar
+            title={tabLabel}
+            onMenu={() => setDrawerOpen(true)}
+            // On Messages the top bar's pencil means "new message", as in the Messages app.
+            onNewChat={tab === 'messages' ? () => window.dispatchEvent(new Event('totem:new-message')) : newChat}
+          />
+        )}
         {/* Keep Chat mounted so its conversation survives tab switches. */}
-        <ChatView visible={tab === 'chat'} onAuthError={onAuthError} onOpenChat={openChat} onOpenMenu={() => setDrawerOpen(true)} panelOpen={panelOpen} onShowPanel={() => setPanelOpen(true)} />
+        <ChatView visible={tab === 'chat'} onAuthError={onAuthError} onOpenMenu={() => setDrawerOpen(true)} panelOpen={panelOpen} onShowPanel={() => setPanelOpen(true)} />
         {tab === 'overview' && <OverviewView onNavigate={navigate} onAuthError={onAuthError} />}
         {/* `/inbox#P12` is a release notification's "tap to update" link. */}
         {tab === 'inbox' && <InboxView onAuthError={onAuthError} focusId={route.hash} />}
@@ -287,7 +329,11 @@ export default function App() {
         )}
         {tab === 'search' && <SearchView onAuthError={onAuthError} onNavigate={navigate} />}
         {tab === 'brain' && <BrainView onAuthError={onAuthError} openPath={route.hash ? safeDecode(route.hash) : undefined} />}
-        {tab === 'code' && <GithubView onAuthError={onAuthError} />}
+        {tab === 'dev' && <DevView onAuthError={onAuthError} />}
+        {tab === 'messages' && (
+          <MessagesView status={appleStatus} onRefreshStatus={refreshAppleStatus} onAuthError={onAuthError} narrow={narrow} />
+        )}
+        {tab === 'screen' && <ScreenView status={screenStatus} onRefreshStatus={refreshScreenStatus} narrow={narrow} />}
         {tab === 'totems' && <TotemsView onAuthError={onAuthError} onOpenChat={openChat} />}
         {tab === SETTINGS_TAB && (
           <SettingsView
@@ -298,12 +344,15 @@ export default function App() {
           />
         )}
       </main>
-      {narrow && tab !== 'chat' && <NewChatFab onNewChat={newChat} onVoice={() => { requestVoice(); selectTab('chat') }} />}
+      {narrow && tab !== 'chat' && tab !== 'messages' && <NewChatFab onNewChat={newChat} onVoice={() => { requestVoice(); selectTab('chat') }} />}
       {narrow && (
         <MobileDrawer
           open={drawerOpen}
           onClose={() => setDrawerOpen(false)}
-          tabs={[...allTabs, SETTINGS_TAB_DEF]}
+          // No Messages on a phone: the Messages app is right there. /messages
+          // still opens, and agents still read Messages through apple__*.
+          tabs={allTabs.filter((t) => t.id !== 'messages')}
+          bottom={SETTINGS_TAB_DEF}
           active={tab}
           onSelect={selectTab}
           onOpenChat={openChat}
@@ -335,6 +384,8 @@ export default function App() {
         unreadNotifications={unreadNotifications}
         onOpenNotifications={() => setNotificationsOpen(true)}
       />
+      {/* Chats answering out of sight, bottom-right; a click opens one in the panel and the chat. */}
+      <RunningChats onOpenChat={openChat} onShowPanel={showPanel} narrow={narrow} />
       <ShortcutOverlay chord={chord} />
       <ToastHost />
     </div>

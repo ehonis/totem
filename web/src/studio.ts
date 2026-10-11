@@ -190,7 +190,9 @@ export interface ChatCommand {
    * scheduled kind" and `/` "the quick one", so the menu keeps colouring them
    * differently rather than flattening a distinction people already read.
    */
-  kind: 'skill' | 'workflow'
+  kind: 'skill' | 'workflow' | 'agent'
+  /** For an agent skill, whose folder it came from ("Claude Code", "Codex"…). */
+  source?: string
 }
 
 let commandCache: ChatCommand[] = []
@@ -216,9 +218,28 @@ function toCommand(skill: any): ChatCommand | null {
   }
 }
 
+// An agent skill (Claude Code, Codex…) is never run on its own: picking one puts
+// `/name` in the message and the bridge sends its instructions along with it.
+function toAgentCommand(skill: any): ChatCommand {
+  return {
+    cmd: skill.command,
+    icon: null,
+    title: skill.name,
+    desc: skill.description || `A ${skill.source || 'agent'} skill.`,
+    mode: 'send',
+    text: skill.command,
+    kind: 'agent',
+    source: skill.source,
+  }
+}
+
 /** Replace the cached catalog from an /api/skills payload. */
-export function setChatCommands(skills: any[]) {
-  commandCache = (skills || []).map(toCommand).filter(Boolean) as ChatCommand[]
+export function setChatCommands(skills: any[], agentSkills: any[] = []) {
+  const own = (skills || []).map(toCommand).filter(Boolean) as ChatCommand[]
+  // Totem's own skill keeps a name both use, under either prefix.
+  const taken = new Set(own.map((c) => c.cmd.slice(1).toLowerCase()))
+  const agent = (agentSkills || []).filter((s) => s?.command && !taken.has(String(s.command).slice(1).toLowerCase())).map(toAgentCommand)
+  commandCache = [...own, ...agent]
   commandsLoaded = true
   emitCommands()
 }
