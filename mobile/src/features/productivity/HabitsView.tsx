@@ -8,10 +8,10 @@ import { router } from 'expo-router'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
 import { Btn, Card, IconBtn, Press, Spinner, ViewHead } from '../../ui/kit'
-import { success } from '../../ui/haptics'
+import { success, tap } from '../../ui/haptics'
 import { showMenu } from '../../ui/menu'
 import { FAB_CLEARANCE } from '../../shell/Screen'
-import { Hi, ArchiveBoxIcon, ArrowPathIcon, FireIcon, PencilSquareIcon, PlusIcon } from '../../lib/icons'
+import { Hi, ArchiveBoxIcon, ArrowPathIcon, ChevronLeftIcon, ChevronRightIcon, FireIcon, PencilSquareIcon, PlusIcon } from '../../lib/icons'
 import { logHabit, updateHabit } from '../../lib/api'
 import { pushToast } from '../../lib/toast'
 import {
@@ -21,12 +21,16 @@ import { loadHabits, mutate, useHabits } from '../habits/store'
 import { CheckRow, QuotaDots, st as rowSt } from '../habits/CheckRow'
 import HabitGrid from '../habits/HabitGrid'
 import { HabitMetricSection } from '../habits/MetricChart'
-import { SegSwitch } from '../habits/form'
 import { openLinkedApp } from '../habits/LinkedApp'
+
+// The check-in steps back as far as the loaded history (a year).
+const MAX_DAYS_BACK = 365
+const shortDay = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
 
 export default function HabitsView({ active: shown }: { active: boolean }) {
   const { data, loading } = useHabits()
-  const [checkinDay, setCheckinDay] = useState<'today' | 'yesterday'>('today')
+  // How many days back the check-in is looking: 0 is today. The arrows step it.
+  const [daysBack, setDaysBack] = useState(0)
   const [busyKeys, setBusyKeys] = useState<Record<string, boolean>>({})
   const [showArchived, setShowArchived] = useState(false)
   const [pulling, setPulling] = useState(false)
@@ -42,7 +46,7 @@ export default function HabitsView({ active: shown }: { active: boolean }) {
   const archived = habits.filter((h) => h.archived)
   const sleepHidden = habits.some((h) => !h.archived && isSyncedSleep(h))
   const today = data?.today || ''
-  const checkinDate = checkinDay === 'today' ? today : addDays(today, -1)
+  const checkinDate = addDays(today, -daysBack)
 
   const withBusy = async (habit: Habit, run: () => Promise<void>) => {
     const key = `${habit.id}:${checkinDate}`
@@ -126,11 +130,18 @@ export default function HabitsView({ active: shown }: { active: boolean }) {
                 <T size={14} weight={600}>Check-in</T>
                 <T size={12} muted style={{ marginTop: 1 }}>{dayLabel(checkinDate)}</T>
               </View>
-              <SegSwitch
-                value={checkinDay}
-                onChange={setCheckinDay}
-                options={[{ value: 'yesterday', label: 'Yesterday' }, { value: 'today', label: 'Today' }]}
-              />
+              <View style={s.dayNav}>
+                {daysBack > 1 ? (
+                  <Press onPress={() => { tap(); setDaysBack(0) }} hitSlop={6} style={s.dayNavToday} accessibilityLabel="Back to today">
+                    <T size={12} weight={600} color={colors.accent}>Today</T>
+                  </Press>
+                ) : null}
+                <IconBtn icon={ChevronLeftIcon} size={16} box={32} bordered label="Previous day" disabled={daysBack >= MAX_DAYS_BACK} onPress={() => { tap(); setDaysBack((d) => Math.min(d + 1, MAX_DAYS_BACK)) }} />
+                <T size={13} weight={600} align="center" style={{ minWidth: 84 }}>
+                  {daysBack === 0 ? 'Today' : daysBack === 1 ? 'Yesterday' : shortDay(checkinDate)}
+                </T>
+                <IconBtn icon={ChevronRightIcon} size={16} box={32} bordered label="Next day" disabled={daysBack === 0} onPress={() => { tap(); setDaysBack((d) => Math.max(d - 1, 0)) }} />
+              </View>
             </View>
             {active.map((h, i) => (
               <CheckRow
@@ -227,6 +238,8 @@ export default function HabitsView({ active: shown }: { active: boolean }) {
 
 const s = StyleSheet.create({
   card: { marginBottom: 14 },
+  dayNav: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  dayNavToday: { height: 32, paddingHorizontal: 8, justifyContent: 'center', marginRight: 2 },
   checkinHead: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap',
     paddingTop: 12, paddingHorizontal: 16, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: colors.line,

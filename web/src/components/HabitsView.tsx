@@ -9,6 +9,7 @@ import { useCommand } from '../useShortcuts'
 import {
   Hi, PlusIcon, MinusIcon, ArrowPathIcon, XMarkIcon, TrashIcon,
   PencilSquareIcon, CheckIcon, ChatBubbleLeftEllipsisIcon, FireIcon, ArchiveBoxIcon, Bars3Icon, ArrowTopRightOnSquareIcon,
+  ChevronLeftIcon, ChevronRightIcon,
 } from '../icons'
 import { useErrorToast, pushToast } from '../toast'
 import { OPEN_HABIT_CHECKIN } from './HabitCheckin'
@@ -884,7 +885,6 @@ interface HabitCheckButtonProps {
 }
 
 export function HabitCheckButton({ habit, count, periodCount, busy, onLog }: HabitCheckButtonProps) {
-  if (habit.linkedApp) return <LinkedAppButton habit={habit} compact />
   const capped = habit.cadence !== 'daily'
   const target = Math.max(1, habit.target)
   const ratio = capped ? Math.min(1, periodCount / target) : count > 0 ? 1 : 0
@@ -893,6 +893,26 @@ export function HabitCheckButton({ habit, count, periodCount, busy, onLog }: Hab
 
   const progress = capped ? `, ${periodCount} of ${target} ${periodLabel(habit.cadence)}` : ''
   const label = done ? `${habit.name}: done — tap to undo${progress}` : `Mark ${habit.name} done${progress}`
+
+  // An app fills this one in: the same circle, filling as it does, but not a
+  // button; the link beside it goes to the app.
+  if (habit.linkedApp) {
+    const name = APP_NAME[habit.linkedApp]
+    return (
+      <span className="habit-linked-pair">
+        <LinkedAppButton habit={habit} compact />
+        <span
+          className={`habit-check readonly${done ? ' on' : ''}${capped ? ' pie' : ''}${full ? ' full' : ''}`}
+          style={{ '--habit-color': habit.color, '--habit-pie': `${ratio * 360}deg` } as React.CSSProperties}
+          role="img"
+          aria-label={`${habit.name}: ${done ? 'done' : 'not yet'}${progress}, from ${name}`}
+          title={done ? `Done, from ${name}` : `Not yet; ${name} fills this in`}
+        >
+          {done && <Hi icon={CheckIcon} size={20} />}
+        </span>
+      </span>
+    )
+  }
 
   return (
     <button
@@ -1293,6 +1313,10 @@ function CheckRow({ habit, entry, periodCount, busy, onLog, onValue, onNote, dra
   )
 }
 
+// The check-in steps back as far as the loaded history (a year).
+const MAX_DAYS_BACK = 365
+const shortDay = (iso: string) => toDate(iso).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+
 const openLinkedApp = (h: Habit) => { if (h.appUrl) window.open(h.appUrl, '_blank', 'noopener') }
 
 // ---------- the view ----------
@@ -1310,7 +1334,8 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   useErrorToast(error)
-  const [checkinDay, setCheckinDay] = useState<'today' | 'yesterday'>('today')
+  // How many days back the check-in is looking: 0 is today. The arrows step it.
+  const [daysBack, setDaysBack] = useState(0)
   const [modal, setModal] = useState<Modal>(null)
   // `g h h` — lands on Habits, then opens the new-habit dialog.
   useCommand(COMMANDS.habitNew, () => setModal({ type: 'add' }))
@@ -1339,7 +1364,7 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
   const archived = (data?.habits || []).filter((h) => h.archived)
   const sleepHidden = (data?.habits || []).some((h) => !h.archived && isSyncedSleep(h))
   const today = data?.today || ''
-  const checkinDate = checkinDay === 'today' ? today : addDays(today, -1)
+  const checkinDate = addDays(today, -daysBack)
 
   const guard = <T,>(p: Promise<T>): Promise<T> =>
     p.catch((e) => { if (e instanceof AuthError) { onAuthError(); return Promise.reject(new Error('Session expired')) } throw e })
@@ -1449,9 +1474,17 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
                 <div className="habit-checkin-title">Check-in</div>
                 <div className="habit-checkin-sub">{dayLabel(checkinDate)}</div>
               </div>
-              <div className="cal-viewswitch habit-dayswitch">
-                <button className={`seg ${checkinDay === 'yesterday' ? 'active' : ''}`} onClick={() => setCheckinDay('yesterday')}>Yesterday</button>
-                <button className={`seg ${checkinDay === 'today' ? 'active' : ''}`} onClick={() => setCheckinDay('today')}>Today</button>
+              <div className="habit-daynav">
+                {daysBack > 1 && (
+                  <button className="habit-daynav-today" onClick={() => setDaysBack(0)}>Today</button>
+                )}
+                <button className="habit-daynav-step" onClick={() => setDaysBack((d) => Math.min(d + 1, MAX_DAYS_BACK))} disabled={daysBack >= MAX_DAYS_BACK} aria-label="Previous day" title="Previous day">
+                  <Hi icon={ChevronLeftIcon} size={16} />
+                </button>
+                <span className="habit-daynav-label">{daysBack === 0 ? 'Today' : daysBack === 1 ? 'Yesterday' : shortDay(checkinDate)}</span>
+                <button className="habit-daynav-step" onClick={() => setDaysBack((d) => Math.max(d - 1, 0))} disabled={daysBack === 0} aria-label="Next day" title="Next day">
+                  <Hi icon={ChevronRightIcon} size={16} />
+                </button>
               </div>
             </div>
             {active.map((h) => (

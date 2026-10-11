@@ -51,15 +51,8 @@ function HabitCheckButton({ habit, count, periodCount, busy, onLog }: {
   const angle = ratio * 2 * Math.PI
   const ex = c + r * Math.sin(angle), ey = c - r * Math.cos(angle)
   const wedge = `M${c},${c}L${c},${c - r}A${r},${r} 0 ${angle > Math.PI ? 1 : 0} 1 ${ex},${ey}Z`
-  return (
-    <Press
-      onPress={() => onLog(habit, done ? -1 : +1)}
-      disabled={busy}
-      accessibilityRole="button"
-      accessibilityLabel={done ? `${habit.name}: done — tap to undo${progress}` : `Mark ${habit.name} done${progress}`}
-      hitSlop={6}
-      style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}
-    >
+  const circle = (
+    <>
       <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
         <Circle
           cx={c} cy={c} r={r}
@@ -69,6 +62,31 @@ function HabitCheckButton({ habit, count, periodCount, busy, onLog }: {
         {capped && ratio > 0 && !full && <Path d={wedge} fill={habit.color} />}
       </Svg>
       {done && <Hi icon={CheckIcon} size={20} color="#fff" />}
+    </>
+  )
+  // An app fills this one in: the same circle, but not a button (the link sits beside it).
+  if (habit.linkedApp) {
+    return (
+      <View
+        accessible
+        accessibilityRole="image"
+        accessibilityLabel={`${habit.name}: ${done ? 'done' : 'not yet'}${progress}, filled in by its app`}
+        style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}
+      >
+        {circle}
+      </View>
+    )
+  }
+  return (
+    <Press
+      onPress={() => onLog(habit, done ? -1 : +1)}
+      disabled={busy}
+      accessibilityRole="button"
+      accessibilityLabel={done ? `${habit.name}: done — tap to undo${progress}` : `Mark ${habit.name} done${progress}`}
+      hitSlop={6}
+      style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}
+    >
+      {circle}
     </Press>
   )
 }
@@ -138,7 +156,7 @@ export function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValu
           <TI icon={IconMessageCircle} size={17} color={entry?.note ? ov.soft : ov.faint} />
         </Press>
       )}
-      {habit.linkedApp ? null : habit.cadence === 'daily' && habit.target > 1 ? (
+      {habit.cadence === 'daily' && habit.target > 1 && !habit.linkedApp ? (
         <View style={st.stepper}>
           <Press onPress={() => onLog(habit, -1)} disabled={busy || count <= 0} accessibilityLabel={`Undo one ${habit.name}`} style={st.step}>
             <TI icon={IconMinus} size={15} color={ov.soft} />

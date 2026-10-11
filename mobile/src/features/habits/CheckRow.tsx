@@ -32,7 +32,6 @@ export function HabitCheckButton({ habit, count, periodCount, busy, onLog }: {
   busy: boolean
   onLog: (habit: Habit, delta: number) => void
 }) {
-  if (habit.linkedApp) return <LinkedAppButton habit={habit} compact />
   const capped = habit.cadence !== 'daily'
   const target = Math.max(1, habit.target)
   const ratio = capped ? Math.min(1, periodCount / target) : count > 0 ? 1 : 0
@@ -44,14 +43,8 @@ export function HabitCheckButton({ habit, count, periodCount, busy, onLog }: {
     ? (full ? habit.color : mixHex(habit.color, colors.line, 40))
     : done ? habit.color : colors.line
   const r = CHECK / 2
-  return (
-    <Press
-      onPress={() => onLog(habit, done ? -1 : +1)}
-      disabled={busy}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      style={{ width: CHECK, height: CHECK }}
-    >
+  const circle = (
+    <>
       <Svg width={CHECK} height={CHECK} style={StyleSheet.absoluteFill}>
         <Circle cx={r} cy={r} r={r - 0.75} fill={!capped && done ? habit.color : colors.bg} />
         {capped && ratio > 0 && (ratio >= 1
@@ -64,6 +57,34 @@ export function HabitCheckButton({ habit, count, periodCount, busy, onLog }: {
           <Hi icon={CheckIcon} size={20} color={colors.white} strokeWidth={2} />
         </View>
       ) : null}
+    </>
+  )
+  // An app fills this one in: the same circle, filling as it does, but not a
+  // button; the link beside it goes to the app.
+  if (habit.linkedApp) {
+    return (
+      <View style={st.linkedPair}>
+        <LinkedAppButton habit={habit} compact />
+        <View
+          accessible
+          accessibilityRole="image"
+          accessibilityLabel={`${habit.name}: ${done ? 'done' : 'not yet'}${progress}, filled in by its app`}
+          style={{ width: CHECK, height: CHECK }}
+        >
+          {circle}
+        </View>
+      </View>
+    )
+  }
+  return (
+    <Press
+      onPress={() => onLog(habit, done ? -1 : +1)}
+      disabled={busy}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={{ width: CHECK, height: CHECK }}
+    >
+      {circle}
     </Press>
   )
 }
@@ -228,6 +249,7 @@ export function CheckRow({ habit, entry, periodCount, busy, onLog, onValue, onNo
 }
 
 export const st = StyleSheet.create({
+  linkedPair: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12, paddingLeft: 14, paddingRight: 12 },
   main: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'stretch' },
   rowRule: { borderTopWidth: 1, borderTopColor: colors.line },
