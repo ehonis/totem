@@ -159,6 +159,8 @@ export interface ChatThread {
   projectId?: string
   /** This is a totem's own chat (its job id). Kept out of Recents. */
   totemId?: string
+  /** Totems brought into this chat (job ids): a group chat its agent hosts. */
+  members?: string[]
   /** A project chat that reads none of the project's instructions, memory or files. */
   projectContextOff?: boolean
   /** Finished, and not yet answered or marked read. */

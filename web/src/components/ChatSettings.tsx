@@ -3,7 +3,8 @@ import { useChat, ensureModels, savePrefs, providerById, type ChatPrefs } from '
 import { visibleModels, EFFORT_LABELS } from '../chat/models'
 import { pushError } from '../toast'
 
-// Settings → Chat: when quiet chats settle, and who writes chat titles.
+// Settings → Chat: when quiet chats settle, whether chats bring in totems, and
+// who writes chat titles.
 // "Pick for me" keeps Totem's own rule.
 
 function Lane({ lane, title, hint }: { lane: 'titles'; title: string; hint: string }) {
@@ -77,6 +78,19 @@ export default function ChatSettings() {
             <select className="model-select" value={String(prefs.autoSettleDays ?? 3)} onChange={(e) => save({ autoSettleDays: Number(e.target.value) })}>
               {[1, 2, 3, 7, 14, 30].map((d) => <option key={d} value={d}>After {d} {d === 1 ? 'day' : 'days'}</option>)}
               <option value="0">Never</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section-title"><span /><strong>Totems</strong></div>
+      <div className="setting-list">
+        <div className="setting-row">
+          <div className="setting-copy"><strong>Let chats bring in totems</strong><span>Any chat’s agent can find your totems and ask one when a request is its job; it joins the chat and answers under its own name, from its own memory and tools. Group chats you start yourself work either way.</span></div>
+          <div className="setting-control">
+            <select className="model-select" value={prefs.totemsInChat === false ? 'off' : 'on'} onChange={(e) => save({ totemsInChat: e.target.value === 'on' })}>
+              <option value="on">On</option>
+              <option value="off">Off</option>
             </select>
           </div>
         </div>

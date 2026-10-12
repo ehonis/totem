@@ -78,6 +78,17 @@ export default function ChatPane() {
         </SettingRow>
       </SettingList>
 
+      <SectionTitle title="Totems" />
+      <SettingList>
+        <SettingRow title="Let chats bring in totems" desc="Any chat’s agent can find your totems and ask one when a request is its job; it joins the chat and answers under its own name, from its own memory and tools. Group chats you start yourself work either way.">
+          <Select
+            value={prefs.totemsInChat === false ? 'off' : 'on'}
+            onChange={(v) => save({ totemsInChat: v === 'on' })}
+            options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+          />
+        </SettingRow>
+      </SettingList>
+
       <SectionTitle title="Titles" />
       <SettingList>
         <SettingRow title="Name chats automatically" desc="A few words in Title Case, the way Codex names threads, written in the background by a very small model.">

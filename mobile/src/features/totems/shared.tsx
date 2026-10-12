@@ -4,7 +4,7 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { api, getJobs, getJobRuns, updateJob, AuthError } from '../../lib/api'
-import { syncThreads } from '../../lib/chat/store'
+import { syncThreads, adoptThread } from '../../lib/chat/store'
 import { THREAD_ICONS } from '../../lib/chat/threadIcons.gen'
 import { pushError } from '../../lib/toast'
 import {
@@ -150,14 +150,26 @@ const STUDIO_ICONS: Record<string, any> = {
 }
 
 /** .tm-icon: the totem's glyph on a bg-3 tile. Tabler thread icons first, then Heroicons. */
-export function TotemIcon({ name, large }: { name?: string; large?: boolean }) {
+export function TotemIcon({ name, large, small }: { name?: string; large?: boolean; small?: boolean }) {
   const icon = (name && THREAD_ICONS[name]) || STUDIO_ICONS[name || ''] || SparklesIcon
-  const box = large ? 48 : 38
+  const box = large ? 48 : small ? 24 : 38
   return (
-    <View style={[st.icon, { width: box, height: box, borderRadius: large ? 12 : 10 }]}>
-      <Hi icon={icon} size={large ? 24 : 20} color={textAlpha(78)} />
+    <View style={[st.icon, { width: box, height: box, borderRadius: large ? 12 : small ? 7 : 10 }]}>
+      <Hi icon={icon} size={large ? 24 : small ? 14 : 20} color={textAlpha(78)} />
     </View>
   )
+}
+
+/** Agent totems (an inline prompt): the only ones that can talk in a chat. */
+export const askable = (j: any) => !j.runner && !j.skillId && !!String(j.prompt || '').trim()
+
+/** Make a group chat with these totems and open it (web TotemsView.tsx startGroupChat). */
+export async function startGroupChat(ids: string[], title: string) {
+  try {
+    const { thread } = await api<{ thread: any }>('/api/totems/groups', { method: 'POST', body: JSON.stringify({ members: ids, title }) })
+    adoptThread(thread)
+    openChat(thread.id)
+  } catch (e: any) { pushError(`Couldn't start the group chat: ${e.message}`) }
 }
 
 export function KindTag({ label }: { label: string }) {

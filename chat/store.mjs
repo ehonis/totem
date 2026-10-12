@@ -14,6 +14,7 @@ import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/pro
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { normalizeAgent } from './subagents.mjs'
+import { normalizeMembers } from '../totems/core.mjs'
 
 export const validThreadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
 
@@ -156,7 +157,7 @@ function normalizeSessions(raw) {
   return Object.keys(out).length ? out : null
 }
 
-const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'projectContextOff', 'needsReply', 'keepUnread', 'settledOverride', 'settledAt', 'unsettledAt', 'snoozedUntil', 'snoozedAt']
+const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'members', 'projectContextOff', 'needsReply', 'keepUnread', 'settledOverride', 'settledAt', 'unsettledAt', 'snoozedUntil', 'snoozedAt']
 
 function applyMetadata(thread, body, now) {
   if (body.kind === 'temporary' || body.kind === 'regular') thread.kind = body.kind
@@ -172,8 +173,15 @@ function applyMetadata(thread, body, now) {
     if (/^[A-Za-z0-9_-]{1,64}$/.test(t)) thread.totemId = t
     else delete thread.totemId
   }
-  // A project or totem chat is always kept: temporary chats live outside them.
-  if (thread.projectId || thread.totemId) thread.kind = 'regular'
+  // Totems brought into this chat (job ids), which makes it a group chat.
+  // A totem's own chat is one-to-one and takes no members.
+  if ('members' in body) {
+    const members = normalizeMembers(body.members)
+    if (members.length && !thread.totemId) thread.members = members
+    else delete thread.members
+  }
+  // A project, totem or group chat is always kept: temporary chats live outside them.
+  if (thread.projectId || thread.totemId || thread.members) thread.kind = 'regular'
   if ('title' in body) {
     const title = str(body.title, 120).trim()
     if (title) thread.title = title

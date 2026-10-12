@@ -29,6 +29,19 @@ test('a client PUT of an existing thread merges metadata and keeps server messag
   await rm(dir, { recursive: true, force: true })
 })
 
+test('totem members make a kept group chat, and a totem chat takes none', async () => {
+  const dir = await tmp()
+  const store = createThreadStore({ dir })
+  const g = await store.put('g1', { kind: 'temporary', members: ['strava', 'strava', 'bad id'], messages: [] })
+  assert.deepEqual(g.members, ['strava'])
+  assert.equal(g.kind, 'regular')
+  const cleared = await store.put('g1', { members: [] })
+  assert.equal(cleared.members, undefined)
+  const own = await store.put('totem-x', { totemId: 'x', members: ['y'], messages: [] })
+  assert.equal(own.members, undefined)
+  await rm(dir, { recursive: true, force: true })
+})
+
 test('a new thread from the client is taken whole, sessions excluded', async () => {
   const dir = await tmp()
   const store = createThreadStore({ dir })

@@ -3,7 +3,7 @@ import { DRIVER_LOGOS } from '../providers'
 import {
   IconBrandGithub, IconBrandStrava, IconCalendarEvent, IconChecklist, IconDeviceDesktop, IconFileText, IconListCheck,
   IconMicrophone, IconTarget, IconTerminal2, IconTool, IconWorld, IconBrain, IconMail, IconNotebook, IconPhoto,
-  IconSearch, IconPencil, IconDatabase, IconRobot,
+  IconSearch, IconPencil, IconDatabase, IconRobot, IconUsersGroup,
 } from './icons'
 
 type TablerIcon = React.ComponentType<{ size?: number; stroke?: number; className?: string; style?: React.CSSProperties }>
@@ -36,6 +36,8 @@ const APPS: Record<string, { icon: TablerIcon; label: string }> = {
   plaud: { icon: IconMicrophone, label: 'Plaud' },
   krakatoa: { icon: IconNotebook, label: 'Krakatoa' },
   gmail: { icon: IconMail, label: 'Mail' },
+  // totems__list / totems__invite; an ask is drawn as the totem's own message (totemReply.ts).
+  totems: { icon: IconUsersGroup, label: 'Totems' },
   'computer-use': { icon: IconDeviceDesktop, label: 'Computer' },
   computer_use: { icon: IconDeviceDesktop, label: 'Computer' },
 }

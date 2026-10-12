@@ -6,8 +6,11 @@ import { setChatCommands } from '../studio'
 import {
   useChat, initChat, send, stop, steer, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
-  openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead,
+  openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead, setMembers,
 } from '../chat/store'
+import { TotemIcon, useTotemDirectory } from '../totems/shared'
+import { GroupPicker } from './TotemsView'
+import TotemsGlyph from './TotemsIcon'
 import { isSnoozed, settledAt, wakeDescription } from '../chat/settle'
 import ProjectHome from '../chat/ProjectHome'
 import ProjectIcon from '../chat/ProjectIcon'
@@ -27,7 +30,7 @@ import { useChatPresence } from '../chat/presence'
 import { useViewing } from '../chat/onScreen'
 import { contextVersion, subscribeContext, takeContext } from '../chat/pendingContext'
 import { TI } from '../chat/ui'
-import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconPaperclip, IconLayoutSidebar, IconSparkles, IconFolder, IconFolderOff } from '../chat/icons'
+import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconPaperclip, IconLayoutSidebar, IconSparkles, IconFolder, IconFolderOff, IconSettings, IconUserPlus } from '../chat/icons'
 import type { Attachment, ModelSettings } from '../chat/types'
 import '../chat/chat.css'
 import { chatGlow } from '../chat/glow'
@@ -51,6 +54,12 @@ const STARTERS: { text: string; fill?: boolean }[] = [
 const DRAFTS_KEY = 'totem.chat.drafts'
 function readDrafts(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {} } catch { return {} }
+}
+
+/** The Totems tab, on one totem's settings when given its id. */
+function goTotems(id?: string) {
+  window.history.pushState({}, '', id ? `/totems?totem=${encodeURIComponent(id)}` : '/totems')
+  window.dispatchEvent(new PopStateEvent('popstate'))
 }
 
 function useNarrow() {
@@ -100,6 +109,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const [voice, setVoice] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
+  const [picking, setPicking] = useState(false)
+  const totemDir = useTotemDirectory()
   const scrollRef = useRef<HTMLDivElement>(null)
   const composer = useRef<ComposerHandle>(null)
   const dragDepth = useRef(0)
@@ -389,15 +400,10 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
             </button>
           )}
           {project && active && !empty && <span className="vc-top-sep" aria-hidden>/</span>}
-          {active?.totemId && (
+          {(active?.totemId || active?.members?.length) && (
             <>
-              <button
-                type="button"
-                className="vc-top-project"
-                title="Open this totem's settings, memory and runs"
-                onClick={() => { window.history.pushState({}, '', `/totems?totem=${encodeURIComponent(active.totemId!)}`); window.dispatchEvent(new PopStateEvent('popstate')) }}
-              >
-                <TI icon={IconSparkles} size={15} /><span>Totem</span>
+              <button type="button" className="vc-top-project" title="All totems" onClick={() => goTotems()}>
+                <TotemsGlyph width={15} height={15} /><span>Totems</span>
               </button>
               <span className="vc-top-sep" aria-hidden>/</span>
             </>
@@ -425,6 +431,21 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
               <TI icon={contextOff ? IconFolderOff : IconFolder} size={19} />
             </button>
           )}
+          {active?.totemId && (
+            <button type="button" className="vc-icon-btn" onClick={() => goTotems(active.totemId)} aria-label="Totem settings" title="This totem's settings, memory and runs"><TI icon={IconSettings} size={19} /></button>
+          )}
+          {active && !active.totemId && (
+            <span className="vc-members">
+              {(active.members || []).slice(0, 4).map((id) => (
+                <button key={id} type="button" className="vc-member" title={`${totemDir.get(id)?.name || 'Totem'}: settings, memory and runs`} onClick={() => goTotems(id)}>
+                  <TotemIcon name={totemDir.get(id)?.iconName} size={14} />
+                </button>
+              ))}
+              <button type="button" className="vc-icon-btn" onClick={() => setPicking((v) => !v)} aria-label="Totems in this chat" title={active.members?.length ? 'Add or remove totems in this chat' : 'Bring totems into this chat'}>
+                <TI icon={IconUserPlus} size={19} />
+              </button>
+            </span>
+          )}
           <AgentsChip threadId={activeId} />
           <BrowserChip threadId={activeId} />
           <UsageChips compact={narrow} />
@@ -447,6 +468,19 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
           )}
         </div>
       </header>
+      {picking && active && !active.totemId && (
+        <div className="vc-members-pop">
+          <GroupPicker
+            jobs={[...totemDir.values()]}
+            initial={active.members?.length ? active.members : []}
+            title={active.members?.length ? 'Totems in this chat' : 'Bring totems into this chat'}
+            action="Save"
+            allowEmpty={!!active.members?.length}
+            onCancel={() => setPicking(false)}
+            onDone={(ids) => { setMembers(active.id, ids); setPicking(false) }}
+          />
+        </div>
+      )}
 
       <div className="vc-scroll" ref={scrollRef} onScroll={onScroll}>
         {empty && project ? (

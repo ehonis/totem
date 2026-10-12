@@ -376,7 +376,8 @@ function GmailConnectionPanel({ onAuthError }: { onAuthError: () => void }) {
             <div className="app-row-body">
               <p className="app-row-desc">
                 Agents get <code>gmail__*</code> tools for every account here. They cannot send: an email they write
-                waits in your Inbox, where you send it or save it as a draft. Uses the same Google OAuth client as
+                waits in your Inbox, where you send it or save it as a draft. The same sign-in adds the account's
+                Google Calendar too, unless it is already connected. Uses the same Google OAuth client as
                 Calendar, with the Gmail API enabled on its project (<code>docs/gmail.md</code>).
               </p>
               {info && !info.configured ? (

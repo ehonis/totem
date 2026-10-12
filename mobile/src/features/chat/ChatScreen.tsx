@@ -46,7 +46,7 @@ import { useChatPresence } from './presence'
 import { TI, vc } from './ui'
 import { PageGlow } from '../../ui/PageGlow'
 import { chatGlow } from '../../lib/chat/glow'
-import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconFolder, IconFolderOff, IconSparkles, IconChevronDown } from './icons'
+import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconFolder, IconFolderOff, IconSparkles, IconChevronDown, IconSettings, IconUsersGroup, IconUserPlus } from './icons'
 
 function greeting(name: string) {
   const h = new Date().getHours()
@@ -354,10 +354,13 @@ export default function ChatScreen() {
             </Press>
           ) : null}
           {project && active && !empty ? <T size={14} color={vc.faint}>/</T> : null}
-          {active?.totemId ? (
-            <Press style={st.crumb} onPress={() => { tap(); router.navigate({ pathname: '/totems', params: { totem: active.totemId } }) }} accessibilityLabel="Open this totem">
-              <TI icon={IconSparkles} size={15} /><T size={14} color={vc.soft}>Totem</T>
-            </Press>
+          {active?.totemId || active?.members?.length ? (
+            <>
+              <Press style={st.crumb} onPress={() => { tap(); router.navigate('/totems') }} accessibilityLabel="All totems">
+                <TI icon={IconSparkles} size={15} /><T size={14} color={vc.soft}>Totems</T>
+              </Press>
+              <T size={14} color={vc.faint}>/</T>
+            </>
           ) : null}
           {!project || (active && !empty) ? (
             titleMenu ? (
@@ -376,6 +379,16 @@ export default function ChatScreen() {
               accessibilityState={{ selected: contextOff }}
             >
               <TI icon={contextOff ? IconFolderOff : IconFolder} size={20} color={contextOff ? colors.text : vc.soft} />
+            </Press>
+          ) : null}
+          {active?.totemId ? (
+            <Press style={st.iconBtn} onPress={() => { tap(); router.push({ pathname: '/totem/[id]', params: { id: active.totemId! } }) }} accessibilityLabel="This totem's settings, memory and runs">
+              <TI icon={IconSettings} size={20} color={vc.soft} />
+            </Press>
+          ) : null}
+          {active && !active.totemId && !empty ? (
+            <Press style={st.iconBtn} onPress={() => { tap(); router.push({ pathname: '/totem/group', params: { chat: active.id } }) }} accessibilityLabel={active.members?.length ? `Totems in this chat: ${active.members.length}` : 'Bring totems into this chat'}>
+              <TI icon={active.members?.length ? IconUsersGroup : IconUserPlus} size={20} color={active.members?.length ? colors.text : vc.soft} />
             </Press>
           ) : null}
           <AgentsChip threadId={activeId} />

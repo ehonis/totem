@@ -40,7 +40,11 @@ export function splitRef(ref, account = null, accounts = []) {
   return { account: acct, id: s }
 }
 
-export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = null, fetchImpl = fetch, now = Date.now } = {}) {
+// `extraScopes` are asked for in the same Google sign-in (Calendar's, so one sign-in
+// connects both); `onConnected` gets the grant to hand them on, and `grantInUse`
+// says whether a refresh token is still used elsewhere, in which case removing the
+// Gmail account must not revoke it at Google.
+export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = null, fetchImpl = fetch, now = Date.now, extraScopes = [], onConnected = null, grantInUse = () => false } = {}) {
   const access = new Map()      // account -> { token, exp }
   const refreshing = new Map()  // account -> Promise<token>, one refresh in flight per account
   const sessions = new Map()    // state -> { label, createdAt }
@@ -172,7 +176,7 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
     url.searchParams.set('client_id', creds.client_id)
     url.searchParams.set('redirect_uri', redirectUri())
     url.searchParams.set('response_type', 'code')
-    url.searchParams.set('scope', GMAIL_SCOPE)
+    url.searchParams.set('scope', [GMAIL_SCOPE, ...extraScopes].join(' '))
     url.searchParams.set('access_type', 'offline')
     url.searchParams.set('prompt', 'consent')
     url.searchParams.set('state', state)
@@ -213,7 +217,12 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
     const tokens = readTokens()
     tokens[sess.label] = { refresh_token: tok.refresh_token, scope: tok.scope || GMAIL_SCOPE, email, connectedAt: new Date(now()).toISOString() }
     await writeTokens(tokens)
-    return { ok: true, message: `Gmail "${sess.label}"${email ? ` (${email})` : ''} connected. You can close this tab and return to Totem.` }
+    let also = ''
+    if (onConnected) {
+      try { also = (await onConnected({ label: sess.label, email, token: tok })) || '' }
+      catch (e) { also = ` Its calendar could not be added: ${String(e?.message || e).slice(0, 160)}` }
+    }
+    return { ok: true, message: `Gmail "${sess.label}"${email ? ` (${email})` : ''} connected.${also} You can close this tab and return to Totem.` }
   }
 
   async function removeAccount({ label } = {}) {
@@ -225,8 +234,9 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
     await writeTokens(tokens)
     access.delete(key)
     labelCache.delete(key)
-    // Best effort: also revoke the grant at Google, so removing it here means it is gone.
-    fetchImpl(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(refreshToken)}`, { method: 'POST' }).catch(() => {})
+    // Best effort: also revoke the grant at Google, so removing it here means it is gone,
+    // unless the same grant still serves something else (this account's calendar).
+    if (!grantInUse(refreshToken)) fetchImpl(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(refreshToken)}`, { method: 'POST' }).catch(() => {})
     return listAccounts()
   }
 

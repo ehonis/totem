@@ -27,7 +27,7 @@
 .tm-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12.5px; color: var(--muted); }
 .tm-dot { opacity: .6; }
 .tm-bad { color: var(--red, #f0879e); }
-.tm-kind { padding: 1px 7px; border-radius: 999px; background: var(--bg-3); color: color-mix(in srgb, var(--text) 70%, transparent); font-size: 11.5px; }
+.tm-kind { flex: none; white-space: nowrap; padding: 1px 7px; border-radius: 999px; background: var(--bg-3); color: color-mix(in srgb, var(--text) 70%, transparent); font-size: 11.5px; }
 .tm-card-side { display: flex; align-items: center; gap: 6px; }
 .tm-chat-btn { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: none; border: 0; color: var(--muted); cursor: pointer; }
 .tm-chat-btn:hover { color: var(--text); background: var(--bg-3); }
@@ -160,3 +160,39 @@
 .tm-drafts { margin-bottom: 22px; }
 .tm-drafts h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
 .tm-card.draft { border-style: dashed; }
+
+/* The list: rows like the chats list. A row opens the totem's chat. */
+.tm-list { display: flex; flex-direction: column; gap: 2px; }
+.tm-row { display: flex; align-items: center; gap: 6px; padding-right: 8px; border-radius: 12px; }
+.tm-row:hover { background: var(--bg-2); }
+.tm-row.off .tm-row-main { opacity: .62; }
+.tm-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 10px; background: none; border: 0; text-align: left; color: inherit; cursor: pointer; }
+.tm-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tm-row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tm-row-name { font-size: 14.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tm-row-last { font-size: 13.5px; color: color-mix(in srgb, var(--text) 72%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tm-row-meta { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.tm-row-time { flex: none; align-self: flex-start; padding-top: 2px; font-size: 12px; color: var(--muted); }
+.tm-unread { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.tm-drafts h2 { margin: 18px 0 6px 10px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.tm-drafts:first-of-type h2 { margin-top: 0; }
+
+.tm-icon.sm { width: 26px; height: 26px; border-radius: 8px; }
+.tm-stack { flex: none; display: flex; width: 38px; height: 38px; align-items: center; justify-content: center; }
+.tm-stack .tm-icon.sm { box-shadow: 0 0 0 2px var(--bg); }
+.tm-stack .tm-icon.sm + .tm-icon.sm { margin-left: -14px; }
+
+/* Picking totems for a group chat. */
+.tm-group-pick { display: flex; flex-direction: column; gap: 12px; padding: 16px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); }
+.tm-group-pick-head { display: flex; flex-direction: column; gap: 4px; }
+.tm-group-pick-head .muted { font-size: 13px; line-height: 1.5; }
+.tm-group-list { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow: auto; }
+.tm-group-opt { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; cursor: pointer; }
+.tm-group-opt:hover { background: var(--bg-3); }
+.tm-group-opt.on { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.tm-group-opt input { accent-color: var(--accent); }
+.tm-group-opt-text { min-width: 0; display: flex; flex-direction: column; font-size: 14px; color: var(--text); }
+.tm-group-opt-text .muted { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 720px) {
+  .tm-head { flex-direction: column; }
+}

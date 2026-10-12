@@ -28,9 +28,9 @@ errors).
 |---|---|
 | Prompts, parsers, cost tiers (pure, tested) | `totems/core.mjs`, `totems/core.test.mjs` |
 | Engine and routes | `bridge.mjs`, the "Totems" block beside the job engine |
-| UI | `web/src/components/TotemsView.tsx` (list, builder, detail), `totems.css`; 3D lobby `web/src/totems/` (`TotemLobby.tsx`, `scene.ts`, `figure.ts`, `lobbyModel.ts`); proposal card `web/src/chat/TotemProposal.tsx` |
+| UI | `web/src/components/TotemsView.tsx` (list, group picker, builder, settings), `totems.css`; `web/src/totems/shared.tsx`; a totem's answer in a chat `web/src/chat/totemReply.ts` + `Message.tsx`; proposal card `web/src/chat/TotemProposal.tsx`. iPhone: `mobile/src/features/totems/` (`TotemGroupSheet.tsx` picks a group's totems) |
 | Memory | `data/totems/<jobId>/memory.md` (`TOTEMS_DIR`) |
-| Chat | thread `totem-<jobId>`, carrying `totemId`; kept out of Recents |
+| Chat | thread `totem-<jobId>`, carrying `totemId`; kept out of Recents. Group chats are regular chats with `members` (job ids) |
 
 ## A run
 
@@ -112,19 +112,45 @@ chat, posts an intro, and starts the first run (not for a watcher). A totem's
 settings offer the same picker.
 `POST /api/totems/:id/recommend` re-asks for models for an existing totem.
 
-## The lobby
+## The list
 
-On a desktop the tab opens as a 3D lobby (three.js, its own lazy chunk): every
-totem stands on a ring, drafts as holograms, and the last plinth is empty for a
-new one, seen from above like a board, every figure turned to face you. Each figure is carved from its id (`figure.ts`), so it looks the same
-every visit. Colour says its task type, the headpiece says what it does (an eye
-for watchers, a gear for built-ins), and the eyes show its state: closed with
-drifting z's when paused, flickering red after a failure, under a beam of light
-while it runs. Hovering previews a totem in the side panel. Clicking brings it to
-the front and clicking the front one opens it; arrows, the wheel, a drag and the
-roster do the same. Phones (≤720 px), browsers without WebGL and anyone who picks
-the list button get the list; the choice is kept in `localStorage`
-(`totems.view`). `prefers-reduced-motion` stills the scene.
+The tab reads like the chats list. Each totem is a row with the newest thing in
+its chat (a run's report, or the last thing said), how long ago, an unread dot,
+and its status line; clicking the row opens that chat, so reading what its runs
+found is one click. The switch pauses it; the gear opens its settings, memory and
+runs (`/totems?totem=<id>`), which the gear in the totem's chat header also opens.
+Group chats are listed above the totems, drafts between. There is no 3D lobby any
+more (it was removed in favour of the list).
+
+## Group chats and totems in any chat
+
+Any chat can bring totems in. Its agent (the host) gets `totemsChatRule`
+(`totems/core.mjs`) and four gateway tools, `totems__*` (`totem_totems_*` on `/mcp`):
+
+| Tool | Does |
+|---|---|
+| `totems__list {query?, chat?}` | Every totem: what it does, whether it can be asked (agent totems only), whether it is in the chat, its last run. |
+| `totems__ask {chat, totem, message}` | Runs that totem on its own account and model (`preflightJobProvider`) with `totemAskPrompt`: its job, memory, last runs, the chat's last ten messages and the question. It may use its tools and write its memory. Joins it to the chat. |
+| `totems__wait {askId}` | An ask waits at most 45 s and otherwise returns `working`, because some CLIs drop a tool call after a minute (Codex's default). The host waits again. Answers are kept an hour. |
+| `totems__invite {chat, totems}` | Joins totems without asking them anything. |
+
+A chat with `members` is a **group chat**. The host is told who is in it, to ask a
+member when the owner addresses it by name or `@name` or the request is its job,
+to pass one member's answer to the next so they build on each other, and not to
+repeat their answers. At most three asks run at once per chat; an ask run has no
+chat id, which keeps totems from asking each other in a loop.
+
+**Catch-all, on by default.** Every chat (not voice, gateway mode only) is told how
+many totems exist and to bring one in when a request is plainly its job.
+Settings → Chat → "Let chats bring in totems" (`totemsInChat` in
+`data/chat-settings.json`) turns that off; group chats work either way.
+
+The dashboard draws each ask (and its waits) as one message from the totem, under
+its name and icon (`foldTotemCalls` in `web/src/chat/totemReply.ts`, ported to
+`mobile/src/lib/chat/`), instead of a tool row. "Group chat" on the Totems tab, or
+the people button in a chat's header, picks the members (`POST /api/totems/groups
+{members, title}` makes one; editing is a thread `PUT` of `members`). A totem's own
+chat stays one-to-one and takes no members.
 
 ## Chats and proposals
 
@@ -146,6 +172,7 @@ the list button get the list; the choice is kept in `localStorage`
 | `GET/PUT /api/totems/:id/memory` | `{memory}` | `{memory}` |
 | `POST /api/totems/:id/thread` | | `{threadId}` |
 | `POST /api/totems/:id/recommend` | | `{job}` |
+| `POST /api/totems/groups` | `{members, title?}` (agent totem ids) | `{thread}` |
 
 Editing, pausing, running and deleting go through `/api/jobs` as before. Deleting a
 totem also deletes its memory and its chat.
