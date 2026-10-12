@@ -196,3 +196,9 @@
 @media (max-width: 720px) {
   .tm-head { flex-direction: column; }
 }
+
+/* A skill totem's instructions, edited in place. */
+.tm-vars { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.tm-var { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--muted); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; }
+.tm-var.used { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.tm-preview { white-space: pre-wrap; max-height: 360px; overflow: auto; margin: 0; }

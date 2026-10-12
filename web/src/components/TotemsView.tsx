@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, AuthError, getJobs, updateJob, deleteJob } from '../api'
+import { api, AuthError, getJobs, updateJob, deleteJob, getSkills, updateSkill, resetSkill, previewSkill } from '../api'
 import { pushError, pushToast } from '../toast'
 import { TI } from '../chat/ui'
 import { useChat, loadProviders, ensureModels, syncThreads, setActive, adoptThread, threadTitle } from '../chat/store'
@@ -447,6 +447,75 @@ function MemoryTab({ job }: { job: any }) {
   )
 }
 
+const andList = (names: string[]) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0] || '')
+
+// A built-in or skill totem runs a skill (skills/, data/skills/<id>/SKILL.md).
+// Its instructions are edited here, in the totem, with the same save, reset and
+// preview the skill store offers; nothing sends him elsewhere to change them.
+function SkillInstructions({ job }: { job: any }) {
+  const [skill, setSkill] = useState<any | null | undefined>(undefined)
+  const [allVars, setAllVars] = useState<string[]>([])
+  const [body, setBody] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState<any>(null)
+  const adopt = (payload: any) => {
+    const s = (payload.skills || []).find((x: any) => x.id === job.skillId) || null
+    setSkill(s)
+    setAllVars(payload.variables || [])
+    setBody(s?.body || '')
+    setPreview(null)
+  }
+  useEffect(() => { getSkills().then(adopt).catch((e: any) => { setSkill(null); pushError(e.message) }) }, [job.skillId]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (skill === undefined) return <section className="tm-section"><h2>Instructions</h2><p className="muted">Loading…</p></section>
+  if (skill === null) {
+    return (
+      <section className="tm-section">
+        <h2>Instructions</h2>
+        <p className="muted">Its instructions (“{job.skillId}”) are missing, so a run has nothing to follow.</p>
+      </section>
+    )
+  }
+  const allowed: string[] = skill.knownVariables?.length ? skill.knownVariables : allVars
+  const used = [...new Set([...String(body).matchAll(/\{\{\s*[#^/]?([a-zA-Z0-9_.-]+)\s*\}\}/g)].map((m) => m[1]))]
+  const unknown = used.filter((v) => !allowed.includes(v))
+  const others = (skill.usedBy || []).filter((j: any) => j.id !== job.id)
+  const dirty = body !== skill.body
+  async function act(fn: () => Promise<any>, message: string) {
+    setBusy(true)
+    try { adopt(await fn()); pushToast(message, 'info') } catch (e: any) { pushError(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <section className="tm-section">
+      <h2>Instructions</h2>
+      <p className="muted">
+        What {job.name} tells the AI each run.
+        {others.length > 0 && ` ${andList(others.map((j: any) => j.name))} ${others.length === 1 ? 'follows' : 'follow'} the same instructions, so a change here changes ${others.length === 1 ? 'it' : 'them'} too.`}
+      </p>
+      <textarea className="tm-input mono" rows={16} value={body} onChange={(e) => setBody(e.target.value)} spellCheck={false} />
+      {allowed.length > 0 && (
+        <div className="tm-vars">
+          <span className="muted tm-hint">Values filled in at run time:</span>
+          {allowed.map((v) => (
+            <button key={v} type="button" className={`tm-var ${used.includes(v) ? 'used' : ''}`} onClick={() => setBody((b) => `${b}${b.endsWith('\n') || !b ? '' : ' '}{{${v}}}`)}>{`{{${v}}}`}</button>
+          ))}
+        </div>
+      )}
+      {unknown.length > 0 && <p className="tm-bad tm-hint">{unknown.map((v) => `{{${v}}}`).join(', ')} {unknown.length === 1 ? 'is not a value' : 'are not values'} Totem can fill, so {unknown.length === 1 ? 'it' : 'they'} will come out blank. Check the spelling.</p>}
+      {preview && <pre className="tm-input mono tm-preview">{preview.text}</pre>}
+      <div className="tm-actions">
+        <button type="button" className="btn primary" disabled={busy || !dirty || !body.trim()} onClick={() => act(() => updateSkill(skill.id, { body }), 'Saved the instructions')}>Save instructions</button>
+        {dirty && <button type="button" className="btn" disabled={busy} onClick={() => setBody(skill.body)}>Discard</button>}
+        <button type="button" className="btn ghost" disabled={busy} onClick={async () => { setBusy(true); try { setPreview(preview ? null : await previewSkill(skill.id, body)) } catch (e: any) { pushError(e.message) } finally { setBusy(false) } }}>
+          {preview ? 'Hide preview' : 'Preview what it receives'}
+        </button>
+        {skill.kind === 'seeded' && skill.modified && (
+          <button type="button" className="btn ghost" disabled={busy} onClick={() => { if (window.confirm('Put back the instructions that ship with Totem? Your changes are discarded.')) act(() => resetSkill(skill.id), 'Restored the original instructions') }}>Reset to original</button>
+        )}
+      </div>
+    </section>
+  )
+}
+
 function SettingsTab({ job, onChanged, onDeleted }: { job: any; onChanged: (job: any) => void; onDeleted: () => void }) {
   const agent = !job.runner && !job.skillId
   const [instructions, setInstructions] = useState(job.prompt || '')
@@ -479,10 +548,12 @@ function SettingsTab({ job, onChanged, onDeleted }: { job: any; onChanged: (job:
             <div className="tm-actions"><button type="button" className="btn primary" onClick={() => save({ prompt: instructions })}>Save instructions</button></div>
           )}
         </section>
+      ) : job.skillId ? (
+        <SkillInstructions job={job} />
       ) : (
         <section className="tm-section">
           <h2>What it runs</h2>
-          <p className="muted">{job.runner ? `Built-in code: ${job.runner}.` : `The “${job.skillId}” skill.`} Edit the prompt in Settings → Skills.</p>
+          <p className="muted">Built-in code ({job.runner}), with no instructions to edit. Its schedule and notifications are below.</p>
         </section>
       )}
       <section className="tm-section">
