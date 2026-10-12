@@ -42,6 +42,7 @@
  */
 import { homedir } from 'node:os'
 import { join, resolve, dirname, isAbsolute } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { mkdir, readdir, readlink, symlink, rm } from 'node:fs/promises'
 
 /** Drivers that can hold more than one account. */
@@ -266,6 +267,14 @@ export function splitLaunchArgs(value) {
  * environment, then the instance's variables, then the config-dir override that
  * actually selects the account (which therefore wins over a stray env entry).
  */
+/** A Codex home signed in with ChatGPT (auth.json in chatgpt mode, with tokens). */
+function hasChatgptLogin(codexHome) {
+  try {
+    const auth = JSON.parse(readFileSync(join(codexHome, 'auth.json'), 'utf8'))
+    return !!auth?.tokens && String(auth.auth_mode || 'chatgpt').toLowerCase() !== 'apikey'
+  } catch { return false }
+}
+
 export function instanceEnvironment(instance, baseEnv = process.env, home = homedir()) {
   const env = { ...baseEnv }
   for (const variable of instance.env || []) env[variable.name] = variable.value
@@ -277,9 +286,12 @@ export function instanceEnvironment(instance, baseEnv = process.env, home = home
     const layout = codexHomeLayout(instance, home)
     if (layout.effectiveHomePath) env.CODEX_HOME = layout.effectiveHomePath
     // `codex exec` authenticates from CODEX_API_KEY; an OPENAI_API_KEY alone (the
-    // name Settings -> AI stores it under, shared with OpenCode) is not enough for
-    // it. Mirror it unless the account set its own.
-    if (!env.CODEX_API_KEY && env.OPENAI_API_KEY) env.CODEX_API_KEY = env.OPENAI_API_KEY
+    // name Settings -> AI stores it under, shared with OpenCode, and the voice
+    // mode's key) is not enough for it. Mirror it only for an account with no
+    // ChatGPT login: CODEX_API_KEY outranks the login, and on an API key Codex
+    // drops its image generation tool.
+    const codexHome = layout.effectiveHomePath || env.CODEX_HOME || join(home, '.codex')
+    if (!env.CODEX_API_KEY && env.OPENAI_API_KEY && !hasChatgptLogin(codexHome)) env.CODEX_API_KEY = env.OPENAI_API_KEY
   }
   return env
 }
