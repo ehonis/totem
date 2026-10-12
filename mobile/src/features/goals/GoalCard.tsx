@@ -5,7 +5,7 @@
 // Editing the title/note and the numbers open as sheets; postpone and delete confirm
 // with the platform alert.
 import React, { useEffect, useRef, useState } from 'react'
-import { Animated, Linking, StyleSheet, TextInput, View } from 'react-native'
+import { Animated, StyleSheet, TextInput, View } from 'react-native'
 import { router } from 'expo-router'
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg'
 import IconActivityHeartbeat from '@tabler/icons-react-native/dist/esm/icons/IconActivityHeartbeat.mjs'
@@ -22,6 +22,7 @@ import { GOAL_DONE_ICON, goalIconFor } from '../../lib/goals/goalIcon'
 import { formatAmount } from '../../lib/goals/types'
 import type { Goal, GoalMetric, GoalPeriodType, SubGoal } from '../../lib/goals/types'
 import { NativeMenu } from './NativeMenu'
+import { openUrl } from '../../lib/siblingApps'
 
 /** One hue per horizon (.period-week …), shared with the tabs and the overview. */
 export const PERIOD_COLOR: Record<GoalPeriodType, string> = {
@@ -425,7 +426,7 @@ export default function GoalCard({ goal, busy, bushidoHosts = [], actions }: {
               kind="link"
               icon={BookmarkIcon}
               strike={link.todo?.status === 'done'}
-              onPress={link.kind === 'url' && link.url ? () => { void Linking.openURL(link.url!) } : undefined}
+              onPress={link.kind === 'url' && link.url ? () => { void openUrl(link.url!) } : undefined}
             >
               {link.kind === 'url' && link.url ? link.label : link.todo?.title ?? link.label}
             </Chip>

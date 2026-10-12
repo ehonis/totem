@@ -122,6 +122,15 @@ runs (`/totems?totem=<id>`), which the gear in the totem's chat header also open
 Group chats are listed above the totems, drafts between. There is no 3D lobby any
 more (it was removed in favour of the list).
 
+**The chats panel has a Totems face.** A Chats | Totems switch at the top of the
+desktop panel and the phone drawer (`totem.panel.mode`, kept per device) turns it
+from your chats to your totems: group chats first (with "+" for a new one), then
+every totem, the one that ran last on top, each opening its own chat. The right of
+each row says what it is doing (`totemNavRows` in `web/src/chat/totemNav.ts`,
+ported to `mobile/src/lib/chat/`): running now, a report waiting, the last run
+failed, or paused (dimmed), and how long ago it last ran. A waiting report puts a
+dot on the Totems tab while the panel shows Chats.
+
 ## Group chats and totems in any chat
 
 Any chat can bring totems in. Its agent (the host) gets `totemsChatRule`

@@ -5,7 +5,6 @@ import React, { useEffect, useRef, useState } from 'react'
 import { StyleSheet, View, type TextInput } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import type { KeyboardAwareScrollViewRef } from 'react-native-keyboard-controller'
-import * as WebBrowser from 'expo-web-browser'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
 import { Btn, Press, Spinner } from '../../ui/kit'
@@ -20,6 +19,7 @@ import { useVentureTags } from '../../lib/todos/ventureTags'
 import { acceptTodo, findTodo, loadBoard, useBoard } from './store'
 import { localDateTimeKey } from './format'
 import { DateField, Field, FieldInput, InlineError, InlineNotice, SectionHead, SelectField, SheetFrame, SheetHead, st as ui } from './ui'
+import { openUrl } from '../../lib/siblingApps'
 
 const REPEAT_OPTIONS = [
   { value: '', label: 'Does not repeat' }, { value: 'daily', label: 'Daily' }, { value: 'weekdays', label: 'Weekdays' },
@@ -200,7 +200,7 @@ function DetailForm({ original, allTodos, initialFocus }: { original: Todo; allT
         <View style={ui.section}>
           <SectionHead title="Source" aside={todo.syncState.status} />
           {link?.externalUrl ? (
-            <Press onPress={() => void WebBrowser.openBrowserAsync(link.externalUrl!)} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }} accessibilityRole="link">
+            <Press onPress={() => void openUrl(link.externalUrl!)} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }} accessibilityRole="link">
               <T size={14} color={colors.accent}>{`Open ${source === 'sheet' ? 'Action Items row' : 'GitHub issue'}`}</T>
               <Hi icon={ArrowTopRightOnSquareIcon} size={13} color={colors.accent} />
             </Press>

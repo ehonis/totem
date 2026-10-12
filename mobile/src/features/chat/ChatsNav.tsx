@@ -2,7 +2,9 @@
 // ChatsNav + ThreadList.tsx): Home's projects and recents, or one project's
 // header, folders and chats. Each list keeps its parked chats on two folding
 // shelves at the bottom, Snoozed and Settled (settle.ts). A row opens its chat
-// on tap; long-press opens the chat's native menu, and the "…" does too.
+// on tap; long-press opens the chat's native menu, and the "…" does too. A switch
+// at the top turns it to Totems: group chats, then every totem, the one that ran
+// last on top, each opening its own chat.
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { MenuView } from '@react-native-menu/menu'
@@ -22,9 +24,15 @@ import { groupThreads, useNow } from './threadOps'
 import { threadMenu } from './threadMenu'
 import { ThreadIcon, ProjectIcon } from './ThreadIcon'
 import { TI } from './ui'
+import Spark from './Spark'
+import { totemNavRows, type TotemNavRow } from '../../lib/chat/totemNav'
+import { TotemIcon, ensureTotemChat, loadJobs, useJobs } from '../totems/shared'
 import {
   IconDots, IconSearch, IconX, IconFolderPlus, IconArrowLeft, IconChevronDown, IconChevronRight, IconChevronUp, IconPlus,
+  IconUsersGroup, IconLayoutList,
 } from './icons'
+import { router } from 'expo-router'
+import { navigateTo } from '../../shell/nav'
 
 const FOLDED_KEY = 'totem.projects.folded'
 const OPEN_FOLDERS_KEY = 'totem.projects.openFolders'
@@ -328,6 +336,96 @@ function ProjectsSection({ onOpen }: { onOpen: () => void }) {
   )
 }
 
+// --- totems (web ProjectNav.tsx TotemsSection) ---------------------------------------------
+
+/** One totem: opens its chat. On the right, what it is doing and when it last ran. */
+function TotemNavItem({ row, active, onOpen, now }: { row: TotemNavRow; active: boolean; onOpen: () => void; now: number }) {
+  const { job, state, lastRanAt } = row
+  return (
+    <Press style={[st.thread, active && st.threadOn]} onPress={() => { tap(); onOpen() }} accessibilityLabel={`${job.name}${state === 'idle' ? '' : `, ${state}`}`}>
+      <View style={[st.threadMain, state === 'paused' && { opacity: 0.55 }]}>
+        <TotemIcon name={job.iconName} small />
+        <T size={15} numberOfLines={1} weight={state === 'unread' ? 600 : 400} color={active || state === 'unread' ? colors.text : textAlpha(86)} style={{ flex: 1 }}>{job.name}</T>
+        {state === 'running' ? <Spark size={12} />
+          : state === 'unread' ? <View style={st.dot} accessibilityLabel="A report is waiting" />
+            : state === 'failed' ? <View style={[st.dot, { backgroundColor: '#f0879e' }]} accessibilityLabel="Last run failed" /> : null}
+        <T size={12} color={textAlpha(40)} style={{ paddingHorizontal: 6, fontVariant: ['tabular-nums'] }}>{lastRanAt ? ago(lastRanAt, now) : ''}</T>
+      </View>
+    </Press>
+  )
+}
+
+/** The drawer's other face: group chats, then every totem with the one that ran last on top. */
+function TotemsPanel({ onOpenChat }: { onOpenChat: (id: string) => void }) {
+  const jobs = useJobs()
+  const threads = useChat((s) => s.threads)
+  const runs = useChat((s) => s.runs)
+  const activeId = useChat((s) => s.activeId)
+  const now = useNow(threads as ChatThread[])
+  // Runs happen on the bridge's clock, so keep the order and states fresh.
+  useEffect(() => {
+    void loadJobs()
+    const t = setInterval(() => { void loadJobs() }, 30_000)
+    return () => clearInterval(t)
+  }, [])
+  const rows = useMemo(() => totemNavRows(jobs || [], threads as ChatThread[], runs), [jobs, threads, runs])
+  const groups = useMemo(() => (threads as ChatThread[]).filter((t) => t.members?.length).sort((a, b) => b.updatedAt - a.updatedAt), [threads])
+  return (
+    <View>
+      <View style={st.head}>
+        <T size={13.5} color={colors.muted}>Group chats</T>
+        <Press style={st.smBtn} onPress={() => { tap(); router.push('/totem/group') }} accessibilityLabel="New group chat">
+          <TI icon={IconPlus} size={17} color={colors.muted} />
+        </Press>
+      </View>
+      {groups.map((t) => <ThreadItem key={t.id} t={t} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpenChat} now={now} />)}
+      {!groups.length ? (
+        <Press style={st.thread} onPress={() => { tap(); router.push('/totem/group') }}>
+          <View style={st.threadMain}><TI icon={IconUsersGroup} size={16} color={colors.muted} /><T size={15} color={colors.muted}>Start a group chat</T></View>
+        </Press>
+      ) : null}
+      <View style={st.head}>
+        <T size={13.5} color={colors.muted}>Totems</T>
+        <Press style={st.smBtn} onPress={() => { tap(); navigateTo('totems') }} accessibilityLabel="The Totems page">
+          <TI icon={IconLayoutList} size={17} color={colors.muted} />
+        </Press>
+      </View>
+      {rows.map((r) => (
+        <TotemNavItem
+          key={r.job.id}
+          row={r}
+          now={now}
+          active={!!r.thread && r.thread.id === activeId}
+          onOpen={async () => { const id = r.thread?.id || await ensureTotemChat(r.job); if (id) onOpenChat(id) }}
+        />
+      ))}
+      {jobs && !rows.length ? <T size={13} color={colors.muted} style={st.emptyNote}>No totems yet. Make one on the Totems page.</T> : null}
+    </View>
+  )
+}
+
+/** Which face the drawer shows: your chats, or your totems (web ProjectNav.tsx usePanelMode). */
+const PANEL_MODE_KEY = 'totem.panel.mode'
+function usePanelMode(): ['chats' | 'totems', (m: 'chats' | 'totems') => void] {
+  const [mode, setMode] = useState<'chats' | 'totems'>(() => (localStorage.getItem(PANEL_MODE_KEY) === 'totems' ? 'totems' : 'chats'))
+  return [mode, (m) => { tap(); setMode(m); localStorage.setItem(PANEL_MODE_KEY, m) }]
+}
+
+function PanelTabs({ mode, onMode }: { mode: 'chats' | 'totems'; onMode: (m: 'chats' | 'totems') => void }) {
+  // A report waiting in a totem's chat shows on the Totems tab from the Chats side.
+  const waiting = useChat((s) => s.threads.some((t) => t.totemId && t.needsReply))
+  return (
+    <View style={st.tabs} accessibilityRole="tablist">
+      {(['chats', 'totems'] as const).map((m) => (
+        <Press key={m} style={[st.tab, mode === m && st.tabOn]} onPress={() => onMode(m)} accessibilityRole="tab" accessibilityState={{ selected: mode === m }}>
+          <T size={13.5} weight={mode === m ? 600 : 400} color={mode === m ? colors.text : colors.muted}>{m === 'chats' ? 'Chats' : 'Totems'}</T>
+          {m === 'totems' && waiting && mode !== 'totems' ? <View style={st.dot} accessibilityLabel="A totem has a report waiting" /> : null}
+        </Press>
+      ))}
+    </View>
+  )
+}
+
 /** A folder in a project: opens its page, unfolds its chats (each list keeps its own shelves). */
 function FolderRow({ f, open, onToggle, onOpenChat }: { f: Project; open: boolean; onToggle: () => void; onOpenChat: (id: string) => void }) {
   const activeId = useChat((s) => s.activeId)
@@ -400,10 +498,14 @@ export default function ChatsNav({ onOpenChat, searchSignal = 0 }: { onOpenChat:
   // A project's page shows in the chat screen with no chat open: the drawer's
   // openChat(null) navigates there and keeps the project the store is scoped to.
   const openPage = () => onOpenChat(null as unknown as string)
+  const [mode, setMode] = usePanelMode()
+  const tabs = <PanelTabs mode={mode} onMode={setMode} />
 
+  if (mode === 'totems') return <View style={{ paddingTop: 6 }}>{tabs}<TotemsPanel onOpenChat={onOpenChat} /></View>
   if (project) {
     return (
       <View style={{ paddingTop: 6 }}>
+        {tabs}
         <View style={st.projHead}>
           <Press style={st.smBtn} onPress={() => { tap(); openProject(null) }} accessibilityLabel="Back to all chats">
             <TI icon={IconArrowLeft} size={18} color={colors.muted} />
@@ -437,6 +539,7 @@ export default function ChatsNav({ onOpenChat, searchSignal = 0 }: { onOpenChat:
   }
   return (
     <View style={{ paddingTop: 6 }}>
+      {tabs}
       <ThreadList
         activeId={activeId}
         onOpen={onOpenChat}
@@ -471,4 +574,7 @@ const st = StyleSheet.create({
   projHead: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingTop: 8, paddingBottom: 2, paddingHorizontal: 4 },
   projTitle: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8, height: 38, paddingHorizontal: 8, borderRadius: 9 },
   foldBtn: { width: 28, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: 2 },
+  tabs: { flexDirection: 'row', gap: 2, marginHorizontal: 8, marginTop: 2, marginBottom: 2, padding: 3, borderRadius: 10, backgroundColor: colors.bg3 },
+  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 32, borderRadius: 8 },
+  tabOn: { backgroundColor: colors.bg },
 })

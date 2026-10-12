@@ -84,3 +84,4 @@ export { default as IconPuzzle } from '@tabler/icons-react-native/dist/esm/icons
 export { default as IconRobot } from '@tabler/icons-react-native/dist/esm/icons/IconRobot.mjs'
 export { default as IconUsersGroup } from '@tabler/icons-react-native/dist/esm/icons/IconUsersGroup.mjs'
 export { default as IconUserPlus } from '@tabler/icons-react-native/dist/esm/icons/IconUserPlus.mjs'
+export { default as IconLayoutList } from '@tabler/icons-react-native/dist/esm/icons/IconLayoutList.mjs'
