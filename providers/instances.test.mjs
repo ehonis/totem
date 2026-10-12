@@ -266,6 +266,22 @@ test('a Codex account gets the stored OpenAI key as CODEX_API_KEY too', async ()
   assert.equal(instanceEnvironment(codex, {}, '/home/x').CODEX_API_KEY, undefined)
 })
 
+test('a Codex account signed in with ChatGPT keeps its login over a stored OpenAI key', async () => {
+  const { instanceEnvironment } = await import('./instances.mjs')
+  const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const home = await mkdtemp(join(tmpdir(), 'codex-login-'))
+  await mkdir(join(home, '.codex'))
+  await writeFile(join(home, '.codex', 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }))
+  const codex = { driver: 'codex', config: {}, env: [] }
+  // CODEX_API_KEY would outrank the login and cost Codex its image tool.
+  assert.equal(instanceEnvironment(codex, { OPENAI_API_KEY: 'sk-voice' }, home).CODEX_API_KEY, undefined)
+  // An API-key login, or none, still gets the key.
+  await writeFile(join(home, '.codex', 'auth.json'), JSON.stringify({ auth_mode: 'apikey', OPENAI_API_KEY: 'sk' }))
+  assert.equal(instanceEnvironment(codex, { OPENAI_API_KEY: 'sk-voice' }, home).CODEX_API_KEY, 'sk-voice')
+})
+
 test('an effective API key counts as signed in, from env, stored settings or the account', async () => {
   const { effectiveApiKeyVar } = await import('./instances.mjs')
   const claude = { driver: 'claude', config: {}, env: [] }
