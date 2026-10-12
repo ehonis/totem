@@ -4,7 +4,7 @@
 import React, { useEffect, useState } from 'react'
 import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
-import { api, deleteJob, runJobNow, updateJob } from '../../lib/api'
+import { api, deleteJob, runJobNow, updateJob, getSkills, updateSkill, resetSkill, previewSkill } from '../../lib/api'
 import { IconLoader2, IconMessage, IconRefresh, IconTrash } from '../../lib/chat/icons'
 import { pushError, pushToast } from '../../lib/toast'
 import { FAB_CLEARANCE } from '../../shell/Screen'
@@ -78,6 +78,63 @@ function MemoryTab({ job }: { job: any }) {
   )
 }
 
+const andList = (names: string[]) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0] || '')
+
+// A built-in or skill totem runs a skill; its instructions are edited here, in
+// the totem (web TotemsView.tsx SkillInstructions).
+function SkillInstructions({ job }: { job: any }) {
+  const [skill, setSkill] = useState<any | null | undefined>(undefined)
+  const [body, setBody] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState<string | null>(null)
+  const adopt = (payload: any) => {
+    const found = (payload.skills || []).find((x: any) => x.id === job.skillId) || null
+    setSkill(found)
+    setBody(found?.body || '')
+    setPreview(null)
+  }
+  useEffect(() => { getSkills().then(adopt).catch((e: any) => { setSkill(null); pushError(e.message) }) }, [job.skillId]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (skill === undefined) return <Section title="Instructions"><T muted>Loading…</T></Section>
+  if (skill === null) return <Section title="Instructions"><T muted size={13}>Its instructions (“{job.skillId}”) are missing, so a run has nothing to follow.</T></Section>
+  const others = (skill.usedBy || []).filter((j: any) => j.id !== job.id)
+  const dirty = body !== skill.body
+  async function act(fn: () => Promise<any>, message: string) {
+    setBusy(true)
+    try { adopt(await fn()); success(); pushToast(message, 'info') } catch (e: any) { pushError(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <Section
+      title="Instructions"
+      hint={`What ${job.name} tells the AI each run.${others.length ? ` ${andList(others.map((j: any) => j.name))} ${others.length === 1 ? 'follows' : 'follow'} the same instructions, so a change here changes ${others.length === 1 ? 'it' : 'them'} too.` : ''}`}
+    >
+      <Area value={body} onChange={setBody} rows={14} mono />
+      {preview !== null ? <T size={12.5} lineHeight={18} color={textAlpha(80)} style={st.preview} selectable>{preview}</T> : null}
+      <View style={st.actions}>
+        <Btn kind="primary" title="Save instructions" disabled={busy || !dirty || !body.trim()} onPress={() => act(() => updateSkill(skill.id, { body }), 'Saved the instructions')} />
+        {dirty ? <Btn title="Discard" disabled={busy} onPress={() => setBody(skill.body)} /> : null}
+        <Btn
+          title={preview !== null ? 'Hide preview' : 'Preview'}
+          disabled={busy}
+          onPress={async () => {
+            if (preview !== null) { setPreview(null); return }
+            setBusy(true)
+            try { const r: any = await previewSkill(skill.id, body); setPreview(r.text || '') } catch (e: any) { pushError(e.message) } finally { setBusy(false) }
+          }}
+        />
+        {skill.kind === 'seeded' && skill.modified ? (
+          <Btn
+            title="Reset to original"
+            disabled={busy}
+            onPress={async () => {
+              if (await confirm('Reset the instructions?', { message: 'Puts back the instructions that ship with Totem. Your changes are discarded.' })) await act(() => resetSkill(skill.id), 'Restored the original instructions')
+            }}
+          />
+        ) : null}
+      </View>
+    </Section>
+  )
+}
+
 function SettingsTab({ job }: { job: any }) {
   const agent = !job.runner && !job.skillId
   const [instructions, setInstructions] = useState(job.prompt || '')
@@ -118,9 +175,11 @@ function SettingsTab({ job }: { job: any }) {
             <View style={st.actions}><Btn kind="primary" title="Save instructions" onPress={() => save({ prompt: instructions })} /></View>
           ) : null}
         </Section>
+      ) : job.skillId ? (
+        <SkillInstructions job={job} />
       ) : (
         <Section title="What it runs">
-          <T muted size={13}>{job.runner ? `Built-in code: ${job.runner}.` : `The “${job.skillId}” skill.`} Edit the prompt in Settings → Skills.</T>
+          <T muted size={13}>Built-in code ({job.runner}), with no instructions to edit. Its schedule and notifications are below.</T>
         </Section>
       )}
       <Section title="When it runs">
@@ -247,6 +306,7 @@ export default function TotemDetailScreen() {
 const st = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  preview: { padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.bg, fontFamily: fonts.mono },
   input: {
     paddingHorizontal: 14, paddingTop: 12, paddingBottom: 12, borderRadius: 12,
     backgroundColor: colors.bg2, borderWidth: 1, borderColor: colors.line,

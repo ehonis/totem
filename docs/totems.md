@@ -16,7 +16,7 @@ Settings.
 | Kind | What it runs | What it gains as a totem |
 |---|---|---|
 | **Agent totem** (an inline `prompt`, which is what the builder makes) | `runAgentTotem` in `bridge.mjs` | Memory, the NOTIFY/QUIET protocol, runs posted to its chat, model recommendations, optional browser. |
-| **Built-in** (a `runner`) or **skill** job | Exactly what it ran before | A chat (runs that did something are posted to it) and the Totems UI. |
+| **Built-in** (a `runner`) or **skill** job | Exactly what it ran before | A chat (runs that did something are posted to it) and the Totems UI. When it runs a skill (`skillId`), its instructions are edited in the totem's own settings (the skill's body, with preview, reset to the shipped version, and a note naming other totems that share it); a runner with no skill says there is nothing to edit. Nothing sends the owner to Settings → Skills. |
 
 Extra job fields: `taskType`, `browser`, `effort`, `threadId`, `recommendations`.
 `notify` gains `agent`: the totem notifies when its run ends with `NOTIFY:` (and on
