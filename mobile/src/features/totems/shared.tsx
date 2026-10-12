@@ -128,12 +128,18 @@ export function statusLine(job: any) {
 }
 
 /** A totem's chat is `totem-<id>`; the bridge makes it on first open. */
-export async function openTotemChat(job: any) {
+/** The totem's own chat, made the first time it is needed. Null (and a toast) if that failed. */
+export async function ensureTotemChat(job: any): Promise<string | null> {
   try {
     const { threadId } = await api<{ threadId: string }>(`/api/totems/${encodeURIComponent(job.id)}/thread`, { method: 'POST' })
     await syncThreads()
-    openChat(threadId)
-  } catch (e: any) { pushError(`Couldn't open the chat: ${e.message}`) }
+    return threadId
+  } catch (e: any) { pushError(`Couldn't open the chat: ${e.message}`); return null }
+}
+
+export async function openTotemChat(job: any) {
+  const id = await ensureTotemChat(job)
+  if (id) openChat(id)
 }
 
 // --- icon ------------------------------------------------------------------------

@@ -16,13 +16,14 @@ import { Markdown as NitroMarkdown, type CustomRenderers, type PartialMarkdownTh
 import { colors, fonts, textAlpha } from '../theme'
 import { bridgeUrl, withAccess } from '../lib/connection'
 import { tap } from './haptics'
+import { openUrl } from '../lib/siblingApps'
 
 const LINK = '#8fb0ff'
 const LINE = '#2a2f3c'
 
 export function openLink(href: string) {
   if (/^https?:\/\//i.test(href)) {
-    WebBrowser.openBrowserAsync(href, { controlsColor: colors.accent, dismissButtonStyle: 'close' }).catch(() => {})
+    void openUrl(href) // a Krakatoa or Bushido link opens that app
     return false
   }
   // A bridge path ("/api/chat/uploads/…?sig=") opens against the bridge.

@@ -1,11 +1,15 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useChat, openProject, createProject, setActive, foldersOf } from './store'
 import ProjectIcon from './ProjectIcon'
 import { TI } from './ui'
-import { IconFolderPlus, IconArrowLeft, IconChevronDown, IconChevronRight } from './icons'
+import { IconFolderPlus, IconArrowLeft, IconChevronDown, IconChevronRight, IconPlus, IconUsersGroup, IconLayoutList } from './icons'
 import { pushError } from '../toast'
 import ThreadList, { ThreadItem, ShelvedChats } from './ThreadList'
-import { isSnoozed, settledAt } from './settle'
+import { isSnoozed, settledAt, ago } from './settle'
+import { totemNavRows, type TotemNavRow } from './totemNav'
+import Spark from './Spark'
+import { TotemIcon, openTotemChat, refreshTotemDirectory, useTotemDirectory } from '../totems/shared'
+import { GroupPicker, startGroupChat } from '../components/TotemsView'
 import { useThreadDrop } from './dnd'
 import type { Project } from './types'
 
@@ -14,6 +18,8 @@ import type { Project } from './types'
 // to that project's chats, the way Claude and ChatGPT do. A project's folders
 // sit above its own chats, each opening in place to show the chats inside.
 // Any of them (and Home, via the back arrow) takes a chat dragged onto it.
+// A switch at the top turns the panel to Totems: group chats, then every totem
+// with the one that ran last on top, each opening its own chat.
 
 const FOLDED_KEY = 'totem.projects.folded'
 const OPEN_FOLDERS_KEY = 'totem.projects.openFolders'
@@ -105,6 +111,97 @@ function ProjectsSection({ onOpen }: { onOpen: () => void }) {
   )
 }
 
+/** One totem: opens its chat. On the right, what it is doing and when it last ran. */
+function TotemNavItem({ row, active, onOpen }: { row: TotemNavRow; active: boolean; onOpen: () => void }) {
+  const { job, state, lastRanAt } = row
+  const label = state === 'running' ? 'running now' : state === 'unread' ? 'a report waiting' : state === 'failed' ? 'last run failed' : state === 'paused' ? 'paused' : ''
+  return (
+    <div className={`vc-thread ${active ? 'active' : ''} ${state === 'paused' ? 'vc-totem-paused' : ''}`}>
+      <button type="button" className="vc-thread-main" onClick={onOpen} title={`${job.name}${label ? `: ${label}` : ''}${lastRanAt ? `. Last ran ${new Date(lastRanAt).toLocaleString()}` : '. Has not run yet'}`}>
+        <TotemIcon name={job.iconName} size={16} />
+        <span className="vc-thread-title">{job.name}</span>
+        {state === 'running' ? <Spark size={12} label="Running now" />
+          : state === 'unread' ? <span className="vc-reply-dot" aria-label="A report is waiting" />
+            : state === 'failed' ? <span className="vc-fail-dot" aria-label="Last run failed" /> : null}
+        <span className="vc-proj-count">{lastRanAt ? ago(lastRanAt, Date.now()) : ''}</span>
+      </button>
+    </div>
+  )
+}
+
+/** The panel's other face: group chats, then every totem with the one that ran last on top. */
+function TotemsPanel({ onOpen }: { onOpen: (id?: string) => void }) {
+  const dir = useTotemDirectory()
+  const threads = useChat((s) => s.threads)
+  const runs = useChat((s) => s.runs)
+  const activeId = useChat((s) => s.activeId)
+  const [grouping, setGrouping] = useState(false)
+  // Runs happen on the bridge's clock, so keep the order and states fresh.
+  useEffect(() => {
+    refreshTotemDirectory(true)
+    const t = setInterval(() => refreshTotemDirectory(true), 30_000)
+    return () => clearInterval(t)
+  }, [])
+  const jobs = [...dir.values()]
+  const rows = useMemo(() => totemNavRows(jobs, threads, runs), [dir, dir.size, threads, runs]) // eslint-disable-line react-hooks/exhaustive-deps
+  const groups = useMemo(() => threads.filter((t) => t.members?.length).sort((a, b) => b.updatedAt - a.updatedAt), [threads])
+  const openChat = () => onOpen()
+  return (
+    <div className="vc-threads">
+      <div className="vc-threads-head">
+        <span>Group chats</span>
+        <button type="button" className="vc-icon-btn sm" onClick={() => setGrouping((v) => !v)} aria-label="New group chat" title="New group chat with your totems">
+          <TI icon={IconPlus} size={15} />
+        </button>
+      </div>
+      {grouping && (
+        <div className="vc-nav-group-pick">
+          <GroupPicker jobs={jobs} named onCancel={() => setGrouping(false)} onDone={async (ids, name) => { await startGroupChat(ids, name, openChat); setGrouping(false) }} />
+        </div>
+      )}
+      {groups.map((t) => <ThreadItem key={t.id} t={t} active={t.id === activeId} live={!!runs[t.id]} onOpen={(id) => { setActive(id); openChat() }} />)}
+      {!groups.length && !grouping && (
+        <button type="button" className="vc-proj-empty" onClick={() => setGrouping(true)}>
+          <TI icon={IconUsersGroup} size={16} /><span>Start a group chat</span>
+        </button>
+      )}
+      <div className="vc-threads-head">
+        <span>Totems</span>
+        <button type="button" className="vc-icon-btn sm" onClick={() => goTotemsTab()} aria-label="All totems" title="The Totems page: new totems, drafts, settings">
+          <TI icon={IconLayoutList} size={15} />
+        </button>
+      </div>
+      {rows.map((r) => (
+        <TotemNavItem key={r.job.id} row={r} active={!!r.thread && r.thread.id === activeId} onOpen={() => openTotemChat(r.job, openChat)} />
+      ))}
+      {!rows.length && <div className="vc-nav-note">No totems yet. Make one on the Totems page.</div>}
+    </div>
+  )
+}
+
+const goTotemsTab = () => { window.history.pushState({}, '', '/totems'); window.dispatchEvent(new PopStateEvent('popstate')) }
+
+/** Which face the chats panel shows: your chats, or your totems. Kept per browser. */
+const PANEL_MODE_KEY = 'totem.panel.mode'
+function usePanelMode(): ['chats' | 'totems', (m: 'chats' | 'totems') => void] {
+  const [mode, setMode] = useState<'chats' | 'totems'>(() => (localStorage.getItem(PANEL_MODE_KEY) === 'totems' ? 'totems' : 'chats'))
+  return [mode, (m) => { setMode(m); localStorage.setItem(PANEL_MODE_KEY, m) }]
+}
+
+function PanelTabs({ mode, onMode }: { mode: 'chats' | 'totems'; onMode: (m: 'chats' | 'totems') => void }) {
+  const dir = useTotemDirectory()
+  // A report waiting in a totem's chat shows on the Totems tab from the Chats side.
+  const waiting = useChat((s) => s.threads.some((t) => t.totemId && t.needsReply && dir.has(t.totemId)))
+  return (
+    <div className="vc-nav-tabs" role="tablist" aria-label="Show">
+      <button type="button" role="tab" aria-selected={mode === 'chats'} className={mode === 'chats' ? 'on' : ''} onClick={() => onMode('chats')}>Chats</button>
+      <button type="button" role="tab" aria-selected={mode === 'totems'} className={mode === 'totems' ? 'on' : ''} onClick={() => onMode('totems')}>
+        Totems{waiting && mode !== 'totems' && <span className="vc-reply-dot" aria-label="A totem has a report waiting" />}
+      </button>
+    </div>
+  )
+}
+
 const readOpenFolders = () => { try { return new Set<string>(JSON.parse(localStorage.getItem(OPEN_FOLDERS_KEY) || '[]')) } catch { return new Set<string>() } }
 
 /** A folder in the project panel: opens its page, unfolds its chats, takes a dropped chat. */
@@ -185,10 +282,14 @@ export function ChatsNav({ onOpenChat, searchSignal }: { onOpenChat: () => void;
   const open = (id: string) => { setActive(id); onOpenChat() }
   const toHome = useThreadDrop(null, 'Home')
   const toRoot = useThreadDrop(project?.id || null, project?.name || '')
+  const [mode, setMode] = usePanelMode()
+  const tabs = <PanelTabs mode={mode} onMode={setMode} />
 
+  if (mode === 'totems') return <>{tabs}<TotemsPanel onOpen={onOpenChat} /></>
   if (project) {
     return (
       <>
+        {tabs}
         <div className="vc-proj-head">
           <button type="button" className={`vc-icon-btn sm ${toHome.over ? 'drop-over' : ''}`} onClick={() => openProject(null)} aria-label="Back to all chats" title="All chats (drop a chat here to move it to Home)" {...toHome.props}>
             <TI icon={IconArrowLeft} size={16} />
@@ -213,12 +314,15 @@ export function ChatsNav({ onOpenChat, searchSignal }: { onOpenChat: () => void;
     )
   }
   return (
-    <ThreadList
-      activeId={activeId}
-      onOpen={open}
-      searchSignal={searchSignal}
-      projectId={null}
-      before={<ProjectsSection onOpen={onOpenChat} />}
-    />
+    <>
+      {tabs}
+      <ThreadList
+        activeId={activeId}
+        onOpen={open}
+        searchSignal={searchSignal}
+        projectId={null}
+        before={<ProjectsSection onOpen={onOpenChat} />}
+      />
+    </>
   )
 }

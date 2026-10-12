@@ -7,7 +7,6 @@ import React, { useRef, useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { MenuView, type MenuAction } from '@react-native-menu/menu'
 import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
-import * as WebBrowser from 'expo-web-browser'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
@@ -21,6 +20,7 @@ import { useVentureTags } from '../../lib/todos/ventureTags'
 import { priorityLabel, priorityMarks, todoSource, type Todo, type TodoStatus } from '../../lib/todos/types'
 import { SOURCE_LABEL, STATUS_LABEL, dateLabel, dueDateChoices, dueTone, snoozeTimes } from './format'
 import { PickWhenSheet, STATUS_COLOR, tone } from './ui'
+import { openUrl } from '../../lib/siblingApps'
 
 export interface TodoCardProps {
   todo: Todo
@@ -191,7 +191,7 @@ export default function TodoCard({
           </Press>
         ) : null}
         {link?.externalUrl
-          ? <Press onPress={() => void WebBrowser.openBrowserAsync(link.externalUrl!)} accessibilityRole="link">{sourcePill}</Press>
+          ? <Press onPress={() => void openUrl(link.externalUrl!)} accessibilityRole="link">{sourcePill}</Press>
           : sourcePill}
         {notDoing ? <View style={st.outcome}><T size={11.5} weight={700} muted lineHeight={16}>Not doing</T></View> : null}
         {todo.syncState.status !== 'idle' && todo.syncState.status !== 'synced' ? (

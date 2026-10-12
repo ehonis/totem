@@ -3,22 +3,23 @@
 // that app (HabitsView.tsx LinkedAppButton). Its numbers and history still show.
 import React from 'react'
 import { StyleSheet, View } from 'react-native'
-import * as WebBrowser from 'expo-web-browser'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { tap } from '../../ui/haptics'
 import { Hi, ArrowTopRightOnSquareIcon } from '../../lib/icons'
 import { APP_NAME, type LinkedApp } from './logic'
+import { openSiblingApp } from '../../lib/siblingApps'
 
 type Linked = { linkedApp?: LinkedApp | null; appUrl?: string | null; name: string }
 
 export const linkedAppName = (h: Linked): string => APP_NAME[h.linkedApp as LinkedApp] || 'its app'
 
+/** The app's own iPhone app when installed, else its web page (lib/siblingApps.ts). */
 export function openLinkedApp(h: Linked) {
-  if (!h.appUrl) return
+  if (!h.linkedApp || !h.appUrl) return
   tap()
-  WebBrowser.openBrowserAsync(h.appUrl, { controlsColor: colors.accent, dismissButtonStyle: 'close' }).catch(() => {})
+  void openSiblingApp(h.linkedApp, h.appUrl)
 }
 
 /** `compact` (a check-in row) shows just the app's name, as the web does. */

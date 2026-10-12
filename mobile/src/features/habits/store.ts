@@ -6,13 +6,14 @@ import { useSyncExternalStore } from 'react'
 import { AuthError, clearSecret, getHabits } from '../../lib/api'
 import { pushToast } from '../../lib/toast'
 import type { HabitsPayload } from './logic'
+import { rememberSiblingApps } from '../../lib/siblingApps'
 
 let data: HabitsPayload | null = null
 let loading = false
 const listeners = new Set<() => void>()
 const emit = () => { for (const fn of listeners) fn() }
 
-export function setHabits(next: HabitsPayload) { data = next; emit() }
+export function setHabits(next: HabitsPayload) { data = next; rememberSiblingApps(next.apps); emit() }
 export const getHabitsData = () => data
 
 export function useHabits(): { data: HabitsPayload | null; loading: boolean } {
