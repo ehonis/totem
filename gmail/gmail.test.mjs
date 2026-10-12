@@ -72,7 +72,7 @@ test('splitRef resolves account:id and bare ids', () => {
 
 // ---- Client against a fake Gmail ------------------------------------------------
 
-function harness({ accounts = { personal: { refresh_token: 'r1', email: 'me@example.com' } } } = {}) {
+function harness({ accounts = { personal: { refresh_token: 'r1', email: 'me@example.com' } }, ...opts } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'gmail-'))
   const tokensFile = join(dir, 'gmail-tokens.json')
   writeFileSync(tokensFile, JSON.stringify(accounts))
@@ -102,6 +102,7 @@ function harness({ accounts = { personal: { refresh_token: 'r1', email: 'me@exam
     loadClient: () => ({ installed: { client_id: 'cid', client_secret: 'sec' } }),
     redirectUri: () => 'http://localhost:8787/gmail-oauth/callback',
     fetchImpl,
+    ...opts,
   })
   return { gmail, calls, on, tokensFile }
 }
@@ -194,6 +195,27 @@ test('completeAuth stores the account 0600 and rejects a grant without Gmail', a
   assert.equal(saved.side.refresh_token, 'r-new')
   assert.equal(statSync(tokensFile).mode & 0o777, 0o600)
   assert.equal((await gmail.completeAuth(new URLSearchParams({ state, code: 'c' }))).ok, false, 'a state is single-use')
+})
+
+test('one sign-in asks for the extra scopes, hands the grant on, and keeps a shared grant', async () => {
+  const handed = []
+  const { gmail, on, calls } = harness({
+    accounts: {},
+    extraScopes: ['https://www.googleapis.com/auth/calendar'],
+    onConnected: async (g) => { handed.push(g); return ' Its calendar was added too.' },
+    grantInUse: (rt) => rt === 'r-new',
+  })
+  on('GET', /^\/profile$/, () => ({ emailAddress: 'new@example.com' }))
+  const url = new URL(gmail.startAuth({ label: 'side' }).authUrl)
+  assert.equal(url.searchParams.get('scope'), `${GMAIL_SCOPE} https://www.googleapis.com/auth/calendar`)
+  const res = await gmail.completeAuth(new URLSearchParams({ state: url.searchParams.get('state'), code: 'c' }))
+  assert.match(res.message, /calendar was added too/)
+  assert.equal(handed[0].label, 'side')
+  assert.equal(handed[0].email, 'new@example.com')
+  assert.equal(handed[0].token.refresh_token, 'r-new')
+  // Removing the Gmail account leaves a grant the calendar still uses.
+  await gmail.removeAccount({ label: 'side' })
+  assert.equal(calls.some((c) => c.path === '/revoke'), false)
 })
 
 test('readThread falls back from a message id to its thread', async () => {

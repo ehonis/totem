@@ -18,7 +18,9 @@ import { useSmoothText } from './smooth'
 import { useTextTicks } from './ticks'
 import { getChatCommands, subscribeChatCommands } from '../studio'
 import { splitMentions } from './mentions'
-import { WorkingLine } from './Spark'
+import Spark, { WorkingLine } from './Spark'
+import { foldTotemCalls, type TotemAnswer } from './totemReply'
+import { TotemIcon, useTotemDirectory } from '../totems/shared'
 
 // --- attachments ---------------------------------------------------------------
 
@@ -184,7 +186,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
 
 // --- assistant -------------------------------------------------------------------
 
-type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'agent'; tool: ToolPart; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'steer'; part: SteerPart; key: string }
+type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'agent'; tool: ToolPart; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'steer'; part: SteerPart; key: string } | { kind: 'totem'; answer: TotemAnswer; key: string }
 
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
@@ -192,10 +194,15 @@ const PROPOSAL_FENCE = /```totem-proposal[\s\S]*?(```|$)/g
 
 function blocks(parts: Part[]): Block[] {
   const out: Block[] = []
+  // A totem asked in the chat speaks for itself: one message per ask, not a tool row.
+  const totems = foldTotemCalls(parts)
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i]
+    if (totems.skip.has(i)) continue
+    const answer = totems.at.get(i)
+    if (answer) out.push({ kind: 'totem', answer, key: `k${i}` })
     // A call that started another agent stands on its own, never folded into the steps.
-    if (p.type === 'tool' && p.agent) out.push({ kind: 'agent', tool: p, key: `a${i}` })
+    else if (p.type === 'tool' && p.agent) out.push({ kind: 'agent', tool: p, key: `a${i}` })
     else if (p.type === 'tool') {
       const last = out[out.length - 1]
       if (last?.kind === 'tools') last.tools.push(p)
@@ -213,6 +220,25 @@ function blocks(parts: Part[]): Block[] {
   }
   for (const b of out) if (b.kind === 'text') b.text = b.text.replace(PROPOSAL_FENCE, '')
   return out
+}
+
+/** A totem's answer in the chat, under its name: what the host's totems__ask brought back. */
+function TotemSays({ answer: a, live }: { answer: TotemAnswer; live: boolean }) {
+  const dir = useTotemDirectory()
+  const known = a.totemId ? dir.get(a.totemId) : undefined
+  const name = a.name || known?.name || 'A totem'
+  const waiting = a.status === 'asking' || a.status === 'working'
+  return (
+    <div className={`vc-totem-say ${a.status}`}>
+      <div className="vc-totem-say-head" title={a.question ? `Asked: ${a.question}` : undefined}>
+        <span className="vc-totem-say-icon"><TotemIcon name={a.icon || known?.iconName} size={15} /></span>
+        <span className="vc-totem-say-name">{name}</span>
+        {waiting && (live ? <span className="vc-totem-say-state"><Spark size={12} />{a.status === 'working' ? 'still working' : 'thinking'}</span> : <span className="vc-totem-say-state">no answer</span>)}
+      </div>
+      {a.status === 'done' && <Markdown text={a.reply || '(nothing to say)'} />}
+      {a.status === 'error' && <div className="vc-totem-say-error">Couldn’t answer: {a.error}</div>}
+    </div>
+  )
 }
 
 /** What the owner sent mid-reply, where it landed: his bubble, marked as a steer. */
@@ -283,6 +309,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
           if (b.kind === 'agent') return <AgentCard key={b.key} tool={b.tool} />
           if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
           if (b.kind === 'steer') return <SteerNote key={b.key} part={b.part} />
+          if (b.kind === 'totem') return <TotemSays key={b.key} answer={b.answer} live={live} />
           if (b.kind === 'file') return <FileCard key={b.key} file={b.part} onOpen={() => openArtifact(b.part)} />
           if (b.kind === 'image') {
             const src = b.part.url || `/api/chat/uploads/${b.part.uploadId}`

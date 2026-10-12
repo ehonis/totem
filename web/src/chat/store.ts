@@ -68,6 +68,8 @@ export interface ChatPrefs {
   titles: { provider: string; model: string; effort: string; off: boolean }
   /** Days without activity before a chat settles on its own; 0 never. */
   autoSettleDays: number
+  /** Every chat's agent may find totems and bring them in (totems__*). Default on. */
+  totemsInChat?: boolean
 }
 
 export interface Artifact { uploadId: string; name: string; mime: string; url?: string; size?: number; path?: string }
@@ -647,6 +649,12 @@ export function setPinned(id: string, pinned: boolean) {
   }
   patchThread(id, (t) => ({ ...t, pinned }))
   putThread({ id, pinned }).catch(fail)
+}
+
+/** Who is in a group chat: totem ids. An empty list makes it a plain chat again. */
+export function setMembers(id: string, members: string[]) {
+  patchThread(id, (t) => ({ ...t, members: members.length ? members : undefined }))
+  putThread({ id, members }).catch(fail)
 }
 
 export function keepThread(id: string) {

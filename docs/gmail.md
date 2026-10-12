@@ -23,6 +23,11 @@ the `email` inbox kind), `web/src/components/McpSettingsView.tsx` (Settings → 
    `http://localhost:<BRIDGE_PORT>/gmail-oauth/callback`. From a phone, swap `localhost` for
    a host the phone can reach, as with Calendar.
 
+The same sign-in asks for Calendar too, and the account's calendar is added under the same
+label (Settings → Connections › Calendar), unless that address already has a calendar
+connected. Removing the Gmail account leaves the calendar working: the grant is revoked at
+Google only when no calendar still uses it.
+
 Accounts are stored in `data/gmail-tokens.json` (0600, override with `GMAIL_TOKENS_FILE`),
 kept apart from Calendar's tokens. Removing an account also asks Google to revoke the grant.
 

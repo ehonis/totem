@@ -19,6 +19,7 @@
 //                     (totems/drafts.mjs keeps an unfinished design between visits.)
 //   costTier         — a model's rough price class, for "cheapest that works".
 //   totemsRule / parseProposals — how any chat proposes a change to a totem.
+//   totemsChatRule / totemAskPrompt — totems brought into a chat (group chats).
 
 import { normalizeTrigger } from '../jobs/triggers.mjs'
 
@@ -160,6 +161,82 @@ export function parseProposals(text, knownIds = null) {
     return ''
   })
   return { text: cleaned.replace(/\n{3,}/g, '\n\n').trim(), proposals }
+}
+
+// --- totems in any chat ------------------------------------------------------------
+// Any chat can bring totems in: the chat's agent (the host) finds them with
+// totems__list and asks one with totems__ask, which runs that totem on its own
+// account and model, with its memory and tools, and joins it to the chat. A chat
+// with members is a group chat; its host coordinates them.
+
+/** Only agent totems (an inline prompt) can be asked; a built-in or skill job has no voice. */
+export const askableTotem = (job) => !!job && !job.runner && !job.skillId && !!String(job.prompt || '').trim()
+
+export const MAX_CHAT_MEMBERS = 12
+
+/** A chat's member list, cleaned: job ids, no repeats, capped. */
+export function normalizeMembers(raw) {
+  if (!Array.isArray(raw)) return []
+  const out = []
+  for (const v of raw) {
+    const id = typeof v === 'string' ? v.slice(0, 64) : ''
+    if (/^[A-Za-z0-9_-]{1,64}$/.test(id) && !out.includes(id)) out.push(id)
+  }
+  return out.slice(0, MAX_CHAT_MEMBERS)
+}
+
+const oneLine = (s, n) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n)
+
+/**
+ * What the host of a chat knows about totems. `members` are the totems already in
+ * this chat (job records); `others` says how many more exist for totems__list to find.
+ * Empty when there is nothing to say.
+ */
+export function totemsChatRule({ chatId, members = [], others = 0 }) {
+  const parts = []
+  const ask = `totems__ask {"chat": "${chatId}", "totem": "<id>", "message": "<what you need from it>"}`
+  if (members.length) {
+    const rows = members.map((t) => `- ${t.name} (id ${t.id})${t.description ? `: ${oneLine(t.description, 140)}` : ''}${t.enabled === false ? ' [paused, still answers]' : ''}`).join('\n')
+    parts.push(
+      `GROUP CHAT: these totems are in this chat with the owner:\n${rows}\n` +
+      `You host it. When he addresses one of them by name or @name, or a request falls within one's job, ask it with ${ask} and let it answer from its own memory and tools. ` +
+      'Ask several when the job needs them, and pass one\'s answer to the next so they build on each other. ' +
+      'Each answer is shown in the chat under that totem\'s name, so never repeat it; add only what ties the answers together, what is still missing, or the result they produced together. ' +
+      'When he talks to you or to nobody in particular, answer yourself.',
+    )
+  }
+  if (others > 0) {
+    parts.push(
+      `${members.length ? 'OTHER TOTEMS' : 'TOTEMS'}: the owner has ${others} ${members.length ? 'more ' : ''}standing agent${others === 1 ? '' : 's'} (totems), each with its own job, memory and tools. ` +
+      `totems__list finds them. When a request is plainly one a totem is for, or needs what one has seen, ask it with ${ask}; that also brings it into this chat. ` +
+      'Do not bring totems in for things you can do directly.',
+    )
+  }
+  if (!parts.length) return ''
+  parts.push('An ask can take minutes. If totems__ask returns status "working", call totems__wait {"askId": "<its askId>"} until it answers.')
+  return parts.join('\n\n')
+}
+
+/**
+ * One totem answering in a chat it was brought into. `transcript` is the chat's
+ * recent messages ([{role, content}], oldest first); `others` the names of the
+ * other totems in it.
+ */
+export function totemAskPrompt({ totem, memory = '', memoryPath = '', recentRuns = [], chatTitle = '', others = [], transcript = [], message = '', browser = false }) {
+  const runs = recentRuns.filter((r) => r && r.status !== 'running').slice(-5)
+  const convo = transcript.slice(-10).map((m) => `${m.role === 'user' ? 'Owner' : 'Host'}: ${String(m.content || '').trim().slice(0, 900)}`).filter((l) => !/:\s*$/.test(l))
+  return [
+    `You are "${totem.name}", one of the owner's totems: a standing agent with one job, your own memory, and your own tools. The owner's chat${chatTitle ? ` "${oneLine(chatTitle, 80)}"` : ''} has brought you in${others.length ? ` alongside ${others.join(', ')}` : ''}, and its host agent is asking you something.`,
+    `YOUR JOB:\n${String(totem.prompt || totem.description || '').trim()}`,
+    `YOUR MEMORY (${memoryPath}):\n${String(memory || '').trim() || '(empty)'}`,
+    runs.length ? `YOUR LAST RUNS:\n${runs.map((r) => `- ${new Date(r.startedAt).toISOString()} ${r.status}${r.preview ? `: ${oneLine(r.preview, 300)}` : ''}`).join('\n')}` : 'You have not run on your schedule yet.',
+    convo.length ? `THE CHAT SO FAR (oldest first):\n${convo.join('\n')}` : '',
+    `THE HOST ASKS YOU:\n${String(message || '').trim()}`,
+    browser ? 'WEB: You may use the browser tools, plain fetches and web search.' : 'WEB: Use web search and plain page fetches for anything online.',
+    'Answer as yourself, in the first person, from what you know and what your tools can find now. Your answer is shown in the chat under your name, to the owner and the other totems, so write it for them: plain, short (a few short paragraphs or a list), Markdown allowed. ' +
+    'Do the work rather than describing it. Never ask the host a question you could answer yourself; if something is missing, say what. ' +
+    'If you learned something you will need on your next run, update your memory file before you finish. Do not end with NOTIFY or QUIET: this is a conversation, not a run.',
+  ].filter(Boolean).join('\n\n')
 }
 
 /** Append a dated note to a memory file's text. */

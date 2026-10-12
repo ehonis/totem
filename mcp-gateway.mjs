@@ -56,7 +56,8 @@ const PROTOCOL_VERSION = '2025-06-18'
 // 1.6.0 adds threads__list and threads__read (the owner's other chats).
 // 1.7.0 adds screen__screenshot and screen__get_status when the bridge has them.
 // 1.8.0 adds gmail__* (search, read, labels, trash, drafts; no send).
-const GATEWAY_INFO = { name: 'totem-gateway', version: '1.8.0' }
+// 1.9.0 adds totems__list, totems__ask, totems__wait and totems__invite (totems in a chat).
+const GATEWAY_INFO = { name: 'totem-gateway', version: '1.9.0' }
 export const NS = '__' // namespace separator: <serverId>__<toolName>
 
 // stderr only — stdout is the JSON-RPC channel and must stay clean.
@@ -377,6 +378,10 @@ const BUILTIN_SERVERS = {
   // threads__list / threads__read: the owner's other chats, for the rare turn that
   // needs one ("another thread is on this"); chat/thread-tools.mjs.
   threads: { filter: /^totem_threads_(list|read)$/, strip: 'totem_threads_', description: "The owner's other Totem chats, via the Totem bridge" },
+  // totems__*: the owner's totems, brought into a chat. totems__ask runs one on its
+  // own account with its memory and tools, and its answer shows in the chat under
+  // its name (totems/core.mjs → totemsChatRule).
+  totems: { filter: /^totem_totems_(list|ask|wait|invite)$/, strip: 'totem_totems_', description: "The owner's totems (standing agents), asked in a chat, via the Totem bridge" },
   // The chat's browser (bridge /agent-mcp). Only inside a chat run: the bridge
   // hands each run a token in TOTEM_BROWSER_TOKEN, which binds the tools to that
   // chat's browser. Claude and Codex get /agent-mcp directly; this is how Cursor

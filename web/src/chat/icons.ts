@@ -82,3 +82,5 @@ export { default as IconChevronUp } from '@tabler/icons-react/dist/esm/icons/Ico
 export { default as IconMailOpened } from '@tabler/icons-react/dist/esm/icons/IconMailOpened.mjs'
 export { default as IconRobot } from '@tabler/icons-react/dist/esm/icons/IconRobot.mjs'
 export { default as IconMessageDots } from '@tabler/icons-react/dist/esm/icons/IconMessageDots.mjs'
+export { default as IconUsersGroup } from '@tabler/icons-react/dist/esm/icons/IconUsersGroup.mjs'
+export { default as IconUserPlus } from '@tabler/icons-react/dist/esm/icons/IconUserPlus.mjs'

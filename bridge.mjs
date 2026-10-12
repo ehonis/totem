@@ -20,7 +20,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createInterface } from 'node:readline'
 import { Poller as AiUsagePoller } from './ai-usage/poller.mjs'
 import { createJobStore } from './jobs/store.mjs'
-import { totemRunPrompt, parseRunReply, totemChatBlock, totemsRule, parseProposals, appendMemoryNote, builderPrompt, parseBuilderReply, costTier } from './totems/core.mjs'
+import { totemRunPrompt, parseRunReply, totemChatBlock, totemsRule, parseProposals, appendMemoryNote, builderPrompt, parseBuilderReply, costTier, askableTotem, normalizeMembers, totemsChatRule, totemAskPrompt } from './totems/core.mjs'
 import { createDraftStore, DRAFT_ID, isPending } from './totems/drafts.mjs'
 import { dueState } from './jobs/schedule.mjs'
 import { normalizeTrigger, isCompleteTrigger, checkWatch, describeChanges, describeSource, watchDue } from './jobs/triggers.mjs'
@@ -2853,12 +2853,43 @@ function appleRule() {
 // email in the inbox (`email` kind) and only the dashboard can send it or save it
 // as a draft. Uses Calendar's Google OAuth client; tokens in data/gmail-tokens.json.
 // Defined before GCAL_OAUTH_PATH, so the path is read when called, not here.
+const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar'
 const gmail = createGmail({
   tokensFile: process.env.GMAIL_TOKENS_FILE || join(HERE, 'data', 'gmail-tokens.json'),
   loadClient: () => JSON.parse(readFileSync(GCAL_OAUTH_PATH, 'utf8')),
   redirectUri: () => `http://localhost:${BRIDGE_PORT}/gmail-oauth/callback`,
   cacheDir: join(HERE, 'data', 'gmail-cache'),
+  // One Google sign-in connects an account's mail and its calendar.
+  extraScopes: [GCAL_SCOPE],
+  onConnected: (grant) => addCalendarFromGmail(grant),
+  grantInUse: (refreshToken) => Object.values(readGcalTokens()).some((t) => t?.refresh_token === refreshToken),
 })
+
+
+// A Gmail sign-in that also granted Calendar adds that account's calendar, under the
+// same label, unless the address already has one connected (Calendar's own sign-in).
+async function addCalendarFromGmail({ label, email, token }) {
+  if (!String(token?.scope || '').split(/\s+/).includes(GCAL_SCOPE)) return ' Its calendar was not added (Calendar access was left unticked).'
+  const tokens = readGcalTokens()
+  if (email) {
+    for (const existing of Object.keys(tokens)) {
+      const known = await gcalAccountEmail(existing).catch(() => '')
+      if (known && known.toLowerCase() === email.toLowerCase()) return ` Its calendar was already connected as "${existing}".`
+    }
+  }
+  let key = label
+  for (let n = 2; tokens[key]; n++) key = `${label}-${n}`
+  tokens[key] = {
+    access_token: token.access_token,
+    refresh_token: token.refresh_token,
+    scope: token.scope,
+    token_type: token.token_type || 'Bearer',
+    expiry_date: Date.now() + (Number(token.expires_in) || 3600) * 1000,
+  }
+  await writeGcalTokens(tokens)
+  delete gcalAccessCache[key]
+  return ` Its calendar was added too${key === label ? '' : ` (as "${key}")`}.`
+}
 
 const GMAIL_RULES =
   'GMAIL. The owner\'s Gmail accounts are the gmail tools (totem_gmail_* on /mcp, gmail__* through the gateway). '
@@ -5466,7 +5497,7 @@ function startCalendarAccountAuth({ label } = {}) {
   authUrl.searchParams.set('client_id', creds.client_id)
   authUrl.searchParams.set('redirect_uri', gcalRedirectUri())
   authUrl.searchParams.set('response_type', 'code')
-  authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/calendar')
+  authUrl.searchParams.set('scope', GCAL_SCOPE)
   authUrl.searchParams.set('access_type', 'offline')
   authUrl.searchParams.set('prompt', 'consent')
   authUrl.searchParams.set('state', state)
@@ -5507,7 +5538,7 @@ async function completeCalendarAccountAuth(query) {
   tokens[sess.label] = {
     access_token: tok.access_token,
     refresh_token: tok.refresh_token,
-    scope: tok.scope || 'https://www.googleapis.com/auth/calendar',
+    scope: tok.scope || GCAL_SCOPE,
     token_type: tok.token_type || 'Bearer',
     expiry_date: Date.now() + (Number(tok.expires_in) || 3600) * 1000,
   }
@@ -9397,7 +9428,7 @@ function chooseChatProvider(config, requested, { kind }) {
 
 // Settings → Chat: who writes chat titles, and when quiet chats settle.
 const CHAT_SETTINGS_FILE = join(HERE, 'data', 'chat-settings.json')
-const DEFAULT_CHAT_SETTINGS = { titles: { provider: '', model: '', effort: '', off: false }, autoSettleDays: 3 }
+const DEFAULT_CHAT_SETTINGS = { titles: { provider: '', model: '', effort: '', off: false }, autoSettleDays: 3, totemsInChat: true }
 let chatSettings = structuredClone(DEFAULT_CHAT_SETTINGS)
 readFile(CHAT_SETTINGS_FILE, 'utf8').then((raw) => { chatSettings = normalizeChatSettings(JSON.parse(raw)) }).catch(() => {})
 
@@ -9407,6 +9438,8 @@ function normalizeChatSettings(raw = {}) {
     titles: { ...lane(raw.titles, ['provider', 'model', 'effort']), off: raw.titles?.off === true },
     // Days without activity before a chat moves to Settled on its own (0 = never), as T3 Code does.
     autoSettleDays: Number.isFinite(Number(raw.autoSettleDays)) && raw.autoSettleDays !== null && raw.autoSettleDays !== '' ? Math.min(90, Math.max(0, Math.round(Number(raw.autoSettleDays)))) : 3,
+    // Every chat's agent may find the owner's totems and bring them in (totems__*). On unless he turns it off.
+    totemsInChat: raw.totemsInChat !== false,
   }
 }
 
@@ -9697,7 +9730,13 @@ async function handleChatSend(req, res) {
   const totemRule = totemList.length ? `${totemsRule(totemList)}\n\n` : ''
   // This chat's id, and when (rarely) to look at the others through threads__*.
   const othersRule = MCP_MODE === 'gateway' && !voice ? `${threadsRule(thread, await projectStore.list().catch(() => []))}\n\n` : ''
-  const contextBlock = `${projectCtx}${totemCtx}${totemRule}${othersRule}`
+  // Totems in this chat (a group chat) and, unless he turned it off, the way to
+  // find and bring in the rest (the "Totems in a chat" block). Gateway only: the
+  // tools are totems__*.
+  const memberJobs = (thread.members || []).map((id) => totemList.find((j) => j.id === id)).filter(Boolean)
+  const othersCount = chatSettings.totemsInChat ? totemList.filter((j) => j.id !== totemId && !memberJobs.includes(j)).length : 0
+  const groupRule = MCP_MODE === 'gateway' && !voice ? totemsChatRule({ chatId: threadId, members: memberJobs, others: othersCount }) : ''
+  const contextBlock = `${projectCtx}${totemCtx}${totemRule}${groupRule ? `${groupRule}\n\n` : ''}${othersRule}`
   const needsTitle = !existing?.title || userIndex === 0
   const streamLive = streamingEnabled(provider, config)
   // The browser, computer use and the hour: every dashboard or app chat, never voice.
@@ -12344,6 +12383,84 @@ const MCP_TOOLS = [
       return readOtherThread(t, args, { projects: await projectStore.list(), running: !!chatRuns.active(t.id), autoSettleDays: chatSettings.autoSettleDays })
     },
   },
+  // The owner's totems, brought into a chat (the "Totems in a chat" block).
+  {
+    name: 'totem_totems_list',
+    description:
+      'The owner\'s totems: standing agents with one job each, their own memory and tools. Each row says what it does, '
+      + 'whether it can be asked (agent totems can; built-in jobs cannot), whether it is already in the given chat, and its last run. '
+      + 'Use it to find the totem whose job matches what the owner wants, then ask it with totem_totems_ask.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Topic words matched against names, summaries and jobs. Omit for all.' },
+        chat: { type: 'string', description: 'This chat\'s id, to mark which totems are already in it.' },
+      },
+      additionalProperties: false,
+    },
+    handler: (args) => listTotemsForChat(args),
+  },
+  {
+    name: 'totem_totems_ask',
+    description:
+      'Ask one of the owner\'s totems something in this chat. It runs on its own account and model with its memory and tools, '
+      + 'answers in the first person, and joins the chat (a group chat). Its answer is shown in the chat under its name, so do not '
+      + 'repeat it; build on it. Waits up to about 45 seconds: if status is "working", call totem_totems_wait with the askId. '
+      + 'Several can work at once (up to 3 per chat): ask them all, then wait for each.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chat: { type: 'string', description: 'This chat\'s id.' },
+        totem: { type: 'string', description: 'The totem\'s id, from totem_totems_list or the chat\'s member list.' },
+        message: { type: 'string', description: 'What you need from it, self-contained: it sees the last few messages of the chat, not your reasoning.' },
+      },
+      required: ['chat', 'totem', 'message'],
+      additionalProperties: false,
+    },
+    handler: (args) => askTotemInChat(args),
+  },
+  {
+    name: 'totem_totems_wait',
+    description: 'Wait for a totem\'s answer that totem_totems_ask returned as "working". Waits up to about 45 seconds; call again while it is still working.',
+    inputSchema: {
+      type: 'object',
+      properties: { askId: { type: 'string', description: 'The askId totem_totems_ask returned.' } },
+      required: ['askId'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const a = totemAsks.get(String(args.askId || ''))
+      if (!a) throw new Error(`no ask ${args.askId}; it finished over an hour ago or the bridge restarted. Ask again.`)
+      return waitForAsk(a, ASK_WAIT_MS)
+    },
+  },
+  {
+    name: 'totem_totems_invite',
+    description: 'Bring totems into this chat without asking them anything yet, so the owner can talk to them here. Asking one with totem_totems_ask brings it in too.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chat: { type: 'string', description: 'This chat\'s id.' },
+        totems: { type: 'array', items: { type: 'string' }, description: 'Totem ids.' },
+      },
+      required: ['chat', 'totems'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const thread = await threadStore.get(String(args.chat || ''))
+      if (!thread) throw new Error(`no chat with id ${args.chat}`)
+      if (thread.totemId) throw new Error('this is a totem\'s own chat, which stays one-to-one; start a group chat instead')
+      const ids = []
+      for (const id of normalizeMembers(args.totems)) {
+        const j = await jobStore.get(id).catch(() => null)
+        if (!j) throw new Error(`no totem with id ${id}`)
+        if (!askableTotem(j)) throw new Error(`${j.name} is a built-in job and cannot join a chat`)
+        ids.push(id)
+      }
+      const t = await addChatMembers(thread.id, ids)
+      return { ok: true, members: t.members || [] }
+    },
+  },
   {
     name: 'totem_strava_get_gear',
     description:
@@ -13418,6 +13535,34 @@ const MCP_TOOL_META = {
       from: { ...S_NUM, description: 'Index of the first message in transcript.' },
       transcript: S_LIST('index, role (user|assistant), at, content (clipped), status for an unfinished reply, tools (one line per tool call), attachments (names).'),
     }, { required: ['fetchedAt', 'id', 'transcript'] }),
+  },
+  totem_totems_list: {
+    title: 'List the owner\'s totems', annotations: ANN.readLocal,
+    outputSchema: out({
+      total: S_NUM,
+      totems: S_LIST('id, name, summary, kind, askable, inChat, enabled, schedule, job (its instructions, clipped), lastRun {status, at, preview}.'),
+    }, { required: ['fetchedAt', 'total', 'totems'] }),
+  },
+  totem_totems_ask: {
+    title: 'Ask a totem', annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    outputSchema: out({
+      askId: S_STR,
+      status: { ...S_STR, description: 'done, working (call totem_totems_wait) or error.' },
+      totem: { ...S_OBJ, description: 'id, name, icon.' },
+      reply: { ...S_STR, description: 'Its answer, as shown in the chat.' },
+      error: S_STR,
+      workingFor: { ...S_NUM, description: 'Seconds so far, while working.' },
+    }, { required: ['fetchedAt', 'askId', 'status', 'totem'] }),
+  },
+  totem_totems_wait: {
+    title: 'Wait for a totem\'s answer', annotations: ANN.readLocal,
+    outputSchema: out({
+      askId: S_STR, status: S_STR, totem: S_OBJ, reply: S_STR, error: S_STR, workingFor: S_NUM,
+    }, { required: ['fetchedAt', 'askId', 'status', 'totem'] }),
+  },
+  totem_totems_invite: {
+    title: 'Bring totems into a chat', annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    outputSchema: out({ ok: S_BOOL, members: { type: 'array', items: S_STR } }, { required: ['fetchedAt', 'ok', 'members'] }),
   },
   totem_strava_get_gear: {
     title: 'Read bikes and shoes', annotations: ANN.readRemote,
@@ -16472,6 +16617,119 @@ async function runAgentTotem(job, agentOptions, { trigger = 'schedule', event = 
   }
 }
 
+// ---- Totems in a chat ---------------------------------------------------------
+// Any chat's agent can bring totems in (totems/core.mjs → totemsChatRule): it
+// finds them with totems__list and asks one with totems__ask, which runs that
+// totem on its own account and model, with its memory and tools, and joins it to
+// the chat (`members`, which makes it a group chat). The answer comes back as the
+// tool result, which the dashboard draws as a message from the totem.
+//
+// An ask can take minutes and some CLIs give up on a tool call after one (Codex's
+// default is 60 s), so an ask waits at most ASK_WAIT_MS and otherwise returns
+// `working` with an askId for totems__wait.
+const ASK_WAIT_MS = 45_000
+const ASKS_PER_CHAT = 3
+const totemAsks = new Map() // askId → { id, chatId, job, startedAt, result, done }
+
+const askView = (a) => ({
+  askId: a.id,
+  status: a.result ? a.result.status : 'working',
+  totem: { id: a.job.id, name: a.job.name, icon: a.job.iconName || a.job.icon || 'sparkles' },
+  ...(a.result?.reply ? { reply: a.result.reply } : {}),
+  ...(a.result?.error ? { error: a.result.error } : {}),
+  ...(a.result ? {} : { workingFor: Math.round((Date.now() - a.startedAt) / 1000) }),
+})
+
+async function waitForAsk(a, ms) {
+  await Promise.race([a.done, new Promise((r) => setTimeout(r, Math.max(0, ms)).unref?.())])
+  return askView(a)
+}
+
+async function addChatMembers(chatId, ids) {
+  return threadStore.update(chatId, (t) => {
+    if (t.totemId) return
+    t.members = normalizeMembers([...(t.members || []), ...ids])
+    if (!t.members.length) delete t.members
+  })
+}
+
+async function askTotemInChat({ chat, totem, message }) {
+  const thread = await threadStore.get(String(chat || ''))
+  if (!thread) throw new Error(`no chat with id ${chat}; pass this chat's own id`)
+  const job = await jobStore.get(String(totem || '')).catch(() => null)
+  if (!job) throw new Error(`no totem with id ${totem}; find it with totems__list`)
+  if (!askableTotem(job)) throw new Error(`${job.name} is a built-in job, not an agent, so it cannot answer in a chat`)
+  const question = String(message || '').trim().slice(0, 8000)
+  if (!question) throw new Error('say what you need from it in message')
+  const busy = [...totemAsks.values()].filter((a) => a.chatId === thread.id && !a.result).length
+  if (busy >= ASKS_PER_CHAT) throw new Error(`${busy} totems are already working in this chat; wait for one with totems__wait first`)
+  const pre = await preflightJobProvider(job)
+  if (!pre.ok) throw new Error(`${job.name} cannot run right now: ${pre.error}`)
+  // A totem's own chat stays one-to-one; anywhere else, asking brings it in.
+  const joined = thread.totemId ? thread : await addChatMembers(thread.id, [job.id])
+  const others = []
+  for (const id of joined.members || []) {
+    if (id === job.id) continue
+    const j = await jobStore.get(id).catch(() => null)
+    if (j) others.push(j.name)
+  }
+  const memoryPath = totemMemoryPath(job.id)
+  await mkdir(dirname(memoryPath), { recursive: true })
+  const browserKey = `${totemThreadId(job.id)}-ask`
+  const browser = job.browser ? grantBrowserAccess(browserKey, () => {}) : null
+  const prompt = totemAskPrompt({
+    totem: job, memory: await readTotemMemory(job.id), memoryPath,
+    recentRuns: (await jobStore.runs({ jobId: job.id, limit: 5 })).reverse(),
+    chatTitle: thread.title || '', others,
+    transcript: thread.messages.filter((m) => m.status !== 'streaming').map((m) => ({ role: m.role, content: m.content })),
+    message: question, browser: !!browser,
+  })
+  const a = { id: `ask-${randomUUID().slice(0, 12)}`, chatId: thread.id, job, startedAt: Date.now(), result: null }
+  log(`totem ask: ${job.name} in chat ${thread.id}`)
+  a.done = runAgent(prompt, 'job', { ...pre.agentOptions, allowWrite: [memoryPath], browser, network: true, timeoutMs: 10 * 60_000 })
+    .then((reply) => {
+      const text = String(reply || '').trim()
+      a.result = text ? { status: 'done', reply: text.length > 4000 ? `${text.slice(0, 3990)}…` : text } : { status: 'error', error: `${job.name} gave no answer` }
+    }, (e) => { a.result = { status: 'error', error: String(e?.message || e).slice(0, 400) } })
+    .finally(async () => {
+      a.finishedAt = Date.now()
+      recordUse('job', { text: `${job.name} (asked in chat)`, startedAt: a.startedAt, ok: a.result?.status === 'done', provider: pre.providerId })
+      browser?.revoke()
+      if (browser) await browserManager.closeSession(browserKey).catch(() => {})
+    })
+  totemAsks.set(a.id, a)
+  // Answers nobody collected are dropped after an hour.
+  for (const [id, old] of totemAsks) if (old.finishedAt && Date.now() - old.finishedAt > 3600_000) totemAsks.delete(id)
+  return waitForAsk(a, ASK_WAIT_MS)
+}
+
+/** totems__list: every totem, the ones in `chat` marked, best matches first with a query. */
+async function listTotemsForChat({ query = '', chat = '' } = {}) {
+  const jobs = await jobStore.list()
+  const thread = chat ? await threadStore.get(String(chat)).catch(() => null) : null
+  const inChat = new Set(thread?.members || [])
+  const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean)
+  const score = (j) => {
+    if (!words.length) return 1
+    const hay = `${j.name} ${j.description || ''} ${j.prompt || ''} ${j.taskType || ''}`.toLowerCase()
+    return words.filter((w) => hay.includes(w)).length
+  }
+  const rows = jobs
+    .map((j) => ({ j, s: score(j) }))
+    .filter((r) => r.s > 0)
+    .sort((a, b) => b.s - a.s || Number(askableTotem(b.j)) - Number(askableTotem(a.j)) || a.j.name.localeCompare(b.j.name))
+    .slice(0, 40)
+  return {
+    total: rows.length,
+    totems: rows.map(({ j }) => ({
+      id: j.id, name: j.name, summary: j.description || '', kind: j.runner ? 'built-in' : j.skillId ? 'skill' : (j.taskType || 'agent'),
+      askable: askableTotem(j), inChat: inChat.has(j.id), enabled: !!j.enabled, schedule: j.scheduleLabel || '',
+      job: askableTotem(j) ? String(j.prompt).slice(0, 400) : '',
+      lastRun: j.lastRun ? { status: j.lastRun.status, at: j.lastRun.startedAt ? new Date(j.lastRun.startedAt).toISOString() : null, preview: String(j.lastRun.preview || '').slice(0, 240) } : null,
+    })),
+  }
+}
+
 // What every enabled account can run, for the builder to recommend from.
 async function totemModelCatalog() {
   const config = await readProviderConfig()
@@ -16539,6 +16797,22 @@ async function handleTotemsApi(req, res, path) {
       if (draftId) await totemDrafts.save(draftId, { messages: [...messages, asked, { role: 'builder', text: error, error: true }], pending: null }, { create: false })
       return send(res, 502, { error })
     }
+  }
+  if (req.method === 'POST' && path === '/api/totems/groups') {
+    // A group chat: a regular chat with totems in it from the start. Its host
+    // asks them in turn (totemsChatRule); more can join later.
+    const body = await readJsonBody(req)
+    const ids = []
+    for (const id of normalizeMembers(body.members)) {
+      const job = await jobStore.get(id).catch(() => null)
+      if (job && askableTotem(job)) ids.push(id)
+    }
+    if (!ids.length) return send(res, 400, { error: 'pick at least one agent totem' })
+    const id = randomUUID()
+    const now = Date.now()
+    const title = String(body.title || '').trim().slice(0, 120)
+    const thread = await threadStore.put(id, { id, kind: 'regular', members: ids, ...(title ? { title } : {}), messages: [], createdAt: now, updatedAt: now })
+    return send(res, 200, { thread })
   }
   if (path === '/api/totems/drafts' && req.method === 'GET') return send(res, 200, { drafts: await totemDrafts.list() })
   const dm = /^\/api\/totems\/drafts\/([A-Za-z0-9_-]{8,64})$/.exec(path)

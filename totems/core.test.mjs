@@ -1,7 +1,7 @@
 // node --test totems/core.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { costTier, totemRunPrompt, parseRunReply, totemsRule, parseProposals, appendMemoryNote, builderPrompt, parseBuilderReply } from './core.mjs'
+import { costTier, totemRunPrompt, parseRunReply, totemsRule, parseProposals, appendMemoryNote, builderPrompt, parseBuilderReply, askableTotem, normalizeMembers, totemsChatRule, totemAskPrompt } from './core.mjs'
 
 const catalog = [
   { provider: 'codex', driver: 'codex', name: 'Codex', models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna' }, { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }] },
@@ -145,4 +145,47 @@ test('a builder reply keeps its message to the owner and at most three questions
   const d = parseBuilderReply(JSON.stringify({ name: 'X', instructions: 'Do x.', reply: 'Set it to run daily.', questions: ['a', 'b', 'c', 'd'] }), { catalog })
   assert.equal(d.reply, 'Set it to run daily.')
   assert.deepEqual(d.questions, ['a', 'b', 'c'])
+})
+
+test('only agent totems can be asked in a chat', () => {
+  assert.equal(askableTotem({ prompt: 'Watch the page' }), true)
+  assert.equal(askableTotem({ prompt: 'x', runner: 'whoop-sync' }), false)
+  assert.equal(askableTotem({ skillId: 'brief' }), false)
+  assert.equal(askableTotem({ prompt: '  ' }), false)
+  assert.equal(askableTotem(null), false)
+})
+
+test('chat members are job ids, unique and capped', () => {
+  assert.deepEqual(normalizeMembers(['a', 'a', 'b c', 'c', 7, '../x']), ['a', 'c'])
+  assert.deepEqual(normalizeMembers('a'), [])
+  assert.equal(normalizeMembers(Array.from({ length: 30 }, (_, i) => `t${i}`)).length, 12)
+})
+
+test('the host rule names the members, the chat id and the wait protocol', () => {
+  const rule = totemsChatRule({ chatId: 'chat1', members: [{ id: 'strava', name: 'Strava Coach', description: 'Weekly training review' }], others: 3 })
+  assert.match(rule, /GROUP CHAT/)
+  assert.match(rule, /Strava Coach \(id strava\): Weekly training review/)
+  assert.match(rule, /"chat": "chat1"/)
+  assert.match(rule, /OTHER TOTEMS: the owner has 3 more standing agents/)
+  assert.match(rule, /totems__wait/)
+  const solo = totemsChatRule({ chatId: 'c', members: [], others: 1 })
+  assert.doesNotMatch(solo, /GROUP CHAT/)
+  assert.match(solo, /^TOTEMS: the owner has 1 standing agent \(/)
+  assert.equal(totemsChatRule({ chatId: 'c' }), '')
+})
+
+test('an ask prompt carries the job, memory, the chat and the question, without the run protocol', () => {
+  const p = totemAskPrompt({
+    totem: { name: 'Stock Watch', prompt: 'Watch the jacket page.' }, memory: '- size M out', memoryPath: '/m.md',
+    chatTitle: 'Weekend plans', others: ['Strava Coach'],
+    transcript: [{ role: 'user', content: 'Can I afford the jacket?' }, { role: 'assistant', content: '' }], message: 'Is it back in stock?',
+  })
+  assert.match(p, /"Stock Watch"/)
+  assert.match(p, /alongside Strava Coach/)
+  assert.match(p, /Watch the jacket page\./)
+  assert.match(p, /YOUR MEMORY \(\/m\.md\):\n- size M out/)
+  assert.match(p, /Owner: Can I afford the jacket\?/)
+  assert.doesNotMatch(p, /Host:\s*$/m)
+  assert.match(p, /THE HOST ASKS YOU:\nIs it back in stock\?/)
+  assert.match(p, /Do not end with NOTIFY or QUIET/)
 })

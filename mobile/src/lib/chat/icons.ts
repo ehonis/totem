@@ -82,3 +82,5 @@ export { default as IconMessageDots } from '@tabler/icons-react-native/dist/esm/
 export { default as IconPencilCheck } from '@tabler/icons-react-native/dist/esm/icons/IconPencilCheck.mjs'
 export { default as IconPuzzle } from '@tabler/icons-react-native/dist/esm/icons/IconPuzzle.mjs'
 export { default as IconRobot } from '@tabler/icons-react-native/dist/esm/icons/IconRobot.mjs'
+export { default as IconUsersGroup } from '@tabler/icons-react-native/dist/esm/icons/IconUsersGroup.mjs'
+export { default as IconUserPlus } from '@tabler/icons-react-native/dist/esm/icons/IconUserPlus.mjs'

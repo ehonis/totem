@@ -1,18 +1,17 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, AuthError, getJobs, updateJob, deleteJob } from '../api'
 import { pushError, pushToast } from '../toast'
 import { TI } from '../chat/ui'
-import { useChat, loadProviders, ensureModels } from '../chat/store'
+import { useChat, loadProviders, ensureModels, syncThreads, setActive, adoptThread, threadTitle } from '../chat/store'
+import { ago } from '../chat/settle'
+import Spark from '../chat/Spark'
+import type { ChatThread } from '../chat/types'
 import { normalizeModelSettings, modelLabel } from '../chat/models'
 import ModelPicker from '../chat/ModelPicker'
-import { IconArrowLeft, IconArrowUp, IconMessage, IconPlus, IconSparkles, IconLoader2, IconTrash, IconRefresh } from '../chat/icons'
+import { IconArrowLeft, IconArrowUp, IconMessage, IconPlus, IconSparkles, IconLoader2, IconTrash, IconRefresh, IconSettings, IconUsersGroup } from '../chat/icons'
 import { ScheduleBuilder, RunHistory, Switch, NOTIFY_CHOICES, relativeTime } from './JobsView'
 import { TotemIcon, TYPE_LABEL, kindOf, statusLine, openTotemChat, runTotemNow, asWatch, sourceKey, type Rec, type Watch, type WatchSource, type Draft, type Choice, type Msg, type DraftRecord } from '../totems/shared'
-import IconCube3dSphere from '@tabler/icons-react/dist/esm/icons/IconCube3dSphere.mjs'
 import './totems.css'
-
-// The 3D lobby is its own chunk: three.js loads only when a desktop opens it.
-const TotemLobby = lazy(() => import('../totems/TotemLobby'))
 
 // Totems: standing agents that wake on a schedule or when something they watch
 // changes, remember between runs, and tell the owner only what matters
@@ -577,32 +576,121 @@ function Detail({ job, onBack, onChanged, onDeleted, onOpenChat }: { job: any; o
   )
 }
 
-// --- the list, or the lobby ----------------------------------------------------------
+// --- the list ------------------------------------------------------------------------
+// Like the chats list: each totem is a row with the latest thing in its chat, and
+// a click opens that chat (its runs are posted there). Settings, memory and runs
+// open from the gear, or from the totem's name at the top of its chat. Group
+// chats, with several totems in one chat, sit above.
 
-const VIEW_KEY = 'totems.view'
-const NARROW = '(max-width: 720px)'
-const REDUCED = '(prefers-reduced-motion: reduce)'
+const plain = (s: string) => s.replace(/[*_`#>|]+/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim()
 
-const webgl = (() => {
-  let ok: boolean | null = null
-  return () => {
-    if (ok === null) {
-      try { const c = document.createElement('canvas'); ok = !!(c.getContext('webgl2') || c.getContext('webgl')) } catch { ok = false }
-    }
-    return ok
-  }
-})()
+/** The newest message in a chat, as one plain line. */
+function lastLine(t: ChatThread | undefined): { text: string; at: number } | null {
+  const m = t?.messages[t.messages.length - 1]
+  if (!m) return null
+  const text = plain(m.content || '') || (m.parts?.some((p) => p.type === 'tool') ? 'Worked on something' : '')
+  return text ? { text: m.role === 'user' ? `You: ${text}` : text, at: m.createdAt || t!.updatedAt } : null
+}
 
-function useMedia(query: string) {
-  const [on, setOn] = useState(() => window.matchMedia?.(query).matches ?? false)
-  useEffect(() => {
-    const mq = window.matchMedia?.(query)
-    if (!mq) return
-    const f = () => setOn(mq.matches)
-    mq.addEventListener('change', f)
-    return () => mq.removeEventListener('change', f)
-  }, [query])
-  return on
+function TotemRow({ job, thread, live, onOpen, onSettings, onToggle }: { job: any; thread?: ChatThread; live: boolean; onOpen: () => void; onSettings: () => void; onToggle: (v: boolean) => void }) {
+  const last = lastLine(thread)
+  const bad = job.lastRun?.status === 'error'
+  const running = live || job.lastRun?.status === 'running'
+  return (
+    <div className={`tm-row ${job.enabled ? '' : 'off'} ${bad ? 'bad' : ''}`}>
+      <button type="button" className="tm-row-main" onClick={onOpen} title={`Open ${job.name}'s chat`}>
+        <span className="tm-icon"><TotemIcon name={job.iconName} /></span>
+        <span className="tm-row-text">
+          <span className="tm-row-top">
+            <span className="tm-row-name">{job.name}</span>
+            <span className="tm-kind">{kindOf(job)}</span>
+            {thread?.needsReply && <span className="tm-unread" aria-label="Unread" />}
+          </span>
+          <span className="tm-row-last">{last ? last.text : job.description || 'No messages yet. Its runs are posted here.'}</span>
+          <span className={`tm-row-meta ${bad ? 'tm-bad' : ''}`}>{running ? <><Spark size={11} /> Running now…</> : statusLine(job)}</span>
+        </span>
+        {last && <span className="tm-row-time">{ago(last.at, Date.now())}</span>}
+      </button>
+      <div className="tm-card-side">
+        <Switch checked={job.enabled} onChange={onToggle} label={`${job.name} on`} />
+        <button type="button" className="tm-chat-btn" onClick={onSettings} aria-label={`${job.name} settings`} title="Settings, memory and runs"><TI icon={IconSettings} size={16} /></button>
+      </div>
+    </div>
+  )
+}
+
+/** Up to three member icons, overlapped. */
+function MemberStack({ ids, jobs }: { ids: string[]; jobs: any[] }) {
+  const shown = ids.map((id) => jobs.find((j) => j.id === id)).filter(Boolean).slice(0, 3)
+  return (
+    <span className="tm-stack" aria-hidden>
+      {shown.length ? shown.map((j) => <span key={j.id} className="tm-icon sm"><TotemIcon name={j.iconName} size={14} /></span>)
+        : <span className="tm-icon sm"><TI icon={IconUsersGroup} size={14} /></span>}
+    </span>
+  )
+}
+
+function GroupRow({ t, jobs, live, onOpen }: { t: ChatThread; jobs: any[]; live: boolean; onOpen: () => void }) {
+  const last = lastLine(t)
+  const names = (t.members || []).map((id) => jobs.find((j) => j.id === id)?.name).filter(Boolean)
+  return (
+    <div className="tm-row">
+      <button type="button" className="tm-row-main" onClick={onOpen}>
+        <MemberStack ids={t.members || []} jobs={jobs} />
+        <span className="tm-row-text">
+          <span className="tm-row-top">
+            <span className="tm-row-name">{threadTitle(t)}</span>
+            {t.needsReply && <span className="tm-unread" aria-label="Unread" />}
+          </span>
+          <span className="tm-row-last">{live ? 'Answering…' : last ? last.text : 'No messages yet.'}</span>
+          <span className="tm-row-meta">You{names.length ? `, ${names.join(', ')}` : ''}</span>
+        </span>
+        {last && <span className="tm-row-time">{ago(last.at, Date.now())}</span>}
+      </button>
+    </div>
+  )
+}
+
+/** Pick totems for a new group chat. Only agent totems can talk. */
+export function GroupPicker({ jobs, initial = [], title: heading = 'New group chat', action = 'Start group chat', named = false, allowEmpty = false, onCancel, onDone }: { jobs: any[]; initial?: string[]; title?: string; action?: string; named?: boolean; allowEmpty?: boolean; onCancel: () => void; onDone: (ids: string[], name: string) => Promise<void> | void }) {
+  const askable = jobs.filter((j) => !j.runner && !j.skillId && String(j.prompt || '').trim())
+  const [picked, setPicked] = useState<string[]>(initial)
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
+  return (
+    <div className="tm-group-pick">
+      <div className="tm-group-pick-head">
+        <strong>{heading}</strong>
+        <span className="muted">The chat’s agent hosts it: it asks the totems you pick, passes their answers between them, and pulls the result together. Say “@name” to talk to one directly.</span>
+      </div>
+      {!askable.length && <p className="muted">No agent totems yet. Make one first; built-in jobs can’t talk.</p>}
+      <div className="tm-group-list">
+        {askable.map((j) => (
+          <label key={j.id} className={`tm-group-opt ${picked.includes(j.id) ? 'on' : ''}`}>
+            <input type="checkbox" checked={picked.includes(j.id)} onChange={() => toggle(j.id)} />
+            <span className="tm-icon sm"><TotemIcon name={j.iconName} size={14} /></span>
+            <span className="tm-group-opt-text"><span>{j.name}</span>{j.description && <span className="muted">{j.description}</span>}</span>
+          </label>
+        ))}
+      </div>
+      {named && <input className="tm-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (optional), e.g. Weekly planning" aria-label="Group chat name" />}
+      <div className="tm-actions">
+        <button type="button" className="btn primary" disabled={(!picked.length && !allowEmpty) || busy} onClick={async () => { setBusy(true); try { await onDone(picked, name.trim()) } finally { setBusy(false) } }}>{busy ? 'Working…' : action}</button>
+        <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+/** Make a group chat and open it. */
+export async function startGroupChat(ids: string[], title: string, onOpenChat: () => void) {
+  try {
+    const { thread } = await api<{ thread: ChatThread }>('/api/totems/groups', { method: 'POST', body: JSON.stringify({ members: ids, title }) })
+    adoptThread(thread)
+    setActive(thread.id)
+    onOpenChat()
+  } catch (e: any) { pushError(`Couldn't start the group chat: ${e.message}`) }
 }
 
 export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: () => void; onOpenChat: () => void }) {
@@ -611,12 +699,23 @@ export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: (
   const [open, setOpen] = useState<string | null>(() => new URLSearchParams(window.location.search).get('totem'))
   // false: the list; null: a new totem; a record: continuing that draft.
   const [building, setBuilding] = useState<DraftRecord | null | false>(false)
-  // A phone always gets the list; a desktop gets the lobby unless he chose the list.
-  const narrow = useMedia(NARROW)
-  const reduced = useMedia(REDUCED)
-  const [view, setView] = useState<'lobby' | 'list'>(() => (localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'lobby'))
-  const pickView = (v: 'lobby' | 'list') => { setView(v); localStorage.setItem(VIEW_KEY, v) }
-  const lobby = !narrow && view === 'lobby' && webgl()
+  const [grouping, setGrouping] = useState(false)
+  const threads = useChat((s) => s.threads)
+  const runs = useChat((s) => s.runs)
+
+  // The chat header's totem link lands here with ?totem=<id>.
+  useEffect(() => {
+    const onPop = () => setOpen(new URLSearchParams(window.location.search).get('totem'))
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  const openSettings = (id: string | null) => {
+    setOpen(id)
+    const url = new URL(window.location.href)
+    if (id) url.searchParams.set('totem', id)
+    else url.searchParams.delete('totem')
+    window.history.replaceState(window.history.state, '', url.pathname + url.search)
+  }
 
   const loadDrafts = useCallback(() => {
     api<{ drafts: DraftRecord[] }>('/api/totems/drafts').then((r) => setDrafts(r.drafts || [])).catch(() => {})
@@ -627,14 +726,20 @@ export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: (
   }, [onAuthError, loadDrafts])
   useEffect(() => {
     load()
-    const t = setInterval(load, 30_000)
+    syncThreads()
+    const t = setInterval(() => { load(); syncThreads() }, 30_000)
     return () => clearInterval(t)
   }, [load])
 
   const replace = (job: any) => setJobs((list) => (list || []).map((j) => (j.id === job.id ? job : j)))
-  // Agent totems first, then built-ins; on before paused; then by name.
+  const toggle = async (j: any, v: boolean) => { try { const r: any = await updateJob(j.id, { enabled: v }); replace(r.job) } catch (e: any) { pushError(e.message) } }
+  const ownChat = useMemo(() => new Map(threads.filter((t) => t.totemId).map((t) => [t.totemId!, t])), [threads])
+  // Agent totems first, then built-ins; then whichever spoke last; then by name.
   const sorted = useMemo(() => [...(jobs || [])].sort((a, b) =>
-    Number(!!(a.runner || a.skillId)) - Number(!!(b.runner || b.skillId)) || Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name)), [jobs])
+    Number(!!(a.runner || a.skillId)) - Number(!!(b.runner || b.skillId))
+    || (ownChat.get(b.id)?.updatedAt || 0) - (ownChat.get(a.id)?.updatedAt || 0)
+    || Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name)), [jobs, ownChat])
+  const groups = useMemo(() => threads.filter((t) => t.members?.length).sort((a, b) => b.updatedAt - a.updatedAt), [threads])
   const job = open ? jobs?.find((j) => j.id === open) : null
 
   const closeBuilder = () => { setBuilding(false); loadDrafts() }
@@ -642,6 +747,7 @@ export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: (
     if (!window.confirm(`Discard the draft${d.draft?.name ? ` “${d.draft.name}”` : ''}?`)) return
     try { await api(`/api/totems/drafts/${d.id}`, { method: 'DELETE' }); setDrafts((l) => l.filter((x) => x.id !== d.id)) } catch (e: any) { pushError(e.message) }
   }
+  const openGroup = (id: string) => { setActive(id); onOpenChat() }
 
   if (building !== false) {
     return (
@@ -651,32 +757,12 @@ export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: (
           initial={building}
           onClose={closeBuilder}
           onDiscarded={closeBuilder}
-          onCreated={(j) => { closeBuilder(); setJobs((l) => [...(l || []), j]); setOpen(j.id) }}
+          onCreated={(j) => { closeBuilder(); setJobs((l) => [...(l || []), j]); openTotemChat(j, onOpenChat) }}
         />
       </div>
     )
   }
-  if (job) return <div className="view tm-view"><Detail job={job} onBack={() => setOpen(null)} onChanged={replace} onDeleted={() => { setOpen(null); load() }} onOpenChat={onOpenChat} /></div>
-
-  if (lobby) {
-    return (
-      <div className="view tm-view tl-view">
-        <Suspense fallback={<div className="tl-root"><div className="tl-loading">Summoning totems…</div></div>}>
-          <TotemLobby
-            jobs={jobs}
-            drafts={drafts}
-            reduced={reduced}
-            onOpen={setOpen}
-            onBuild={setBuilding}
-            onDiscardDraft={discardDraft}
-            onChanged={replace}
-            onOpenChat={onOpenChat}
-            onList={() => pickView('list')}
-          />
-        </Suspense>
-      </div>
-    )
-  }
+  if (job) return <div className="view tm-view"><Detail job={job} onBack={() => openSettings(null)} onChanged={replace} onDeleted={() => { openSettings(null); load() }} onOpenChat={onOpenChat} /></div>
 
   return (
     <div className="view tm-view">
@@ -684,31 +770,39 @@ export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: (
         <div className="tm-head">
           <div>
             <h1>Totems</h1>
-            <p className="tm-lede">Standing agents that work on their own schedule, remember what they’ve seen, and only tell you what matters.</p>
+            <p className="tm-lede">Standing agents that work on their own schedule, remember what they’ve seen, and only tell you what matters. Open one to read its runs and talk to it.</p>
           </div>
           <div className="tm-head-actions">
-            {!narrow && webgl() && (
-              <button type="button" className="btn" onClick={() => pickView('lobby')} title="Show the 3D lobby"><TI icon={IconCube3dSphere} size={15} />Lobby</button>
-            )}
+            <button type="button" className="btn" onClick={() => setGrouping(true)} disabled={!jobs?.length}><TI icon={IconUsersGroup} size={15} />Group chat</button>
             <button type="button" className="btn primary" onClick={() => setBuilding(null)}><TI icon={IconPlus} size={15} />New totem</button>
           </div>
         </div>
+        {grouping && jobs && (
+          <GroupPicker jobs={jobs} named onCancel={() => setGrouping(false)} onDone={async (ids, name) => { await startGroupChat(ids, name, onOpenChat); setGrouping(false) }} />
+        )}
         {!jobs && <p className="muted">Loading…</p>}
+        {groups.length > 0 && (
+          <section className="tm-drafts">
+            <h2>Group chats</h2>
+            <div className="tm-list">
+              {groups.map((t) => <GroupRow key={t.id} t={t} jobs={jobs || []} live={!!runs[t.id]} onOpen={() => openGroup(t.id)} />)}
+            </div>
+          </section>
+        )}
         {drafts.length > 0 && (
           <section className="tm-drafts">
             <h2>Drafts</h2>
-            <div className="tm-grid">
+            <div className="tm-list">
               {drafts.map((d) => (
-                <div key={d.id} className="tm-card draft">
-                  <button type="button" className="tm-card-main" onClick={() => setBuilding(d)}>
+                <div key={d.id} className="tm-row draft">
+                  <button type="button" className="tm-row-main" onClick={() => setBuilding(d)}>
                     <span className="tm-icon"><TotemIcon name={d.draft?.icon || 'sparkles'} /></span>
-                    <span className="tm-card-text">
-                      <span className="tm-card-name">{d.draft?.name || 'Untitled totem'}</span>
-                      <span className="tm-card-desc">{d.draft?.summary || d.description}</span>
-                      <span className="tm-card-meta">
-                        <span className="tm-kind">Draft</span>
+                    <span className="tm-row-text">
+                      <span className="tm-row-top"><span className="tm-row-name">{d.draft?.name || 'Untitled totem'}</span><span className="tm-kind">Draft</span></span>
+                      <span className="tm-row-last">{d.draft?.summary || d.description}</span>
+                      <span className="tm-row-meta">
                         {d.pending ? 'The builder is working on it…' : `Edited ${relativeTime(d.updatedAt)}`}
-                        {!d.pending && d.messages[d.messages.length - 1]?.questions?.length ? <><span className="tm-dot">·</span>Has questions for you</> : null}
+                        {!d.pending && d.messages[d.messages.length - 1]?.questions?.length ? ' · Has questions for you' : ''}
                       </span>
                     </span>
                   </button>
@@ -727,29 +821,24 @@ export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: (
             <span>Describe a job, such as watching a listing or writing a weekly review, and the builder sets it up.</span>
           </button>
         )}
-        <div className="tm-grid">
-          {sorted.map((j) => (
-            <div key={j.id} className={`tm-card ${j.enabled ? '' : 'off'} ${j.lastRun?.status === 'error' ? 'bad' : ''}`}>
-              <button type="button" className="tm-card-main" onClick={() => setOpen(j.id)}>
-                <span className="tm-icon"><TotemIcon name={j.iconName} /></span>
-                <span className="tm-card-text">
-                  <span className="tm-card-name">{j.name}</span>
-                  <span className="tm-card-desc">{j.description || j.scheduleLabel}</span>
-                  <span className="tm-card-meta">
-                    <span className="tm-kind">{kindOf(j)}</span>
-                    {j.scheduleLabel}
-                    <span className="tm-dot">·</span>
-                    <span className={j.lastRun?.status === 'error' ? 'tm-bad' : ''}>{statusLine(j)}</span>
-                  </span>
-                </span>
-              </button>
-              <div className="tm-card-side">
-                <Switch checked={j.enabled} onChange={async (v: boolean) => { try { const r: any = await updateJob(j.id, { enabled: v }); replace(r.job) } catch (e: any) { pushError(e.message) } }} label={`${j.name} on`} />
-                <button type="button" className="tm-chat-btn" onClick={() => openTotemChat(j, onOpenChat)} aria-label={`Chat with ${j.name}`} title="Chat with it"><TI icon={IconMessage} size={16} /></button>
-              </div>
+        {jobs && jobs.length > 0 && (
+          <section className="tm-drafts">
+            {(groups.length > 0 || drafts.length > 0) && <h2>Totems</h2>}
+            <div className="tm-list">
+              {sorted.map((j) => (
+                <TotemRow
+                  key={j.id}
+                  job={j}
+                  thread={ownChat.get(j.id)}
+                  live={!!(ownChat.get(j.id) && runs[ownChat.get(j.id)!.id])}
+                  onOpen={() => openTotemChat(j, onOpenChat)}
+                  onSettings={() => openSettings(j.id)}
+                  onToggle={(v) => toggle(j, v)}
+                />
+              ))}
             </div>
-          ))}
-        </div>
+          </section>
+        )}
       </div>
     </div>
   )

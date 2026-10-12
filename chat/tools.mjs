@@ -11,7 +11,7 @@ const APP_LABELS = {
   tasks: 'Tasks', goals: 'Goals', lists: 'Lists', strava: 'Strava', plaud: 'Plaud', github: 'GitHub',
   'google-calendar': 'Calendar', calendar: 'Calendar', krakatoa: 'Krakatoa', vercel: 'Vercel', habits: 'Habits',
   'youtube-transcript': 'YouTube', notion: 'Notion', gmail: 'Gmail', slack: 'Slack', linear: 'Linear',
-  'computer-use': 'Computer', computer_use: 'Computer', browser: 'Browser', playwright: 'Browser',
+  'computer-use': 'Computer', computer_use: 'Computer', browser: 'Browser', playwright: 'Browser', totems: 'Totems',
 }
 
 const VERBS = [

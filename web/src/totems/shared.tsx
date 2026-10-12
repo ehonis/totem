@@ -1,5 +1,5 @@
 import React from 'react'
-import { api, runJobNow } from '../api'
+import { api, runJobNow, getJobs } from '../api'
 import { pushError, pushToast } from '../toast'
 import { Hi } from '../icons'
 import { iconFor } from '../studio'
@@ -8,8 +8,8 @@ import { TI } from '../chat/ui'
 import { syncThreads, setActive } from '../chat/store'
 import { relativeTime } from '../components/JobsView'
 
-// What the Totems list (components/TotemsView.tsx) and the 3D lobby
-// (TotemLobby.tsx) both need to describe a totem.
+// What the Totems list (components/TotemsView.tsx) and a totem's chat need to
+// describe a totem.
 
 export interface Rec { provider: string; model: string; effort: string; label: string; account: string; driver: string; cost: number; why: string }
 export type WatchSource = { kind: 'git'; repo: string; ref: string } | { kind: 'url'; url: string; contains?: string }
@@ -79,4 +79,30 @@ export async function runTotemNow(job: any): Promise<any | null> {
     pushToast(status === 'error' ? `${job.name} failed: ${r.run?.error || 'no error text'}` : status === 'skipped' ? `${job.name} checked: nothing new` : `${job.name} ran. Its report is in its chat.`, status === 'error' ? 'error' : 'info')
     return (r.jobs || []).find((j: any) => j.id === job.id) || null
   } catch (e: any) { pushError(e.message); return null }
+}
+
+// Totem names and icons by id, for chat surfaces that only hold an id (a group
+// chat's members, a totem asked mid-reply). One shared fetch, refreshed after a minute.
+let directory: Map<string, any> = new Map()
+let loadedAt = 0
+let loading: Promise<void> | null = null
+const dirSubs = new Set<() => void>()
+export function refreshTotemDirectory(force = false) {
+  if (loading || (!force && Date.now() - loadedAt < 60_000)) return loading
+  loading = getJobs().then((p: any) => {
+    directory = new Map((p.jobs || []).map((j: any) => [j.id, j]))
+    loadedAt = Date.now()
+    dirSubs.forEach((f) => f())
+  }).catch(() => {}).finally(() => { loading = null })
+  return loading
+}
+export function useTotemDirectory(): Map<string, any> {
+  const [, bump] = React.useState(0)
+  React.useEffect(() => {
+    const f = () => bump((n) => n + 1)
+    dirSubs.add(f)
+    refreshTotemDirectory()
+    return () => { dirSubs.delete(f) }
+  }, [])
+  return directory
 }

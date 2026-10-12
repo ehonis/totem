@@ -1179,6 +1179,20 @@
 }
 
 /* --- totem proposals ------------------------------------------------------------ */
+/* A totem speaking in a chat (a totems__ask answer): its own message, under its name. */
+.vc-totem-say { margin: 10px 0 6px; padding: 10px 14px 12px; border-radius: 14px; border: 1px solid var(--vc-line); background: var(--vc-surface); max-width: 640px; }
+.vc-totem-say-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 13px; }
+.vc-totem-say-icon { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--bg-3); color: color-mix(in srgb, var(--text) 80%, transparent); }
+.vc-totem-say-name { font-weight: 600; color: var(--text); }
+.vc-totem-say-state { display: inline-flex; align-items: center; gap: 5px; color: var(--vc-soft); font-size: 12.5px; }
+.vc-totem-say.asking, .vc-totem-say.working { padding-bottom: 10px; }
+.vc-totem-say.asking .vc-totem-say-head, .vc-totem-say.working .vc-totem-say-head { margin-bottom: 0; }
+.vc-totem-say-error { font-size: 13.5px; color: var(--vc-soft); }
+/* A group chat's members, in its header. */
+.vc-members { display: inline-flex; align-items: center; gap: 2px; }
+.vc-member { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: var(--bg-3); color: color-mix(in srgb, var(--text) 80%, transparent); border: 0; cursor: pointer; }
+.vc-member:hover { color: var(--text); }
+.vc-members-pop { position: absolute; top: 46px; right: 12px; z-index: 30; width: min(420px, calc(100vw - 24px)); }
 .vc-totem-prop { margin: 10px 0 4px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--vc-line); background: var(--vc-surface); max-width: 560px; }
 .vc-totem-prop-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--vc-soft); }
 .vc-totem-prop-summary { margin-top: 4px; font-size: 14.5px; color: var(--text); line-height: 1.45; }
