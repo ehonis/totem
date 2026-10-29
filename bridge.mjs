@@ -8321,14 +8321,12 @@ const CURSOR_DEFAULT_MODELS = new Set([
   'auto',
   'composer-2.5',
   'composer-2.5-fast',
-  'gpt-5.5-medium',            // GPT-5.5 1M
-  'gpt-5.4-medium',            // GPT-5.4 1M
-  'gpt-5.2',                   // GPT-5.2
-  'gpt-5.3-codex',             // Codex 5.3
-  'claude-opus-4-8-high',      // Opus 4.8 1M
-  'claude-4.6-sonnet-medium',  // Sonnet 4.6 1M
-  'gemini-3.1-pro',            // Gemini 3.1 Pro
-  'grok-4.3',                  // Grok 4.3 1M
+  'claude-opus-5-5-medium',    // Opus 5.5 1M
+  'claude-fable-5-1-high',     // Fable 5.1 1M
+  'claude-sonnet-5-5-medium',  // Sonnet 5.5
+  'gemini-4-argon-medium',     // Gemini 4 Argon
+  'gemini-3.8-flash-medium',   // Gemini 3.8 Flash
+  'grok-4.7-medium',           // Grok 4.7
 ])
 
 // Claude Code has no model-list command, so its catalog is written down here —
