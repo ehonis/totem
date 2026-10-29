@@ -455,7 +455,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
   const secs = m.durationMs && m.durationMs > 2000 ? formatDuration(m.durationMs) : null
   const lane = m.power ? [POWER_NAMES[String(m.power)], m.route === 'thinking' && secs ? `thought for ${secs}` : null].filter(Boolean).join(', ')
     : m.route === 'thinking' ? (secs ? `Thought for ${secs}` : 'Thinking') : m.route === 'instant' ? 'Instant' : null
-  const meta = [lane, provider?.name, modelName, lane ? null : secs].filter(Boolean).join(' · ')
+  // The account's logo leads the line; its name is in the details (TurnStats).
+  const meta = [lane, modelName, lane ? null : secs].filter(Boolean).join(' · ')
   const copiedTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const doCopy = () => { copy(m.content); setCopied(true); clearTimeout(copiedTimer.current); copiedTimer.current = setTimeout(() => setCopied(false), 1200) }
   const items = [
@@ -512,7 +513,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
           ) : null}
         </View>
       ) : null}
-      {details && meta && !live ? <TurnStats m={m} modelName={modelName} /> : null}
+      {details && meta && !live ? <TurnStats m={m} modelName={modelName} account={provider?.name} /> : null}
       <Lightbox source={lightbox} onClose={() => setLightbox(null)} />
     </View>
   )
