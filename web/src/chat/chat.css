@@ -161,34 +161,50 @@
 .vc-meta .vc-logo { opacity: .75; }
 @media (hover: none) { .vc-actions { opacity: 1; } }
 
-/* The reply's details (TurnStats.tsx): hover or tap the meta and they slide out to its side. */
-.vc-turn { position: relative; }
+/* The reply's details (TurnStats.tsx): hovering or tapping the meta grows the chip's
+   own background down into the card, details under the chip, so chip and details are
+   one surface to move within. The card sits behind the chip, clipped to the chip's box
+   (--chip-w/h) until open. With no room below (the last reply, over the composer) it
+   grows up instead (.up), details above the chip. */
+.vc-turn { position: relative; --chip-w: 0px; --chip-h: 0px; --grow: cubic-bezier(.2, .8, .2, 1); }
+.vc-turn:hover, .vc-turn.open, .vc-turn:focus-within { z-index: 30; }
 .vc-turn-chip {
+  position: relative; z-index: 2;
   display: inline-flex; align-items: center; gap: 6px; margin: -4px -6px; padding: 4px 6px; border-radius: 7px;
   background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: default;
-  transition: color .15s, background .15s;
+  transition: color .15s;
 }
-.vc-turn:hover .vc-turn-chip, .vc-turn.open .vc-turn-chip { color: var(--text); background: var(--vc-raise); }
+.vc-turn:hover .vc-turn-chip, .vc-turn.open .vc-turn-chip { color: var(--text); }
 .vc-turn-panel {
-  position: absolute; z-index: 30; left: calc(100% + 12px); top: 50%;
-  display: grid; grid-template-columns: repeat(2, auto auto); gap: 4px 14px; padding: 10px 14px;
+  position: absolute; z-index: 1; left: -6px; top: -4px;
+  display: grid; grid-template-columns: auto auto; gap: 4px 14px; min-width: var(--chip-w);
+  padding: calc(var(--chip-h) + 6px) 14px 10px;
   white-space: nowrap; font-size: 12px; line-height: 1.35; color: var(--text);
-  background: #1a1d26; border: 1px solid var(--vc-line); border-radius: 12px;
-  box-shadow: 0 12px 36px #00000066, 0 2px 6px #0000004d;
-  opacity: 0; transform: translate(-8px, -50%); clip-path: inset(0 100% 0 0 round 12px); pointer-events: none;
-  transition: clip-path .32s cubic-bezier(.2, .8, .2, 1), transform .32s cubic-bezier(.2, .8, .2, 1), opacity .16s;
+  /* The composer's glass (.vc-box), so the chat has one kind of raised surface. Unlike
+     the composer it lands on text, so it blurs what is behind it, but only while open:
+     a small blur over the moving glow is cheap, a resting one on every reply is not. */
+  background: color-mix(in srgb, #0e0f13 78%, transparent);
+  border: 1px solid #ffffff14; border-radius: 12px;
+  box-shadow: inset 0 1px 0 #ffffff14, 0 18px 48px -20px #00000099, 0 4px 14px -7px #00000066;
+  --rest: inset(0 calc(100% - var(--chip-w)) calc(100% - var(--chip-h)) 0 round 7px);
+  opacity: 0; clip-path: var(--rest); pointer-events: none;
+  transition: clip-path .34s var(--grow), opacity .12s;
 }
+/* The numbers trail the card's edge rather than racing it. */
+.vc-turn-row > * { opacity: 0; transition: opacity .12s; }
 .vc-turn:hover .vc-turn-panel, .vc-turn.open .vc-turn-panel, .vc-turn-chip:focus-visible + .vc-turn-panel {
-  opacity: 1; transform: translate(0, -50%); clip-path: inset(0 0 0 0 round 12px); pointer-events: auto;
+  opacity: 1; clip-path: inset(0 0 0 0 round 12px); pointer-events: auto;
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+}
+.vc-turn:hover .vc-turn-row > *, .vc-turn.open .vc-turn-row > *, .vc-turn-chip:focus-visible + .vc-turn-panel .vc-turn-row > * {
+  opacity: 1; transition: opacity .2s .1s;
 }
 .vc-turn-row { display: contents; }
 .vc-turn-k { color: var(--vc-faint); }
 .vc-turn-v { font-variant-numeric: tabular-nums; padding-right: 6px; }
-/* It needs ~600px beside the chip, which a narrow pane (a laptop with the chats
-   panel open, a phone) doesn't have: there it opens above, still sliding out sideways. */
-@container vc-scroll (max-width: 1100px) {
-  .vc-turn-panel { left: -6px; top: auto; bottom: calc(100% + 10px); grid-template-columns: auto auto; transform: translateX(-8px); }
-  .vc-turn:hover .vc-turn-panel, .vc-turn.open .vc-turn-panel, .vc-turn-chip:focus-visible + .vc-turn-panel { transform: none; }
+.vc-turn.up .vc-turn-panel {
+  top: auto; bottom: -4px; padding: 10px 14px calc(var(--chip-h) + 6px);
+  --rest: inset(calc(100% - var(--chip-h)) calc(100% - var(--chip-w)) 0 0 round 7px);
 }
 @media (prefers-reduced-motion: reduce) { .vc-turn-panel { transition: opacity .16s; } }
 

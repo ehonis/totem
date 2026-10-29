@@ -324,7 +324,8 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
   const secs = m.durationMs && m.durationMs > 2000 ? formatDuration(m.durationMs) : null
   const lane = m.power ? [POWER_NAMES[String(m.power)], m.route === 'thinking' && secs ? `thought for ${secs}` : null].filter(Boolean).join(', ')
     : m.route === 'thinking' ? (secs ? `Thought for ${secs}` : 'Thinking') : m.route === 'instant' ? 'Instant' : null
-  const meta = [lane, provider?.name, modelName, lane ? null : secs].filter(Boolean).join(' · ')
+  // The account's logo leads the line; its name is in the details (TurnStats).
+  const meta = [lane, modelName, lane ? null : secs].filter(Boolean).join(' · ')
 
   return (
     <div className={`vc-row vc-assistant ${live ? 'live' : ''}`}>
@@ -384,7 +385,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
           )}
           {isLast && onRegenerate && <button type="button" className="vc-act" title="Regenerate" onClick={onRegenerate}><TI icon={IconRefresh} size={15} /></button>}
           {meta && (
-            <TurnStats m={m} modelName={modelName}>
+            <TurnStats m={m} modelName={modelName} account={provider?.name}>
               {provider && <ProviderLogo driver={provider.driver} name={provider.name} size={12} />}
               {meta}
             </TurnStats>

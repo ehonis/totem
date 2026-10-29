@@ -26,13 +26,14 @@ function setting(m: ChatMessage) {
   return 'Manual'
 }
 
-export function turnRows(m: ChatMessage, modelName?: string): [string, string][] {
+export function turnRows(m: ChatMessage, modelName?: string, account?: string): [string, string][] {
   const s = m.stats || {}
   // Cursor carries effort and speed inside the model id ("composer-2.5[fast=true,effort=high]").
   const spec = m.model?.includes('[') ? parseModelSpec(m.model) : null
   const effort = m.effort || (spec && spec.effort !== 'default' ? spec.effort : '')
   const rows: [string, string][] = [['Setting', setting(m)]]
   if (effort) rows.push(['Effort', EFFORT_LABELS[effort] || effort])
+  if (account) rows.push(['Account', account])
   if (spec && spec.speed !== 'default') rows.push(['Mode', spec.speed === 'fast' ? 'Fast' : 'Quality'])
   if (m.model) rows.push(['Model', modelName && modelName !== m.model.split('[')[0] ? `${modelName} (${m.model.split('[')[0]})` : m.model.split('[')[0]])
   if (s.tps) rows.push(['Speed', `${s.tps >= 100 ? Math.round(s.tps) : s.tps} tok/s`])
@@ -63,8 +64,8 @@ export function TurnChip({ open, onToggle, children }: { open: boolean; onToggle
 }
 
 /** The details themselves: a two-column table, keys faint, values in tabular figures. */
-export default function TurnStats({ m, modelName }: { m: ChatMessage; modelName?: string }) {
-  const rows = turnRows(m, modelName)
+export default function TurnStats({ m, modelName, account }: { m: ChatMessage; modelName?: string; account?: string }) {
+  const rows = turnRows(m, modelName, account)
   return (
     <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={st.panel} accessibilityLabel="Reply details">
       {rows.map(([k, v]) => (
