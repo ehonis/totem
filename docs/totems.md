@@ -2,8 +2,10 @@
 
 A totem is a standing agent: it wakes on a schedule, or when something it watches
 changes, to do one job, remembers what it saw between runs, and tells the owner
-only what matters. The Totems tab replaced
-Studio. This is the spec; AGENTS.md has the summary.
+only what matters. Totems replaced Studio. They live in the chats panel (its
+Totems switch); the Totems page (`/totems`, off the nav rail since 2026-10-21) is
+where one is built or edited, reached from the panel's "All totems" button or a
+totem chat's gear. This is the spec; AGENTS.md has the summary.
 
 ## Every job is a totem
 
@@ -45,6 +47,10 @@ ends with one line:
 - `QUIET` → recorded as `skipped`. Not posted, not a failure, no notification. Most
   polls of a watcher end this way.
 - neither → `ok`, posted, notified only under `notify: always`.
+
+A failed run is posted to the chat too, and its push (and a `notify: always` push for a
+run that was posted) opens the chat. A skipped run, and a watch that cannot be read,
+open the totem's settings (`/totems?totem=<id>`) instead.
 
 The browser is per totem (`browser: true`), off by default. A run gets a fresh grant
 for the totem's thread and the session is closed when it ends.
@@ -119,6 +125,10 @@ its chat (a run's report, or the last thing said), how long ago, an unread dot,
 and its status line; clicking the row opens that chat, so reading what its runs
 found is one click. The switch pauses it; the gear opens its settings, memory and
 runs (`/totems?totem=<id>`), which the gear in the totem's chat header also opens.
+Beside that gear, a play button runs the totem now (`POST /api/jobs/run`, the same
+manual run as its settings page) instead of waiting for its schedule or watch; it spins
+until the run ends and its report lands in the chat (`TotemRunButton` in
+`web/src/totems/shared.tsx`, mirrored in `mobile/src/features/totems/shared.tsx`).
 Group chats are listed above the totems, drafts between. There is no 3D lobby any
 more (it was removed in favour of the list).
 
@@ -156,7 +166,7 @@ Settings → Chat → "Let chats bring in totems" (`totemsInChat` in
 
 The dashboard draws each ask (and its waits) as one message from the totem, under
 its name and icon (`foldTotemCalls` in `web/src/chat/totemReply.ts`, ported to
-`mobile/src/lib/chat/`), instead of a tool row. "Group chat" on the Totems tab, or
+`mobile/src/lib/chat/`), instead of a tool row. "Group chat" on the Totems page, or
 the people button in a chat's header, picks the members (`POST /api/totems/groups
 {members, title}` makes one; editing is a thread `PUT` of `members`). A totem's own
 chat stays one-to-one and takes no members.

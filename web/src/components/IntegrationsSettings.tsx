@@ -1,24 +1,18 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import {
-  ApiError, AuthError, connectStrava, connectWhoop, getIntegrations, getStravaStatus, getWhoopStatus, saveIntegrations,
-} from '../api'
-import type { IntegrationField, IntegrationInfo, IntegrationsPayload } from '../api'
+import { ApiError, AuthError, getIntegrations, saveIntegrations } from '../api'
+import type { IntegrationField, IntegrationsPayload } from '../api'
 
 /*
- * Settings -> Integrations: the OAuth apps Totem talks to directly (WHOOP,
- * Strava). Each needs an app created in the provider's developer console; this
- * page takes its client ID and secret, shows the redirect URI to paste there, and
- * starts the connection. Values in the server environment win and are read-only
- * here. MCP-based connections (Google Calendar, Plaud, GitHub, …) live in
- * Studio -> Connections.
+ * Settings -> Integrations: the public URL and the services Totem talks to with
+ * its own credentials (the Google Sheet task sync). WHOOP and Strava are not
+ * here: Bushido holds those grants and Totem reads them from it. Values in the
+ * server environment win and are read-only here. MCP-based connections (Google
+ * Calendar, Plaud, GitHub, …) live in Studio -> Connections.
  */
 
 function errorText(e: unknown) {
   return e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
 }
-
-const CONNECT: Partial<Record<IntegrationInfo['id'], () => Promise<any>>> = { whoop: connectWhoop, strava: connectStrava }
-const STATUS: Partial<Record<IntegrationInfo['id'], () => Promise<any>>> = { whoop: getWhoopStatus, strava: getStravaStatus }
 
 function FieldRow({ field, draft, onDraft, onSave, onClear, saving }: {
   field: IntegrationField
@@ -54,7 +48,6 @@ function FieldRow({ field, draft, onDraft, onSave, onClear, saving }: {
 export default function IntegrationsSettings({ onAuthError }: { onAuthError: () => void }) {
   const [data, setData] = useState<IntegrationsPayload | null>(null)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [states, setStates] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -63,23 +56,9 @@ export default function IntegrationsSettings({ onAuthError }: { onAuthError: () 
     setError(errorText(e))
   }, [onAuthError])
 
-  const refreshStates = useCallback((payload: IntegrationsPayload) => {
-    for (const i of payload.integrations) {
-      const status = STATUS[i.id]
-      if (!status) {
-        setStates((st) => ({ ...st, [i.id]: i.configured ? 'Configured.' : 'Not configured.' }))
-        continue
-      }
-      status()
-        .then((s: { state?: string; detail?: string; connected?: boolean }) =>
-          setStates((st) => ({ ...st, [i.id]: s.detail || (s.connected ? 'Connected.' : 'Not connected.') })))
-        .catch(() => setStates((st) => ({ ...st, [i.id]: 'Not connected.' })))
-    }
-  }, [])
-
   useEffect(() => {
-    getIntegrations().then((d) => { setData(d); refreshStates(d) }).catch(fail)
-  }, [fail, refreshStates])
+    getIntegrations().then(setData).catch(fail)
+  }, [fail])
 
   async function save(values: Record<string, string | null>) {
     setSaving(true)
@@ -88,22 +67,10 @@ export default function IntegrationsSettings({ onAuthError }: { onAuthError: () 
       const next = await saveIntegrations(values)
       setData(next)
       setDrafts((d) => { const out = { ...d }; for (const k of Object.keys(values)) delete out[k]; return out })
-      refreshStates(next)
     } catch (e) {
       fail(e)
     } finally {
       setSaving(false)
-    }
-  }
-
-  async function connect(id: IntegrationInfo['id']) {
-    setError('')
-    try {
-      const r = await CONNECT[id]?.()
-      if (r?.authUrl) window.open(r.authUrl, '_blank', 'noopener')
-      else if (r?.error) setError(r.error)
-    } catch (e) {
-      fail(e)
     }
   }
 
@@ -128,7 +95,7 @@ export default function IntegrationsSettings({ onAuthError }: { onAuthError: () 
       <header className="settings-pane-head">
         <h2>Integrations</h2>
         <p>
-          Services Totem connects to with its own OAuth app. Everything here is off until you add credentials. Google
+          Services Totem connects to with its own credentials. Everything here is off until you add them. Google
           Calendar, Plaud, GitHub and other MCP servers are set up in Studio → Connections.
         </p>
       </header>
@@ -138,8 +105,8 @@ export default function IntegrationsSettings({ onAuthError }: { onAuthError: () 
       <div className="setting-list">
         {field(data.publicUrl)}
         <p className="text-muted m-0 px-1">
-          The address you open Totem at from other devices, e.g. https://totem.example.com. Redirect URIs below are
-          built from it; without it they point at localhost, which only works from a browser on this machine.
+          The address you open Totem at from other devices, e.g. https://totem.example.com. The first-run setup link
+          is built from it, and behind a proxy that rewrites the host, requests naming it still count as same-origin.
         </p>
       </div>
 
@@ -149,27 +116,13 @@ export default function IntegrationsSettings({ onAuthError }: { onAuthError: () 
           <div className="setting-list">
             <div className="setting-row">
               <div className="setting-copy">
-                <strong>{i.configured ? (states[i.id] || 'Checking…') : 'Not connected'}</strong>
-                {i.redirectUri ? (
-                  <span>
-                    Create an app at <a href={i.console} target="_blank" rel="noreferrer">{i.console}</a> and set its
-                    redirect URI to <code>{i.redirectUri}</code>
-                    {i.callbackDomain ? <> (Strava asks for the bare domain: <code>{i.callbackDomain}</code>)</> : null}.
-                    {i.redirectFromEnv && ' This redirect URI comes from the server environment.'}
-                  </span>
-                ) : (
-                  <span>
-                    Create a service account at <a href={i.console} target="_blank" rel="noreferrer">Google Cloud</a>, share
-                    the spreadsheet with it as Editor, and fill in the fields below. See <code>{i.docs}</code>.
-                    {i.restartRequired && ' Restart Totem after changing these.'}
-                  </span>
-                )}
+                <strong>{i.configured ? 'Configured.' : 'Not connected'}</strong>
+                <span>
+                  Create a service account at <a href={i.console} target="_blank" rel="noreferrer">Google Cloud</a>, share
+                  the spreadsheet with it as Editor, and fill in the fields below. See <code>{i.docs}</code>.
+                  {i.restartRequired && ' Restart Totem after changing these.'}
+                </span>
               </div>
-              {CONNECT[i.id] && (
-                <div className="setting-control">
-                  <button className="btn primary" disabled={!i.configured} onClick={() => connect(i.id)}>Connect</button>
-                </div>
-              )}
             </div>
             {i.fields.map(field)}
             {i.credentialsFile && (

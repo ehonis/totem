@@ -10,7 +10,7 @@ import type { Access } from '../../lib/chat/types'
 import { T } from '../../ui/Text'
 import { tap } from '../../ui/haptics'
 import { TI, vc } from './ui'
-import { IconChevronDown, IconLock, IconLockOpen, IconPencilCheck, IconSparkles } from './icons'
+import { IconLock, IconLockOpen, IconPencilCheck, IconSparkles } from './icons'
 
 const HINTS: Record<string, string> = {
   low: 'Quick, for simple questions',
@@ -38,19 +38,19 @@ function Menu({ title, actions, onPick, children, label, fixed }: { title?: stri
 
 export interface Stop { value: string; label: string; hint?: string }
 
-/** ChatGPT's "Thinking effort": one row per level, with what it costs. */
+/** ChatGPT's "Thinking effort": one row per level, with what it costs. The chip shows the level, as the web's phone layout does. */
 export function ThinkingControl({ stops, value, onChange, label = 'Thinking effort' }: { stops: Stop[]; value: string; onChange: (v: string) => void; label?: string }) {
   const current = stops.find((s) => s.value === value) || stops[0]
   return (
     <Menu
+      fixed
       title={label}
       label={`${label}: ${current?.label}`}
       actions={stops.map((s) => ({ id: s.value, title: s.label, subtitle: s.hint || undefined, state: s.value === current?.value ? ('on' as const) : undefined }))}
       onPick={onChange}
     >
-      <View style={st.chip}>
-        <T size={14} color={vc.soft}>Effort</T>
-        <TI icon={IconChevronDown} size={14} color={vc.faint} />
+      <View style={[st.chip, { flexShrink: 0 }]}>
+        <T size={14} color={vc.soft} numberOfLines={1}>{current?.label}</T>
       </View>
     </Menu>
   )

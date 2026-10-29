@@ -12,6 +12,7 @@ export const TAB_ROUTES = {
   chat: '/chat',
   productivity: '/productivity',
   inbox: '/inbox',
+  fleet: '/fleet',
   settings: '/settings',
 } as const
 
@@ -36,6 +37,11 @@ export function navigateTo(target: string | { tab?: string; app?: string | null;
     return
   }
   if (tab === 'settings') {
+    // Providers › Usage (the quota meters) is a native sheet; the rest of that pane is web-only.
+    if (t.sub === 'providers' && t.hash === 'usage') {
+      router.push('/chat/usage')
+      return
+    }
     router.navigate({ pathname: '/settings', params: t.sub ? { sub: t.sub } : {} })
     return
   }

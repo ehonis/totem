@@ -23,9 +23,9 @@ const build = async (snap) => (await createRevalidator({ collect: async () => sn
 
 test('a fact still in the live set is fresh', async () => {
   const revalidate = await build(snapshot({
-    facts: [{ revalidate: { collector: 'habits', factKey: 'daily:journal:2026-09-15' } }],
+    facts: [{ revalidate: { collector: 'tasks', factKey: 'due:2026-09-15:1' } }],
   }))
-  const verdict = await revalidate(entry({ revalidate: { collector: 'habits', factKey: 'daily:journal:2026-09-15' } }))
+  const verdict = await revalidate(entry({ revalidate: { collector: 'tasks', factKey: 'due:2026-09-15:1' } }))
   assert.equal(verdict.state, 'fresh')
 })
 
@@ -35,51 +35,24 @@ test('an entry with no revalidation key is always fresh', async () => {
   assert.equal((await revalidate(entry({ revalidate: null }))).state, 'fresh')
 })
 
-test('a streak nudge is resolved once the habit is logged', async () => {
-  const revalidate = await build(snapshot({ entries: { [TODAY]: { journal: { count: 1 } } } }))
-  const verdict = await revalidate(entry({ subject: 'journal', revalidate: { collector: 'habits', factKey: `daily:journal:${TODAY}` } }))
-  assert.equal(verdict.state, 'resolved')
-  assert.match(verdict.body, /streak intact/i)
-})
-
-test('a streak nudge whose habit is still unlogged but absent from facts is stale', async () => {
-  // Can happen when the collector stops emitting it — e.g. the habit was deleted.
-  const revalidate = await build(snapshot({ entries: {} }))
-  const verdict = await revalidate(entry({ subject: 'journal', revalidate: { collector: 'habits', factKey: `daily:journal:${TODAY}` } }))
-  assert.equal(verdict.state, 'stale')
-})
-
-test('a plan that outlived its day is stale, not a win', async () => {
-  const revalidate = await build(snapshot({ entries: { '2026-09-14': { journal: { count: 1 } } } }))
-  const verdict = await revalidate(entry({ subject: 'journal', revalidate: { collector: 'habits', factKey: 'daily:journal:2026-09-14' } }))
-  assert.equal(verdict.state, 'stale')
-})
-
-test('the weekly nudge resolves only when the target is actually hit', async () => {
-  // Week starts Sunday 2026-09-13. Three logged when planned, target 4.
-  const threeSoFar = {
-    '2026-09-13': { business: { count: 1 } },
-    '2026-09-14': { business: { count: 1 } },
-    '2026-09-15': { business: { count: 1 } },
+test('a queued habit nudge is never turned into a congratulation', async () => {
+  // Habit nudges are retired. One still in the queue goes quiet even after the
+  // habit is logged: no "Streak intact", no "Done for the week".
+  const logged = await build(snapshot({
+    entries: {
+      [TODAY]: { journal: { count: 1 }, business: { count: 2 } },
+      '2026-09-14': { business: { count: 1 } },
+      '2026-09-13': { business: { count: 1 } },
+    },
+  }))
+  for (const rev of [
+    { collector: 'habits', identity: `daily:journal:${TODAY}`, factKey: `daily:journal:${TODAY}` },
+    { collector: 'habits', identity: 'weekly:business:2026-09-14', factKey: 'weekly:business:2026-09-14:3' },
+    { collector: 'habits', identity: 'weekly-behind:business:2026-09-14', factKey: 'weekly-behind:business:2026-09-14:1' },
+  ]) {
+    const verdict = await logged(entry({ subject: rev.identity.split(':')[1], revalidate: rev }))
+    assert.equal(verdict.state, 'stale', rev.identity)
   }
-  const stillShort = await build(snapshot({ entries: threeSoFar }))
-  assert.equal(
-    (await stillShort(entry({ subject: 'business', revalidate: { collector: 'habits', factKey: 'weekly:business:2026-09-13:2' } }))).state,
-    'stale',
-  )
-
-  const done = await build(snapshot({ entries: { ...threeSoFar, '2026-09-15': { business: { count: 2 } } } }))
-  const verdict = await done(entry({ subject: 'business', revalidate: { collector: 'habits', factKey: 'weekly:business:2026-09-13:2' } }))
-  assert.equal(verdict.state, 'resolved')
-  assert.match(verdict.body, /4 of 4/)
-})
-
-test('a deleted habit cannot resolve', async () => {
-  const revalidate = await build(snapshot({ habits: [] }))
-  assert.equal(
-    (await revalidate(entry({ subject: 'business', revalidate: { collector: 'habits', factKey: 'weekly:business:2026-09-13:2' } }))).state,
-    'stale',
-  )
 })
 
 test('the due-today nudge resolves when the board is clear', async () => {
@@ -130,7 +103,7 @@ test('an unknown collector fails closed', async () => {
 
 test('a failed snapshot sends nothing at all rather than sending unverified', async () => {
   const revalidate = await (createRevalidator({ collect: async () => { throw new Error('db locked') } })())
-  assert.equal((await revalidate(entry({ revalidate: { collector: 'habits', factKey: 'daily:journal:x' } }))).state, 'stale')
+  assert.equal((await revalidate(entry({ revalidate: { collector: 'birthdays', factKey: 'birthday:Marion:x' } }))).state, 'stale')
   // Even an entry that would otherwise be trivially fresh.
   assert.equal((await revalidate(entry({ revalidate: null }))).state, 'stale')
 })
@@ -181,9 +154,9 @@ test('a finished fact still resolves rather than being re-worded', async () => {
 test('an entry planned before identities existed still revalidates', async () => {
   // Entries already sitting in the queue at deploy time carry a factKey and no
   // identity. They must not all go stale on the first drain after a restart.
-  const rev = { collector: 'habits', factKey: `daily:journal:${TODAY}` }
+  const rev = { collector: 'goals', factKey: `near:g1:${TODAY}:73` }
   const revalidate = await build(snapshot({ facts: [{ revalidate: rev }] }))
-  assert.equal((await revalidate(entry({ subject: 'journal', revalidate: rev }))).state, 'fresh')
+  assert.equal((await revalidate(entry({ subject: 'g1', revalidate: rev }))).state, 'fresh')
 })
 
 test('an entry that cannot be checked is never congratulated', async () => {

@@ -82,6 +82,7 @@ const ROUTES: { name: string; options: object }[] = [
   { name: 'totem/[id]', options: pushedOptions('', 'Totems') },
   { name: 'totem/new', options: pushedOptions('', 'Totems') },
   { name: 'totem/group', options: sheet([0.85, 1]) },
+  { name: 'fleet/[id]', options: pushedOptions('', 'Fleet') },
   // A list draws its own header (back, title, its "…" menu).
   { name: 'list/[id]', options: {} },
 ]

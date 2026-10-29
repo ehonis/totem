@@ -32,6 +32,7 @@
 // a watch that wakes it when something changes. A watch job has no nextRunAt at
 // all; the tick checks its watch instead, and `watch` holds what the last check saw.
 
+import { cleanGitSync } from './git-sync.mjs'
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { mkdir, readFile, rename, writeFile, stat, appendFile } from 'node:fs/promises'
@@ -115,6 +116,8 @@ function hydrate(id, saved, def, tz, runners = {}) {
     browser: saved?.browser === true,
     threadId: typeof saved?.threadId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(saved.threadId) ? saved.threadId : null,
     recommendations: cleanRecommendations(saved?.recommendations),
+    // Hosts the git-sync runner keeps current (jobs/git-sync.mjs).
+    gitSync: cleanGitSync(saved?.gitSync),
   }
   // A job pointing at a runner the bridge no longer defines would otherwise fail
   // at 07:00 with a confusing message. Flag it so the UI can say so up front.
@@ -174,6 +177,7 @@ function persistable(job) {
     browser: job.browser,
     threadId: job.threadId,
     recommendations: job.recommendations,
+    gitSync: job.gitSync,
   }
   if (!job.agentless && !job.fixedProvider) {
     out.provider = job.provider
@@ -414,6 +418,7 @@ export function createJobStore({
       if (patch.taskType !== undefined) next.taskType = String(patch.taskType || '').slice(0, 20)
       if (patch.threadId !== undefined) next.threadId = patch.threadId || null
       if (patch.recommendations !== undefined) next.recommendations = patch.recommendations
+      if (patch.gitSync !== undefined) next.gitSync = cleanGitSync(patch.gitSync)
       next.updatedAt = new Date().toISOString()
 
       const after = hydrateJob(id, next)

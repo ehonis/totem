@@ -205,8 +205,9 @@ export function createGitHubAppClient({
         (payload?.repositories ?? []).map(repo => repo.full_name).filter(Boolean));
       return [...new Set(names)];
     },
-    async createIssue({ repo, title, body = '' }) {
-      return remember(await api(`/repos/${repo}/issues`, { method: 'POST', body: { title, body } }));
+    async createIssue({ repo, title, body = '', labels = [] }) {
+      const fields = { title, body, ...(labels.length ? { labels } : {}) };
+      return remember(await api(`/repos/${repo}/issues`, { method: 'POST', body: fields }));
     },
     async editIssue({ id, repo, number, title, body }) {
       const fields = {};

@@ -7,10 +7,11 @@ import { AttachmentChip, useMentionSet } from './Message'
 import { insertMention, mentionAtCaret, splitMentions } from './mentions'
 import { micUnavailableReason, openMic, closeMic, recordUntilStopped } from './recorder'
 import type { Attachment, DraftAttachment } from './types'
+import type { Answering } from './QuestionsPanel'
 import { TI, useDismiss } from './ui'
 import {
   IconArrowUp, IconPlayerStopFilled, IconPlus, IconPaperclip, IconPhoto, IconMicrophone, IconWaveSine,
-  IconSparkles, IconX, IconCheck, IconLoader2, IconCornerUpRight, IconPuzzle,
+  IconSparkles, IconX, IconCheck, IconLoader2, IconCornerUpRight, IconPuzzle, IconPlaylistAdd, IconPlayerPlayFilled,
 } from './icons'
 import type { ChatCommand } from '../studio'
 
@@ -23,8 +24,15 @@ export interface ComposerHandle {
   addFiles: (files: File[] | FileList) => void
   /** An upload that already exists (Search's "Add to chat"). */
   addAttachment: (a: Attachment) => void
+  /** The box's finished uploads, taken out of it (not deleted): a queued edit stashes the draft. */
+  takeAttachments: () => Attachment[]
+  /** Put uploads in the box in place of what is there (a queued message being edited, a stashed draft). */
+  setAttachments: (list: Attachment[]) => void
   focus: () => void
 }
+
+export type FollowUp = 'queue' | 'steer'
+export interface FollowUpPayload { text: string; attachments: Attachment[] }
 
 export interface ComposerProps {
   value: string
@@ -32,11 +40,18 @@ export interface ComposerProps {
   onSend: (payload: { text: string; attachments: Attachment[] }) => void
   onStop: () => void
   /**
-   * A message while the reply is still running steers it (T3 Code's follow-up):
-   * the agent takes it in mid-turn. Resolves false when it could not be sent, and
-   * the text goes back in the box.
+   * A message while the reply is still running (T3 Code's follow-ups): it waits
+   * its turn (`onQueue`) or the agent takes it in mid-turn (`onSteer`). Enter does
+   * `followUp`, Ctrl/⌘ the other. Resolves false when it could not be sent, and
+   * the words and files go back in the box.
    */
-  onSteer?: (text: string) => Promise<boolean> | boolean
+  onSteer?: (p: FollowUpPayload) => Promise<boolean> | boolean
+  onQueue?: (p: FollowUpPayload) => Promise<boolean> | boolean
+  followUp?: FollowUp
+  /** A queued message is in the box being edited: sending saves it. */
+  queueEdit?: { onSave: (p: FollowUpPayload) => Promise<boolean> | boolean }
+  /** The queue is held (the last reply was stopped or failed): an empty box offers Resume. */
+  onResume?: () => void
   onVoice?: () => void
   busy: boolean
   placeholder?: string
@@ -45,13 +60,34 @@ export interface ComposerProps {
   allowCommands?: boolean
   maxUploadBytes?: number
   onAuthError?: () => void
-  /** The model chip (T3-style), after the + button. */
-  leftSlot?: React.ReactNode
-  /** Thinking effort, beside the mic. */
+  /** The model chip and its effort and access menu (T3-style), before the mic and send. */
   rightSlot?: React.ReactNode
+  /** Attached to the box's top edge: the queued messages (QueuedMessages.tsx). */
+  above?: React.ReactNode
+  /**
+   * The agent's questions are open (QuestionsPanel.tsx): the box is the typed
+   * answer to the one on screen, and the button moves through them.
+   */
+  answering?: Answering
 }
 
 const coarse = () => window.matchMedia?.('(pointer: coarse)').matches
+const modKey = () => (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl+')
+
+/** Whether Ctrl or ⌘ is held, so the follow-up button shows what a click will do. */
+function useModifierHeld(on: boolean) {
+  const [held, setHeld] = useState(false)
+  useEffect(() => {
+    if (!on) { setHeld(false); return }
+    const read = (e: KeyboardEvent) => setHeld(e.metaKey || e.ctrlKey)
+    const clear = () => setHeld(false)
+    window.addEventListener('keydown', read)
+    window.addEventListener('keyup', read)
+    window.addEventListener('blur', clear)
+    return () => { window.removeEventListener('keydown', read); window.removeEventListener('keyup', read); window.removeEventListener('blur', clear) }
+  }, [on])
+  return held
+}
 
 let pasteCount = 0
 
@@ -75,7 +111,7 @@ function rankCommands(catalog: ChatCommand[], prefix: string, term: string, alon
 }
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onSend, onStop, onSteer, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, leftSlot, rightSlot } = props
+  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, rightSlot, answering, above } = props
   const ta = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const photoInput = useRef<HTMLInputElement>(null)
@@ -136,17 +172,32 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   const addAttachment = useCallback((a: Attachment) => {
     setDrafts((d) => d.some((x) => x.uploaded?.id === a.id) ? d : [...d, {
       key: `ctx-${a.id}`, name: a.name, mime: a.mime, size: a.size, kind: a.kind,
-      textPreview: a.preview, status: 'ready', uploaded: a,
+      previewUrl: a.kind === 'image' ? a.url : undefined, textPreview: a.preview, status: 'ready', uploaded: a,
     }])
   }, [])
 
-  useImperativeHandle(ref, () => ({ addFiles, addAttachment, focus: () => ta.current?.focus() }), [addFiles, addAttachment])
+  const draftsRef = useRef(drafts)
+  draftsRef.current = drafts
+  const takeAttachments = useCallback(() => {
+    const taken = draftsRef.current.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
+    draftsRef.current.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl))
+    setDrafts([])
+    return taken
+  }, [])
+  const setAttachments = useCallback((list: Attachment[]) => {
+    draftsRef.current.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl))
+    setDrafts([])
+    list.forEach(addAttachment)
+  }, [addAttachment])
+
+  useImperativeHandle(ref, () => ({ addFiles, addAttachment, takeAttachments, setAttachments, focus: () => ta.current?.focus() }), [addFiles, addAttachment, takeAttachments, setAttachments])
 
   function removeDraft(key: string) {
     setDrafts((d) => {
       const gone = d.find((x) => x.key === key)
       if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl)
-      if (gone?.uploaded) deleteUpload(gone.uploaded.id)
+      // One that was already an upload (Search's, a queued message's) may still be in use there.
+      if (gone?.uploaded && !gone.key.startsWith('ctx-')) deleteUpload(gone.uploaded.id)
       return d.filter((x) => x.key !== key)
     })
   }
@@ -168,29 +219,68 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   }
 
   const uploading = drafts.some((d) => d.status === 'uploading')
+  const failed = drafts.some((d) => d.status === 'error')
   const ready = drafts.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
-  const canSend = !busy && !uploading && (value.trim().length > 0 || ready.length > 0)
-  // Steering is words only; files wait in the box for the next message.
-  const steerable = busy && !!onSteer
-  const canSteer = steerable && value.trim().length > 0 && !drafts.length
-  const placeholder = steerable ? 'Steer this reply: add context or change course' : idlePlaceholder
+  const hasContent = value.trim().length > 0 || drafts.length > 0
+  const sendable = !uploading && !failed && (value.trim().length > 0 || ready.length > 0)
+  const canSend = !busy && sendable
+  // While a reply runs, a message waits its turn or steers it (T3 Code). Enter
+  // does the chosen one, Ctrl/⌘ the other; with only one on offer, always that one.
+  const followUps = busy && !!(onQueue || onSteer)
+  const actionFor = (alternate: boolean): FollowUp => {
+    if (!onSteer) return 'queue'
+    if (!onQueue) return 'steer'
+    return alternate ? (followUp === 'queue' ? 'steer' : 'queue') : followUp
+  }
+  const action = actionFor(useModifierHeld(followUps))
+  const placeholder = answering ? answering.placeholder
+    : followUps ? (actionFor(false) === 'steer' ? 'Steer this reply: add context or change course' : 'Queue a message for when this reply finishes')
+    : idlePlaceholder
   const valueRef = useRef(value)
   valueRef.current = value
+  const handing = useRef(false)
 
-  async function steerNow() {
-    if (!canSteer || !onSteer) return
+  /** Empty the box into a follow-up (or a queued edit); put it all back if that fails. */
+  async function hand(fn: (p: FollowUpPayload) => Promise<boolean> | boolean) {
+    if (!sendable || handing.current) return
+    handing.current = true
     const text = value.trim()
+    const attachments = ready
+    const kept = drafts
     onChange('')
-    const ok = await onSteer(text)
-    // Not sent: give the words back, unless he has started typing something else.
-    if (!ok && !valueRef.current.trim()) onChange(text)
+    setDrafts([])
+    try {
+      if (await fn({ text, attachments })) { kept.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl)); return }
+      // Not sent: give it back, unless he has started on something else.
+      if (!valueRef.current.trim()) onChange(text)
+      setDrafts((d) => (d.length ? d : kept))
+    } finally {
+      handing.current = false
+    }
+  }
+
+  function followUpNow(alternate: boolean) {
+    const fn = actionFor(alternate) === 'queue' ? onQueue : onSteer
+    if (fn) void hand(fn)
+  }
+
+  function clearTray() {
+    drafts.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl))
+    setDrafts([])
   }
 
   function send() {
+    if (queueEdit) { void hand(queueEdit.onSave); return }
     if (!canSend) return
     onSend({ text: value.trim(), attachments: ready })
-    drafts.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl))
-    setDrafts([])
+    clearTray()
+  }
+
+  // Answering a question: the tray's files go with the answer on screen.
+  const canAnswer = !!answering && !answering.submitting && !uploading && (answering.answered || ready.length > 0)
+  function answerNow() {
+    if (!answering || !canAnswer) return
+    if (answering.onSubmit(ready)) clearTray()
   }
 
   // --- skills menu ("/" or "$" anywhere) -----------------------------------
@@ -239,7 +329,13 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     }
     // On a phone, Return is a newline and the button sends — the way every
     // messaging app on it behaves.
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !coarse()) { e.preventDefault(); if (busy) steerNow(); else send() }
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !coarse()) {
+      e.preventDefault()
+      if (answering) answerNow()
+      else if (queueEdit) send()
+      else if (followUps) followUpNow(e.metaKey || e.ctrlKey)
+      else if (!busy) send()
+    }
   }
 
   // --- dictation -------------------------------------------------------------
@@ -290,10 +386,11 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   }
 
   const secs = dictation ? Math.floor((Date.now() - dictation.startedAt) / 1000) : 0
-  const showVoice = !!onVoice && !busy && !value.trim() && !drafts.length && !dictation
+  const showVoice = !!onVoice && !busy && !value.trim() && !drafts.length && !dictation && !onResume
 
   return (
     <div className={`vc-composer ${compact ? 'compact' : ''}`}>
+      {above}
       {matches.length > 0 && (
         <div className="vc-cmd-menu" role="listbox" ref={cmdMenuRef}>
           {matches.map((c, i) => {
@@ -386,7 +483,6 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
                 )}
               </div>
             )}
-            {!dictation && leftSlot}
           </div>
           <div className="vc-box-right">
             {dictation ? (
@@ -399,20 +495,37 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
             ) : (
               <>
                 {rightSlot}
-                {(!busy || steerable) && (
+                {(!busy || followUps) && (
                   <button type="button" className="vc-icon-btn" onClick={startDictation} aria-label="Dictate" title="Dictate">
                     <TI icon={IconMicrophone} size={19} />
                   </button>
                 )}
-                {busy && steerable && value.trim() ? (
+                {answering ? (
                   <>
-                    <button type="button" className="vc-icon-btn" onClick={onStop} aria-label="Stop" title="Stop the reply"><TI icon={IconPlayerStopFilled} size={14} /></button>
-                    <button type="button" className="vc-send" onClick={steerNow} disabled={!canSteer} aria-label="Steer" title={drafts.length ? 'Files go with the next message, once this reply finishes' : 'Steer: send this into the running reply'}>
-                      <TI icon={IconCornerUpRight} size={18} stroke={2.25} />
+                    {answering.onBack && <button type="button" className="vc-btn sm ghost" onClick={answering.onBack}>Previous</button>}
+                    {busy && <button type="button" className="vc-icon-btn" onClick={onStop} aria-label="Stop" title="Stop the reply"><TI icon={IconPlayerStopFilled} size={14} /></button>}
+                    <button type="button" className="vc-btn sm vc-answer-btn" onClick={answerNow} disabled={!canAnswer} title={uploading ? 'Waiting for uploads' : undefined}>
+                      {(answering.submitting || uploading) && <TI icon={IconLoader2} size={14} className="vc-spin" />}{answering.submitLabel}
                     </button>
                   </>
+                ) : queueEdit ? (
+                  <button type="button" className="vc-send" onClick={send} disabled={!sendable} aria-label="Update queued message" title={uploading ? 'Waiting for uploads' : 'Update queued message'}>
+                    {uploading ? <TI icon={IconLoader2} size={18} className="vc-spin" /> : <TI icon={IconCheck} size={18} stroke={2.25} />}
+                  </button>
+                ) : followUps && hasContent ? (
+                  // T3 Code's follow-up button: what Enter does, and the other with Ctrl/⌘ (held, or on the click).
+                  <button type="button" className="vc-send" onClick={(e) => followUpNow(e.metaKey || e.ctrlKey)} disabled={!sendable}
+                    aria-label={action === 'queue' ? 'Queue message' : 'Steer message'}
+                    title={uploading ? 'Waiting for uploads' : failed ? 'Retry or remove failed uploads before sending'
+                      : onQueue && onSteer ? `Click to ${followUp}, Ctrl/⌘-click or ${modKey()}↵ to ${followUp === 'queue' ? 'steer' : 'queue'}`
+                      : action === 'queue' ? 'Queue message' : 'Steer message'}>
+                    {uploading ? <TI icon={IconLoader2} size={18} className="vc-spin" />
+                      : <span className="vc-morph" key={action}><TI icon={action === 'queue' ? IconPlaylistAdd : IconCornerUpRight} size={18} stroke={2.25} /></span>}
+                  </button>
                 ) : busy ? (
                   <button type="button" className="vc-send stop" onClick={onStop} aria-label="Stop" title="Stop"><TI icon={IconPlayerStopFilled} size={14} /></button>
+                ) : onResume && !hasContent ? (
+                  <button type="button" className="vc-send" onClick={onResume} aria-label="Resume thread" title="Resume thread"><TI icon={IconPlayerPlayFilled} size={16} /></button>
                 ) : showVoice ? (
                   <button type="button" className="vc-send voice" onClick={onVoice} aria-label="Start voice mode" title="Voice mode"><TI icon={IconWaveSine} size={19} stroke={2} /></button>
                 ) : (

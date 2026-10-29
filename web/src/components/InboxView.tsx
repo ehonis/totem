@@ -95,7 +95,7 @@ function InboxDetails({ item }: { item: any }) {
       )}
       {isIssue && (
         <div className="inbox-detail-block">
-          <div className="inbox-detail-label">Issue body</div>
+          <div className="inbox-detail-label">{item.kind === 'prompt' ? 'Prompt' : 'Issue body'}</div>
           <div className="inbox-issue-body"><Markdown text={p.body} /></div>
         </div>
       )}
@@ -123,7 +123,15 @@ function InboxCard({ item, busy, focused, onResolve }: InboxCardProps) {
   // An email opens showing itself: reading it is the decision.
   const isEmail = item.kind === 'email'
   const [open, setOpen] = useState(focused || isEmail)
-  const detailLabel = item.kind === 'imessage' ? 'message' : isEmail ? 'email' : item.preview?.body ? 'proposed issue' : 'details'
+  const isPrompt = item.kind === 'prompt'
+  const detailLabel = item.kind === 'imessage' ? 'message' : isEmail ? 'email' : isPrompt ? 'prompt' : item.preview?.body ? 'proposed issue' : 'details'
+  // A prompt is accepted by opening it as a new T3 Code thread. The tab opens in
+  // the click itself, before the resolve call, or Safari blocks it as a popup.
+  const t3Url: string | undefined = isPrompt ? item.preview?.openUrl : undefined
+  const accept = () => {
+    if (t3Url) window.open(t3Url, '_blank', 'noopener')
+    onResolve(item, 'accept')
+  }
   return (
     <div className={`inbox-card${open ? ' open' : ''}${focused ? ' focused' : ''}`} id={`inbox-${item.id}`}>
       <div className="inbox-card-row">
@@ -157,11 +165,12 @@ function InboxCard({ item, busy, focused, onResolve }: InboxCardProps) {
         <div className="inbox-actions">
           <button
             className="inbox-btn accept"
-            disabled={busy}
+            disabled={busy || (isPrompt && !t3Url)}
             title={item.kind === 'imessage' ? `Send this message to ${item.meta?.recipient || 'them'}`
-              : isEmail ? `Send this email to ${item.meta?.recipient || 'them'} now` : `Accept - add to ${item.destination}`}
-            aria-label={isEmail ? 'Send email' : 'Accept'}
-            onClick={() => onResolve(item, 'accept')}
+              : isEmail ? `Send this email to ${item.meta?.recipient || 'them'} now`
+                : isPrompt ? 'Open this prompt in a new T3 Code thread' : `Accept - add to ${item.destination}`}
+            aria-label={isEmail ? 'Send email' : isPrompt ? 'Open in T3 Code' : 'Accept'}
+            onClick={accept}
           >
             <Hi icon={isEmail ? PaperAirplaneIcon : CheckCircleIcon} size={20} />
           </button>

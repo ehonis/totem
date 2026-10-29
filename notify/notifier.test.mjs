@@ -146,8 +146,8 @@ test('a fact that went stale is dropped at send time, not delivered wrong', asyn
   const { store, notifier, sent } = await harness()
   await store.saveSubscription({ subscription: sub('https://push/1') })
   await store.enqueue({
-    category: 'goal.nearcomplete', title: 'One more to finish', deliverAt: T0,
-    revalidate: { collector: 'habits', factKey: 'weekly:business:3' },
+    category: 'goal.nearcomplete', title: '"50 Miles Biked" is at 73%', deliverAt: T0, subject: 'g1',
+    revalidate: { collector: 'goals', factKey: 'near:g1:73' },
   })
   const result = await notifier.drain({ at: T0, revalidate: async () => ({ state: 'stale' }) })
   assert.equal(sent.length, 0)
@@ -159,12 +159,12 @@ test('a fact that turned into a win sends the other copy', async () => {
   const { store, notifier, sent } = await harness()
   await store.saveSubscription({ subscription: sub('https://push/1') })
   await store.enqueue({
-    category: 'goal.nearcomplete', title: 'One more to finish', resolvedTitle: 'Done for the week — 4 of 4',
-    deliverAt: T0, revalidate: { collector: 'habits', factKey: 'weekly:business:3' },
+    category: 'goal.nearcomplete', title: '"50 Miles Biked" is at 73%', resolvedTitle: '"50 Miles Biked" is done',
+    deliverAt: T0, subject: 'g1', revalidate: { collector: 'goals', factKey: 'near:g1:73' },
   })
   await notifier.drain({ at: T0, revalidate: async () => ({ state: 'resolved', body: 'nice' }) })
   const payload = JSON.parse(sent[0].payload)
-  assert.equal(payload.notification.title, 'Done for the week — 4 of 4')
+  assert.equal(payload.notification.title, '"50 Miles Biked" is done')
   assert.equal(payload.notification.body, 'nice')
 })
 
@@ -211,8 +211,8 @@ test('a resolved fact with nothing good to say stays quiet', async () => {
   const { store, notifier, sent } = await harness()
   await store.saveSubscription({ subscription: sub('https://push/1') })
   await store.enqueue({
-    category: 'habit.slipping', title: 'streak ends tonight', deliverAt: T0,
-    revalidate: { collector: 'habits', factKey: 'daily:journal' },
+    category: 'reminder.task', title: '2 due today', deliverAt: T0,
+    revalidate: { collector: 'tasks', factKey: 'due:2026-09-15:2' },
   })
   await notifier.drain({ at: T0, revalidate: async () => ({ state: 'resolved' }) })
   assert.equal(sent.length, 0)
@@ -222,14 +222,56 @@ test('a collector that throws during revalidation fails closed', async () => {
   const { store, notifier, sent } = await harness()
   await store.saveSubscription({ subscription: sub('https://push/1') })
   await store.enqueue({
-    category: 'habit.slipping', title: 'unverifiable', deliverAt: T0,
-    revalidate: { collector: 'habits', factKey: 'x' },
+    category: 'reminder.task', title: 'unverifiable', deliverAt: T0,
+    revalidate: { collector: 'tasks', factKey: 'x' },
   })
   await notifier.drain({ at: T0, revalidate: async () => { throw new Error('db locked') } })
   // Sending something that could not be verified is the failure the check exists
   // to prevent, so an error means silence.
   assert.equal(sent.length, 0)
   assert.equal((await store.listQueue({ state: 'stale' })).length, 1)
+})
+
+test('a habit nudge still in the queue is finished quietly, never sent', async () => {
+  // Shaped like the entries in the live queue when habit nudges were retired,
+  // plus the older shape that carried only a category and a bare fact kind.
+  const { store, notifier, sent } = await harness()
+  await store.saveSubscription({ subscription: sub('https://push/1') })
+  const queued = [
+    { category: 'habit.slipping', factKind: 'habit.streak-ending', title: 'Journal: your streak ends tonight', subject: 'journal',
+      resolvedTitle: 'Streak intact', revalidate: { collector: 'habits', identity: 'daily:journal:2026-09-15', factKey: 'daily:journal:2026-09-15' } },
+    { category: 'goal.nearcomplete', factKind: 'habit.near-target', title: 'One more to finish', subject: 'business',
+      resolvedTitle: 'Done for the week', revalidate: { collector: 'habits', identity: 'weekly:business:2026-09-14', factKey: 'weekly:business:2026-09-14:3' } },
+    { category: 'habit.slipping', factKind: 'habit.behind-pace', title: 'Short this week', subject: 'business',
+      revalidate: { collector: 'habits', identity: 'weekly-behind:business:2026-09-14', factKey: 'weekly-behind:business:2026-09-14:1' } },
+    { category: 'habit.slipping', factKind: 'daily', subject: 'move', title: 'streak ends tonight' },
+  ]
+  for (const e of queued) await store.enqueue({ ...e, deliverAt: T0 })
+
+  // Even when the revalidator would call it a win: logging the habit afterwards
+  // must not produce "Streak intact" or "Done for the week".
+  let asked = 0
+  const result = await notifier.drain({ at: T0, revalidate: async () => { asked += 1; return { state: 'resolved', body: 'nice' } } })
+  assert.equal(sent.length, 0)
+  assert.equal(asked, 0)
+  assert.deepEqual(result.sent, [])
+  // History is kept: the rows stay in the queue, marked stale, and nothing reaches
+  // the ledger as delivered.
+  assert.equal((await store.listQueue({ state: 'stale' })).length, queued.length)
+  assert.equal((await store.ledger()).items.length, 0)
+})
+
+test('a real goal nudge and an ad-hoc reminder still go out beside a retired habit nudge', async () => {
+  const { store, notifier, sent } = await harness()
+  await store.saveSubscription({ subscription: sub('https://push/1') })
+  await store.enqueue({ category: 'habit.slipping', factKind: 'habit.streak-ending', title: 'streak', deliverAt: T0,
+    revalidate: { collector: 'habits', factKey: 'daily:journal:2026-09-15' } })
+  await store.enqueue({ category: 'goal.nearcomplete', factKind: 'goal.near-complete', title: '"50 Miles Biked" is at 91%', deliverAt: T0,
+    subject: 'g1', revalidate: { collector: 'goals', identity: 'near:g1:2026-09-15', factKey: 'near:g1:2026-09-15:91' } })
+  await store.enqueue({ category: 'reminder.adhoc', title: 'Call the dentist', deliverAt: T0 })
+  await notifier.drain({ at: T0, revalidate: async () => ({ state: 'fresh' }) })
+  const titles = sent.map((s) => JSON.parse(s.payload).notification.title).sort()
+  assert.deepEqual(titles, ['"50 Miles Biked" is at 91%', 'Call the dentist'])
 })
 
 test('a late delivery says how late it is', async () => {
@@ -243,12 +285,12 @@ test('a late delivery says how late it is', async () => {
 test('every delivery writes a feedback row, so effectiveness can be measured later', async () => {
   const { store, notifier } = await harness()
   await store.saveSubscription({ subscription: sub('https://push/1') })
-  await store.enqueue({ category: 'habit.slipping', factKind: 'habit.streak-ending', title: 'streak', deliverAt: T0 })
+  await store.enqueue({ category: 'goal.nearcomplete', factKind: 'goal.near-complete', title: 'at 73%', deliverAt: T0 })
   await notifier.drain({ at: T0 })
   const rows = await store.readFeedback()
   assert.equal(rows.length, 1)
   assert.equal(rows[0].event, 'delivered')
-  assert.equal(rows[0].factKind, 'habit.streak-ending')
+  assert.equal(rows[0].factKind, 'goal.near-complete')
 })
 
 test('a transient send failure leaves the entry retryable rather than delivered', async () => {
@@ -297,11 +339,11 @@ test('the ledger keeps the fact kind, so a notification stays ratable after its 
   // quietly become impossible.
   const { store, notifier } = await harness()
   await store.saveSubscription({ subscription: sub('https://push/1') })
-  await store.enqueue({ category: 'habit.slipping', factKind: 'habit.streak-ending', title: 'streak', deliverAt: T0 })
+  await store.enqueue({ category: 'goal.nearcomplete', factKind: 'goal.near-complete', title: 'at 73%', deliverAt: T0 })
   await notifier.drain({ at: T0 })
 
   const { items } = await store.ledger()
-  assert.equal(items[0].factKind, 'habit.streak-ending')
+  assert.equal(items[0].factKind, 'goal.near-complete')
 })
 
 test('the native app is reached through APNs, alongside Web Push devices', async () => {
@@ -333,6 +375,28 @@ test('without Web Push keys the native app still gets its notifications', async 
   assert.equal(result.ok, true)
   assert.equal(native.length, 1)
   assert.equal(sent.length, 0)
+})
+
+test('a chat read elsewhere is taken back off the phone, once', async () => {
+  const native = []
+  const apns = { send: async (args) => { native.push(args); return { ok: true, status: 200 } } }
+  const { store } = await harness()
+  const notifier = createNotifier({ store, vapid: VAPID, sendImpl: async () => ({ ok: true }), apns })
+  await store.saveSubscription({ subscription: sub('https://push/1') })
+  await store.saveSubscription({ subscription: { endpoint: 'apns:abc' }, transport: 'apns', token: 'abc' })
+
+  // Nothing was shown, so nothing is sent.
+  assert.equal((await notifier.dismiss('chat:t1')).sent, 0)
+  await notifier.deliver({ title: 'Done', tag: 'chat:t1' })
+  assert.equal(native[0].payload.tag, 'chat:t1')
+
+  const result = await notifier.dismiss('chat:t1')
+  assert.equal(result.sent, 1)
+  assert.equal(native[1].background, true)
+  assert.deepEqual(native[1].payload.dismiss, ['chat:t1'])
+  // Presence beats every 20 s; the second look must not push again.
+  assert.equal((await notifier.dismiss('chat:t1')).sent, 0)
+  assert.equal(native.length, 2)
 })
 
 test('a deleted app expires its device', async () => {

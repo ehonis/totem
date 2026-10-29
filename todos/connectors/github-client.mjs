@@ -87,9 +87,10 @@ export function createGitHubClient({ execFile } = {}) {
       ]);
       return [...new Set(output.split('\n').map(value => value.trim()).filter(Boolean))];
     },
-    async createIssue({ repo, title, body = '' }) {
+    async createIssue({ repo, title, body = '', labels = [] }) {
       return remember(await api([
         '--method', 'POST', `repos/${repo}/issues`, '-f', `title=${title}`, '-f', `body=${body}`,
+        ...labels.flatMap(label => ['-f', `labels[]=${label}`]),
       ], 'create issue'));
     },
     async editIssue({ id, repo, number, title, body }) {

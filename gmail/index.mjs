@@ -11,117 +11,41 @@
 // The OAuth client is the same Desktop client Calendar uses (GOOGLE_OAUTH_CREDENTIALS);
 // the Gmail API has to be enabled on its Google Cloud project.
 
-import { readFileSync } from 'node:fs'
-import { mkdir, writeFile, rename, chmod } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { randomBytes } from 'node:crypto'
 import {
   buildMessage, toBase64Url, headerMap, readPayload, parseAddressList, validEmail, replySubject,
 } from './mime.mjs'
+import { createGoogleAccounts, GoogleError, splitRef, mapLimit, LABEL_RE } from '../google/accounts.mjs'
 
+export { splitRef, LABEL_RE }
+export const GmailError = GoogleError
 export const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.modify'
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me'
-export const LABEL_RE = /^[a-zA-Z0-9_-]{1,40}$/
-const SESSION_TTL = 15 * 60 * 1000
-
-export class GmailError extends Error {
-  constructor(message, status = 400) { super(message); this.status = status }
-}
-
-// "personal:18c2f…" → { account, id }. A bare id is fine with one account
-// connected, or when `account` is passed alongside it.
-export function splitRef(ref, account = null, accounts = []) {
-  const s = String(ref ?? '').trim()
-  if (!s) throw new GmailError('missing id')
-  const i = s.indexOf(':')
-  if (i > 0 && accounts.includes(s.slice(0, i))) return { account: s.slice(0, i), id: s.slice(i + 1) }
-  const acct = account || (accounts.length === 1 ? accounts[0] : null)
-  if (!acct) throw new GmailError(`"${s}" does not say which account — pass the id as returned (account:id) or add account`)
-  return { account: acct, id: s }
-}
 
 // `extraScopes` are asked for in the same Google sign-in (Calendar's, so one sign-in
 // connects both); `onConnected` gets the grant to hand them on, and `grantInUse`
 // says whether a refresh token is still used elsewhere, in which case removing the
 // Gmail account must not revoke it at Google.
 export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = null, fetchImpl = fetch, now = Date.now, extraScopes = [], onConnected = null, grantInUse = () => false } = {}) {
-  const access = new Map()      // account -> { token, exp }
-  const refreshing = new Map()  // account -> Promise<token>, one refresh in flight per account
-  const sessions = new Map()    // state -> { label, createdAt }
   const labelCache = new Map()  // account -> { at, labels }
 
-  function client() {
-    const raw = loadClient()
-    return raw.installed || raw.web || raw
-  }
-
-  function configured() {
-    try { return Boolean(client().client_id) } catch { return false }
-  }
-
-  function readTokens() {
-    try { return JSON.parse(readFileSync(tokensFile, 'utf8')) } catch { return {} }
-  }
-
-  async function writeTokens(tokens) {
-    await mkdir(dirname(tokensFile), { recursive: true })
-    const tmp = `${tokensFile}.${process.pid}.tmp`
-    await writeFile(tmp, `${JSON.stringify(tokens, null, 2)}\n`, { mode: 0o600 })
-    await rename(tmp, tokensFile)
-    await chmod(tokensFile, 0o600).catch(() => {})
-  }
-
-  const accountLabels = () => Object.keys(readTokens())
-
-  function requireAccount(account) {
-    const labels = accountLabels()
-    if (!labels.length) throw new GmailError('No Gmail account is connected. Add one in Totem: Settings → Connections → Gmail.', 409)
-    const key = account ? String(account).trim() : labels.length === 1 ? labels[0] : ''
-    if (!key) throw new GmailError(`Several Gmail accounts are connected (${labels.join(', ')}); say which with account.`)
-    if (!labels.includes(key)) {
-      // Accept the address as well as the label: "owner@…" is how people name an inbox.
-      const tokens = readTokens()
-      const byEmail = labels.find((l) => tokens[l]?.email && tokens[l].email.toLowerCase() === key.toLowerCase())
-      if (byEmail) return byEmail
-      throw new GmailError(`No Gmail account "${key}". Connected: ${labels.join(', ')}.`)
-    }
-    return key
-  }
-
-  async function refresh(account) {
-    const acct = readTokens()[account]
-    if (!acct?.refresh_token) throw new GmailError(`Gmail account "${account}" has no refresh token; reconnect it.`, 409)
-    const creds = client()
-    const r = await fetchImpl(creds.token_uri || 'https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: creds.client_id, client_secret: creds.client_secret,
-        refresh_token: acct.refresh_token, grant_type: 'refresh_token',
-      }),
-    })
-    if (!r.ok) {
-      let reason = ''
-      try { const j = JSON.parse(await r.text()); reason = j.error_description || j.error || '' } catch {}
-      // invalid_grant every 7 days means the consent screen is still in Testing.
-      throw new GmailError(`Gmail sign-in for "${account}" failed (HTTP ${r.status}${reason ? `: ${reason}` : ''}). Reconnect it in Settings → Connections.`, 409)
-    }
-    const data = await r.json()
-    access.set(account, { token: data.access_token, exp: now() + (Number(data.expires_in) || 3600) * 1000 })
-    return data.access_token
-  }
-
-  async function accessToken(account) {
-    const cached = access.get(account)
-    if (cached && cached.exp > now() + 60_000) return cached.token
-    if (!refreshing.has(account)) {
-      refreshing.set(account, refresh(account).finally(() => refreshing.delete(account)))
-    }
-    return refreshing.get(account)
-  }
+  const accounts = createGoogleAccounts({
+    name: 'Gmail', scope: GMAIL_SCOPE, tokensFile, loadClient, redirectUri, fetchImpl, now, extraScopes, grantInUse,
+    describe: async (label) => {
+      const p = await api(label, '/profile')
+      return { email: p.emailAddress || '', messagesTotal: p.messagesTotal ?? null }
+    },
+    onConnected: onConnected && (async (grant) => {
+      try { return await onConnected(grant) }
+      catch (e) { return ` Its calendar could not be added: ${String(e?.message || e).slice(0, 160)}` }
+    }),
+    onForget: (label) => labelCache.delete(label),
+  })
+  const { configured, readTokens, accountLabels, requireAccount, listAccounts, startAuth, completeAuth, removeAccount, renameAccount } = accounts
 
   async function api(account, path, { method = 'GET', query = null, body = undefined } = {}) {
-    const token = await accessToken(account)
+    const token = await accounts.accessToken(account)
     const url = new URL(`${API}${path}`)
     for (const [k, v] of Object.entries(query || {})) {
       if (v == null || v === '') continue
@@ -138,122 +62,13 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
     try { json = text ? JSON.parse(text) : {} } catch {}
     if (!r.ok) {
       const msg = json?.error?.message || text.slice(0, 200)
-      if (r.status === 401) access.delete(account)
+      if (r.status === 401) accounts.forget(account)
       if (r.status === 403 && /has not been used|is disabled/i.test(msg)) {
         throw new GmailError('The Gmail API is not enabled on the Google Cloud project behind Totem\'s OAuth client. Enable it in the Cloud console (APIs & Services → Library → Gmail API).', 409)
       }
       throw new GmailError(`Gmail "${account}" ${method} ${path.split('?')[0]} HTTP ${r.status}: ${msg}`, r.status >= 500 ? 502 : r.status)
     }
     return json ?? {}
-  }
-
-  // ---- Accounts and sign-in ----------------------------------------------------
-
-  async function listAccounts() {
-    const tokens = readTokens()
-    const accounts = await Promise.all(Object.keys(tokens).map(async (label) => {
-      const out = { label, email: tokens[label]?.email || '', status: 'ok', error: '', connectedAt: tokens[label]?.connectedAt || null }
-      try {
-        const p = await api(label, '/profile')
-        out.email = p.emailAddress || out.email
-        out.messagesTotal = p.messagesTotal ?? null
-      } catch (e) { out.status = 'error'; out.error = String(e?.message || e).slice(0, 160) }
-      return out
-    }))
-    return { configured: configured(), accounts }
-  }
-
-  function startAuth({ label } = {}) {
-    if (!configured()) throw new GmailError('Totem has no Google OAuth client yet. Set one up as for Calendar (docs/gmail.md).', 409)
-    const key = String(label || '').trim()
-    if (!LABEL_RE.test(key)) throw new GmailError('label: letters, numbers, dash, underscore (max 40), no spaces')
-    if (readTokens()[key]) throw new GmailError(`"${key}" is already connected — pick a different label, or remove it first`)
-    const creds = client()
-    const state = randomBytes(24).toString('base64url')
-    for (const [k, v] of sessions) if (now() - v.createdAt > SESSION_TTL) sessions.delete(k)
-    sessions.set(state, { label: key, createdAt: now() })
-    const url = new URL(creds.auth_uri || 'https://accounts.google.com/o/oauth2/auth')
-    url.searchParams.set('client_id', creds.client_id)
-    url.searchParams.set('redirect_uri', redirectUri())
-    url.searchParams.set('response_type', 'code')
-    url.searchParams.set('scope', [GMAIL_SCOPE, ...extraScopes].join(' '))
-    url.searchParams.set('access_type', 'offline')
-    url.searchParams.set('prompt', 'consent')
-    url.searchParams.set('state', state)
-    return { ok: true, authUrl: url.toString(), label: key }
-  }
-
-  // The unauthenticated callback's handler. The unguessable `state` is the guard.
-  async function completeAuth(query) {
-    const state = query.get('state') || ''
-    const code = query.get('code') || ''
-    const err = query.get('error') || ''
-    const sess = sessions.get(state)
-    if (err) return { ok: false, message: `Authorization was denied (${err}).` }
-    if (!sess || now() - sess.createdAt > SESSION_TTL) return { ok: false, message: 'This sign-in link expired or was already used. Start again from the dashboard.' }
-    if (!code) return { ok: false, message: 'The callback had no authorization code.' }
-    const creds = client()
-    const r = await fetchImpl(creds.token_uri || 'https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code', code, redirect_uri: redirectUri(),
-        client_id: creds.client_id, client_secret: creds.client_secret,
-      }).toString(),
-    })
-    const txt = await r.text()
-    let tok = null
-    try { tok = JSON.parse(txt) } catch {}
-    if (!r.ok || !tok?.access_token) return { ok: false, message: `Token exchange failed (HTTP ${r.status}). ${txt.slice(0, 200)}` }
-    if (!tok.refresh_token) return { ok: false, message: 'Google returned no refresh token. Remove Totem at myaccount.google.com/permissions, then try again.' }
-    // Unticking the Gmail box on Google's consent screen still "succeeds".
-    if (tok.scope && !String(tok.scope).split(/\s+/).includes(GMAIL_SCOPE)) {
-      return { ok: false, message: 'Google did not grant Gmail access (the checkbox on the consent screen was left unticked). Try again and allow it.' }
-    }
-    sessions.delete(state)
-    access.set(sess.label, { token: tok.access_token, exp: now() + (Number(tok.expires_in) || 3600) * 1000 })
-    // Runs on the access token just cached, before the account is on disk.
-    const email = (await api(sess.label, '/profile').catch(() => null))?.emailAddress || ''
-    const tokens = readTokens()
-    tokens[sess.label] = { refresh_token: tok.refresh_token, scope: tok.scope || GMAIL_SCOPE, email, connectedAt: new Date(now()).toISOString() }
-    await writeTokens(tokens)
-    let also = ''
-    if (onConnected) {
-      try { also = (await onConnected({ label: sess.label, email, token: tok })) || '' }
-      catch (e) { also = ` Its calendar could not be added: ${String(e?.message || e).slice(0, 160)}` }
-    }
-    return { ok: true, message: `Gmail "${sess.label}"${email ? ` (${email})` : ''} connected.${also} You can close this tab and return to Totem.` }
-  }
-
-  async function removeAccount({ label } = {}) {
-    const key = String(label || '').trim()
-    const tokens = readTokens()
-    if (!tokens[key]) throw new GmailError(`No Gmail account "${key}"`)
-    const refreshToken = tokens[key].refresh_token
-    delete tokens[key]
-    await writeTokens(tokens)
-    access.delete(key)
-    labelCache.delete(key)
-    // Best effort: also revoke the grant at Google, so removing it here means it is gone,
-    // unless the same grant still serves something else (this account's calendar).
-    if (!grantInUse(refreshToken)) fetchImpl(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(refreshToken)}`, { method: 'POST' }).catch(() => {})
-    return listAccounts()
-  }
-
-  async function renameAccount({ from, to } = {}) {
-    const oldLabel = String(from || '').trim()
-    const newLabel = String(to || '').trim()
-    if (!LABEL_RE.test(newLabel)) throw new GmailError('label: letters, numbers, dash, underscore (max 40), no spaces')
-    const tokens = readTokens()
-    if (!tokens[oldLabel]) throw new GmailError(`No Gmail account "${oldLabel}"`)
-    if (oldLabel === newLabel) return listAccounts()
-    if (tokens[newLabel]) throw new GmailError(`"${newLabel}" already exists`)
-    tokens[newLabel] = tokens[oldLabel]
-    delete tokens[oldLabel]
-    await writeTokens(tokens)
-    access.delete(oldLabel)
-    labelCache.delete(oldLabel)
-    return listAccounts()
   }
 
   // ---- Reading -------------------------------------------------------------------
@@ -568,15 +383,3 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
   }
 }
 
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length)
-  let next = 0
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++
-      out[i] = await fn(items[i], i)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-  return out
-}

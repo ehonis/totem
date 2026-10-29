@@ -37,8 +37,31 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A') {
     node.setAttribute('target', '_blank')
     node.setAttribute('rel', 'noreferrer noopener')
+    // A link to a file on the box (the agent names what it saved by absolute
+    // path) opens in the chat's Files panel; see openFileLink.
+    const path = filePath(node.getAttribute('href') || '')
+    if (path) node.setAttribute('data-file-path', path)
   }
 })
+
+const FS_PATH = /^\/(Users|home|root|tmp|private|var|opt|mnt|Volumes|srv)\//
+function filePath(href: string) {
+  if (!FS_PATH.test(href)) return null
+  try { return decodeURIComponent(href) } catch { return href }
+}
+
+/**
+ * The chat opens a file link in its Files panel (ChatView listens for
+ * `totem:open-file`); anywhere else it downloads through the bridge.
+ */
+function openFileLink(e: React.MouseEvent) {
+  const a = (e.target as HTMLElement).closest?.('a[data-file-path]') as HTMLAnchorElement | null
+  if (!a || e.metaKey || e.ctrlKey || e.shiftKey) return
+  e.preventDefault()
+  const path = a.dataset.filePath!
+  const unhandled = window.dispatchEvent(new CustomEvent('totem:open-file', { detail: path, cancelable: true }))
+  if (unhandled) window.open(`/api/chat/files/raw?path=${encodeURIComponent(path)}`, '_blank', 'noopener')
+}
 
 function render(text: string) {
   return DOMPurify.sanitize(md.parse(text || '') as string, { ADD_ATTR: ['target'] })
@@ -130,5 +153,5 @@ export default React.memo(function Markdown({ text, className = '' }: MarkdownPr
     })
   }, [html])
 
-  return <div ref={ref} className={`md ${className}`} dangerouslySetInnerHTML={{ __html: html }} />
+  return <div ref={ref} className={`md ${className}`} onClick={openFileLink} dangerouslySetInnerHTML={{ __html: html }} />
 })

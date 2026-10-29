@@ -12,7 +12,8 @@ import { Press } from '../../ui/kit'
 import { tap } from '../../ui/haptics'
 import { colors } from '../../theme'
 import { ProjectIcon, ThreadIcon } from './ThreadIcon'
-import { vc } from './ui'
+import { TI, vc } from './ui'
+import { IconArrowLeft } from './icons'
 
 export default function ProjectHome({ projectId }: { projectId: string }) {
   const project = useChat((s) => s.projectDetail[projectId] || s.projects.find((p) => p.id === projectId))
@@ -27,6 +28,11 @@ export default function ProjectHome({ projectId }: { projectId: string }) {
   const now = Date.now()
   return (
     <View style={st.page}>
+      {/* Back to Home, out of every project, without opening the drawer. */}
+      <Press style={st.home} onPress={() => { tap(); openProject(null) }} hitSlop={8} accessibilityLabel="Back to all chats">
+        <TI icon={IconArrowLeft} size={15} color={vc.soft} />
+        <T size={13.5} color={vc.soft}>All chats</T>
+      </Press>
       <View style={st.hero}>
         <ProjectIcon p={project} size={26} color={vc.soft} />
         <T size={26} weight={500} lineHeight={34} style={{ flexShrink: 1 }}>{project.name}</T>
@@ -62,6 +68,7 @@ export default function ProjectHome({ projectId }: { projectId: string }) {
 
 const st = StyleSheet.create({
   page: { paddingHorizontal: 20, paddingBottom: 24 },
+  home: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', height: 32, marginBottom: 6 },
   hero: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 14 },
   group: { paddingTop: 12, paddingBottom: 4 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 46, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: vc.line },

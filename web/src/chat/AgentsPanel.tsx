@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { useChat, showAgents, focusAgent } from './store'
 import type { AgentInfo, AgentStep, ChatThread, ToolPart } from './types'
 import { TI, ProviderLogo, toolApp, toolIcon, formatDuration, agentName } from './ui'
-import { IconX, IconCheck, IconChevronRight, IconBrain, IconRobot } from './icons'
+import { IconX, IconCheck, IconChevronRight, IconChevronDown, IconChevronUp, IconBrain, IconRobot } from './icons'
 import Spark from './Spark'
 import Markdown from '../components/Markdown'
 
@@ -163,10 +163,10 @@ function AgentLog({ agent: a }: { agent: AgentInfo }) {
       {!!a.dropped && <p className="vc-agent-note">{a.dropped} earlier step{a.dropped === 1 ? '' : 's'} not kept.</p>}
       {a.steps.map((s) => <StepRow key={s.id} step={s} />)}
       {running && !a.steps.length && (
-        <p className="vc-agent-note"><Spark size={13} />{a.log === 'none' ? `${name} is working. Its steps aren't visible from here; what it hands back appears when it finishes.` : `Waiting for ${name}'s first step…`}</p>
+        <p className="vc-agent-note"><Spark size={13} />{a.log === 'none' || a.log === 'off' ? `${name} is working. Its steps aren't visible from here; what it hands back appears when it finishes.` : `Waiting for ${name}'s first step…`}</p>
       )}
-      {a.log === 'none' && !running && !a.steps.length && (
-        <p className="vc-agent-note">{a.via === 'cli' && (a.provider === 'codex' || a.provider === 'claude') ? `${name}'s own log wasn't found, so only what it printed is shown.` : `${name} keeps no log Totem can read, so only what it printed is shown.`}</p>
+      {(a.log === 'none' || a.log === 'off') && !running && !a.steps.length && (
+        <p className="vc-agent-note">{a.log === 'off' ? `${name} was started without a session log, so only what it printed is shown.` : a.via === 'cli' && (a.provider === 'codex' || a.provider === 'claude') ? `${name}'s own log wasn't found, so only what it printed is shown.` : `${name} keeps no log Totem can read, so only what it printed is shown.`}</p>
       )}
       {showResult && (
         <div className="vc-agent-result">
@@ -217,24 +217,72 @@ function StepRow({ step }: { step: AgentStep }) {
 }
 
 /** In the reply: the call that started an agent, always in view. Opens the panel on it. */
-export function AgentCard({ tool }: { tool: ToolPart }) {
+const ROW_STATE: Record<AgentInfo['status'], string> = { running: 'Running', done: 'Done', error: 'Failed', stopped: 'Stopped' }
+
+function AgentAvatar({ a, dot }: { a: AgentInfo; dot?: boolean }) {
+  return (
+    <span className={`vc-agent-avatar ${a.status}`}>
+      <ProviderLogo driver={a.provider} name={agentName(a.provider)} size={14} />
+      {dot && a.status !== 'done' && <span className="vc-agent-avatar-dot" />}
+    </span>
+  )
+}
+
+/**
+ * The agents a reply started back to back, as one group the way T3 Code draws
+ * them: overlapping avatars, how many are working and the time since the first
+ * started, folding open to one row per agent. A row opens it in the Agents panel.
+ */
+export function AgentGroup({ tools }: { tools: ToolPart[] }) {
+  const agents = tools.map((t) => t.agent!)
+  const running = agents.filter((a) => a.status === 'running').length
+  const failed = agents.filter((a) => a.status === 'error').length
+  const [open, setOpen] = useState(true)
+  useTick(running > 0)
+  const starts = agents.map((a) => a.startedAt).filter((n): n is number => !!n)
+  const ends = agents.map((a) => (a.status === 'running' ? Date.now() : a.endedAt)).filter((n): n is number => !!n)
+  const ms = starts.length && ends.length ? Math.max(...ends) - Math.min(...starts) : 0
+  const state = running ? `${running} working` : failed ? `${failed} failed` : 'Finished'
+  return (
+    <div className={`vc-agent-group ${running ? 'running' : ''}`}>
+      <button type="button" className="vc-agent-group-head" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className="vc-agent-stack">
+          {agents.slice(0, 3).map((a, i) => <AgentAvatar key={i} a={a} />)}
+        </span>
+        <span className="vc-agent-group-title">
+          <span className="vc-agent-group-name">{agents.length} {agents.length === 1 ? 'subagent' : 'subagents'}</span>
+          <span className={`vc-agent-group-state ${running ? 'live' : failed ? 'error' : ''}`}>{state}</span>
+        </span>
+        {ms >= 1500 && <span className="vc-agent-time">{formatDuration(ms)}</span>}
+        <TI icon={open ? IconChevronUp : IconChevronDown} size={15} />
+      </button>
+      {open && (
+        <div className="vc-agent-rows">
+          {tools.map((t) => <GroupRow key={t.id} tool={t} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function GroupRow({ tool }: { tool: ToolPart }) {
   const a = tool.agent!
   const running = a.status === 'running'
-  useTick(running)
   const ms = elapsedOf(a)
+  const now = running ? agentNow(a) : firstLine(a.summary) || agentHeading(a)
   return (
-    <div className={`vc-agent-card ${a.status}`}>
-      <button type="button" className="vc-agent-card-head" onClick={() => showAgents(true, tool.id)} title="Open in the Agents panel">
-        <ProviderLogo driver={a.provider} name={agentName(a.provider)} size={16} />
-        <span className="vc-agent-card-name">{agentHeading(a)}</span>
-        <span className={`vc-agent-card-text ${running ? 'vc-shimmer' : ''}`}>{running ? agentNow(a) : a.title || firstLine(a.prompt) || tool.title}</span>
-        <span className="vc-agent-card-state">
-          {running ? <Spark size={13} /> : a.status === 'error' ? <TI icon={IconX} size={14} /> : <TI icon={IconCheck} size={14} />}
-          {ms >= 1500 && <span>{formatDuration(ms)}</span>}
+    <button type="button" className={`vc-agent-row ${a.status}`} onClick={() => showAgents(true, tool.id)} title="Open in the Agents panel">
+      <AgentAvatar a={a} dot />
+      <span className="vc-agent-row-main">
+        <span className="vc-agent-row-top">
+          <span className="vc-agent-row-name">{a.title || firstLine(a.prompt) || tool.title || agentHeading(a)}</span>
+          <span className="vc-agent-row-state">{ROW_STATE[a.status]}</span>
         </span>
-        <span className="vc-agent-card-open">{running ? 'Watch' : 'View'}</span>
-      </button>
-    </div>
+        <span className="vc-agent-row-now">{running ? `Running ${now}` : now}</span>
+      </span>
+      {ms >= 1500 && <span className="vc-agent-time">{formatDuration(ms)}</span>}
+      <TI icon={IconChevronRight} size={15} />
+    </button>
   )
 }
 

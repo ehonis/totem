@@ -2,16 +2,19 @@
 // ChatsNav + ThreadList.tsx): Home's projects and recents, or one project's
 // header, folders and chats. Each list keeps its parked chats on two folding
 // shelves at the bottom, Snoozed and Settled (settle.ts). A row opens its chat
-// on tap; long-press opens the chat's native menu, and the "…" does too. A switch
+// on tap; swiped left it shows Snooze, Settle and "…" (the full menu), and
+// long-press opens that menu too. A switch
 // at the top turns it to Totems: group chats, then every totem, the one that ran
 // last on top, each opening its own chat.
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { MenuView } from '@react-native-menu/menu'
+import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated'
 import { useChat, openProject, createProject, foldersOf, threadTitle } from '../../lib/chat/store'
+import { pendingQuestions } from '../../lib/chat/questions'
 import {
-  shelve, shelfOf, wokeAt, countdown, ago, settledAt, isSnoozed, type Shelf,
+  shelve, shelfOf, wokeAt, countdown, ago, settledAt, isSnoozed, snoozePresets, type Shelf,
 } from '../../lib/chat/settle'
 import type { ChatThread, Project } from '../../lib/chat/types'
 import { pushError } from '../../lib/toast'
@@ -29,10 +32,11 @@ import { totemNavRows, type TotemNavRow } from '../../lib/chat/totemNav'
 import { TotemIcon, ensureTotemChat, loadJobs, useJobs } from '../totems/shared'
 import {
   IconDots, IconSearch, IconX, IconFolderPlus, IconArrowLeft, IconChevronDown, IconChevronRight, IconChevronUp, IconPlus,
-  IconUsersGroup, IconLayoutList,
+  IconUsersGroup, IconLayoutList, IconClock, IconCheck, IconArrowBackUp, IconAlarm,
 } from './icons'
 import { router } from 'expo-router'
 import { navigateTo } from '../../shell/nav'
+import { drawerPan } from '../../shell/drawerGesture'
 
 const FOLDED_KEY = 'totem.projects.folded'
 const OPEN_FOLDERS_KEY = 'totem.projects.openFolders'
@@ -71,19 +75,21 @@ function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: { t: Cha
   const title = threadTitle(t)
   const woke = shelf === 'active' && !!wokeAt(t, now) && !active
   const waiting = (t.needsReply && !live) || woke
+  // Questions from the agent outrank everything else on the row, as in T3.
+  const asking = !!pendingQuestions(t)
   const parked = shelf !== 'active' && !active
   const menu = threadMenu(t, shelf, live)
-  const pick = ({ nativeEvent }: { nativeEvent: { event: string } }) => { tap(); menu.run(nativeEvent.event) }
-  return (
-    // No long-press MenuView around the row: inside the drawer it swallowed the
-    // tap, so chats could not be opened. Long-press shows the same menu as sheets.
-    <View style={[st.thread, active && st.threadOn]}>
+  const swipe = useRef<SwipeableMethods>(null)
+  // Every swipe action is one of the menu's own ids, so both run the same code.
+  const act = (id: string) => { swipe.current?.close(); tap(); menu.run(id) }
+  const row = (
+    <View style={[st.thread, active ? st.threadOn : st.threadOff]}>
       <Press
         style={st.threadMain}
         onPress={() => { tap(); onOpen(t.id) }}
         onLongPress={() => { impact(); showActionTree(menu.actions, (id) => { tap(); menu.run(id) }, title) }}
         accessibilityLabel={title}
-        accessibilityHint="Long-press for options"
+        accessibilityHint="Swipe left or long-press for options"
       >
         <View style={parked ? { opacity: 0.45 } : undefined}><ThreadIcon t={t} size={16} busy={retitling} /></View>
         <T
@@ -95,18 +101,75 @@ function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: { t: Cha
         >
           {title}
         </T>
-        {live ? <LiveDot />
+        {asking ? <View style={st.woke} accessibilityLabel="Totem asked you questions"><T size={11} weight={600} color={colors.accent}>Awaiting input</T></View>
+          : live ? <LiveDot />
           : woke ? <View style={st.woke}><T size={11} weight={600} color={colors.accent}>Woke</T></View>
             : t.needsReply ? <View style={st.dot} accessibilityLabel="Waiting on you" /> : null}
         {shelf === 'snoozed' ? <T size={11.5} color={colors.accent} style={st.meta}>{countdown(t.snoozedUntil!, now)}</T> : null}
         {shelf === 'settled' ? <T size={11.5} color={muted80} style={st.meta}>{ago(settledAt(t, now, autoDays), now)}</T> : null}
       </Press>
-      <MenuView actions={menu.actions} themeVariant="dark" onOpenMenu={tap} onPressAction={pick}>
-        <View style={st.more} accessibilityRole="button" accessibilityLabel={`Options for ${title}`}>
-          <TI icon={IconDots} size={16} color={colors.muted} />
-        </View>
-      </MenuView>
     </View>
+  )
+  return (
+    // No long-press MenuView around the row: inside the drawer it swallowed the
+    // tap, so chats could not be opened. Long-press shows the same menu as sheets.
+    // The row blocks the drawer's pan, so a left swipe opens its actions rather
+    // than closing the drawer.
+    <ReanimatedSwipeable
+      ref={swipe}
+      friction={1.4}
+      rightThreshold={40}
+      overshootRight={false}
+      blocksExternalGesture={drawerPan()}
+      renderRightActions={() => (
+        <View style={st.swipe}>
+          {shelf === 'snoozed' ? (
+            <SwipeBtn label="Wake" icon={IconAlarm} fill={colors.accent} ink={colors.white} onPress={() => act('wake')} />
+          ) : (
+            <MenuView
+              title="Snooze until"
+              actions={[
+                ...snoozePresets(new Date()).map((p) => ({ id: `snooze:${p.until}`, title: p.label, subtitle: p.when })),
+                { id: 'snooze-custom', title: 'Custom…' },
+              ]}
+              themeVariant="dark"
+              onOpenMenu={tap}
+              onPressAction={({ nativeEvent }) => act(nativeEvent.event)}
+            >
+              <SwipeBtn label="Snooze" icon={IconClock} fill={colors.amber} ink="#1d1606" />
+            </MenuView>
+          )}
+          {shelf === 'settled' ? (
+            <SwipeBtn label="Un-settle" icon={IconArrowBackUp} fill={colors.bg3} ink={colors.text} onPress={() => act('unsettle')} />
+          ) : (
+            <SwipeBtn label="Settle" icon={IconCheck} fill={colors.toastSuccess} ink={colors.white} disabled={live} onPress={() => act('settle')} />
+          )}
+          <MenuView actions={menu.actions} themeVariant="dark" onOpenMenu={tap} onPressAction={({ nativeEvent }) => act(nativeEvent.event)}>
+            <SwipeBtn label="More" icon={IconDots} fill={colors.drawerOn} ink={colors.text} />
+          </MenuView>
+        </View>
+      )}
+    >
+      {row}
+    </ReanimatedSwipeable>
+  )
+}
+
+/** One action behind a swiped chat row. Without onPress it is the face of a MenuView. */
+function SwipeBtn({ label, icon, fill, ink, disabled, onPress }: {
+  label: string; icon: typeof IconDots; fill: string; ink: string; disabled?: boolean; onPress?: () => void
+}) {
+  const face = (
+    <>
+      <TI icon={icon} size={18} color={ink} />
+      <T size={11} weight={600} color={ink}>{label}</T>
+    </>
+  )
+  if (!onPress) return <View style={[st.swipeBtn, { backgroundColor: fill }]} accessible accessibilityRole="button" accessibilityLabel={label}>{face}</View>
+  return (
+    <Press style={[st.swipeBtn, { backgroundColor: fill }, disabled && { opacity: 0.4 }]} disabled={disabled} onPress={onPress} accessibilityLabel={disabled ? `${label} once the reply finishes` : label}>
+      {face}
+    </Press>
   )
 }
 
@@ -563,8 +626,11 @@ const st = StyleSheet.create({
   groupLabel: { paddingTop: 6, paddingBottom: 4, paddingHorizontal: 12 },
   thread: { flexDirection: 'row', alignItems: 'center', borderRadius: 10 },
   threadOn: { backgroundColor: colors.drawerOn },
+  // Opaque, so the actions stay hidden until the row slides off them.
+  threadOff: { backgroundColor: colors.bg2 },
   threadMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 9, height: 44, paddingLeft: 12, paddingRight: 4 },
-  more: { width: 34, height: 34, marginRight: 3, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  swipe: { flexDirection: 'row', gap: 4, paddingLeft: 6 },
+  swipeBtn: { width: 62, height: 44, alignItems: 'center', justifyContent: 'center', gap: 2, borderRadius: 10 },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent },
   woke: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: 'rgba(91, 140, 255, 0.15)' },
   meta: { paddingLeft: 4, fontVariant: ['tabular-nums'] },

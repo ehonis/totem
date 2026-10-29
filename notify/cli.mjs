@@ -15,7 +15,7 @@ import { readFile } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { localParts, zonedToUtc } from '../jobs/schedule.mjs'
-import { parsePeople, birthdayFacts, habitFacts, metricFacts, goalFacts, taskFacts } from './signals.mjs'
+import { parsePeople, birthdayFacts, metricFacts, goalFacts, taskFacts } from './signals.mjs'
 import { closeTodoDatabase, openTodoDatabase } from '../todos/db.mjs'
 import { createGoalService } from '../goals/service.mjs'
 import { createTodoService } from '../todos/service.mjs'
@@ -80,7 +80,6 @@ export async function collectFacts({ now, tz }) {
   const entries = habitsState.entries || {}
   return [
     ...birthdayFacts({ people: parsePeople(peopleMd), now, tz }),
-    ...habitFacts({ habits, entries, now, tz }),
     ...metricFacts({ habits, entries, now, tz }),
     ...goalFacts({ goals, now, tz }),
     ...taskFacts({ tasks, now, tz }),

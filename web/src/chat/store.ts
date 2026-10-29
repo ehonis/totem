@@ -11,11 +11,12 @@ import { getThreads, putThread, deleteThread as apiDeleteThread, getChatModels, 
 import { pushError, pushToast } from '../toast'
 import { applyEvent } from './reduce'
 import {
-  sendChat, attachRun, stopChat, steerChat, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
+  sendChat, attachRun, stopChat, steerChat, changeQueue, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi, projectFaviconApi,
   deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
 } from './api'
+import type { QueueAction } from './api'
 import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
-import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, StreamEvent } from './types'
+import type { Attachment, BrowserFrame, BrowserHandoff, ChatCapabilities, ChatMessage, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
 import { activeAt, wokeAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
 
 const CACHE_KEY = 'chat_threads_v2'
@@ -51,10 +52,16 @@ export interface ChatState {
   browser: Record<string, BrowserFrame & { live: boolean }>
   /** The browser panel is open beside the active chat. */
   browserOpen: boolean
+  /** Chats whose agent has handed the browser to the owner and is waiting. */
+  handoffs: Record<string, BrowserHandoff>
   /** The Agents panel (AgentsPanel.tsx) is open beside the active chat. */
   agentsOpen: boolean
   /** The sub-agent it has open: the id of the tool card that started it. */
   agentFocus: string | null
+  /** The Files panel (FilesPanel.tsx) is open beside the active chat. */
+  filesOpen: boolean
+  /** Each chat's saved files, as last listed. */
+  files: Record<string, ChatFiles>
   /** Chat projects, without their files and memory. */
   projects: Project[]
   /** Projects fetched on their own (files and memory included), by id. */
@@ -70,9 +77,19 @@ export interface ChatPrefs {
   autoSettleDays: number
   /** Every chat's agent may find totems and bring them in (totems__*). Default on. */
   totemsInChat?: boolean
+  /** What sending does while a reply runs: wait its turn or steer the reply. Ctrl/⌘ does the other. */
+  followUp?: 'queue' | 'steer'
 }
 
+// A file the bridge sent here to be shown (chat/files.mjs, chatFileRedirect).
+// Read at load: the router drops query params it does not know.
+let pendingFile = new URLSearchParams(window.location.search).get('file')
+export function takePendingFile() { const f = pendingFile; pendingFile = null; return f }
+
 export interface Artifact { uploadId: string; name: string; mime: string; url?: string; size?: number; path?: string }
+
+export interface FileEntry { path: string; rel: string; name: string; dir: boolean; size?: number; mtime?: number; mime?: string }
+export interface ChatFiles { root: string; entries: FileEntry[]; truncated: boolean }
 
 let state: ChatState = {
   threads: readCache(),
@@ -87,8 +104,11 @@ let state: ChatState = {
   artifact: null,
   browser: {},
   browserOpen: false,
+  handoffs: {},
   agentsOpen: false,
   agentFocus: null,
+  filesOpen: false,
+  files: {},
   retitling: {},
   projects: [],
   projectDetail: {},
@@ -294,7 +314,7 @@ export function setActive(id: string | null) {
   // The panel follows the chat: opening a project's chat shows that project.
   const t = id ? state.threads.find((x) => x.id === id) : null
   const scope = t ? (t.projectId && state.projects.some((p) => p.id === t.projectId) ? t.projectId : null) : state.projectId
-  set({ activeId: id, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null, projectId: scope })
+  set({ activeId: id, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null, projectId: scope })
   if (id && !state.browser[id]) loadBrowser(id)
 }
 
@@ -305,7 +325,7 @@ export function setActive(id: string | null) {
 
 /** Show a project's page (or Home with null) with no chat open. */
 export function openProject(id: string | null) {
-  set({ projectId: id, activeId: null, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null })
+  set({ projectId: id, activeId: null, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null })
   if (id) loadProject(id)
 }
 
@@ -333,7 +353,8 @@ function takeProject(project: Project) {
   set((s) => ({
     projectDetail: { ...s.projectDetail, [project.id]: project },
     projects: s.projects.some((p) => p.id === project.id)
-      ? s.projects.map((p) => (p.id === project.id ? { ...p, ...summary } : p))
+      // A removed picture is a missing key, which a spread would not clear.
+      ? s.projects.map((p) => (p.id === project.id ? { ...p, ...summary, image: summary.image, imageUrl: summary.imageUrl } : p))
       : [...s.projects, summary as Project].sort((a, b) => a.name.localeCompare(b.name)),
   }))
   return project
@@ -355,14 +376,24 @@ export async function createProject(body: { name: string; icon?: string; instruc
   return project
 }
 
-export async function updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'icon' | 'instructions' | 'provider' | 'modelSettings'>>) {
+export async function updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'icon' | 'instructions' | 'provider' | 'modelSettings'>> & { image?: string | null }) {
   const before = state.projectDetail[id]
-  if (before) set((s) => ({ projectDetail: { ...s.projectDetail, [id]: { ...before, ...patch } } }))
+  if (before) {
+    // Clearing the picture shows the icon at once; a new one shows when the bridge has signed it.
+    const { image, ...rest } = patch
+    const next = 'image' in patch ? { ...before, ...rest, image: image || undefined, imageUrl: undefined } : { ...before, ...rest }
+    set((s) => ({ projectDetail: { ...s.projectDetail, [id]: next } }))
+  }
   try { return takeProject((await patchProjectApi(id, patch)).project) } catch (e: any) {
     if (!fail(e)) pushError(`Couldn't save the project: ${e.message}`)
     if (before) set((s) => ({ projectDetail: { ...s.projectDetail, [id]: before } }))
     return null
   }
+}
+
+/** Wear a website's icon: the bridge fetches it and keeps it as the project's picture. */
+export async function setProjectFavicon(id: string, site: string) {
+  return takeProject((await projectFaviconApi(id, site)).project)
 }
 
 export async function saveProjectMemory(id: string, memory: string) {
@@ -515,16 +546,44 @@ const browserDismissed = new Set<string>()
 
 async function loadBrowser(threadId: string) {
   try {
-    const r = await api<{ open: boolean; frame: BrowserFrame | null }>(`/api/chat/browser?threadId=${encodeURIComponent(threadId)}`)
+    const r = await api<{ open: boolean; frame: BrowserFrame | null; handoff: BrowserHandoff | null }>(`/api/chat/browser?threadId=${encodeURIComponent(threadId)}`)
     if (r.frame && !state.browser[threadId]) set((s) => ({ browser: { ...s.browser, [threadId]: { ...r.frame!, live: !!s.runs[threadId] } } }))
+    if (r.handoff) onHandoff(threadId, r.handoff)
   } catch {}
 }
 
 function onBrowserFrame(threadId: string, frame: BrowserFrame) {
   set((s) => ({ browser: { ...s.browser, [threadId]: { ...frame, live: true } } }))
-  if (state.activeId === threadId && !state.browserOpen && !browserDismissed.has(threadId) && !narrowScreen()) {
+  const waiting = !!state.handoffs[threadId]
+  if (state.activeId === threadId && !state.browserOpen && (waiting || (!browserDismissed.has(threadId) && !narrowScreen()))) {
     set({ browserOpen: true, artifact: null, agentsOpen: false })
   }
+}
+
+// A handoff opens the panel even if it was closed, phone included: the owner has
+// something to do in it.
+function onHandoff(threadId: string, handoff: BrowserHandoff | null) {
+  set((s) => {
+    const handoffs = { ...s.handoffs }
+    if (handoff) handoffs[threadId] = handoff
+    else delete handoffs[threadId]
+    return { handoffs }
+  })
+  if (handoff && state.activeId === threadId && state.browser[threadId]) {
+    browserDismissed.delete(threadId)
+    set({ browserOpen: true, artifact: null, agentsOpen: false })
+  }
+}
+
+/** Done or Skip on a handoff. Past the agent's wait, it goes as his next message. */
+export async function answerHandoff(threadId: string, action: 'done' | 'skip') {
+  const handoff = state.handoffs[threadId]
+  if (!handoff) return
+  onHandoff(threadId, null)
+  try {
+    const r = await api<{ live: boolean; message: string | null }>('/api/chat/browser/handoff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, id: handoff.id, action }) })
+    if (!r.live && r.message) send({ threadId, text: r.message })
+  } catch (e: any) { fail(e) }
 }
 
 const narrowScreen = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches
@@ -533,21 +592,71 @@ export function showBrowser(open: boolean) {
   const id = state.activeId
   if (id && !open) browserDismissed.add(id)
   if (id && open) browserDismissed.delete(id)
-  set({ browserOpen: open, ...(open ? { artifact: null, agentsOpen: false } : {}) })
+  set({ browserOpen: open, ...(open ? { artifact: null, agentsOpen: false, filesOpen: false } : {}) })
 }
 
 /** Open the Agents panel (on one sub-agent, by its tool card id) or close it. */
 export function showAgents(open: boolean, focus: string | null = null) {
-  set({ agentsOpen: open, ...(open ? { artifact: null, browserOpen: false, ...(focus ? { agentFocus: focus } : {}) } : {}) })
+  set({ agentsOpen: open, ...(open ? { artifact: null, browserOpen: false, filesOpen: false, ...(focus ? { agentFocus: focus } : {}) } : {}) })
 }
+
+/** Open or close the Files panel: the chat's own folder on the box, T3 Code's files viewer. */
+export function showFiles(open: boolean) {
+  set({ filesOpen: open, ...(open ? { artifact: null, browserOpen: false, agentsOpen: false } : {}) })
+  if (open && state.activeId) loadFiles(state.activeId)
+}
+
+/** List what the chat's agent has saved (data/chat-outputs/<thread>). */
+export async function loadFiles(threadId: string) {
+  try {
+    const r = await api<ChatFiles>(`/api/chat/files?thread=${encodeURIComponent(threadId)}`)
+    set((s) => ({ files: { ...s.files, [threadId]: r } }))
+  } catch (e: any) { if (e instanceof AuthError) fail(e) }
+}
+
+/** A file on the box, by absolute path, as something the canvas can open. */
+export function fileArtifact(path: string, size?: number): Artifact {
+  const name = path.split('/').pop() || path
+  const url = `/api/chat/files/raw?path=${encodeURIComponent(path)}`
+  return { uploadId: `file:${path}`, name, mime: mimeOf(name), url, size, path }
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  md: 'text/markdown', markdown: 'text/markdown', html: 'text/html', htm: 'text/html', csv: 'text/csv', tsv: 'text/tab-separated-values',
+  txt: 'text/plain', log: 'text/plain', json: 'application/json', yml: 'text/yaml', yaml: 'text/yaml', xml: 'application/xml',
+  ics: 'text/calendar', svg: 'image/svg+xml', pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  gif: 'image/gif', webp: 'image/webp',
+}
+export const mimeOf = (name: string) => MIME_BY_EXT[(name.split('.').pop() || '').toLowerCase()] || 'application/octet-stream'
 
 export function focusAgent(id: string | null) {
   set({ agentFocus: id })
 }
 
+export type BrowserInput =
+  | { kind: 'click'; x: number; y: number }
+  | { kind: 'type'; text: string }
+  | { kind: 'press'; key: string; modifiers?: string[] }
+  | { kind: 'scroll'; deltaX?: number; deltaY?: number }
+  | { kind: 'look' }
+
+// The owner's own clicks and keys, sent one at a time so they land in order.
+let browserQueue: Promise<unknown> = Promise.resolve()
+
+/** Drive the chat's browser by hand (sign in, dismiss a banner); shows the frame it leaves. */
+export function browserInput(threadId: string, input: BrowserInput) {
+  browserQueue = browserQueue.then(async () => {
+    try {
+      const r = await api<{ frame: BrowserFrame | null }>('/api/chat/browser/input', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, ...input }) })
+      if (r.frame) set((s) => ({ browser: { ...s.browser, [threadId]: { ...r.frame!, live: !!s.runs[threadId] } } }))
+    } catch (e: any) { if (input.kind !== 'look') fail(e) }
+  })
+  return browserQueue
+}
+
 /** Close the chat's browser for good: tabs, cookies and all. */
 export async function closeBrowser(threadId: string) {
-  set((s) => { const b = { ...s.browser }; delete b[threadId]; return { browser: b, browserOpen: s.activeId === threadId ? false : s.browserOpen } })
+  set((s) => { const b = { ...s.browser }; delete b[threadId]; const h = { ...s.handoffs }; delete h[threadId]; return { browser: b, handoffs: h, browserOpen: s.activeId === threadId ? false : s.browserOpen } })
   try { await api('/api/chat/browser/close', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId }) }) } catch (e: any) { fail(e) }
 }
 
@@ -558,7 +667,7 @@ export function requestVoice() { voiceRequested = true; set({ activeId: null, ar
 export function takeVoiceRequest() { const v = voiceRequested; voiceRequested = false; return v }
 
 export function openArtifact(a: Artifact | null) {
-  set({ artifact: a, ...(a ? { browserOpen: false, agentsOpen: false } : {}) })
+  set({ artifact: a, ...(a ? { browserOpen: false, agentsOpen: false, filesOpen: false } : {}) })
 }
 
 /** Pull server history. A thread with a live local run keeps its live copy. */
@@ -605,7 +714,9 @@ export function initChat(authError: () => void) {
   loadCapabilities()
   loadPrefs()
   const refresh = () => {
-    if (!Object.keys(state.runs).length) syncThreads()
+    // A run the bridge started from a queue, or from another device, shows live here too.
+    if (!Object.keys(state.runs).length) syncThreads().then(resumeRuns)
+    else resumeRuns()
     loadProjects()
     // The agent edits the memory and adds files while it works; keep the open project's page current.
     if (state.projectId) loadProject(state.projectId)
@@ -731,10 +842,16 @@ function handleEvent(threadId: string, e: StreamEvent) {
           msgs.push(e.userMessage, e.assistantMessage)
         }
         // The account that answered is the chat's account from now on.
-        return { ...t, messages: msgs, provider: e.provider }
+        // A queued message that has started is no longer waiting.
+        const queue = e.queuedId ? (t.queue || []).filter((q) => q.id !== e.queuedId) : t.queue
+        return { ...t, messages: msgs, provider: e.provider, queue }
       })
       break
+    case 'queue':
+      patchThread(threadId, (t) => ({ ...t, queue: e.queue, queueHeld: e.queueHeld }))
+      break
     case 'steer':
+    case 'questions':
     case 'delta':
     case 'tool':
     case 'agent':
@@ -749,6 +866,9 @@ function handleEvent(threadId: string, e: StreamEvent) {
     case 'browser':
       onBrowserFrame(threadId, { tabId: e.tabId, url: e.url, title: e.title, image: e.image, at: e.at })
       break
+    case 'handoff':
+      onHandoff(threadId, e.handoff)
+      break
     case 'title':
       patchThread(threadId, (t) => ({ ...t, title: e.title, ...(e.icon ? { icon: e.icon } : {}) }))
       break
@@ -762,6 +882,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
       break
     case 'end': {
       setRun(threadId, null)
+      // The bridge starts the next queued message itself: pick its run up.
+      if (state.threads.find((t) => t.id === threadId)?.queue?.length) watchQueue(threadId)
       const pid = state.threads.find((t) => t.id === threadId)?.projectId
       if (pid && state.projectDetail[pid]) loadProject(pid)
       browserDismissed.delete(threadId)
@@ -769,6 +891,26 @@ function handleEvent(threadId: string, e: StreamEvent) {
       break
     }
   }
+}
+
+/**
+ * After a reply ends with messages queued, the bridge starts the next one (or
+ * holds the queue). Look for that run a few times, then take the thread as the
+ * bridge has it, which says whether the queue is held.
+ */
+function watchQueue(threadId: string) {
+  let tries = 0
+  const look = async () => {
+    if (state.runs[threadId]) return
+    try {
+      const { runs } = await getRuns()
+      const r = runs.find((x) => x.threadId === threadId && x.status === 'running')
+      if (r) { if (!state.runs[threadId]) watchRun(threadId, 0, r.startedAt); return }
+    } catch (e) { if (fail(e)) return }
+    if (++tries < 4) setTimeout(look, 400 * tries)
+    else syncThreads()
+  }
+  setTimeout(look, 150)
 }
 
 function watchRun(threadId: string, since: number, startedAt: number) {
@@ -923,13 +1065,53 @@ export function stop(threadId: string) {
  * own stream, so nothing is added here. False when the run had already finished
  * (or was a skill, which cannot take one): the caller keeps the text.
  */
-export async function steer(threadId: string, text: string): Promise<boolean> {
-  if (!state.runs[threadId] || !text.trim()) return false
+export async function steer(threadId: string, text: string, attachments?: string[]): Promise<boolean> {
+  if (!state.runs[threadId] || (!text.trim() && !attachments?.length)) return false
   try {
-    await steerChat(threadId, text)
+    await steerChat(threadId, text, attachments)
     return true
   } catch (e: any) {
     if (!fail(e)) pushError(e?.status === 409 ? 'That reply had already finished. Your message is still in the box.' : `Couldn't send that: ${e.message}`)
+    return false
+  }
+}
+
+/** Patch the thread's queue from the bridge's answer. */
+function takeQueue(threadId: string, r: { queue: QueuedMessage[]; queueHeld: boolean }) {
+  patchThread(threadId, (t) => ({ ...t, queue: r.queue, queueHeld: r.queueHeld }))
+}
+
+/**
+ * Queue a message behind the running reply (T3 Code's follow-up). It keeps the
+ * model the composer shows now. False when it could not be queued: the caller
+ * keeps the text.
+ */
+export async function queueMessage(threadId: string, text: string, attachments: Attachment[] = []): Promise<boolean> {
+  const thread = state.threads.find((t) => t.id === threadId)
+  if (!thread || (!text.trim() && !attachments.length)) return false
+  const { provider, row, settings } = threadChoice(thread)
+  const wire = wireModel(row?.driver || 'cursor', settings)
+  try {
+    takeQueue(threadId, await changeQueue(threadId, { action: 'add', text, attachments: attachments.map((a) => a.id), provider, model: wire.model, effort: wire.effort, modelSettings: settings }))
+    // It ended as this was sent, so the bridge started it at once.
+    if (!state.runs[threadId]) watchQueue(threadId)
+    return true
+  } catch (e: any) {
+    if (!fail(e)) pushError(`Couldn't queue that: ${e.message}`)
+    return false
+  }
+}
+
+/** Edit, remove, reorder, steer with or resume a thread's queue. False when it did not happen. */
+export async function updateQueue(threadId: string, change: Exclude<QueueAction, { action: 'add' }>): Promise<boolean> {
+  try {
+    takeQueue(threadId, await changeQueue(threadId, change))
+    if (change.action === 'resume' && !state.runs[threadId]) watchQueue(threadId)
+    return true
+  } catch (e: any) {
+    if (fail(e)) return false
+    pushError(e?.status === 404 ? 'That message is no longer queued.' : e.message)
+    syncThreads()
     return false
   }
 }

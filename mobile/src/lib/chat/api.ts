@@ -2,7 +2,7 @@
 // fetch (EventSource cannot send the bearer header).
 import { authHeaders, AuthError, api } from '../api'
 import { bridgeFetch, bridgeUrl } from '../connection'
-import type { Attachment, ChatCapabilities, ChatMode, Project, StreamEvent } from './types'
+import type { Attachment, ChatCapabilities, ChatMode, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
 
 export interface SendArgs {
   threadId: string
@@ -83,9 +83,20 @@ export function attachRun(threadId: string, since: number, onEvent: (e: StreamEv
 export const stopChat = (threadId: string) =>
   api('/api/chat/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId }) })
 
-/** Send a message to a chat that is still answering: it steers that run. */
-export const steerChat = (threadId: string, text: string) =>
-  api<{ ok: boolean; steer: { id: string; via: 'live' | 'restart' } }>('/api/chat/steer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, text }) })
+/** Send a message to a chat that is still answering: it steers that run. `attachments`: upload ids. */
+export const steerChat = (threadId: string, text: string, attachments?: string[]) =>
+  api<{ ok: boolean; steer: { id: string; via: 'live' | 'restart' } }>('/api/chat/steer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, text, ...(attachments?.length ? { attachments } : {}) }) })
+
+export type QueueAction =
+  | { action: 'add'; text: string; attachments: string[]; provider?: string; model?: string; effort?: string; modelSettings?: Partial<ModelSettings> }
+  | { action: 'edit'; id: string; text: string; attachments: string[] }
+  | { action: 'remove' | 'steer'; id: string }
+  | { action: 'move'; id: string; beforeId: string | null }
+  | { action: 'resume' }
+
+/** Change a chat's queue (chat/queue.mjs): answers with the queue as it now stands. */
+export const changeQueue = (threadId: string, change: QueueAction) =>
+  api<{ queue: QueuedMessage[]; queueHeld: boolean }>('/api/chat/queue', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, ...change }) })
 
 export const getRuns = () => api<{ runs: { threadId: string; status: string; mode: string; startedAt: number }[] }>('/api/chat/runs')
 

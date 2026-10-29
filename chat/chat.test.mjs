@@ -8,7 +8,8 @@ import { createThreadStore } from './store.mjs'
 import { createUploadStore } from './uploads.mjs'
 import { createChatRuns } from './runs.mjs'
 import { planHistory, renderTranscript, attachmentBlock, applyEvent, finalizeMessage, fallbackTitle, failureText } from './turn.mjs'
-import { parseToolName, describeMcpCall, humanizeTool, resultText } from './tools.mjs'
+import { parseToolName, describeMcpCall, humanizeTool, resultText, chatToolFromClaude } from './tools.mjs'
+import { normalizeMessage } from './store.mjs'
 import { parseTitleReply, cleanIcon, THREAD_ICONS } from './thread-icons.mjs'
 
 const tmp = () => mkdtemp(join(tmpdir(), 'totem-chat-'))
@@ -84,6 +85,38 @@ test('renderTranscript keeps the newest turns under budget', () => {
   const out = renderTranscript(msgs, { budget: 200 })
   assert.match(out, /message number 49/)
   assert.doesNotMatch(out, /message number 0\b/)
+})
+
+test('a handoff transcript keeps the first message, lists steps and says what was left out', () => {
+  const msgs = [
+    { role: 'user', content: 'Plan the Chicago trip' },
+    ...Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'user' : 'assistant', content: `filler ${i} `.repeat(5) })),
+    { role: 'user', content: 'Check the hotel' },
+    {
+      role: 'assistant', content: 'Booked it.', provider: 'codex',
+      parts: [
+        { type: 'tool', title: 'Ran a command', detail: 'curl hotel.example', status: 'done' },
+        { type: 'tool', title: 'Edited file', detail: 'trip.md', status: 'error' },
+      ],
+    },
+  ]
+  let told = 0
+  const out = renderTranscript(msgs, { budget: 600, tools: true, keepFirst: true, omitted: (n) => { told = n; return `(${n} left out)` } })
+  assert.match(out, /^Conversation so far:\nOwner: Plan the Chicago trip\n\n\(…\)\n\n/)
+  assert.match(out, /Booked it\.\n\[steps taken\]\n {2}- Ran a command — curl hotel\.example\n {2}- Edited file — trip\.md \(failed\)/)
+  assert.ok(told > 0)
+  assert.match(out, new RegExp(`\\(${told} left out\\)\\n\\n$`))
+  assert.doesNotMatch(out, /filler 0 /)
+  // Without the handoff options a reply's steps stay out, as before.
+  assert.doesNotMatch(renderTranscript(msgs.slice(-2)), /steps taken/)
+})
+
+test('a reply that only ran tools still reaches a handoff', () => {
+  const out = renderTranscript([
+    { role: 'user', content: 'go' },
+    { role: 'assistant', content: '', parts: [{ type: 'tool', title: 'Ran a command', detail: 'ls', status: 'done' }] },
+  ], { tools: true })
+  assert.match(out, /Totem: \n\[steps taken\]\n {2}- Ran a command — ls/)
 })
 
 test('attachmentBlock lists paths and inlines pasted text', () => {
@@ -236,4 +269,31 @@ test('failureText says a usage limit plainly and unwraps JSON error bodies', () 
   assert.equal(failureText('{"error":{"code":"model_not_found","message":"unknown provider for model x"}}', 'Codex'), 'unknown provider for model x')
   assert.equal(failureText('', 'Codex'), '')
   assert.equal(failureText('something broke'), 'something broke')
+})
+
+test('a claude.ai connector carries its own name and logo from tool_use_meta', () => {
+  assert.deepEqual(parseToolName('mcp__claude_ai_Microsoft_365__outlook_email_search'), { server: 'Microsoft_365', app: 'microsoft_365', tool: 'outlook_email_search' })
+  const block = { id: 'tu1', name: 'mcp__claude_ai_Microsoft_365__outlook_email_search', input: { query: 'invoice' } }
+  const meta = { id: 'tu1', display_name: 'Search email', server_display_name: 'Microsoft 365', icon_url: 'https://claude.ai/connectors/m365.png' }
+  const card = chatToolFromClaude(block, meta)
+  assert.equal(card.title, 'Search email')
+  assert.equal(card.app, 'Microsoft 365')
+  assert.equal(card.logo, 'https://claude.ai/connectors/m365.png')
+  assert.equal(card.server, 'microsoft_365')
+  // Without meta the card still reads, from the tool's own name.
+  assert.equal(chatToolFromClaude(block).title, humanizeTool('outlook_email_search'))
+  // Totem's own gateway keeps its names; a non-https logo is dropped.
+  const gw = chatToolFromClaude({ id: 'tu2', name: 'mcp__totem-gateway__tasks__get_tasks', input: {} }, { id: 'tu2', display_name: 'get_tasks', server_display_name: 'totem-gateway', icon_url: 'https://x/y.png' })
+  assert.equal(gw.title, 'Looked up tasks')
+  assert.equal(gw.app, undefined)
+  assert.equal(chatToolFromClaude(block, { ...meta, icon_url: 'javascript:alert(1)' }).logo, undefined)
+})
+
+test('a tool part keeps its connector name and only an https logo', () => {
+  const msg = { role: 'assistant', content: '', parts: [] }
+  applyEvent(msg, { type: 'tool', tool: { id: 'x', phase: 'start', title: 'Search email', server: 'microsoft_365', app: 'Microsoft 365', logo: 'https://claude.ai/m365.png' } })
+  assert.equal(msg.parts[0].app, 'Microsoft 365')
+  const saved = normalizeMessage({ id: 'm1', role: 'assistant', content: '', parts: [msg.parts[0], { ...msg.parts[0], id: 'y', logo: 'http://evil/x.png' }] })
+  assert.equal(saved.parts[0].logo, 'https://claude.ai/m365.png')
+  assert.equal(saved.parts[1].logo, undefined)
 })

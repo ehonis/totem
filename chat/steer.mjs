@@ -13,6 +13,12 @@
 // Anything that could not be delivered live (the process was already finishing)
 // waits in `pending` and becomes the next attempt once the current one ends, so
 // a steer is never dropped because it arrived at an awkward moment.
+//
+// A steer may carry files, as any message can (`files`: loaded uploads). Their
+// paths go in the text; images also go to the CLI natively, as Claude image
+// blocks on stdin or as the restarted attempt's images.
+
+import { attachmentBlock } from './turn.mjs'
 
 export function createSteering() {
   let deliver = null // (steer) => boolean, while a streamer can take input mid-turn
@@ -62,9 +68,19 @@ export function progressNote(msg, { textTail = 1200, tools = 12 } = {}) {
   return out.join('\n\n')
 }
 
+/**
+ * What one steer says to the agent: the owner's words and the files sent with
+ * them (`files`, loaded uploads with their paths), the way a message lists them.
+ */
+export function steerText(steer) {
+  const att = attachmentBlock(steer.files).trim()
+  const words = String(steer.text || '').trim() || (att ? '(The owner sent only the attachments above. Look at them and take them into account.)' : '')
+  return [att, words].filter(Boolean).join('\n\n')
+}
+
 /** The message a restarted attempt sends: the owner's words, with what came before. */
 export function steerPrompt(steers, { owner = 'Owner', progress = '' } = {}) {
-  const words = steers.map((s) => s.text).join('\n\n')
+  const words = steers.map(steerText).join('\n\n')
   return [
     'The owner interrupted your reply to add the message below. Take it into account and carry on with their request from where you were, changing course if they ask you to. Do not start over or repeat work you have already done.',
     progress,

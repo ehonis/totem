@@ -412,6 +412,14 @@ export function createBrowserManager({ log = () => {}, onFrame = () => {}, execu
     return { tabId: tab.id }
   }
 
+  /** A fresh frame of the current tab, for a viewer whose last one may be stale. */
+  async function look(key) {
+    const s = sessions.get(key)
+    const tab = s?.current && s.tabs.get(s.current)
+    if (tab) await frame(key, tab)
+    return { tabId: tab?.id || null }
+  }
+
   async function closeAll() {
     for (const key of [...sessions.keys()]) await closeSession(key)
     if (browserIdle) { clearTimeout(browserIdle); browserIdle = null }
@@ -423,7 +431,7 @@ export function createBrowserManager({ log = () => {}, onFrame = () => {}, execu
   return {
     available: () => !!executablePath,
     executablePath,
-    status, open, navigate, resize, setColorScheme, snapshot, click, type, press, scroll, evaluate, waitFor,
+    status, open, navigate, resize, setColorScheme, snapshot, click, type, press, scroll, evaluate, waitFor, look,
     closeSession, closeAll,
     sessionKeys: () => [...sessions.keys()],
   }

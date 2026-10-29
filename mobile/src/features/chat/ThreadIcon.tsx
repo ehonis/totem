@@ -3,6 +3,9 @@
 // shows a plain bubble; a project without one, a folder.
 import React, { useEffect } from 'react'
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated'
+import { Image } from 'expo-image'
+import { uploadUrl } from '../../lib/chat/api'
+import { authHeaders } from '../../lib/api'
 import { THREAD_ICONS } from '../../lib/chat/threadIcons.gen'
 import type { ChatThread, Project } from '../../lib/chat/types'
 import { TI } from './ui'
@@ -23,7 +26,9 @@ export function ThreadIcon({ t, size = 16, busy = false, color }: { t: Pick<Chat
   )
 }
 
-export function ProjectIcon({ p, size = 16, color = textAlpha(70) }: { p?: Pick<Project, 'icon'> | null; size?: number; color?: string }) {
+export function ProjectIcon({ p, size = 16, color = textAlpha(70) }: { p?: Pick<Project, 'icon' | 'image' | 'imageUrl'> | null; size?: number; color?: string }) {
+  // With the bearer and the Access token, like every other picture the bridge serves: behind Cloudflare Access a bare URL gets the sign-in page.
+  if (p?.image && p.imageUrl) return <Image source={{ uri: uploadUrl(p.image, { url: p.imageUrl }), headers: authHeaders() }} style={{ width: size, height: size, borderRadius: 4 }} contentFit="contain" />
   const icon = (p?.icon && THREAD_ICONS[p.icon]) || IconFolder
   return <TI icon={icon} size={size} color={color} />
 }

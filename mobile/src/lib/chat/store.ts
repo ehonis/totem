@@ -12,11 +12,12 @@ import { getThreads, putThread, deleteThread as apiDeleteThread, getChatModels, 
 import { pushError, pushToast } from '../toast'
 import { applyEvent } from './reduce'
 import {
-  sendChat, attachRun, stopChat, steerChat, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
+  sendChat, attachRun, stopChat, steerChat, changeQueue, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
   deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
 } from './api'
+import type { QueueAction } from './api'
 import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
-import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, StreamEvent } from './types'
+import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
 import { activeAt, wokeAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
 
 const CACHE_KEY = 'chat_threads_v2'
@@ -72,6 +73,8 @@ export interface ChatPrefs {
   autoSettleDays: number
   /** Every chat's agent may find totems and bring them in (totems__*). Default on. */
   totemsInChat?: boolean
+  /** What sending does while a reply runs: wait its turn or steer the reply. A long press does the other. */
+  followUp?: 'queue' | 'steer'
 }
 
 export interface Artifact { uploadId: string; name: string; mime: string; url?: string; size?: number; path?: string }
@@ -335,7 +338,8 @@ function takeProject(project: Project) {
   set((s) => ({
     projectDetail: { ...s.projectDetail, [project.id]: project },
     projects: s.projects.some((p) => p.id === project.id)
-      ? s.projects.map((p) => (p.id === project.id ? { ...p, ...summary } : p))
+      // A removed picture is a missing key, which a spread would not clear.
+      ? s.projects.map((p) => (p.id === project.id ? { ...p, ...summary, image: summary.image, imageUrl: summary.imageUrl } : p))
       : [...s.projects, summary as Project].sort((a, b) => a.name.localeCompare(b.name)),
   }))
   return project
@@ -608,13 +612,21 @@ export function initChat(authError: () => void) {
   loadCapabilities()
   loadPrefs()
   const refresh = () => {
-    if (!Object.keys(state.runs).length) syncThreads()
+    // A run the bridge started from a queue, or from another device, shows live here too.
+    if (!Object.keys(state.runs).length) syncThreads().then(resumeRuns)
+    else resumeRuns()
     loadProjects()
     // The agent edits the memory and adds files while it works; keep the open project's page current.
     if (state.projectId) loadProject(state.projectId)
   }
-  // Coming back to the app is the phone's "tab became visible".
-  AppState.addEventListener('change', (s) => { if (s === 'active') { refresh(); resumeRuns() } })
+  // Coming back to the app is the phone's "tab became visible". The first try can
+  // fail while iOS brings the network back (its toast is muted, lib/wake.ts), so
+  // try again once it has settled rather than wait for the 30-second tick.
+  AppState.addEventListener('change', (s) => {
+    if (s !== 'active') return
+    refresh(); resumeRuns()
+    setTimeout(() => { if (AppState.currentState === 'active') { refresh(); resumeRuns() } }, 3000)
+  })
   setInterval(refresh, 30_000)
   setInterval(() => set((s) => ({ threads: sortThreads(s.threads) })), 60_000)
 }
@@ -734,10 +746,16 @@ function handleEvent(threadId: string, e: StreamEvent) {
           msgs.push(e.userMessage, e.assistantMessage)
         }
         // The account that answered is the chat's account from now on.
-        return { ...t, messages: msgs, provider: e.provider }
+        // A queued message that has started is no longer waiting.
+        const queue = e.queuedId ? (t.queue || []).filter((q) => q.id !== e.queuedId) : t.queue
+        return { ...t, messages: msgs, provider: e.provider, queue }
       })
       break
+    case 'queue':
+      patchThread(threadId, (t) => ({ ...t, queue: e.queue, queueHeld: e.queueHeld }))
+      break
     case 'steer':
+    case 'questions':
     case 'delta':
     case 'tool':
     case 'agent':
@@ -765,6 +783,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
       break
     case 'end': {
       setRun(threadId, null)
+      // The bridge starts the next queued message itself: pick its run up.
+      if (state.threads.find((t) => t.id === threadId)?.queue?.length) watchQueue(threadId)
       const pid = state.threads.find((t) => t.id === threadId)?.projectId
       if (pid && state.projectDetail[pid]) loadProject(pid)
       browserDismissed.delete(threadId)
@@ -772,6 +792,26 @@ function handleEvent(threadId: string, e: StreamEvent) {
       break
     }
   }
+}
+
+/**
+ * After a reply ends with messages queued, the bridge starts the next one (or
+ * holds the queue). Look for that run a few times, then take the thread as the
+ * bridge has it, which says whether the queue is held.
+ */
+function watchQueue(threadId: string) {
+  let tries = 0
+  const look = async () => {
+    if (state.runs[threadId]) return
+    try {
+      const { runs } = await getRuns()
+      const r = runs.find((x) => x.threadId === threadId && x.status === 'running')
+      if (r) { if (!state.runs[threadId]) watchRun(threadId, 0, r.mode as ChatMode, r.startedAt); return }
+    } catch (e) { if (fail(e)) return }
+    if (++tries < 4) setTimeout(look, 400 * tries)
+    else syncThreads()
+  }
+  setTimeout(look, 150)
 }
 
 function watchRun(threadId: string, since: number, mode: ChatMode, startedAt: number) {
@@ -930,13 +970,53 @@ export function stop(threadId: string) {
  * own stream, so nothing is added here. False when the run had already finished
  * (or was a skill, which cannot take one): the caller keeps the text.
  */
-export async function steer(threadId: string, text: string): Promise<boolean> {
-  if (!state.runs[threadId] || !text.trim()) return false
+export async function steer(threadId: string, text: string, attachments?: string[]): Promise<boolean> {
+  if (!state.runs[threadId] || (!text.trim() && !attachments?.length)) return false
   try {
-    await steerChat(threadId, text)
+    await steerChat(threadId, text, attachments)
     return true
   } catch (e: any) {
     if (!fail(e)) pushError(e?.status === 409 ? 'That reply had already finished. Your message is still in the box.' : `Couldn't send that: ${e.message}`)
+    return false
+  }
+}
+
+/** Patch the thread's queue from the bridge's answer. */
+function takeQueue(threadId: string, r: { queue: QueuedMessage[]; queueHeld: boolean }) {
+  patchThread(threadId, (t) => ({ ...t, queue: r.queue, queueHeld: r.queueHeld }))
+}
+
+/**
+ * Queue a message behind the running reply (T3 Code's follow-up). It keeps the
+ * model the composer shows now. False when it could not be queued: the caller
+ * keeps the text.
+ */
+export async function queueMessage(threadId: string, text: string, attachments: Attachment[] = []): Promise<boolean> {
+  const thread = state.threads.find((t) => t.id === threadId)
+  if (!thread || (!text.trim() && !attachments.length)) return false
+  const { provider, row, settings } = threadChoice(thread)
+  const wire = wireModel(row?.driver || 'cursor', settings)
+  try {
+    takeQueue(threadId, await changeQueue(threadId, { action: 'add', text, attachments: attachments.map((a) => a.id), provider, model: wire.model ?? undefined, effort: wire.effort ?? undefined, modelSettings: settings }))
+    // It ended as this was sent, so the bridge started it at once.
+    if (!state.runs[threadId]) watchQueue(threadId)
+    return true
+  } catch (e: any) {
+    if (!fail(e)) pushError(`Couldn't queue that: ${e.message}`)
+    return false
+  }
+}
+
+/** Edit, remove, reorder, steer with or resume a thread's queue. False when it did not happen. */
+export async function updateQueue(threadId: string, change: Exclude<QueueAction, { action: 'add' }>): Promise<boolean> {
+  try {
+    takeQueue(threadId, await changeQueue(threadId, change))
+    if (change.action === 'resume' && !state.runs[threadId]) watchQueue(threadId)
+    return true
+  } catch (e: any) {
+    if (fail(e)) return false
+    pushError(e?.status === 404 ? 'That message is no longer queued.' : e.message)
+    syncThreads()
     return false
   }
 }

@@ -78,6 +78,8 @@ function normalizeProject(raw, id) {
   }
   // One of chat/thread-icons.mjs's names.
   if (typeof raw?.icon === 'string' && /^[a-z0-9-]{1,40}$/.test(raw.icon)) out.icon = raw.icon
+  // An uploaded picture (a chat/uploads.mjs id) worn instead of the icon.
+  if (validUploadId(raw?.image)) out.image = raw.image
   if (typeof raw?.provider === 'string' && /^[a-z0-9_-]{1,80}$/i.test(raw.provider)) out.provider = raw.provider
   if (validProjectId(raw?.parentId) && raw.parentId !== id) out.parentId = raw.parentId
   const ms = normalizeModelSettings(raw?.modelSettings)
@@ -85,7 +87,7 @@ function normalizeProject(raw, id) {
   return out
 }
 
-const EDITABLE = ['name', 'instructions', 'icon', 'provider', 'modelSettings']
+const EDITABLE = ['name', 'instructions', 'icon', 'image', 'provider', 'modelSettings']
 
 // A memory file as entries: each top-level bullet (with its indented lines) or
 // paragraph, under the heading it sits beneath. web/src/chat/memoryEntries.ts is
@@ -219,7 +221,7 @@ export function createProjectStore({ dir } = {}) {
     })
   }
 
-  /** Owner edits. `null`/'' clears provider, model settings and icon. */
+  /** Owner edits. `null`/'' clears provider, model settings, icon and image. */
   const patch = (id, body = {}) => update(id, (p) => {
     for (const key of EDITABLE) {
       if (!(key in body)) continue
@@ -270,7 +272,10 @@ export function createProjectStore({ dir } = {}) {
   /** Every upload id any project holds, so thread cleanup and the orphan sweep leave them be. */
   async function fileIds() {
     const ids = new Set()
-    for (const p of await list()) for (const f of p.files) ids.add(f.id)
+    for (const p of await list()) {
+      for (const f of p.files) ids.add(f.id)
+      if (p.image) ids.add(p.image)
+    }
     return ids
   }
 

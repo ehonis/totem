@@ -10,6 +10,8 @@
 // keeps its own explicit `browser` switch; that is its builder's choice, not
 // this default.
 
+import { HANDOFF_RULE } from '../browser/handoff.mjs'
+
 /**
  * What a chat run is handed. `body` is the request, read only for the toggles
  * older clients still send (`mode: 'task' | 'computer'`, `browser: true`): they
@@ -49,8 +51,8 @@ export const WORK_RULES =
   'you did, what changed, and anything only he can do.'
 
 /** The browser's how-to. Also the /agent-mcp server's `instructions`. */
-export function browserRules(mcpName) {
-  return `BROWSER: Your preview_* tools (the ${mcpName} MCP server, or browser__preview_* through totem-gateway) are a real Chromium on the owner's machine that he watches live in the chat. When a request needs a browser, use these rather than any other browser or a headless script: open with preview_open (or preview_navigate), call preview_snapshot to see the page (you get the screenshot and the elements with locators), act with preview_click / preview_type / preview_press using the snapshot's role locators rather than coordinates, then snapshot again to check. It suits pages that need JavaScript, checking how a site or a dev server looks (target {kind:'environment-port',port}), and anything he wants to see. The tab stays open across messages in this chat. To show the owner what you saw, call preview_snapshot with save:true and put ![short description](screenshotPath) in your reply; only do that when the picture helps. Never enter passwords, pay, buy, send messages, or submit anything irreversible on his behalf without asking first.`
+export function browserRules(mcpName, { handoff = false } = {}) {
+  return `BROWSER: Your preview_* tools (the ${mcpName} MCP server, or browser__preview_* through totem-gateway) are a real Chromium on the owner's machine that he watches live in the chat. When a request needs a browser, use these rather than any other browser or a headless script: open with preview_open (or preview_navigate), call preview_snapshot to see the page (you get the screenshot and the elements with locators), act with preview_click / preview_type / preview_press using the snapshot's role locators rather than coordinates, then snapshot again to check. It suits pages that need JavaScript, checking how a site or a dev server looks (target {kind:'environment-port',port}), and anything he wants to see. The tab stays open across messages in this chat. To show the owner what you saw, call preview_snapshot with save:true and put ![short description](screenshotPath) in your reply; only do that when the picture helps. ${handoff ? HANDOFF_RULE : 'When a page needs the owner to sign in, ask him to do it himself and stop there.'} Never enter passwords, pay, buy, send messages, or submit anything irreversible on his behalf without asking first.`
 }
 
 export const COMPUTER_RULES =

@@ -104,3 +104,41 @@ test('browser calls read like what the agent did', async () => {
   assert.equal(describeMcpCall({ name: 'totem-gateway-browser__preview_snapshot', input: {} }).title, 'Looked at the page')
   assert.equal(describeMcpCall({ name: 'preview_navigate', server: 'totem_browser', input: { target: { kind: 'environment-port', port: 5173 } } }).title, 'Went to localhost:5173')
 })
+
+const SIGN_IN = `<!doctype html><title>Sign in</title>
+<input id="pw" type="password" style="position:absolute;left:100px;top:100px;width:200px;height:30px">
+<p id="out"></p>
+<script>document.getElementById('pw').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('out').textContent = 'signed in as ' + e.target.value.length })</script>`
+
+test('the owner can click and type into the page from the panel, and the password is not logged', { skip: !findChromium() && 'no Chromium on this machine' }, async () => {
+  const server = createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(SIGN_IN) })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const frames = []
+  const manager = createBrowserManager({ onFrame: (key, f) => frames.push(f) })
+  try {
+    await manager.open('t', { url: `http://127.0.0.1:${server.address().port}/` })
+    await manager.click('t', { x: 150, y: 115 })
+    await manager.type('t', { text: 'hunter22' })
+    await manager.press('t', { key: 'Enter' })
+    const before = frames.length
+    await manager.look('t')
+    assert.equal(frames.length, before + 1)
+    const snap = await manager.snapshot('t', {})
+    assert.match(snap.visibleText, /signed in as 8/)
+    assert.doesNotMatch(JSON.stringify(snap.actionTimeline), /hunter22/)
+  } finally {
+    await manager.closeAll()
+    server.close()
+  }
+})
+
+test('the handoff tool reaches every CLI and is only promised when it is there', async () => {
+  const { HANDOFF_TOOL, HANDOFF_TOOL_DESCRIPTOR, normalizeReason } = await import('./handoff.mjs')
+  const { browserRules } = await import('../chat/reach.mjs')
+  assert.match(HANDOFF_TOOL, /^preview_/) // the gateway's `browser` builtin passes preview_* through
+  assert.equal(HANDOFF_TOOL_DESCRIPTOR.inputSchema.type, 'object')
+  assert.equal(normalizeReason({ reason: '  Sign in\n to Gmail ' }), 'Sign in to Gmail')
+  assert.equal(normalizeReason({}), 'Take over the browser')
+  assert.match(browserRules('x', { handoff: true }), /preview_handoff/)
+  assert.doesNotMatch(browserRules('x'), /preview_handoff/)
+})

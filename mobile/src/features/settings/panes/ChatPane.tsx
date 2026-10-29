@@ -64,6 +64,17 @@ export default function ChatPane() {
     <>
       <PaneHead desc="How the chat list tidies itself and who names chats. New chats start on your default model (Settings → AI); pick another in the composer." />
 
+      <SectionTitle title="Sending" />
+      <SettingList>
+        <SettingRow title="Follow-up behaviour" desc="Queue follow-ups while the agent runs or steer the current run. Long-press send to do the opposite for one message (Ctrl/⌘ + Enter on the web). A queued message can still be sent as a steer from the queue.">
+          <Select
+            value={prefs.followUp ?? 'queue'}
+            onChange={(v) => save({ followUp: v as 'queue' | 'steer' })}
+            options={[{ value: 'queue', label: 'Queue' }, { value: 'steer', label: 'Steer' }]}
+          />
+        </SettingRow>
+      </SettingList>
+
       <SectionTitle title="Chat list" />
       <SettingList>
         <SettingRow title="Settle quiet chats" desc="A chat with no activity for this long moves to its list’s Settled shelf on its own, as in T3 Code. Pinned chats, and chats you un-settle by hand, stay put.">

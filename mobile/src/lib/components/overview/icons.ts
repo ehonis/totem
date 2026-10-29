@@ -27,3 +27,4 @@ export { default as IconPinned } from '@tabler/icons-react-native/dist/esm/icons
 export { default as IconSparkles } from '@tabler/icons-react-native/dist/esm/icons/IconSparkles.mjs'
 export { default as IconClock } from '@tabler/icons-react-native/dist/esm/icons/IconClock.mjs'
 export { default as IconBolt } from '@tabler/icons-react-native/dist/esm/icons/IconBolt.mjs'
+export { default as IconServer2 } from '@tabler/icons-react-native/dist/esm/icons/IconServer2.mjs'

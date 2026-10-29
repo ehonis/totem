@@ -140,7 +140,7 @@ JOURNAL_RESULT: {"title": "…", "summary": "…", "memory": [...], "habits": [.
 prose may contain braces). A reply with no marker is still recorded — `parsed: false`, summary
 from the prose — because the digest *did* run; the card just says "unstructured reply" and cannot
 count what changed. The push body is built from the counts: "2 memory updates · 1 proposal in
-the inbox · 1 habit logged", linked to `/inbox` when there is something to decide.
+the inbox · 1 habit logged", linked to the first proposal (`/inbox#P12`) when there is something to decide.
 
 ## Transcription
 

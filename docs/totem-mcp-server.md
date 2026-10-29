@@ -283,7 +283,7 @@ is missing, and it is the most likely source of day-to-day annoyance.
 
 The original design had `totem_escalate` run an agent *immediately* to author finished
 `todo`/`calendar`/`github` proposals, then stage those. That is superseded. What shipped stages **the
-prompt itself** as a new inbox kind, and the agent runs only after the owner accepts:
+prompt itself** as a new inbox kind, and the agent runs only after the owner accepts it into T3 Code:
 
 ```jsonc
 {
@@ -303,14 +303,14 @@ Why this is better: nothing runs before the yes/no, so a bad escalation costs no
 the owner approves is the thing that will run rather than a summary of it. It also means `dryRun` is
 unnecessary — staging *is* the dry run.
 
-- **New inbox kind `prompt`**, destination "Agent run". Same `P<N>` sequence, same `- [ ]`/`- [x]`
+- **New inbox kind `prompt`**, destination "T3 Code". Same `P<N>` sequence, same `- [ ]`/`- [x]`
   semantics, same file. The brief goes to `inbox-prompts/P<N>.md`; the details drop-down previews it
-  along with the chosen provider and that provider's live login state.
-- **Accepting** force-checks provider health, then runs `runAgent(brief, 'inbox', {provider, model})`
-  **detached** — the HTTP resolve returns `started on codex/gpt-5.6-sol (medium)` in milliseconds while the run
-  continues. On completion the output lands in `inbox-prompts/P<N>-result.md` and raises a
-  server-side notification; on failure the notification carries the error. Cursor's `cursorModel` vs
-  everyone else's `bareModelId` quirk is handled inside the runner.
+  along with the suggested provider and model.
+- **Accepting** opens the brief as a new T3 Code thread (`T3_CODE_URL/new?prompt=<brief>`, default
+  `https://app.t3.codes`), where the owner picks the project and model and starts it. The dashboard
+  opens the tab in the same click and the resolve only stamps `opened in T3 Code`; Totem runs
+  nothing itself. Only the dashboard can accept one: `totem_resolve_inbox` refuses, since there is
+  no browser on that side to open it in.
 - **Staging is serialised** through the same queue as accept/deny, because both rewrite `inbox.md`
   and an append racing a resolve would drop one of the two edits.
 
@@ -520,7 +520,7 @@ the tool table: `docs/apple.md`. `serverInfo.version` is **2.10.0**.
 
 ### 6.9 Strava — **BUILT** (2026-09-07)
 
-Thirteen `totem_strava_*` tools expose the Strava connector (`strava/client.mjs`, full write-up
+Thirteen `totem_strava_*` tools expose the Strava connector (`strava/remote.mjs`, which reads the owner's Strava from Bushido; full write-up
 in `docs/strava.md`). They exist here rather than behind `totem_call_connection` because Strava is
 not an MCP server of its own: the bridge holds the grant, so the bridge is the server.
 

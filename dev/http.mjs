@@ -2,6 +2,9 @@
 //
 //   GET /api/dev[?refresh=1]                      repo cards, health, recent alerts
 //   PUT /api/dev/repos                             { repo: 'owner/name', watch: bool }
+//   GET /api/dev/shipped?days=14|30|90[&refresh=1]  the owner's merged PRs, any repo
+//   PUT /api/dev/shipped/hidden                     { repo: 'owner/name', hidden: bool }
+//   PUT /api/dev/shipped/groups                     { groups: [{ name, repos: ['owner/name'] }] }
 //   PUT /api/dev/repos/:owner/:repo/ai-review     { enabled: bool }
 //   POST /api/dev/repos/:owner/:repo/pulls/:n/review   one-off review dispatch
 import { ghErrorMessage } from './github.mjs'
@@ -53,6 +56,20 @@ export function createDevHttpHandler({ service }) {
     if (req.method === 'PUT' && path === '/api/dev/repos') {
       const b = await body((x) => typeof x?.repo === 'string' && typeof x?.watch === 'boolean', 'body must be { "repo": "owner/name", "watch": true | false }')
       return b ? attempt(() => service.setWatch(b.repo, b.watch)) : true
+    }
+
+    if (req.method === 'GET' && path === '/api/dev/shipped') {
+      return attempt(() => service.shipped({ days: Number(url.searchParams.get('days') || 30), refresh: url.searchParams.has('refresh') }))
+    }
+
+    if (req.method === 'PUT' && path === '/api/dev/shipped/hidden') {
+      const b = await body((x) => typeof x?.repo === 'string' && typeof x?.hidden === 'boolean', 'body must be { "repo": "owner/name", "hidden": true | false }')
+      return b ? attempt(() => service.setShippedHidden(b.repo, b.hidden)) : true
+    }
+
+    if (req.method === 'PUT' && path === '/api/dev/shipped/groups') {
+      const b = await body((x) => Array.isArray(x?.groups), 'body must be { "groups": [{ "name": "Work", "repos": ["owner/name"] }] }')
+      return b ? attempt(() => service.setShippedGroups(b.groups)) : true
     }
 
     const toggle = /^\/api\/dev\/repos\/([^/]+)\/([^/]+)\/ai-review$/.exec(path)

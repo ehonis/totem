@@ -1,9 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  summarizeActivity, detailActivity, shapeGear, shapeStats, mileage, weekOf, sportFamily,
-  matchesSport, localDate, localStamp, endInstant, paceLabel, shapeStreams, shapeActivityZones,
-  daysAgoLocal,
+  summarizeActivity, mileage, weekOf, sportFamily, matchesSport, localDate, localStamp, endInstant, paceLabel,
 } from './shape.mjs'
 
 // A real-shaped SummaryActivity: a 20.1 mile gravel ride, 1h22 moving, 1h35 elapsed.
@@ -96,59 +94,6 @@ test('a sport filter accepts a family, an exact type, a comma list, and bike as 
   assert.equal(matchesSport(a, null), true)
 })
 
-test('detail layers laps, splits, calories and gear on the summary', () => {
-  const d = detailActivity({
-    ...RIDE, calories: 812, description: 'windy', gear: { id: 'b1234', name: 'Canyon Grizl', distance: 2_413_000, primary: true },
-    laps: [{ lap_index: 1, distance: 16000, moving_time: 2400, elapsed_time: 2700, average_speed: 6.67, average_heartrate: 139, total_elevation_gain: 100 }],
-    splits_standard: [{ split: 1, distance: 1609.3, moving_time: 240, elapsed_time: 250, elevation_difference: 3, average_speed: 6.7 }],
-    segment_efforts: [{ id: 5, name: 'Big hill', elapsed_time: 300, moving_time: 300, distance: 1200, start_date_local: '2026-09-06T11:00:00Z', pr_rank: 1, achievements: [{ type: 'pr', rank: 1 }], segment: { id: 7, distance: 1200, average_grade: 5.5, starred: true } }],
-  })
-  assert.equal(d.calories, 812)
-  assert.equal(d.description, 'windy')
-  assert.equal(d.gear.name, 'Canyon Grizl')
-  assert.equal(d.gear.distanceMi, 1499.4)
-  assert.equal(d.gear.kind, 'bike')
-  assert.equal(d.laps.length, 1)
-  assert.equal(d.laps[0].distanceMi, 9.94)
-  assert.equal(d.laps[0].movingMin, 40)
-  assert.equal(d.laps[0].elevationFt, 328)
-  assert.equal(d.splitsStandard[0].index, 1)
-  assert.equal(d.segmentEfforts[0].segmentId, 7)
-  assert.equal(d.segmentEfforts[0].prRank, 1)
-  assert.equal(d.segmentEfforts[0].segment.starred, true)
-  assert.equal(d.segmentEffortCount, 1)
-  // Efforts can be left out — a long ride carries a hundred of them.
-  const lean = detailActivity({ ...RIDE, segment_efforts: [{ id: 5 }] }, { segmentEfforts: false })
-  assert.equal(lean.segmentEfforts, undefined)
-  assert.equal(lean.segmentEffortCount, 1)
-})
-
-test('gear carries the odometer in miles, and shoes are told apart from bikes', () => {
-  assert.equal(shapeGear({ id: 'b1', distance: 1609344, weight: 9.5 }).distanceMi, 1000)
-  assert.equal(shapeGear({ id: 'b1', distance: 1609344, weight: 9.5 }).weightLb, 20.9)
-  assert.equal(shapeGear({ id: 'g1', distance: 100 }).kind, 'shoes')
-  assert.equal(shapeGear(null), null)
-})
-
-test('stats give recent / ytd / all per sport in miles', () => {
-  const s = shapeStats({
-    biggest_ride_distance: 80467.2, biggest_climb_elevation_gain: 304.8,
-    recent_ride_totals: { count: 4, distance: 96560.6, moving_time: 14400, elapsed_time: 15000, elevation_gain: 600, achievement_count: 2 },
-    ytd_ride_totals: { count: 40, distance: 965606, moving_time: 144000, elapsed_time: 150000, elevation_gain: 6000 },
-    all_ride_totals: { count: 400, distance: 9656064, moving_time: 1440000, elapsed_time: 1500000, elevation_gain: 60000 },
-    recent_run_totals: { count: 0, distance: 0, moving_time: 0, elapsed_time: 0, elevation_gain: 0 },
-    ytd_run_totals: null, all_run_totals: null, recent_swim_totals: null, ytd_swim_totals: null, all_swim_totals: null,
-  })
-  assert.equal(s.biggestRideDistanceMi, 50)
-  assert.equal(s.biggestClimbElevationFt, 1000)
-  assert.equal(s.ride.recent.distanceMi, 60)
-  assert.equal(s.ride.recent.movingHours, 4)
-  assert.equal(s.ride.ytd.distanceMi, 600)
-  assert.equal(s.ride.all.distanceMi, 6000)
-  assert.equal(s.run.recent.count, 0)
-  assert.equal(s.run.ytd, null)
-})
-
 test('weeks start on Sunday and are labelled by that Sunday', () => {
   assert.equal(weekOf('2026-09-07'), '2026-09-07') // a Monday
   assert.equal(weekOf('2026-09-12'), '2026-09-07') // Saturday → same week
@@ -189,24 +134,4 @@ test('mileage rolls activities into buckets with a distance-weighted average spe
   assert.equal(windowed.buckets[0].key, '2026-09')
 
   assert.throws(() => mileage(acts, { group: 'fortnight' }), /unknown group/)
-})
-
-test('streams and activity zones normalise both response shapes', () => {
-  const keyed = shapeStreams({ heartrate: { data: [120, 130], series_type: 'time', original_size: 2, resolution: 'high' }, time: { data: [0, 1] } })
-  assert.equal(keyed.heartrate.type, 'heartrate')
-  assert.deepEqual(keyed.heartrate.data, [120, 130])
-  assert.equal(keyed.time.data.length, 2)
-  const arr = shapeStreams([{ type: 'watts', data: [200], series_type: 'distance' }])
-  assert.equal(arr.watts.seriesType, 'distance')
-
-  const zones = shapeActivityZones([{ type: 'heartrate', sensor_based: true, distribution_buckets: [{ min: 0, max: 120, time: 600 }, { min: 120, max: 150, time: 1800 }] }])
-  assert.equal(zones[0].buckets[1].minutes, 30)
-  assert.equal(zones[0].buckets.length, 2)
-})
-
-test('daysAgoLocal is a local calendar date', () => {
-  const now = new Date('2026-09-07T02:00:00Z') // 22:00 on the 6th in New York
-  assert.equal(daysAgoLocal(0, { now, timeZone: 'America/New_York' }), '2026-09-06')
-  assert.equal(daysAgoLocal(7, { now, timeZone: 'America/New_York' }), '2026-08-30')
-  assert.equal(daysAgoLocal(0, { now, timeZone: 'UTC' }), '2026-09-07')
 })

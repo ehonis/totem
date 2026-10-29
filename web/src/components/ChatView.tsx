@@ -1,29 +1,36 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { COMMANDS } from '../shortcuts'
 import { useCommand } from '../useShortcuts'
 import { getSkills, AuthError } from '../api'
 import { setChatCommands } from '../studio'
 import {
-  useChat, initChat, send, stop, steer, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
+  useChat, initChat, send, stop, steer, queueMessage, updateQueue, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
   openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead, setMembers,
+  loadFiles, openArtifact, fileArtifact, takePendingFile,
 } from '../chat/store'
-import { TotemIcon, useTotemDirectory } from '../totems/shared'
+import { TotemIcon, TotemRunButton, useTotemDirectory } from '../totems/shared'
 import { GroupPicker } from './TotemsView'
 import TotemsGlyph from './TotemsIcon'
 import { isSnoozed, settledAt, wakeDescription } from '../chat/settle'
 import ProjectHome from '../chat/ProjectHome'
 import ProjectIcon from '../chat/ProjectIcon'
-import Composer, { type ComposerHandle } from '../chat/Composer'
+import Composer, { type ComposerHandle, type FollowUpPayload } from '../chat/Composer'
+import QueuedMessages from '../chat/QueuedMessages'
+import { pushToast } from '../toast'
 import { UserMessage, AssistantMessage } from '../chat/Message'
+import { useQuestionFlow } from '../chat/QuestionsPanel'
+import { pendingQuestions } from '../chat/questions'
 import ModelPicker from '../chat/ModelPicker'
-import ThinkingControl, { hintFor } from '../chat/ThinkingControl'
-import AccessControl from '../chat/AccessControl'
+import HandoffMark from '../chat/HandoffMark'
+import { providerSwitches } from '../chat/handoff'
+import ComposerTraits, { hintFor } from '../chat/ComposerTraits'
 import { EFFORT_LABELS, visibleModels } from '../chat/models'
 import VoiceMode from '../chat/VoiceMode'
 import ArtifactPanel from '../chat/ArtifactPanel'
 import BrowserPanel, { BrowserChip } from '../chat/BrowserPanel'
 import AgentsPanel, { AgentsChip } from '../chat/AgentsPanel'
+import FilesPanel, { FilesChip } from '../chat/FilesPanel'
 import UsageChips from '../chat/UsageChips'
 import ThreadIcon from '../chat/ThreadIcon'
 import { useChatPresence } from '../chat/presence'
@@ -31,9 +38,10 @@ import { useViewing } from '../chat/onScreen'
 import { contextVersion, subscribeContext, takeContext } from '../chat/pendingContext'
 import { TI } from '../chat/ui'
 import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconPaperclip, IconLayoutSidebar, IconSparkles, IconFolder, IconFolderOff, IconSettings, IconUserPlus } from '../chat/icons'
-import type { Attachment, ModelSettings } from '../chat/types'
+import type { Attachment, ModelSettings, QueuedMessage } from '../chat/types'
 import '../chat/chat.css'
 import { chatGlow } from '../chat/glow'
+import { useSettings } from '../settings'
 import { useOwnerName } from '../useOwnerName'
 
 function greeting(name: string) {
@@ -94,6 +102,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const artifact = useChat((s) => s.artifact)
   const browserShown = useChat((s) => s.browserOpen && !!(s.activeId && s.browser[s.activeId]))
   const agentsShown = useChat((s) => s.agentsOpen && !!s.activeId)
+  const filesShown = useChat((s) => s.filesOpen && !!s.activeId)
   const retitling = useChat((s) => !!(s.activeId && s.retitling[s.activeId]))
   const [artifactWide, setArtifactWide] = useState(false)
   const providers = useChat((s) => s.providers)
@@ -105,6 +114,9 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   // The project the panel is showing. A new chat here starts in it, on its default model.
   const scopeId = useChat((s) => s.projectId)
   const scopeProject = useChat((s) => s.projects.find((p) => p.id === s.projectId))
+  // Home's new chat offers the projects to start in instead, most recently used first.
+  const allProjects = useChat((s) => s.projects)
+  const startInProjects = useMemo(() => allProjects.filter((p) => !p.parentId).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6), [allProjects])
   const [drafts, setDrafts] = useState<Record<string, string>>(readDrafts)
   const [voice, setVoice] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -200,7 +212,32 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   }, [])
 
   const busy = activeId ? !!runs[activeId] : false
+
+  // The chat's saved files, listed on opening it and again when a reply ends.
+  useEffect(() => { if (activeId && !busy) loadFiles(activeId) }, [activeId, busy])
+  // A file path in a reply opens in the canvas (Markdown's file links), and so
+  // does one the bridge redirected here (?file=, read at load by the store).
+  useEffect(() => {
+    if (!visible) return
+    const onOpen = (e: Event) => { e.preventDefault(); openArtifact(fileArtifact((e as CustomEvent<string>).detail)) }
+    window.addEventListener('totem:open-file', onOpen)
+    return () => window.removeEventListener('totem:open-file', onOpen)
+  }, [visible])
+  useEffect(() => {
+    const path = visible ? takePendingFile() : null
+    if (path) openArtifact(fileArtifact(path))
+  }, [visible])
+
   const glow = chatGlow(activeId)
+  const glowOn = useSettings().chatGlow
+  // The glow keeps its brightening filter while the swing dies away after a
+  // reply (glow.css), then drops it so an idle chat skips that render pass.
+  const [glowSettling, setGlowSettling] = useState(false)
+  useEffect(() => {
+    if (busy) { setGlowSettling(true); return }
+    const t = window.setTimeout(() => setGlowSettling(false), 1200)
+    return () => window.clearTimeout(t)
+  }, [busy])
   const run = activeId ? runs[activeId] : undefined
   // The chat's project (or, for a new chat, the one the panel is in).
   const project = active ? threadProject(active) : scopeProject
@@ -228,22 +265,49 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     })
   }, [draftKey])
 
+  /** Open a project for a new chat, taking what's already typed along. */
+  function startIn(id: string) {
+    if (input.trim()) {
+      setDrafts((d) => {
+        const next = { ...d, [`new:project:${id}`]: d[`new:project:${id}`] || input }
+        delete next[draftKey]
+        try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(next)) } catch {}
+        return next
+      })
+    }
+    openProject(id)
+  }
+
   // --- scrolling ---------------------------------------------------------------
   // Follow the reply while you're at the bottom; stop the moment you scroll up to
-  // read something, and offer a way back.
+  // read something, and offer a way back. Opening a chat always starts at the bottom.
+  const pinned = useRef(true)
   const onScroll = () => {
     const el = scrollRef.current
-    if (!el) return
-    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80)
+    // Hidden behind another tab there is no layout to judge by.
+    if (!el || !el.clientHeight) return
+    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    setAtBottom(pinned.current)
   }
   const scrollToBottom = (smooth = true) => {
     const el = scrollRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   }
-  useLayoutEffect(() => { scrollToBottom(false); setAtBottom(true) }, [activeId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The view isn't rendered behind another tab, so showing it is opening the chat too.
+  useLayoutEffect(() => { pinned.current = true; scrollToBottom(false); setAtBottom(true) }, [activeId, visible]) // eslint-disable-line react-hooks/exhaustive-deps
   const lastContent = messages[messages.length - 1]?.content.length || 0
   const lastParts = messages[messages.length - 1]?.parts?.length || 0
-  useLayoutEffect(() => { if (atBottom) scrollToBottom(false) }, [messages.length, lastContent, lastParts, run?.activity]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { if (pinned.current) scrollToBottom(false) }, [messages.length, lastContent, lastParts, run?.activity]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Code blocks, images and Markdown keep growing the log after its first layout:
+  // stay at the bottom through that while pinned.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(() => { if (pinned.current) el.scrollTop = el.scrollHeight })
+    ro.observe(el)
+    if (el.firstElementChild) ro.observe(el.firstElementChild)
+    return () => ro.disconnect()
+  }, [empty, activeId, visible])
 
   // --- actions -----------------------------------------------------------------
   function newChat(k: 'regular' | 'temporary' = 'regular') {
@@ -255,6 +319,13 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     requestAnimationFrame(() => composer.current?.focus())
   }
   useCommand(COMMANDS.chatNew, () => newChat('regular'))
+  // A new chat started from anywhere (the panel, the rail, a project) is ready to type
+  // into; not on a touch screen, where focusing would throw up the keyboard.
+  useEffect(() => {
+    if (!visible || activeId || window.matchMedia?.('(pointer: coarse)').matches) return undefined
+    const raf = requestAnimationFrame(() => composer.current?.focus())
+    return () => cancelAnimationFrame(raf)
+  }, [visible, activeId, draftKey])
   // T3's settle toggle, on the leader (`g c s`).
   useCommand(COMMANDS.chatSettle, () => {
     const id = getState().activeId
@@ -274,6 +345,67 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     setAtBottom(true)
     requestAnimationFrame(() => scrollToBottom())
   }
+
+  // --- the queue (T3 Code's follow-ups) ----------------------------------------
+  // Enter while a reply runs queues or steers, as Settings → Chat says; Ctrl/⌘ the other.
+  const followUp = useChat((s) => s.prefs.followUp ?? 'queue')
+  const queue = active?.queue || []
+  // A queued message being edited in the composer, and the draft it displaced.
+  const [queueEdit, setQueueEdit] = useState<{ id: string; threadId: string; draftKey: string; stash: { text: string; attachments: Attachment[] } } | null>(null)
+  const putBack = (stash: { text: string; attachments: Attachment[] }) => {
+    setInput(stash.text)
+    composer.current?.setAttachments(stash.attachments)
+  }
+  function editQueued(q: QueuedMessage) {
+    if (!activeId) return
+    const stash = queueEdit ? queueEdit.stash : { text: input, attachments: composer.current?.takeAttachments() || [] }
+    setQueueEdit({ id: q.id, threadId: activeId, draftKey, stash })
+    setInput(q.text)
+    composer.current?.setAttachments(q.attachments || [])
+    requestAnimationFrame(() => composer.current?.focus())
+  }
+  function cancelQueueEdit() {
+    if (!queueEdit) return
+    putBack(queueEdit.stash)
+    setQueueEdit(null)
+  }
+  // Leaving the chat drops the edit; his own draft goes back where it was.
+  useEffect(() => {
+    if (queueEdit && queueEdit.threadId !== activeId) {
+      setDrafts((d) => ({ ...d, [queueEdit.draftKey]: queueEdit.stash.text }))
+      setQueueEdit(null)
+    }
+  }, [activeId, queueEdit])
+  // It started (or another device removed it) mid-edit: as T3 Code does, keep
+  // the edit as the draft if the box had none, otherwise put his draft back.
+  const editGone = !!queueEdit && queueEdit.threadId === activeId && !queue.some((q) => q.id === queueEdit.id)
+  useEffect(() => {
+    if (!editGone || !queueEdit) return
+    const { stash } = queueEdit
+    setQueueEdit(null)
+    if (!stash.text.trim() && !stash.attachments.length) pushToast('Queued message is no longer queued. Your unsaved edit was kept in the composer.', 'info')
+    else { putBack(stash); pushToast('Queued message is no longer queued. Your unsaved edit was discarded.', 'info') }
+  }, [editGone])
+  const onQueue = (p: FollowUpPayload) => (activeId ? queueMessage(activeId, p.text, p.attachments) : false)
+  const onSteerNow = (p: FollowUpPayload) => (activeId ? steer(activeId, p.text, p.attachments.map((a) => a.id)) : false)
+  const saveQueueEdit = async (p: FollowUpPayload) => {
+    if (!queueEdit) return false
+    const ok = await updateQueue(queueEdit.threadId, { action: 'edit', id: queueEdit.id, text: p.text, attachments: p.attachments.map((a) => a.id) })
+    if (ok) { putBack(queueEdit.stash); setQueueEdit(null) }
+    return ok
+  }
+  const queueEl = activeId && queue.length ? (
+    <QueuedMessages
+      queue={queue}
+      canSteer={busy}
+      editingId={queueEdit?.threadId === activeId ? queueEdit.id : null}
+      onEdit={editQueued}
+      onCancelEdit={cancelQueueEdit}
+      onSteer={(id) => { void updateQueue(activeId, { action: 'steer', id }) }}
+      onRemove={(id) => { if (queueEdit?.id === id) cancelQueueEdit(); void updateQueue(activeId, { action: 'remove', id }) }}
+      onMove={(id, beforeId) => { void updateQueue(activeId, { action: 'move', id, beforeId }) }}
+    />
+  ) : null
 
   function changeModel(patch: { provider: string; modelSettings: ModelSettings }) {
     // Picking a model builds its settings afresh; the chat's access stays.
@@ -299,33 +431,59 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
 
   const providerState = caps?.providers?.[choice.provider]?.state
 
-  // ChatGPT's "Thinking effort": the picked reasoning model's own effort levels.
-  const effortEl = (() => {
+  // The agent's questions (T3's pending user input): a panel above the composer,
+  // and the composer's box is the typed answer while they are open.
+  const questionFlow = useQuestionFlow({
+    threadId: activeId,
+    pending: active ? pendingQuestions(active) : null,
+    // The run that asked has ended: the answers are the next message.
+    sendText: (text, files) => {
+      if (!activeId) return
+      if (busy) void steer(activeId, text, files.map((f) => f.id))
+      else send({ threadId: activeId, text, attachments: files, kind, provider: draft.provider, modelSettings: draft.modelSettings })
+    },
+    displace: (text) => setInput(input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text),
+  })
+
+  // T3 Code's model chip: the model, then its effort and the chat's access in one
+  // menu (the effort on ChatGPT's slider, from the picked model's own levels).
+  const traitsEl = (() => {
     const st = choice.settings
     const m = visibleModels(models[choice.provider]).concat(models[choice.provider] || []).find((x) => x.id === st.modelId)
-    if (!m?.efforts?.length) return null
     return (
-      <ThinkingControl
-        stops={m.efforts.map((e) => ({ value: e, label: EFFORT_LABELS[e] || e, hint: hintFor(e) }))}
-        value={st.effort && st.effort !== 'default' ? st.effort : (m.defaultEffort || m.efforts[0])}
-        onChange={(v) => changeModel({ provider: choice.provider, modelSettings: { ...st, effort: v } })}
+      <ComposerTraits
+        effort={m?.efforts?.length ? {
+          stops: m.efforts.map((e) => ({ value: e, label: EFFORT_LABELS[e] || e, hint: hintFor(e) })),
+          value: st.effort && st.effort !== 'default' ? st.effort : (m.defaultEffort || m.efforts[0]),
+          onChange: (v) => changeModel({ provider: choice.provider, modelSettings: { ...st, effort: v } }),
+        } : undefined}
+        access={st.access}
+        onAccess={(v) => changeModel({ provider: choice.provider, modelSettings: { ...st, access: v } })}
       />
     )
   })()
 
   const composerEl = (
     <Composer
-      leftSlot={<ModelPicker provider={choice.provider} settings={choice.settings} onChange={changeModel} locked={!empty} />}
-      rightSlot={<>
-        <AccessControl value={choice.settings.access} onChange={(v) => changeModel({ provider: choice.provider, modelSettings: { ...choice.settings, access: v } })} />
-        {effortEl}
-      </>}
+      rightSlot={
+        <div className="vc-model-group">
+          <ModelPicker provider={choice.provider} settings={choice.settings} onChange={changeModel} started={!empty} locked={temporary && !empty} align="end" />
+          {/* Answering questions: effort and access make way for the answer buttons. */}
+          {!questionFlow?.answering && traitsEl}
+        </div>
+      }
       ref={composer}
-      value={input}
-      onChange={setInput}
+      value={questionFlow ? questionFlow.value : input}
+      onChange={questionFlow ? questionFlow.onChange : setInput}
+      answering={questionFlow?.answering}
       onSend={onSend}
       onStop={() => activeId && stop(activeId)}
-      onSteer={(text) => (activeId ? steer(activeId, text) : false)}
+      onSteer={onSteerNow}
+      onQueue={empty ? undefined : onQueue}
+      followUp={followUp}
+      queueEdit={queueEdit && queueEdit.threadId === activeId ? { onSave: saveQueueEdit } : undefined}
+      onResume={!busy && active?.queueHeld && queue.length && activeId ? () => { void updateQueue(activeId, { action: 'resume' }) } : undefined}
+      above={queueEl}
       onVoice={() => setVoice(true)}
       busy={busy}
       autoFocus={visible}
@@ -360,6 +518,13 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   if (!visible) return null
 
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+  // The chat moving to another account (chat/handoff.ts): a divider where each
+  // move happened, and a row over the composer once a new account is picked.
+  const switches = providerSwitches(messages)
+  const lastProvider = [...messages].reverse().find((m) => m.role === 'assistant' && m.provider)?.provider
+  const pendingHandoff = active && !temporary && lastProvider && lastProvider !== choice.provider
+    ? <HandoffMark s={{ from: lastProvider, to: choice.provider }} pending />
+    : null
   // A raw id ("gpt-6.1-sol", "composer-2.5[fast=true]") is shown as its catalog name.
   const modelNameFor = (provider?: string, model?: string) => {
     if (!provider || !model) return undefined
@@ -368,10 +533,11 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   }
 
   return (
-    <div className={`vc-split${artifact || browserShown || agentsShown ? ' has-artifact' : ''}${artifact && artifactWide ? ' artifact-wide' : ''}`}>
-    <div className="vc" onDragEnter={onDragEnter} onDragOver={(e) => e.preventDefault()} onDragLeave={onDragLeave} onDrop={onDrop}>
-      {/* This chat's own colours; they wobble while the agent is replying. */}
-      <div className={`page-glow${busy ? ' live' : ''}`} style={{ '--glow-a': glow.a, '--glow-b': glow.b } as React.CSSProperties} aria-hidden />
+    <div className={`vc-split${artifact || browserShown || agentsShown || filesShown ? ' has-artifact' : ''}${artifact && artifactWide ? ' artifact-wide' : ''}`}>
+    <div className={`vc${glowOn ? '' : ' no-glow'}`} onDragEnter={onDragEnter} onDragOver={(e) => e.preventDefault()} onDragLeave={onDragLeave} onDrop={onDrop}>
+      {/* This chat's own colours; they wobble while the agent is replying. Settings → Chat can turn them off on this device. */}
+      {glowOn && <div className={`page-glow${busy ? ' live' : glowSettling ? ' settling' : ''}`} style={{ '--glow-a': glow.a, '--glow-b': glow.b } as React.CSSProperties} aria-hidden />}
+      {glowOn && <div className="vc-veil" aria-hidden />}
       <header className="vc-top">
         {narrow && (
           <button type="button" className="vc-icon-btn" onClick={onOpenMenu} aria-label="Menu"><TI icon={IconMenu} size={21} /></button>
@@ -431,6 +597,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
               <TI icon={contextOff ? IconFolderOff : IconFolder} size={19} />
             </button>
           )}
+          {active?.totemId && <TotemRunButton job={totemDir.get(active.totemId)} />}
           {active?.totemId && (
             <button type="button" className="vc-icon-btn" onClick={() => goTotems(active.totemId)} aria-label="Totem settings" title="This totem's settings, memory and runs"><TI icon={IconSettings} size={19} /></button>
           )}
@@ -446,6 +613,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
               </button>
             </span>
           )}
+          <FilesChip threadId={activeId} />
           <AgentsChip threadId={activeId} />
           <BrowserChip threadId={activeId} />
           <UsageChips compact={narrow} />
@@ -493,6 +661,17 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
               <p className="vc-empty-warn">{providerById(choice.provider)?.name} is {providerState === 'missing' ? 'not installed on this machine' : providerState === 'logged-out' ? 'signed out' : 'not responding'}. Pick another account above{caps?.providers?.[choice.provider]?.fix ? `, or run ${caps.providers[choice.provider].fix}` : ''}.</p>
             )}
             {!narrow && <div className="vc-empty-composer">{composerEl}</div>}
+            {!temporary && startInProjects.length > 0 && (
+              <div className="vc-start-in">
+                <span className="vc-start-in-label">Start in</span>
+                {startInProjects.map((p) => (
+                  <button key={p.id} type="button" className="vc-start-in-chip" onClick={() => startIn(p.id)} title={`New chat in ${p.name}`}>
+                    <ProjectIcon p={p} size={15} />
+                    <span>{p.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             {!temporary && (
               <div className="vc-starters">
                 {STARTERS.map((s) => (
@@ -509,7 +688,9 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
         ) : (
           <div className="vc-log">
             {messages.map((m, i) => (
-              m.role === 'user'
+              <React.Fragment key={m.id}>
+              {switches.has(m.id) && <HandoffMark s={switches.get(m.id)!} />}
+              {m.role === 'user'
                 ? <UserMessage
                     key={m.id}
                     m={m}
@@ -527,7 +708,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
                     modelName={modelNameFor(m.provider, m.model)}
                     isLast={m === lastAssistant && i === messages.length - 1}
                     onRegenerate={!busy && active ? () => regenerate(active.id) : undefined}
-                  />
+                  />}
+              </React.Fragment>
             ))}
           </div>
         )}
@@ -536,7 +718,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       {!empty && !atBottom && (
         <button type="button" className="vc-jump" onClick={() => scrollToBottom()} aria-label="Scroll to the latest message"><TI icon={IconArrowDown} size={18} /></button>
       )}
-      {(!empty || (narrow && !project)) && <div className="vc-dock">{parkedEl}{composerEl}</div>}
+      {(!empty || (narrow && !project)) && <div className="vc-dock">{questionFlow ? questionFlow.panel : <>{parkedEl}{pendingHandoff}</>}{composerEl}</div>}
 
       {dragging && (
         <div className="vc-drop">
@@ -555,6 +737,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     </div>
     {artifact && <ArtifactPanel threadId={activeId} expanded={artifactWide} onExpand={setArtifactWide} />}
     {!artifact && <AgentsPanel threadId={activeId} />}
+    {!artifact && <FilesPanel threadId={activeId} />}
     {!artifact && <BrowserPanel threadId={activeId} />}
     </div>
   )

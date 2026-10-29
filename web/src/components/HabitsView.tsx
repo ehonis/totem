@@ -3,7 +3,7 @@ import {
   getHabits, createHabit, reorderHabits, updateHabit, deleteHabit, logHabit,
   syncSleep, AuthError,
 } from '../api'
-import { useWhoopStatus, WhoopConnectButton, WhoopStatusNote } from './WhoopConnection'
+import { useWhoopStatus, WhoopBushidoLink, WhoopStatusNote } from './WhoopConnection'
 import { COMMANDS } from '../shortcuts'
 import { useCommand } from '../useShortcuts'
 import {
@@ -57,8 +57,8 @@ export function LinkedAppButton({ habit, compact }: { habit: Pick<Habit, 'linked
 
 // The WHOOP-synced sleep habit isn't shown here or on the Overview: nobody logs
 // it by hand, and Bushido is where it is read. The habit, its nightly sync and its
-// history stay in the habit store, so agents and search still see every night,
-// and Bushido gets it through /api/whoop/training.
+// history stay in the habit store, so agents and search still see every night.
+// Bushido reads WHOOP itself; it holds the grant.
 export const isSyncedSleep = (h: { metric?: { source?: string } | null }) => h.metric?.source === 'whoop-sleep'
 
 interface Entry { count: number; note?: string; value?: number | null; parts?: Record<string, number> }
@@ -446,7 +446,7 @@ function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDel
                 </label>
                 {metric.source === 'whoop-sleep' && (
                   <span className="habit-field-hint">
-                    A scheduled job pulls last night's sleep performance and stages from the WHOOP API each late
+                    A scheduled job pulls last night's sleep performance and stages from WHOOP (through Bushido) each late
                     morning (Studio → Workflows → WHOOP sleep sync). Nights you've already filled in are left alone.
                   </span>
                 )}
@@ -1192,8 +1192,8 @@ export function HabitMetricSection({ habit, entries, today, compact, days: fixed
   const series = useMemo(() => metricSeries(entries, habit.id, today, days), [entries, habit.id, today, days])
   const stats = useMemo(() => metricStats(series), [series])
 
-  // WHOOP has to be authorized before any sync can work, so the section asks for
-  // that itself rather than letting the first Sync fail confusingly.
+  // WHOOP has to be connected (in Bushido) before any sync can work, so the
+  // section says so itself rather than letting the first Sync fail confusingly.
   const syncable = Boolean(onSync) && !compact
   const { status: whoop, reload: reloadWhoop } = useWhoopStatus(syncable)
   // Anything other than "as far as we know, this works" — a dead grant, a missing
@@ -1210,9 +1210,9 @@ export function HabitMetricSection({ habit, entries, today, compact, days: fixed
                 wasn't before: `state` is a real health signal (including a latched
                 `needs-reauth` set by the last failed refresh), not the old
                 "a token file exists" check that hid this button precisely when the
-                grant was dead. The permanent, always-available Reconnect lives in
-                Studio → Connections. */}
-            {syncable && needsAttention && <WhoopConnectButton status={whoop} onDone={reloadWhoop} />}
+                grant was dead. The grant is Bushido's, so this links there; the
+                permanent link lives in Studio → Connections. */}
+            {syncable && needsAttention && <WhoopBushidoLink status={whoop} />}
             {onSync && (
               <button
                 className="btn compact"

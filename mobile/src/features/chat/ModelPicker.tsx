@@ -13,7 +13,8 @@ import { ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useChat, ensureModels, providerById, toggleFavorite } from '../../lib/chat/store'
-import { EFFORT_LABELS, defaultSettingsFor, visibleModels } from '../../lib/chat/models'
+import { EFFORT_LABELS, settingsForPick, visibleModels } from '../../lib/chat/models'
+import { handoffNote } from '../../lib/chat/handoff'
 import type { Access, ModelRow, ModelSettings } from '../../lib/chat/types'
 import { colors, fonts } from '../../theme'
 import { T } from '../../ui/Text'
@@ -50,8 +51,10 @@ export function chipLabel(settings: ModelSettings, provider: string, models: Rec
 export interface PickerRequest {
   provider: string
   settings: ModelSettings
-  /** The chat has started: it keeps its account, like T3. */
-  locked: boolean
+  /** The chat has started: picking another account hands it over (lib/chat/handoff.ts). */
+  started: boolean
+  /** A started temporary chat: the bridge holds it to the default account. */
+  locked?: boolean
   onChange: (patch: { provider: string; modelSettings: ModelSettings }) => void
 }
 let request: PickerRequest | null = null
@@ -62,13 +65,13 @@ export function openModelPicker(r: PickerRequest) {
 }
 
 /** The chip in the composer: the account's logo and the model's name. */
-export function ModelChip({ provider, settings, onChange, locked = false }: PickerRequest) {
+export function ModelChip({ provider, settings, onChange, started = false, locked = false }: PickerRequest) {
   const models = useChat((s) => s.models)
   const row = providerById(provider)
   const label = chipLabel(settings, provider, models)
   return (
     <Press
-      onPress={() => openModelPicker({ provider, settings, locked, onChange })}
+      onPress={() => openModelPicker({ provider, settings, started, locked, onChange })}
       accessibilityLabel={`Model: ${label}. Choose a model`}
       style={st.chip}
     >
@@ -89,7 +92,6 @@ export default function ModelPickerSheet() {
   const caps = useChat((s) => s.caps)
   const defaultProvider = useChat((s) => s.defaultProvider)
   const defaultModel = useChat((s) => s.defaultModel)
-  // Once a chat has started it stays on its account; its other models stay available.
   const lockedTo: null | string = req?.locked ? provider : null
   const ordered = useMemo(() => [...providers]
     .sort((a, b) => (b.default ? 1 : 0) - (a.default ? 1 : 0))
@@ -143,9 +145,8 @@ export default function ModelPickerSheet() {
 
   function choose(r: Row) {
     tap()
-    const base = defaultSettingsFor(providerById(r.provider), defaultProvider, defaultModel)
     // Picking a model builds its settings afresh; the chat's access stays.
-    apply({ provider: r.provider, modelSettings: { ...base, ...(r.model ? { modelId: r.model.id } : {}), effort: 'default', ...(settings!.access ? { access: settings!.access } : {}) } })
+    apply({ provider: r.provider, modelSettings: { ...settingsForPick(providerById(r.provider), r.model?.id, defaultProvider, defaultModel), ...(settings!.access ? { access: settings!.access } : {}) } })
     router.back()
   }
 
@@ -276,7 +277,11 @@ export default function ModelPickerSheet() {
 
       {lockedTo ? (
         <T size={12.5} lineHeight={18} color={vc.faint} style={st.lock}>
-          {`This chat stays on ${providerById(lockedTo)?.name || lockedTo}. Start a new chat to use another account.`}
+          {`A temporary chat stays on ${providerById(lockedTo)?.name || lockedTo}. Start a regular chat to use another account.`}
+        </T>
+      ) : req.started && provider !== req.provider ? (
+        <T size={12.5} lineHeight={18} color={vc.faint} style={st.lock}>
+          {handoffNote(providerById(req.provider)?.name || req.provider, providerById(provider)?.name || provider)}
         </T>
       ) : null}
 

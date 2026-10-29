@@ -167,6 +167,16 @@ test('the shipped sources are all public and need no key', () => {
   }
 })
 
+test('a shipped source taps through to a page, never to the feed it is read from', () => {
+  // `url` is what a release, roundup or "More from …" push opens; the feed XML
+  // belongs in `feeds`.
+  for (const s of DEFAULT_SOURCES) {
+    if (!s.url) continue
+    assert.match(s.url, /^https:\/\//, `${s.id}: url should be a web page`)
+    assert.ok(!/\/feeds?\b|\.xml\b|\/rss\b|registry\.npmjs/i.test(s.url), `${s.id}: url ${s.url} is a feed, not a page`)
+  }
+})
+
 test('Hacker News keywords are matched here, not handed to a query that ignores them', async () => {
   // Algolia's `query` is full-text relevance with no boolean OR: asking it for
   // "Claude OR Anthropic OR OpenAI" matches none of them and returns whatever it

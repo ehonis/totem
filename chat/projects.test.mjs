@@ -27,6 +27,19 @@ test('a project is created with an empty memory file and edited field by field',
   await rm(dir, { recursive: true, force: true })
 })
 
+test('a project can wear an uploaded picture, which the orphan sweep keeps', async () => {
+  const dir = await tmp()
+  const store = createProjectStore({ dir })
+  const p = await store.create({ name: 'Acme', image: 'cccccccccc' })
+  assert.equal(p.image, 'cccccccccc')
+  assert.deepEqual([...(await store.fileIds())], ['cccccccccc'])
+  assert.equal((await store.patch(p.id, { image: '../etc' })).image, undefined, 'a bad id is dropped')
+  await store.patch(p.id, { image: 'dddddddddd', icon: 'code' })
+  assert.equal((await store.patch(p.id, { image: null })).image, undefined)
+  assert.equal((await store.get(p.id)).icon, 'code')
+  await rm(dir, { recursive: true, force: true })
+})
+
 test('files are deduplicated by upload id and removed by id', async () => {
   const dir = await tmp()
   const store = createProjectStore({ dir })

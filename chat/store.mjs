@@ -15,6 +15,8 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { normalizeAgent } from './subagents.mjs'
 import { normalizeMembers } from '../totems/core.mjs'
+import { logoUrl } from './tools.mjs'
+import { QUEUE_LIMIT } from './queue.mjs'
 
 export const validThreadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
 
@@ -60,10 +62,45 @@ export function normalizePart(p, i = 0) {
     if (p.totemName) out.totemName = str(p.totemName, 80)
     return out
   }
+  // Questions the agent asked the owner (chat/questions.mjs).
+  if (p.type === 'questions') {
+    const questions = (Array.isArray(p.questions) ? p.questions : []).map((q, j) => {
+      if (!q || typeof q.question !== 'string' || !q.question.trim()) return null
+      const options = (Array.isArray(q.options) ? q.options : [])
+        .filter((o) => o && typeof o.label === 'string' && o.label.trim())
+        .map((o) => ({ label: str(o.label, 200), ...(o.description ? { description: str(o.description, 1000) } : {}) }))
+      return { id: str(q.id, 40) || `q${j + 1}`, header: str(q.header, 40) || `Question ${j + 1}`, question: str(q.question, 2000), options, ...(q.multiSelect === true ? { multiSelect: true } : {}) }
+    }).filter(Boolean)
+    if (!questions.length) return null
+    const out = { type: 'questions', id: str(p.id, 64) || `q${i}`, questions, status: ['pending', 'answered', 'dismissed'].includes(p.status) ? p.status : 'pending', askedAt: num(p.askedAt) }
+    if (p.answers && typeof p.answers === 'object') {
+      const answers = {}
+      for (const q of questions) {
+        const list = Array.isArray(p.answers[q.id]) ? p.answers[q.id].filter((a) => typeof a === 'string').map((a) => a.slice(0, 8000)) : []
+        if (list.length) answers[q.id] = list
+      }
+      out.answers = answers
+    }
+    // Uploads sent with an answer, by question id (chat/questions.mjs).
+    if (p.attachments && typeof p.attachments === 'object') {
+      const attachments = {}
+      for (const q of questions) {
+        const list = (Array.isArray(p.attachments[q.id]) ? p.attachments[q.id] : [])
+          .filter((a) => a && /^[A-Za-z0-9_-]{8,64}$/.test(a.id))
+          .map((a) => ({ id: a.id, name: str(a.name, 200), mime: str(a.mime, 120), size: num(a.size) || 0, kind: ['image', 'text'].includes(a.kind) ? a.kind : 'file' }))
+        if (list.length) attachments[q.id] = list
+      }
+      if (Object.keys(attachments).length) out.attachments = attachments
+    }
+    if (num(p.answeredAt)) out.answeredAt = num(p.answeredAt)
+    return out
+  }
   // Something the owner sent while the reply was running (chat/steer.mjs).
   if (p.type === 'steer') {
-    if (typeof p.text !== 'string' || !p.text.trim()) return null
-    return { type: 'steer', id: str(p.id, 64) || `s${i}`, text: str(p.text, 20_000), via: p.via === 'restart' ? 'restart' : 'live', createdAt: num(p.createdAt) }
+    const attachments = (Array.isArray(p.attachments) ? p.attachments : []).map(normalizeAttachment).filter(Boolean).slice(0, 20)
+    const text = typeof p.text === 'string' ? str(p.text, 20_000) : ''
+    if (!text.trim() && !attachments.length) return null
+    return { type: 'steer', id: str(p.id, 64) || `s${i}`, text, via: p.via === 'restart' ? 'restart' : 'live', createdAt: num(p.createdAt), ...(attachments.length ? { attachments } : {}) }
   }
   if (p.type !== 'tool') return null
   const out = {
@@ -76,6 +113,9 @@ export function normalizePart(p, i = 0) {
   }
   if (p.server) out.server = str(p.server, 80)
   if (p.tool) out.tool = str(p.tool, 120)
+  // A connector's own name and logo (chat/tools.mjs connectorLook).
+  if (p.app) out.app = str(p.app, 80)
+  if (logoUrl(p.logo)) out.logo = p.logo
   if (p.input) out.input = str(p.input, 4000)
   if (p.output) out.output = str(p.output, 8000)
   if (num(p.startedAt)) out.startedAt = num(p.startedAt)
@@ -143,6 +183,28 @@ function normalizeModelSettings(settings) {
   return Object.keys(out).length ? out : null
 }
 
+// Messages waiting for the running reply to finish (chat/queue.mjs). Written
+// only by the bridge, never taken from a client's copy of the thread.
+function normalizeQueue(raw) {
+  if (!Array.isArray(raw)) return []
+  const out = []
+  for (const q of raw.slice(0, QUEUE_LIMIT)) {
+    if (!q || typeof q !== 'object' || !validThreadId(q.id)) continue
+    const attachments = (Array.isArray(q.attachments) ? q.attachments : []).map(normalizeAttachment).filter(Boolean).slice(0, 20)
+    const text = str(q.text, 20_000)
+    if (!text.trim() && !attachments.length) continue
+    const item = { id: q.id, text, createdAt: num(q.createdAt) || Date.now() }
+    if (attachments.length) item.attachments = attachments
+    const provider = str(q.provider, 80)
+    if (provider) item.provider = provider
+    for (const key of ['model', 'effort']) if (str(q[key], 160)) item[key] = str(q[key], 160)
+    const ms = normalizeModelSettings(q.modelSettings)
+    if (ms) item.modelSettings = ms
+    out.push(item)
+  }
+  return out
+}
+
 // A provider's native session, and how many messages of the thread it has seen.
 // `through` is what lets a thread move between providers: when Claude resumes a
 // session that stopped at message 4 and Codex answered 5 and 6, those two are
@@ -157,7 +219,7 @@ function normalizeSessions(raw) {
   return Object.keys(out).length ? out : null
 }
 
-const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'members', 'projectContextOff', 'needsReply', 'keepUnread', 'settledOverride', 'settledAt', 'unsettledAt', 'snoozedUntil', 'snoozedAt']
+const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'members', 'projectContextOff', 'needsReply', 'keepUnread', 'settledOverride', 'settledAt', 'unsettledAt', 'snoozedUntil', 'snoozedAt', 'sourceKey']
 
 function applyMetadata(thread, body, now) {
   if (body.kind === 'temporary' || body.kind === 'regular') thread.kind = body.kind
@@ -186,6 +248,13 @@ function applyMetadata(thread, body, now) {
     const title = str(body.title, 120).trim()
     if (title) thread.title = title
     else delete thread.title
+  }
+  // What an agent that made this chat (threads__create) called the thing it is
+  // about, e.g. a ticket number, so making it again finds this one instead.
+  if ('sourceKey' in body) {
+    const key = str(body.sourceKey, 200).trim()
+    if (key) thread.sourceKey = key
+    else delete thread.sourceKey
   }
   // One of chat/thread-icons.mjs's names, chosen by the title model.
   if ('icon' in body) {
@@ -288,6 +357,11 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
     applyMetadata(thread, raw || {}, now)
     const sessions = normalizeSessions(raw?.sessions)
     if (sessions) thread.sessions = sessions
+    const queue = normalizeQueue(raw?.queue)
+    if (queue.length) {
+      thread.queue = queue
+      if (raw.queueHeld === true) thread.queueHeld = true
+    }
     return thread
   }
 
@@ -329,7 +403,7 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
     if (!validThreadId(id)) throw new Error('bad thread id')
     return withLock(id, async () => {
       const existing = await rawRead(id)
-      if (!existing) return rawWrite(normalizeThread({ ...body, sessions: null }, id))
+      if (!existing) return rawWrite(normalizeThread({ ...body, sessions: null, queue: null }, id))
       const thread = normalizeThread(existing, id)
       applyMetadata(thread, Object.fromEntries(METADATA_KEYS.filter((k) => k in body).map((k) => [k, body[k]])), Date.now())
       thread.updatedAt = Math.max(thread.updatedAt, num(body.updatedAt) || 0) || Date.now()
@@ -349,6 +423,10 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
       const sessions = normalizeSessions(thread.sessions)
       if (sessions) thread.sessions = sessions
       else delete thread.sessions
+      const queue = normalizeQueue(thread.queue)
+      if (queue.length) thread.queue = queue
+      else delete thread.queue
+      if (!queue.length || thread.queueHeld !== true) delete thread.queueHeld
       await rawWrite(thread)
       return out === undefined ? thread : out
     })

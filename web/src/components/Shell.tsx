@@ -4,6 +4,7 @@ import totemLogo from '../assets/totem-logo.png'
 import { ChatsNav } from '../chat/ProjectNav'
 import { setActive } from '../chat/store'
 import { TI } from '../chat/ui'
+import UsageChips from '../chat/UsageChips'
 import { IconBell, IconEdit, IconWaveSine, IconMenu, IconSearch, IconLayoutSidebar, IconLayoutSidebarLeftCollapse, IconX } from '../chat/icons'
 
 // The app shell, after ChatGPT's current layout.
@@ -104,7 +105,7 @@ function Badge({ count, title }: { count?: number | null; title?: string }) {
   return <span className="sh-badge" role="status" aria-label={title}>{count > 99 ? '99+' : count}</span>
 }
 
-export function Rail({ tabs, bottom, active, onSelect, panelOpen, onTogglePanel, badges }: {
+export function Rail({ tabs, bottom, active, onSelect, panelOpen, onTogglePanel, badges, usage = false }: {
   tabs: TabDef[]
   bottom: TabDef
   active: string
@@ -112,6 +113,8 @@ export function Rail({ tabs, bottom, active, onSelect, panelOpen, onTogglePanel,
   panelOpen: boolean
   onTogglePanel: () => void
   badges: Record<string, { count: number; title?: string }>
+  /** The AI usage pills above Settings (off on the chat, whose header has them). */
+  usage?: boolean
 }) {
   return (
     <nav className="sh-rail" aria-label="Totem">
@@ -128,11 +131,33 @@ export function Rail({ tabs, bottom, active, onSelect, panelOpen, onTogglePanel,
           </button>
         ))}
       </div>
-      <button type="button" className={`sh-rail-btn sh-rail-bottom ${active === bottom.id ? 'on' : ''}`} onClick={() => onSelect(bottom.id)} title={bottom.label} aria-label={bottom.label}>
-        <Hi icon={bottom.icon} size={21} />
-        <span className="sh-tip">{bottom.label}</span>
-      </button>
+      <div className="sh-rail-foot">
+        {usage && <UsageChips rail />}
+        <button type="button" className={`sh-rail-btn ${active === bottom.id ? 'on' : ''}`} onClick={() => onSelect(bottom.id)} title={bottom.label} aria-label={bottom.label}>
+          <Hi icon={bottom.icon} size={21} />
+          <span className="sh-tip">{bottom.label}</span>
+        </button>
+        <Version />
+      </div>
     </nav>
+  )
+}
+
+// The running build: the count goes up by one with every merge to main, and the
+// date is that merge's (stamped at build time by build-version.mjs).
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+function shortDate(iso: string): string {
+  const [, m, d] = iso.split('-').map(Number)
+  return m && d ? `${MONTHS[m - 1]} ${d}` : iso
+}
+
+function Version({ inline = false }: { inline?: boolean }) {
+  const { version, date, commit } = __TOTEM_VERSION__
+  return (
+    <span className={`sh-version ${inline ? 'inline' : ''}`} title={`Totem ${version} · ${date}${commit ? ` · ${commit}` : ''}`}>
+      <span>{version}</span>
+      <span className="sh-version-date">{shortDate(date)}</span>
+    </span>
   )
 }
 
@@ -254,6 +279,7 @@ export function MobileDrawer({ open, onClose, tabs, bottom, active, onSelect, on
           <ChatsNav onOpenChat={() => { onOpenChat(); onClose() }} searchSignal={search} />
         </div>
         <div className="sh-drawer-foot">
+          <Version inline />
           <button type="button" className={`sh-icon sh-drawer-bottom ${active === bottom.id ? 'on' : ''}`} onClick={() => go(bottom.id)} aria-label={bottom.label} title={bottom.label} aria-current={active === bottom.id ? 'page' : undefined}>
             <Hi icon={bottom.icon} size={22} />
           </button>

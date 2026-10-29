@@ -2,8 +2,8 @@ import React from 'react'
 import { DRIVER_LOGOS } from '../providers'
 import {
   IconBrandGithub, IconBrandStrava, IconCalendarEvent, IconChecklist, IconDeviceDesktop, IconFileText, IconListCheck,
-  IconMicrophone, IconTarget, IconTerminal2, IconTool, IconWorld, IconBrain, IconMail, IconNotebook, IconPhoto,
-  IconSearch, IconPencil, IconDatabase, IconRobot, IconUsersGroup,
+  IconMicrophone, IconTarget, IconTerminal2, IconTool, IconWorld, IconBrain, IconMail, IconBrandGoogleDrive, IconNotebook, IconPhoto,
+  IconSearch, IconPencil, IconDatabase, IconRobot, IconUsersGroup, IconBrandOffice, IconBrandNotion, IconBrandSlack, IconBrandFigma,
 } from './icons'
 
 type TablerIcon = React.ComponentType<{ size?: number; stroke?: number; className?: string; style?: React.CSSProperties }>
@@ -36,10 +36,16 @@ const APPS: Record<string, { icon: TablerIcon; label: string }> = {
   plaud: { icon: IconMicrophone, label: 'Plaud' },
   krakatoa: { icon: IconNotebook, label: 'Krakatoa' },
   gmail: { icon: IconMail, label: 'Mail' },
+  drive: { icon: IconBrandGoogleDrive, label: 'Drive' },
   // totems__list / totems__invite; an ask is drawn as the totem's own message (totemReply.ts).
   totems: { icon: IconUsersGroup, label: 'Totems' },
   'computer-use': { icon: IconDeviceDesktop, label: 'Computer' },
   computer_use: { icon: IconDeviceDesktop, label: 'Computer' },
+  // claude.ai connectors, for when the CLI sent no logo (an older reply, another CLI).
+  microsoft_365: { icon: IconBrandOffice, label: 'Microsoft 365' },
+  notion: { icon: IconBrandNotion, label: 'Notion' },
+  slack: { icon: IconBrandSlack, label: 'Slack' },
+  figma: { icon: IconBrandFigma, label: 'Figma' },
 }
 
 const KINDS: Record<string, TablerIcon> = {
@@ -119,14 +125,24 @@ function dockClear(): number {
 }
 
 // What a position:fixed descendant of `el` is laid out against: the viewport,
-// unless an ancestor has a transform, filter or will-change: transform (the
-// phone shell's sliding .main does) — then that ancestor's box.
+// unless an ancestor is a containing block for fixed boxes — a transform (the
+// phone shell's sliding .main), a filter or backdrop-filter (the glass
+// composer's .vc-box), perspective, layout/paint containment or a container
+// query (.vc-scroll), or will-change on any of those — then that ancestor's
+// padding box.
+function makesFixedFrame(cs: CSSStyleDeclaration): boolean {
+  const backdrop = cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || 'none'
+  return cs.transform !== 'none' || cs.filter !== 'none' || backdrop !== 'none' || cs.perspective !== 'none'
+    || (cs.containerType || 'normal') !== 'normal' || /layout|paint|strict|content/.test(cs.contain || '')
+    || /transform|filter|perspective|contain/.test(cs.willChange)
+}
+
 function fixedFrame(el: HTMLElement): { left: number; top: number; bottom: number } {
   for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
-    const cs = getComputedStyle(p)
-    if (cs.transform !== 'none' || cs.filter !== 'none' || /transform|filter/.test(cs.willChange)) {
+    if (makesFixedFrame(getComputedStyle(p))) {
       const b = p.getBoundingClientRect()
-      return { left: b.left, top: b.top, bottom: b.bottom }
+      const left = b.left + p.clientLeft, top = b.top + p.clientTop
+      return { left, top, bottom: top + p.clientHeight }
     }
   }
   return { left: 0, top: 0, bottom: window.innerHeight }
@@ -140,8 +156,12 @@ function fixedFrame(el: HTMLElement): { left: number; top: number; bottom: numbe
  * width less `edge` on each side. Recomputed on resize and scroll.
  */
 export function usePopoverPlacement(open: boolean, anchor: React.RefObject<HTMLElement>, {
-  width, height, gap = 10, edge = 8, offsetX = 0, narrow = 720,
-}: { width: number; height: number; gap?: number; edge?: number; offsetX?: number; narrow?: number }): React.CSSProperties | undefined {
+  width, height, gap = 10, edge = 8, offsetX = 0, narrow = 720, align = 'start', alignTo,
+}: {
+  width: number; height: number; gap?: number; edge?: number; offsetX?: number; narrow?: number; align?: 'start' | 'end'
+  /** A selector for an ancestor whose edges the popover lines up with instead of the anchor's own. */
+  alignTo?: string
+}): React.CSSProperties | undefined {
   const [style, setStyle] = React.useState<React.CSSProperties>()
   React.useLayoutEffect(() => {
     if (!open) { setStyle(undefined); return }
@@ -156,7 +176,10 @@ export function usePopoverPlacement(open: boolean, anchor: React.RefObject<HTMLE
       const up = above >= height || above >= below
       const h = Math.max(160, Math.min(height, up ? above : below))
       const w = vw <= narrow ? vw - edge * 2 : Math.min(width, vw - 24)
-      const left = vw <= narrow ? edge : Math.min(Math.max(12, r.left + offsetX), vw - w - 12)
+      // 'end' lines the popover's right edge up with the anchor's.
+      const box = (alignTo && el.closest(alignTo)?.getBoundingClientRect()) || r
+      const want = align === 'end' ? box.right - w + offsetX : box.left + offsetX
+      const left = vw <= narrow ? edge : Math.min(Math.max(12, want), vw - w - 12)
       const f = fixedFrame(el)
       setStyle({
         position: 'fixed', left: left - f.left, right: 'auto', width: w, height: h,
@@ -167,6 +190,6 @@ export function usePopoverPlacement(open: boolean, anchor: React.RefObject<HTMLE
     window.addEventListener('resize', place)
     window.addEventListener('scroll', place, true)
     return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true) }
-  }, [open, anchor, width, height, gap, edge, offsetX, narrow])
+  }, [open, anchor, width, height, gap, edge, offsetX, narrow, align, alignTo])
   return style
 }

@@ -114,3 +114,27 @@ test('a review dispatch posts to review.yml on the default branch with the PR as
   await assert.rejects(createDevGithub({ run: none.run }).dispatchReview('owner/repo', 4), (e) => e.status === 400)
   assert.ok(!none.calls.some((a) => a.includes('POST')), 'nothing is dispatched without the workflow')
 })
+
+test('merged PRs are searched in two-week slices, paged, deduplicated and sorted', async () => {
+  const item = (repo, number, mergedAt) => ({
+    number, title: `PR ${number}`, html_url: `https://github.com/${repo}/pull/${number}`,
+    repository_url: `https://api.github.com/repos/${repo}`, pull_request: { merged_at: mergedAt },
+  })
+  const asked = []
+  const { run } = fakeGh((key) => {
+    const q = decodeURIComponent(/q=([^&]+)/.exec(key)[1])
+    const page = Number(/&page=(\d+)/.exec(key)[1])
+    asked.push([q.split('merged:')[1], page])
+    if (q.endsWith('2026-09-01..2026-09-14')) {
+      // A full first page means there is a second.
+      if (page === 1) return { items: Array.from({ length: 100 }, (_, i) => item('a/one', i + 1, '2026-09-02T10:00:00Z')) }
+      return { items: [item('a/one', 1, '2026-09-02T10:00:00Z'), item('b/two', 7, '2026-09-01T09:00:00Z')] }
+    }
+    return { items: [item('b/two', 8, '2026-09-20T12:00:00Z')] }
+  })
+  const pulls = await createDevGithub({ run }).mergedPulls('2026-09-01', { today: new Date('2026-09-20T15:00:00Z') })
+  assert.deepEqual(asked, [['2026-09-01..2026-09-14', 1], ['>=2026-09-15', 1], ['2026-09-01..2026-09-14', 2]])
+  assert.equal(pulls.length, 102, 'a PR seen twice is counted once')
+  assert.deepEqual(pulls[0], { repo: 'b/two', number: 7, title: 'PR 7', url: 'https://github.com/b/two/pull/7', mergedAt: '2026-09-01T09:00:00Z' })
+  assert.equal(pulls.at(-1).number, 8)
+})

@@ -68,6 +68,9 @@ npm run start:tailscale                            # Metro on the Tailscale IP, 
 - iOS ATS allows plain http (`NSAllowsArbitraryLoads`) because the bridge is usually reached over
   Tailscale at `http://<100.x>:8787`.
 - A 401 from the chat store's sync loop signs out (forgets the secret, keeps the address).
+- The entry is `index.ts`, not `expo-router/entry`: a silent push launches the bundle headless,
+  so the notification background task (`src/shell/pushDismiss.ts`) must be defined before the
+  router loads. Keep that import first.
 - `react-native-nitro-markdown`, `react-native-pager-view` and `@react-native-menu/menu` are native-only.
   They need a dev build; Expo Go cannot run this app.
 - Building and submitting non-interactively needs the App Store Connect API key in the environment
@@ -83,8 +86,18 @@ npm run start:tailscale                            # Metro on the Tailscale IP, 
   gives later `eas update`s a runtime the installed build doesn't have, and they never arrive. Check
   `npx expo-updates runtimeversion:resolve --platform ios` against the build's runtime before
   publishing; change `eas.json` only alongside a new build. `eas update` needs `--environment production`.
+- `mobile/.gitignore` is in the fingerprint too (`bareGitIgnore`), byte for byte, comments included.
+  Changing `node_modules/` to `node_modules` there moved the runtime off the installed build's and
+  would have stranded every update after it, so ignore rules for the whole repo go in the root
+  `.gitignore`, whose patterns already reach `mobile/`.
 - The bridge's data changes shape with the web (e.g. a totem watch became `sources: []` in
   totem-private #60; the app still read `source` and crashed). When porting, read the current
   `web/src` on totem-private `main`, not an old checkout, and normalise old shapes the way the web
   does. Every screen sits under an error boundary (`src/shell/ScreenError.tsx`), so a mismatch shows
   an error on that screen instead of closing the app.
+- **A remote push's `content.data` is only its `body` key.** expo-notifications (iOS) builds
+  `notification.request.content.data` from the APNs payload's `body` dictionary and ignores every
+  other top-level key, so `notify/apns.mjs` puts `url`, `entryId`, `category` and `tag` under `body`.
+  With them only at the top level every tap opened the app wherever it was. Read them through
+  `pushData()` (`src/shell/pushDismiss.ts`), which falls back to the raw `trigger.payload`.
+  A tap's `url` is mapped by the pure `src/features/notifications/destination.ts`.

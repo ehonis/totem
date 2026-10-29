@@ -143,6 +143,10 @@ test('creates and edits issues over the REST API with the App token', async () =
   const post = calls.find(call => call.method === 'POST' && call.path === '/repos/alexdev/totem/issues');
   assert.deepEqual(post.body, { title: 'Ship the connector', body: 'details' });
 
+  await github.createIssue({ repo: 'alexdev/totem', title: 'Labelled', body: '', labels: ['enhancement'] });
+  const labelled = calls.filter(call => call.method === 'POST' && call.path === '/repos/alexdev/totem/issues').at(-1);
+  assert.deepEqual(labelled.body, { title: 'Labelled', body: '', labels: ['enhancement'] });
+
   const edited = await github.editIssue({ id: '991', repo: 'alexdev/totem', number: 7, title: 'Renamed' });
   assert.equal(edited.title, 'Renamed');
   const patch = calls.find(call => call.method === 'PATCH');

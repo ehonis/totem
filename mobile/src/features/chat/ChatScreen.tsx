@@ -4,13 +4,13 @@
 // Everything about a chat's data lives in lib/chat/store (one sync loop shared
 // with the drawer); this screen only renders it and turns taps into store calls.
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AppState, StyleSheet, View } from 'react-native'
+import { AppState, ScrollView, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useFocusEffect, useIsFocused, useNavigation } from 'expo-router'
 import { MenuView } from '@react-native-menu/menu'
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
 import {
-  useChat, send, stop, steer, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
+  useChat, send, stop, steer, queueMessage, updateQueue, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState,
   takeVoiceRequest, openProject, threadProject, projectById, setProjectContext,
 } from '../../lib/chat/store'
@@ -19,7 +19,7 @@ import { useViewing } from '../../lib/chat/onScreen'
 import { EFFORT_LABELS, visibleModels } from '../../lib/chat/models'
 import { isSnoozed, settledAt, shelfOf, wakeDescription, wokeAt } from '../../lib/chat/settle'
 import type { ChatThread } from '../../lib/chat/types'
-import type { Attachment, ChatMessage, ChatMode, ModelSettings } from '../../lib/chat/types'
+import type { Attachment, ChatMessage, ChatMode, ModelSettings, QueuedMessage } from '../../lib/chat/types'
 import { useOwnerName } from '../../lib/useOwnerName'
 import { AuthError, getSkills } from '../../lib/api'
 import { setChatCommands } from '../../lib/studio'
@@ -30,9 +30,14 @@ import { colors } from '../../theme'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { impact, tap } from '../../ui/haptics'
-import Composer, { type ComposerHandle } from './Composer'
+import Composer, { type ComposerHandle, type FollowUpPayload } from './Composer'
+import QueuedMessages from './QueuedMessages'
 import { UserMessage, AssistantMessage } from './Message'
+import { useQuestionFlow } from './QuestionsPanel'
+import { pendingQuestions } from '../../lib/chat/questions'
 import { ModelChip } from './ModelPicker'
+import HandoffMark from './HandoffMark'
+import { providerSwitches } from '../../lib/chat/handoff'
 import { AccessControl, ThinkingControl, hintFor } from './controls'
 import UsageChips from './UsageChips'
 import { AgentsChip } from './AgentsPanel'
@@ -44,6 +49,7 @@ import { threadMenu } from './threadMenu'
 import { markRead, unsettleThread, wakeThread } from './threadOps'
 import { useChatPresence } from './presence'
 import { TI, vc } from './ui'
+import { TotemRunButton } from '../totems/shared'
 import { PageGlow } from '../../ui/PageGlow'
 import { chatGlow } from '../../lib/chat/glow'
 import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconFolder, IconFolderOff, IconSparkles, IconChevronDown, IconSettings, IconUsersGroup, IconUserPlus } from './icons'
@@ -83,6 +89,9 @@ export default function ChatScreen() {
   const retitling = useChat((s) => !!(s.activeId && s.retitling[s.activeId]))
   const autoSettleDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   const scopeProject = useChat((s) => s.projects.find((p) => p.id === s.projectId))
+  // Home's new chat offers the projects to start in, most recently used first.
+  const allProjects = useChat((s) => s.projects)
+  const startInProjects = useMemo(() => allProjects.filter((p) => !p.parentId).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6), [allProjects])
   const [draftKind, setDraftKind] = useState<'regular' | 'temporary'>('regular')
   const [draftModel, setDraftModel] = useState<{ provider?: string; modelSettings?: ModelSettings }>({})
   const [draftContextOff, setDraftContextOff] = useState(false)
@@ -187,6 +196,20 @@ export default function ChatScreen() {
     })
   }, [draftKey])
 
+  /** Open a project for a new chat, taking what's already typed along. */
+  function startIn(id: string) {
+    tap()
+    if (input.trim()) {
+      setDrafts((d) => {
+        const next = { ...d, [`new:project:${id}`]: d[`new:project:${id}`] || input }
+        delete next[draftKey]
+        try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(next)) } catch {}
+        return next
+      })
+    }
+    openProject(id)
+  }
+
   function newChat(k: 'regular' | 'temporary' = 'regular') {
     impact()
     setActive(null)
@@ -207,6 +230,80 @@ export default function ChatScreen() {
     setAtEnd(true)
     requestAnimationFrame(() => frame.current?.scrollToEnd())
   }
+
+  // The agent's questions (web ChatView): a panel above the composer, and the
+  // box is the typed answer while they are open.
+  const questionFlow = useQuestionFlow({
+    threadId: activeId,
+    pending: active ? pendingQuestions(active) : null,
+    // The run that asked has ended: the answers are the next message.
+    sendText: (text) => {
+      if (!activeId) return
+      if (busy) void steer(activeId, text)
+      else send({ threadId: activeId, text, attachments: [], mode: 'chat', kind, provider: draft.provider, modelSettings: draft.modelSettings })
+    },
+    displace: (text) => setInput(input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text),
+  })
+
+  // --- the queue (T3 Code's follow-ups; web ChatView) --------------------------
+  // Sending while a reply runs queues or steers, as Settings → Chat says; a long press the other.
+  const followUp = useChat((s) => s.prefs.followUp ?? 'queue')
+  const queue = active?.queue || []
+  // A queued message being edited in the composer, and the draft it displaced.
+  const [queueEdit, setQueueEdit] = useState<{ id: string; threadId: string; draftKey: string; stash: { text: string; attachments: Attachment[] } } | null>(null)
+  const putBack = (stash: { text: string; attachments: Attachment[] }) => {
+    setInput(stash.text)
+    composer.current?.setAttachments(stash.attachments)
+  }
+  function editQueued(q: QueuedMessage) {
+    if (!activeId) return
+    const stash = queueEdit ? queueEdit.stash : { text: input, attachments: composer.current?.takeAttachments() || [] }
+    setQueueEdit({ id: q.id, threadId: activeId, draftKey, stash })
+    setInput(q.text)
+    composer.current?.setAttachments(q.attachments || [])
+    requestAnimationFrame(() => composer.current?.focus())
+  }
+  function cancelQueueEdit() {
+    if (!queueEdit) return
+    putBack(queueEdit.stash)
+    setQueueEdit(null)
+  }
+  // Leaving the chat drops the edit; his own draft goes back where it was.
+  useEffect(() => {
+    if (queueEdit && queueEdit.threadId !== activeId) {
+      setDrafts((d) => ({ ...d, [queueEdit.draftKey]: queueEdit.stash.text }))
+      setQueueEdit(null)
+    }
+  }, [activeId, queueEdit])
+  // It started (or another device removed it) mid-edit: as T3 Code does, keep
+  // the edit as the draft if the box had none, otherwise put his draft back.
+  const editGone = !!queueEdit && queueEdit.threadId === activeId && !queue.some((q) => q.id === queueEdit.id)
+  useEffect(() => {
+    if (!editGone || !queueEdit) return
+    const { stash } = queueEdit
+    setQueueEdit(null)
+    if (!stash.text.trim() && !stash.attachments.length) pushToast('Queued message is no longer queued. Your unsaved edit was kept in the composer.', 'info')
+    else { putBack(stash); pushToast('Queued message is no longer queued. Your unsaved edit was discarded.', 'info') }
+  }, [editGone]) // eslint-disable-line react-hooks/exhaustive-deps
+  const onQueue = (p: FollowUpPayload) => (activeId ? queueMessage(activeId, p.text, p.attachments) : false)
+  const onSteerNow = (p: FollowUpPayload) => (activeId ? steer(activeId, p.text, p.attachments.map((a) => a.id)) : false)
+  const saveQueueEdit = async (p: FollowUpPayload) => {
+    if (!queueEdit) return false
+    const ok = await updateQueue(queueEdit.threadId, { action: 'edit', id: queueEdit.id, text: p.text, attachments: p.attachments.map((a) => a.id) })
+    if (ok) { putBack(queueEdit.stash); setQueueEdit(null) }
+    return ok
+  }
+  const queueEl = activeId && queue.length ? (
+    <QueuedMessages
+      queue={queue}
+      canSteer={busy}
+      editingId={queueEdit?.threadId === activeId ? queueEdit.id : null}
+      onEdit={editQueued}
+      onCancelEdit={cancelQueueEdit}
+      onSteer={(id) => { void updateQueue(activeId, { action: 'steer', id }) }}
+      onRemove={(id) => { if (queueEdit?.id === id) cancelQueueEdit(); void updateQueue(activeId, { action: 'remove', id }) }}
+    />
+  ) : null
 
   function changeModel(patch: { provider: string; modelSettings: ModelSettings }) {
     // Picking a model builds its settings afresh; the chat's access stays.
@@ -254,6 +351,13 @@ export default function ChatScreen() {
   })()
 
   const lastAssistantId = useMemo(() => [...messages].reverse().find((m) => m.role === 'assistant')?.id, [messages])
+  // The chat moving to another account (lib/chat/handoff.ts): a divider where
+  // each move happened, and a row over the composer once a new account is picked.
+  const switches = useMemo(() => providerSwitches(messages), [messages])
+  const lastProvider = useMemo(() => [...messages].reverse().find((m) => m.role === 'assistant' && m.provider)?.provider, [messages])
+  const pendingHandoff = active && !temporary && lastProvider && lastProvider !== choice.provider
+    ? <HandoffMark s={{ from: lastProvider, to: choice.provider }} pending />
+    : null
   // A raw id ("gpt-6.1-sol", "composer-2.5[fast=true]") is shown as its catalog name.
   const modelNameFor = (provider?: string, model?: string) => {
     if (!provider || !model) return undefined
@@ -263,7 +367,10 @@ export default function ChatScreen() {
 
   const renderItem = (m: ChatMessage, i: number) => {
     const last = i === messages.length - 1
+    const moved = switches.get(m.id)
     return (
+      <>
+      {moved ? <HandoffMark s={moved} /> : null}
       <View style={{ paddingHorizontal: 16, paddingBottom: last ? 16 : 24 }}>
         {m.role === 'user' ? (
           <UserMessage
@@ -285,6 +392,7 @@ export default function ChatScreen() {
           />
         )}
       </View>
+      </>
     )
   }
 
@@ -381,6 +489,7 @@ export default function ChatScreen() {
               <TI icon={contextOff ? IconFolderOff : IconFolder} size={20} color={contextOff ? colors.text : vc.soft} />
             </Press>
           ) : null}
+          {active?.totemId ? <TotemRunButton totemId={active.totemId} style={st.iconBtn} /> : null}
           {active?.totemId ? (
             <Press style={st.iconBtn} onPress={() => { tap(); router.push({ pathname: '/totem/[id]', params: { id: active.totemId! } }) }} accessibilityLabel="This totem's settings, memory and runs">
               <TI icon={IconSettings} size={20} color={vc.soft} />
@@ -433,24 +542,46 @@ export default function ChatScreen() {
               </Animated.View>
             ) : null}
             <RunningChats />
-            {parkedEl}
+            {questionFlow ? questionFlow.panel : <>{parkedEl}{pendingHandoff}</>}
+            {empty && !project && !temporary && !questionFlow && startInProjects.length ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={st.startIn} contentContainerStyle={st.startInRow}>
+                <T size={12.5} color={vc.soft} style={{ marginRight: 2 }}>Start in</T>
+                {startInProjects.map((p) => (
+                  <Press key={p.id} style={st.startInChip} onPress={() => startIn(p.id)} accessibilityLabel={`New chat in ${p.name}`}>
+                    <ProjectIcon p={p} size={15} />
+                    <T size={13} color={vc.soft} numberOfLines={1} style={{ maxWidth: 160 }}>{p.name}</T>
+                  </Press>
+                ))}
+              </ScrollView>
+            ) : null}
             <Composer
               ref={composer}
-              value={input}
-              onChange={setInput}
+              value={questionFlow ? questionFlow.value : input}
+              onChange={questionFlow ? questionFlow.onChange : setInput}
+              answering={questionFlow?.answering}
               onSend={onSend}
               onStop={() => activeId && stop(activeId)}
-              onSteer={(text) => (activeId ? steer(activeId, text) : false)}
+              onSteer={onSteerNow}
+              onQueue={empty ? undefined : onQueue}
+              followUp={followUp}
+              queueEdit={queueEdit && queueEdit.threadId === activeId ? { onSave: saveQueueEdit } : undefined}
+              onResume={!busy && active?.queueHeld && queue.length && activeId ? () => { void updateQueue(activeId, { action: 'resume' }) } : undefined}
+              above={queueEl}
               onVoice={() => openVoice({ threadId: activeId, kind })}
               busy={busy}
               placeholder={temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
               allowCommands={!temporary}
               maxUploadBytes={caps?.maxUploadBytes}
-              leftSlot={<ModelChip provider={choice.provider} settings={choice.settings} onChange={changeModel} locked={!empty} />}
-              rightSlot={
+              leftSlot={
                 <>
-                  <AccessControl value={choice.settings.access} onChange={(v) => changeModel({ provider: choice.provider, modelSettings: { ...choice.settings, access: v } })} />
-                  {effortEl}
+                  <ModelChip provider={choice.provider} settings={choice.settings} onChange={changeModel} started={!empty} locked={temporary && !empty} />
+                  {/* Answering questions: effort and access make way for the answer buttons. */}
+                  {questionFlow?.answering ? null : (
+                    <>
+                      {effortEl}
+                      <AccessControl value={choice.settings.access} onChange={(v) => changeModel({ provider: choice.provider, modelSettings: { ...choice.settings, access: v } })} />
+                    </>
+                  )}
                 </>
               }
             />
@@ -475,6 +606,9 @@ const st = StyleSheet.create({
   starters: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   starter: { height: 36, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderColor: vc.line, justifyContent: 'center' },
   dock: { paddingHorizontal: 10, backgroundColor: 'transparent' },
+  startIn: { marginHorizontal: -10, marginBottom: 8 },
+  startInRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14 },
+  startInChip: { flexDirection: 'row', alignItems: 'center', gap: 7, height: 30, paddingLeft: 10, paddingRight: 12, borderRadius: 999, borderWidth: 1, borderColor: vc.line },
   parked: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6, paddingVertical: 4, paddingLeft: 14, paddingRight: 4, borderRadius: 12, backgroundColor: vc.raise },
   ghostBtn: { height: 30, paddingHorizontal: 12, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
   jumpWrap: { position: 'absolute', top: -50, left: 0, right: 0, alignItems: 'center', zIndex: 3 },

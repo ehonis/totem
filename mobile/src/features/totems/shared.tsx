@@ -2,11 +2,13 @@
 // plus the pieces of JobsView.tsx it borrows: the schedule builder, run history,
 // notify choices and relative times).
 import React, { useEffect, useState, useSyncExternalStore } from 'react'
-import { StyleSheet, View } from 'react-native'
-import { api, getJobs, getJobRuns, updateJob, AuthError } from '../../lib/api'
+import { ActivityIndicator, StyleSheet, View } from 'react-native'
+import { api, getJobs, getJobRuns, runJobNow, updateJob, AuthError } from '../../lib/api'
 import { syncThreads, adoptThread } from '../../lib/chat/store'
 import { THREAD_ICONS } from '../../lib/chat/threadIcons.gen'
-import { pushError } from '../../lib/toast'
+import { pushError, pushToast } from '../../lib/toast'
+import { IconPlayerPlay } from '../../lib/chat/icons'
+import { TI, vc } from '../chat/ui'
 import {
   Hi, SparklesIcon, BoltIcon, SunIcon, MoonIcon, PuzzlePieceIcon, CheckCircleIcon, CalendarDaysIcon, CalendarIcon,
   ViewColumnsIcon, CircleStackIcon, MagnifyingGlassIcon, PencilSquareIcon, PencilIcon, CommandLineIcon, ClockIcon,
@@ -62,6 +64,53 @@ export function dropJob(id: string) {
 const subscribe = (fn: () => void) => { subs.add(fn); return () => { subs.delete(fn) } }
 export const useJobs = () => useSyncExternalStore(subscribe, () => jobs, () => jobs)
 export const useJobTimezone = () => useSyncExternalStore(subscribe, () => timezone, () => timezone)
+
+// --- run now (web totems/shared.tsx → TotemRunButton) -------------------------
+// Runs this app started and is still waiting on, kept outside any screen so the
+// button still shows the run after the owner leaves the chat and comes back.
+const runningHere = new Set<string>()
+let runsVersion = 0
+const runSubs = new Set<() => void>()
+const bumpRuns = () => { runsVersion++; runSubs.forEach((fn) => fn()) }
+const subscribeRuns = (fn: () => void) => { runSubs.add(fn); return () => { runSubs.delete(fn) } }
+
+/** Run a totem now; its report lands in its chat, which is refreshed. */
+export async function startTotemRun(job: any) {
+  if (runningHere.has(job.id)) return
+  runningHere.add(job.id)
+  bumpRuns()
+  try {
+    const r: any = await runJobNow(job.id)
+    replaceJob((r.jobs || []).find((j: any) => j.id === job.id))
+    const status = r.run?.status
+    pushToast(
+      status === 'error' ? `${job.name} failed: ${r.run?.error || 'no error text'}` : status === 'skipped' ? `${job.name} checked: nothing new` : `${job.name} ran. Its report is in its chat.`,
+      status === 'error' ? 'error' : 'info',
+    )
+    await syncThreads()
+  } catch (e: any) { pushError(e.message) } finally {
+    runningHere.delete(job.id)
+    bumpRuns()
+  }
+}
+
+/** The play button in a totem's chat: run it now instead of waiting for its schedule or watch. */
+export function TotemRunButton({ totemId, style }: { totemId: string; style?: any }) {
+  const list = useJobs()
+  useSyncExternalStore(subscribeRuns, () => runsVersion, () => runsVersion)
+  useEffect(() => { if (!list) void loadJobs() }, [list])
+  const job = list?.find((j) => j.id === totemId)
+  if (!job) return null
+  const running = runningHere.has(job.id) || job.lastRun?.status === 'running'
+  return (
+    <Press
+      style={style} onPress={() => { if (running) return; tap(); void startTotemRun(job) }}
+      accessibilityLabel={running ? `${job.name} is running` : `Run ${job.name} now`} accessibilityState={{ busy: running }}
+    >
+      {running ? <ActivityIndicator size="small" color={vc.soft} /> : <TI icon={IconPlayerPlay} size={20} color={vc.soft} />}
+    </Press>
+  )
+}
 
 // --- labels --------------------------------------------------------------------
 

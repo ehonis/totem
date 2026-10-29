@@ -50,7 +50,7 @@ docker compose) always wins and is shown as read-only.
 | Owner password | setup page, Settings -> General | `data/auth.json` |
 | Default AI provider and model, accounts | Settings -> AI, Settings -> Providers | `data/provider-config.json` |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CURSOR_API_KEY` | Settings -> AI | `data/ai-settings.json` |
-| `PUBLIC_URL`, WHOOP and Strava client ID/secret, task sheet ID/tab/assignees | Settings -> Integrations | `data/integrations.json` |
+| `PUBLIC_URL`, task sheet ID/tab/assignees | Settings -> Integrations | `data/integrations.json` |
 | Venture tags | Settings -> Tasks | `data/todos.db` (`todo_preferences`) |
 | MCP servers | Settings -> Connections | `data/mcp-manifest.json` |
 | Scheduled jobs | Totems | `data/jobs.json` |
@@ -133,7 +133,7 @@ voice journal transcription is unavailable.
 
 ### Behind a reverse proxy
 
-Set `PUBLIC_URL` to the external origin so the setup link and OAuth redirect URIs use it, and
+Set `PUBLIC_URL` to the external origin so the setup link uses it and same-origin checks accept it, and
 have the proxy send `X-Forwarded-Proto: https` so session cookies are marked `Secure`. If the
 proxy authenticates users itself and the port is not reachable any other way, `TOTEM_AUTH=proxy`
 removes the second sign-in.
@@ -145,10 +145,58 @@ Everything a running install creates is under `data/` and `secrets/`:
 - `data/todos.db`: tasks, goals, lists (SQLite; backups before purges in `data/todo-backups/`)
 - `data/brain/`: the Markdown notes repo, its own local git repository
 - `data/*.json`, `data/*.jsonl`: settings, jobs, threads, habits, logs, notification state
-- `secrets/`: WHOOP and Strava OAuth tokens, the Google OAuth client file, a GitHub App key if used
+- `secrets/`: the Google OAuth client file, a GitHub App key if used (WHOOP and Strava tokens are Bushido's)
 
 The agent CLIs keep their own logins and MCP OAuth tokens in your home directory (`~/.codex`,
 `~/.claude`, `~/.config/...`); those are not part of a Totem backup.
 
 Back up both directories. Restoring them onto a fresh checkout restores the install, including
 the owner account.
+
+## Deploying every merge (optional)
+
+`.github/workflows/deploy.yml` deploys `main` after CI passes on it. It runs on a
+[self-hosted GitHub Actions runner](https://docs.github.com/actions/hosting-your-own-runners)
+on the machine that serves the app, so nothing has to reach that machine from outside.
+Each deploy:
+
+1. stops if the live checkout has uncommitted changes to tracked files or is not on `main`;
+2. fast-forwards it to `origin/main` (nothing new, nothing done), runs `npm ci` only if a
+   `package.json` or lockfile changed, and builds;
+3. restarts the service once no chat or job is running in it (no agent CLI under the
+   bridge, checked every 15 seconds, for up to 30 minutes) (`launchctl kickstart -k` on macOS,
+   `systemctl --user restart` on Linux), then waits up to a minute for the health URL;
+4. if the build, the restart or the health check fails, resets to the commit it started
+   from, builds that and restarts again.
+
+When the iPhone app changed (`mobile/`), a second job ships it. It publishes an over-the-air
+update to the `production` channel; installed builds take it only when their native code
+matches (the runtime version is a fingerprint). When no App Store build has that
+fingerprint yet, it also starts one with `--auto-submit`, so it lands in TestFlight.
+
+It does nothing until the repository is told where the install is:
+
+```bash
+# On the serving machine, as the user the service runs as: a runner for this repository
+# with the label the workflow asks for (Settings → Actions → Runners → New self-hosted
+# runner gives the download and the token).
+./config.sh --url https://github.com/<you>/<repo> --token <token> --labels totem-deploy --no-default-labels
+./svc.sh install && ./svc.sh start
+# Give it the PATH npm needs, in .env beside config.sh, e.g.:
+#   PATH=/opt/homebrew/opt/node/bin:/opt/homebrew/bin:/usr/bin:/bin
+
+# Repository variables (Settings → Secrets and variables → Actions):
+gh variable set DEPLOY_DIR -b /path/to/the/live/checkout
+gh variable set DEPLOY_SERVICE -b totem            # the launchd label or systemd unit
+gh variable set DEPLOY_HEALTH_URL -b http://127.0.0.1:8787/health   # the default
+
+# Optional, for the iPhone app:
+gh variable set EAS_PROJECT_ID -b <project id>       # what mobile/app.local.json holds
+gh variable set IOS_BUNDLE_ID -b <bundle id>
+gh secret set EXPO_TOKEN                             # an Expo access token
+```
+
+Run one by hand from the Actions tab (Deploy → Run workflow) or with
+`gh workflow run deploy.yml`. Only people who can push to the repository can trigger it, so
+use it on a private repository you control: a self-hosted runner runs whatever a workflow
+on that repository asks of it.

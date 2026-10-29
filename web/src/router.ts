@@ -26,7 +26,7 @@ export interface Route {
 export type NavTarget = string | Partial<Route>
 
 export const TAB_IDS = [
-  'overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'inbox', 'logs', 'brain', 'settings',
+  'overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'fleet', 'inbox', 'logs', 'brain', 'settings',
 ]
 
 // Todos/Calendar/Habits are apps *inside* Productivity, but their ids still turn

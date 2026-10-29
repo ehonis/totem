@@ -38,29 +38,72 @@ function describeAttachments(m) {
 // added mid-reply, what Totem said after. Null when there was no steer.
 function steeredText(m) {
   if (m?.role !== 'assistant' || !m.parts?.some((p) => p.type === 'steer')) return null
-  return m.parts.map((p) => (p.type === 'text' ? p.text : p.type === 'steer' ? `\n\n[${OWNER_LABEL}, mid-reply: ${p.text}]\n\n` : '')).join('')
+  return m.parts.map((p) => (p.type === 'text' ? p.text : p.type === 'steer' ? `\n\n[${OWNER_LABEL}, mid-reply: ${[p.text, p.attachments?.length ? `(attached ${p.attachments.map((a) => a.name).join(', ')})` : ''].filter(Boolean).join(' ')}]\n\n` : '')).join('')
 }
 
-export function renderTranscript(messages, { budget = 16_000, heading = 'Conversation so far:' } = {}) {
+const TOOL_LINES_PER_REPLY = 12
+
+// What a reply did, one line a step, for an agent taking the chat over: it did
+// not run these itself, and files or state may have changed under it. Only the
+// last few steps of a long reply, with how many came before.
+function toolLines(m) {
+  const tools = (m?.parts || []).filter((p) => p.type === 'tool')
+  if (!tools.length) return ''
+  const shown = tools.slice(-TOOL_LINES_PER_REPLY).map((p) => {
+    const detail = p.detail ? ` — ${String(p.detail).replace(/\s+/g, ' ').slice(0, 200)}` : ''
+    return `  - ${p.title || 'Tool call'}${detail}${p.status === 'error' ? ' (failed)' : ''}`
+  })
+  const more = tools.length > shown.length ? `  - (${tools.length - shown.length} earlier steps)\n` : ''
+  return `\n[steps taken]\n${more}${shown.join('\n')}`
+}
+
+function transcriptLine(m, { tools }) {
+  const content = (steeredText(m) ?? m?.content ?? '').trim()
+  const steps = tools && m?.role === 'assistant' ? toolLines(m) : ''
+  if (!content && !m?.attachments?.length && !steps) return ''
+  // A reply that failed carries no useful text; saying so beats replaying an
+  // apology the model will then try to continue.
+  const body = m.role === 'assistant' && m.status === 'error' && !content ? '(that reply failed)' : content
+  return `${m.role === 'user' ? OWNER_LABEL : 'Totem'}: ${body}${describeAttachments(m)}${steps}`
+}
+
+/**
+ * Prior turns as plain text, newest first until `budget` characters are used.
+ *
+ * A handoff (the chat moving to another account, planHistory above) asks for
+ * more, the way T3 Code hands a thread between providers: each reply's steps
+ * (`tools`), the owner's first message kept however long ago it was
+ * (`keepFirst`, it usually says what the chat is for), and `omitted(n)` to say
+ * where the n messages that did not fit can be read.
+ */
+export function renderTranscript(messages, { budget = 16_000, heading = 'Conversation so far:', tools = false, keepFirst = false, omitted = null } = {}) {
   if (!Array.isArray(messages) || !messages.length) return ''
-  const lines = []
-  let left = budget
+  const all = messages.map((m) => transcriptLine(m, { tools }))
+  const firstUser = keepFirst ? messages.findIndex((m, i) => m?.role === 'user' && all[i]) : -1
+  const first = firstUser >= 0 && all[firstUser].length <= budget / 4 ? firstUser : -1
+  const kept = new Set()
+  let left = budget - (first >= 0 ? all[first].length : 0)
   for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]
-    const content = (steeredText(m) ?? m?.content ?? '').trim()
-    if (!content && !m?.attachments?.length) continue
-    // A reply that failed carries no useful text; saying so beats replaying an
-    // apology the model will then try to continue.
-    const body = m.role === 'assistant' && m.status === 'error' && !content ? '(that reply failed)' : content
-    const line = `${m.role === 'user' ? OWNER_LABEL : 'Totem'}: ${body}${describeAttachments(m)}`
-    if (left - line.length < 0) {
-      if (!lines.length) lines.unshift(line.slice(0, left))
+    if (!all[i] || i === first) continue
+    if (left - all[i].length < 0) {
+      if (!kept.size) { all[i] = all[i].slice(0, Math.max(0, left)); kept.add(i) }
       break
     }
-    left -= line.length
-    lines.unshift(line)
+    left -= all[i].length
+    kept.add(i)
   }
-  return lines.length ? `${heading}\n${lines.join('\n\n')}\n\n` : ''
+  if (first >= 0) kept.add(first)
+  if (!kept.size) return ''
+  const order = [...kept].sort((a, b) => a - b)
+  const lines = []
+  order.forEach((i, k) => {
+    // A gap between the first message and the newest ones is said, not hidden.
+    if (k > 0 && all.slice(order[k - 1] + 1, i).some(Boolean)) lines.push('(…)')
+    lines.push(all[i])
+  })
+  const leftOut = all.filter((l, i) => l && !kept.has(i)).length
+  const note = leftOut && omitted ? `${omitted(leftOut)}\n\n` : ''
+  return `${heading}\n${lines.join('\n\n')}\n\n${note}`
 }
 
 /**
@@ -182,6 +225,7 @@ export function applyEvent(msg, event, now = Date.now()) {
         type: 'tool', id: t.id || `t${msg.parts.length}`, kind: t.kind || 'tool', title: t.title || 'Tool call',
         detail: t.detail || '', status: 'running', startedAt: now,
         ...(t.server ? { server: t.server } : {}), ...(t.tool ? { tool: t.tool } : {}),
+        ...(t.app ? { app: t.app } : {}), ...(t.logo ? { logo: t.logo } : {}),
         ...(t.input ? { input: t.input } : {}),
       })
       break
@@ -190,7 +234,8 @@ export function applyEvent(msg, event, now = Date.now()) {
       // Another agent this one started (chat/subagents.mjs), folded into the
       // card of the call that started it.
       const target = event.toolId ? msg.parts.find((p) => p.type === 'tool' && p.id === event.toolId) : null
-      if (target) target.agent = foldAgent(target.agent, event)
+      // An agent starts with its provider; anything else on a plain card is not one.
+      if (target && (target.agent || event.agent?.provider)) target.agent = foldAgent(target.agent, event)
       break
     }
     case 'image':
@@ -199,11 +244,21 @@ export function applyEvent(msg, event, now = Date.now()) {
     case 'file':
       if (event.file?.uploadId) msg.parts.push({ type: 'file', ...event.file })
       break
+    case 'questions': {
+      // Questions the agent asked (chat/questions.mjs): added where they were
+      // asked, then updated in place when answered or dismissed.
+      const q = event.questions || {}
+      if (!q.id) break
+      const existing = msg.parts.find((p) => p.type === 'questions' && p.id === q.id)
+      if (existing) Object.assign(existing, q)
+      else msg.parts.push({ type: 'questions', ...q })
+      break
+    }
     case 'steer': {
       // The owner's words mid-reply, kept where they landed among the steps.
       const st = event.steer || {}
-      if (!st.text || msg.parts.some((p) => p.type === 'steer' && p.id === st.id)) break
-      msg.parts.push({ type: 'steer', id: st.id || `s${msg.parts.length}`, text: st.text, via: st.via || 'live', createdAt: st.createdAt || now })
+      if ((!st.text && !st.attachments?.length) || msg.parts.some((p) => p.type === 'steer' && p.id === st.id)) break
+      msg.parts.push({ type: 'steer', id: st.id || `s${msg.parts.length}`, text: st.text || '', via: st.via || 'live', createdAt: st.createdAt || now, ...(st.attachments?.length ? { attachments: st.attachments } : {}) })
       // What it says after the steer is a new paragraph in the copyable text too.
       if (msg.content) msg.content = msg.content.replace(/\s*$/, '\n\n')
       break

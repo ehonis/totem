@@ -146,7 +146,7 @@ test('the grace period is honoured: nothing ingests before the deadline, then it
   assert.deepEqual(done.ingest.result.proposals, ['P9'])
   assert.equal(h.notes.length, 1)
   assert.equal(h.notes[0].category, 'journal.ingested')
-  assert.equal(h.notes[0].url, '/inbox')
+  assert.equal(h.notes[0].url, '/inbox#P9')
   assert.match(h.notes[0].body, /1 memory update · 1 proposal in the inbox · 1 habit logged/)
 
   // The words went into the brain before the agent ran, under a dated page.

@@ -24,7 +24,7 @@ import { DRIVER_LOGOS } from '../../lib/providers'
 import {
   IconArrowUp, IconChevronRight, IconRefresh, IconCalendarEvent, IconChecklist, IconFlame, IconTarget,
   IconListCheck, IconMicrophone2, IconHistory, IconWand, IconSettings, IconInbox,
-  IconAlertTriangle, IconMapPin, IconPlus, IconCheck, IconBolt,
+  IconAlertTriangle, IconMapPin, IconPlus, IconCheck, IconBolt, IconServer2,
 } from '../../lib/components/overview/icons'
 import IconSearch from '@tabler/icons-react-native/dist/esm/icons/IconSearch.mjs'
 import { clock, dueDiff, dueLabel, periodTotal, startOfDay, until } from '../../lib/components/overview/time'
@@ -58,6 +58,7 @@ const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'inbox', label: 'Inbox', icon: IconInbox, to: 'inbox' },
   { id: 'search', label: 'Search', icon: IconSearch, to: 'search' },
   { id: 'totems', label: 'Totems', icon: TotemsGlyph, to: 'totems' },
+  { id: 'fleet', label: 'Fleet', icon: IconServer2, to: 'fleet' },
   { id: 'logs', label: 'Logs', icon: IconHistory, to: { tab: 'settings', sub: 'logs' } },
   { id: 'studio', label: 'Skills', icon: IconWand, to: { tab: 'settings', sub: 'skills' } },
   { id: 'settings', label: 'Settings', icon: IconSettings, to: 'settings' },

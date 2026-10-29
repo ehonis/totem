@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useChat, ensureModels, providerById, toggleFavorite } from './store'
-import { defaultSettingsFor, visibleModels } from './models'
+import { settingsForPick, visibleModels } from './models'
+import { handoffNote } from './handoff'
 import type { ModelRow, ModelSettings } from './types'
 import { TI, ProviderLogo, useDismiss, usePopoverPlacement } from './ui'
 import { IconChevronDown, IconChevronRight, IconSearch } from './icons'
@@ -31,12 +32,16 @@ export function chipLabel(settings: ModelSettings, provider: string, models: Rec
   return m?.name || row?.name || provider
 }
 
-export default function ModelPicker({ provider, settings, onChange, locked = false }: {
+export default function ModelPicker({ provider, settings, onChange, started = false, locked = false, align = 'start' }: {
   provider: string
   settings: ModelSettings
   onChange: (patch: { provider: string; modelSettings: ModelSettings }) => void
-  /** The chat has started: it keeps its account, like T3. */
+  /** The chat has started: picking another account hands it over (chat/handoff.ts). */
+  started?: boolean
+  /** A started temporary chat: the bridge holds it to the default account. */
   locked?: boolean
+  /** 'end': the chip sits at the composer's right (T3 Code's), so the picker opens leftward from it. */
+  align?: 'start' | 'end'
 }) {
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<Tab>('favorites')
@@ -52,9 +57,11 @@ export default function ModelPicker({ provider, settings, onChange, locked = fal
   const defaultModel = useChat((s) => s.defaultModel)
   useDismiss(open, ref, useCallback(() => setOpen(false), []))
   // Up from the chip when there is room; down (or shorter) when the composer sits
-  // high on the page, as on an empty chat or a project's home.
-  const placement = usePopoverPlacement(open, ref, { width: 560, height: 440, offsetX: -46 })
-  // Once a chat has started it stays on its account; its other models stay available.
+  // high on the page, as on an empty chat or a project's home. At the composer's
+  // right it lines up with the end of the whole chip, where the effort menu opens.
+  const placement = usePopoverPlacement(open, ref, align === 'end'
+    ? { width: 560, height: 440, align, alignTo: '.vc-model-group', offsetX: 4 }
+    : { width: 560, height: 440, offsetX: -46 })
   const lockedTo: null | string = locked ? provider : null
   const ordered = useMemo(() => [...providers]
     .sort((a, b) => (b.default ? 1 : 0) - (a.default ? 1 : 0))
@@ -98,8 +105,7 @@ export default function ModelPicker({ provider, settings, onChange, locked = fal
   useEffect(() => { setSel(0) }, [tab, q, legacy])
 
   function choose(r: Row) {
-    const base = defaultSettingsFor(providerById(r.provider), defaultProvider, defaultModel)
-    onChange({ provider: r.provider, modelSettings: { ...base, ...(r.model ? { modelId: r.model.id } : {}), effort: 'default' } })
+    onChange({ provider: r.provider, modelSettings: settingsForPick(providerById(r.provider), r.model?.id, defaultProvider, defaultModel) })
     setOpen(false)
   }
 
@@ -200,8 +206,11 @@ export default function ModelPicker({ provider, settings, onChange, locked = fal
             </div>
             {lockedTo && (
               <div className="vc-picker-lock">
-                {`This chat stays on ${providerById(lockedTo)?.name || lockedTo}. Start a new chat to use another account.`}
+                {`A temporary chat stays on ${providerById(lockedTo)?.name || lockedTo}. Start a regular chat to use another account.`}
               </div>
+            )}
+            {started && !lockedTo && shown[sel] && shown[sel].provider !== provider && (
+              <div className="vc-picker-lock">{handoffNote(providerById(provider)?.name || provider, shown[sel].source)}</div>
             )}
           </div>
         </div>

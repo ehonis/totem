@@ -69,6 +69,7 @@ export function todoCommandFromInboxProposal(item, { github } = {}) {
     ...dueDate(item.when),
     ...(description ? { description } : {}),
     syncTarget,
-    ...(githubKind ? { github: { ...github } } : {}),
+    // The GitHub connector reads the repo at the top level, as the HTTP adapter sends it.
+    ...(githubKind ? { repo: github?.repo, ...(github?.labels?.length ? { labels: [...github.labels] } : {}) } : {}),
   };
 }

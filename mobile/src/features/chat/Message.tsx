@@ -23,19 +23,22 @@ import { useSmoothText } from '../../lib/chat/smooth'
 import { useTextTicks } from '../../lib/chat/ticks'
 import { POWER_NAMES } from '../../lib/chat/models'
 import { splitMentions } from '../../lib/chat/mentions'
-import type { Attachment, ChatMessage, Part, ProviderRow, SteerPart, ToolPart } from '../../lib/chat/types'
+import type { Attachment, ChatMessage, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart } from '../../lib/chat/types'
 import { getChatCommands, subscribeChatCommands } from '../../lib/studio'
 import WorkLog from './WorkLog'
-import { AgentCard } from './AgentsPanel'
+import { foldWork } from './workFold'
+import { AgentGroup } from './AgentsPanel'
 import TurnStats, { TurnChip } from './TurnStats'
 import TotemProposal from './TotemProposal'
+import { QuestionsRecord } from './QuestionsPanel'
+import { isAskTool } from '../../lib/chat/questions'
 import Spark, { WorkingLine } from './Spark'
 import { foldTotemCalls, type TotemAnswer } from '../../lib/chat/totemReply'
 import { TotemIcon, loadJobs, useJobs } from '../totems/shared'
 import { TI, ProviderLogo, formatBytes, formatDuration, vc } from './ui'
 import {
   IconAlertCircle, IconCopy, IconCheck, IconRefresh, IconFileText, IconFileTypePdf, IconClipboardText,
-  IconBolt, IconDeviceDesktop, IconMicrophone, IconX, IconCornerUpRight, IconWorld, IconPencil,
+  IconBolt, IconDeviceDesktop, IconMicrophone, IconX, IconArrowForwardUp, IconWorld, IconPencil,
 } from './icons'
 
 // A pasted URL has no spaces to wrap at; iOS breaks it anywhere already, the web preview needs telling.
@@ -276,16 +279,23 @@ function Act({ icon, label, onPress, on }: { icon: any; label: string; onPress: 
 type Block =
   | { kind: 'text'; text: string; key: string }
   | { kind: 'tools'; tools: ToolPart[]; key: string }
-  | { kind: 'agent'; tool: ToolPart; key: string }
+  | { kind: 'agents'; tools: ToolPart[]; key: string }
   | { kind: 'image'; part: any; key: string }
   | { kind: 'file'; part: any; key: string }
   | { kind: 'proposal'; part: any; key: string }
   | { kind: 'steer'; part: SteerPart; key: string }
   | { kind: 'totem'; answer: TotemAnswer; key: string }
+  | { kind: 'questions'; part: QuestionsPart; key: string }
 
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
 const PROPOSAL_FENCE = /```totem-proposal[\s\S]*?(```|$)/g
+
+// A GFM table's delimiter row, or a fenced code block: both render in a sideways
+// ScrollView. The long-press menu is a native UIButton on iOS, and a ScrollView
+// inside it never gets the swipe, so a reply holding one goes without the menu
+// (Copy and Regenerate are still in the row under it).
+const SIDEWAYS = /^\s*\|?\s*:?-{3,}:?\s*\|[\s|:-]*$|^\s*```/m
 
 function blocks(parts: Part[]): Block[] {
   const out: Block[] = []
@@ -296,8 +306,15 @@ function blocks(parts: Part[]): Block[] {
     if (totems.skip.has(i)) continue
     const answer = totems.at.get(i)
     if (answer) out.push({ kind: 'totem', answer, key: `k${i}` })
+    // The questions themselves stand for the call that asked them.
+    else if (p.type === 'tool' && isAskTool(p.tool)) continue
+    else if (p.type === 'questions') out.push({ kind: 'questions', part: p, key: `q${i}` })
     // A call that started another agent stands on its own, never folded into the steps.
-    else if (p.type === 'tool' && p.agent) out.push({ kind: 'agent', tool: p, key: `a${i}` })
+    else if (p.type === 'tool' && p.agent) {
+      const last = out[out.length - 1]
+      if (last?.kind === 'agents') last.tools.push(p)
+      else out.push({ kind: 'agents', tools: [p], key: `a${i}` })
+    }
     else if (p.type === 'tool') {
       const last = out[out.length - 1]
       if (last?.kind === 'tools') last.tools.push(p)
@@ -338,14 +355,24 @@ function TotemSays({ answer: a, live }: { answer: TotemAnswer; live: boolean }) 
   )
 }
 
-/** What the owner sent mid-reply, where it landed: his bubble, marked as a steer. */
+/** What the owner sent mid-reply, where it landed: his bubble and files, under T3 Code's "Steer" label. */
 function SteerNote({ part }: { part: SteerPart }) {
+  const [lightbox, setLightbox] = useState<{ uri: string; headers?: Record<string, string> } | null>(null)
+  const open = (a: Attachment) => (a.kind === 'image' ? setLightbox(imageSource(a.url, a.id)) : openFile(a))
   return (
-    <View style={{ alignItems: 'flex-end', marginVertical: 10 }} accessibilityHint={part.via === 'restart' ? 'Interrupted the reply and carried on with this' : 'Taken into the running reply'}>
-      <View style={st.bubble}>
-        <View style={st.badge}><TI icon={IconCornerUpRight} size={13} /><T size={12} color={vc.soft}>Steered</T></View>
-        <T size={15} lineHeight={23} color={colors.text} style={WRAP}>{part.text}</T>
-      </View>
+    <View style={{ alignItems: 'flex-end', marginVertical: 10 }} accessibilityHint={part.via === 'restart' ? 'Steered the active turn: it was interrupted and carried on with this' : 'Steered the active turn'}>
+      <View style={st.steerLabel}><TI icon={IconArrowForwardUp} size={12} /><T size={12} color={vc.soft}>Steer</T></View>
+      {!!part.attachments?.length && (
+        <View style={st.userAttachments}>
+          {part.attachments.map((a) => <AttachmentChip key={a.id} a={a} large onOpen={() => open(a)} />)}
+        </View>
+      )}
+      {part.text ? (
+        <View style={st.bubble}>
+          <T size={15} lineHeight={23} color={colors.text} style={WRAP}>{part.text}</T>
+        </View>
+      ) : null}
+      <Lightbox source={lightbox} onClose={() => setLightbox(null)} />
     </View>
   )
 }
@@ -415,11 +442,15 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
   const [copied, setCopied] = useState(false)
   const [details, setDetails] = useState(false)
   const [lightbox, setLightbox] = useState<{ uri: string; headers?: Record<string, string> } | null>(null)
-  const list = useMemo(() => (m.parts?.length ? blocks(m.parts) : m.content ? [{ kind: 'text', text: m.content, key: 'c' } as Block] : []), [m.parts, m.content])
+  // The steps before the answer fold into one line above it once the reply is
+  // in (workFold.ts); a stopped or failed reply has no answer, so it stays open.
+  const settled = !live && m.status !== 'stopped' && m.status !== 'error'
+  const list = useMemo(() => (m.parts?.length ? foldWork(blocks(m.parts), settled) : m.content ? [{ kind: 'text', text: m.content, key: 'c' } as Block] : []), [m.parts, m.content, settled])
   const thinking = live && !list.length
   // Mid-reply silence (between tools, or thinking before the next sentence) gets
   // the working line too, so a live reply never looks stalled.
-  const toolRunning = !!m.parts?.some((p) => p.type === 'tool' && p.status === 'running')
+  const asking = !!m.parts?.some((p) => p.type === 'questions' && p.status === 'pending')
+  const toolRunning = !asking && !!m.parts?.some((p) => p.type === 'tool' && p.status === 'running')
   const quiet = useQuiet(live, `${m.content.length}:${m.parts?.length || 0}`)
   const secs = m.durationMs && m.durationMs > 2000 ? formatDuration(m.durationMs) : null
   const lane = m.power ? [POWER_NAMES[String(m.power)], m.route === 'thinking' && secs ? `thought for ${secs}` : null].filter(Boolean).join(', ')
@@ -436,18 +467,22 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
   const body = (
     <View style={{ gap: 10, minWidth: 0 }}>
       {list.map((b, i) => {
-        if (b.kind === 'tools') return <WorkLog key={b.key} tools={b.tools} live={live && i === list.length - 1} />
-        if (b.kind === 'agent') return <AgentCard key={b.key} tool={b.tool} />
+        if (b.kind === 'work') return <WorkLog key={b.key} items={b.items} live={live && i === list.length - 1} />
+        if (b.kind === 'agents') return <AgentGroup key={b.key} tools={b.tools} />
         if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
         if (b.kind === 'steer') return <SteerNote key={b.key} part={b.part} />
         if (b.kind === 'totem') return <TotemSays key={b.key} answer={b.answer} live={live} />
+        if (b.kind === 'questions') return <QuestionsRecord key={b.key} part={b.part} />
         if (b.kind === 'file') return <FileCard key={b.key} file={b.part} />
         if (b.kind === 'image') return <Shot key={b.key} part={b.part} onOpen={() => setLightbox(imageSource(b.part.url, b.part.uploadId))} />
+        // A run of calls is always inside a work block (workFold.ts).
+        if (b.kind !== 'text') return null
         if (live && i === list.length - 1) return <StreamingText key={b.key} text={b.text} />
         return <Markdown key={b.key} text={b.text} size={16} />
       })}
       {thinking ? <WorkingLine text={activity ? activity.split('\n')[0].replace(/^(Working|Running|Done):\s*/, '') : m.route === 'thinking' ? 'Thinking longer for a better answer' : 'Thinking'} /> : null}
-      {live && !thinking && quiet && !toolRunning ? <WorkingLine text={activity && !/^Done:/.test(activity) ? activity.split('\n')[0].replace(/^(Working|Running):\s*/, '') : 'Working'} /> : null}
+      {live && asking ? <WorkingLine text="Waiting for your answers" /> : null}
+      {live && !asking && !thinking && quiet && !toolRunning ? <WorkingLine text={activity && !/^Done:/.test(activity) ? activity.split('\n')[0].replace(/^(Working|Running):\s*/, '') : 'Working'} /> : null}
       {m.status === 'error' ? (
         <View style={st.error}>
           <T size={14} lineHeight={20} color="#ffb3c0" style={{ flexShrink: 1 }}>{m.error || 'Something went wrong before the reply finished.'}</T>
@@ -464,7 +499,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
 
   return (
     <View>
-      {items.length && !live ? <MessageMenu items={items}>{body}</MessageMenu> : body}
+      {items.length && !live && !list.some((b) => b.kind === 'text' && SIDEWAYS.test(b.text)) ? <MessageMenu items={items}>{body}</MessageMenu> : body}
       {!live && (m.content || m.status === 'error') ? (
         <View style={st.actions}>
           {m.content ? <Act icon={copied ? IconCheck : IconCopy} label={copied ? 'Copied' : 'Copy'} onPress={doCopy} /> : null}
@@ -488,6 +523,7 @@ export const st = StyleSheet.create({
   totemHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   bubble: { maxWidth: '86%', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 22, backgroundColor: vc.bubble },
   badge: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 4 },
+  steerLabel: { flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: 4, marginBottom: 4 },
   userAttachments: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginBottom: 8, maxWidth: '80%' },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 6, minHeight: 30 },
   act: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },

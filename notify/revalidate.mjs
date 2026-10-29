@@ -1,7 +1,7 @@
 // notify/revalidate.mjs — is this still true, seconds before it is sent?
 //
 // A plan is built in the morning and fires through the day. Between the two, the
-// habit gets logged, the task gets done, the ride happens. Sending the nudge
+// task gets done, the ride happens, the goal is finished. Sending the nudge
 // anyway is the single most obvious way for Totem to look broken, so every
 // planned entry is re-checked at the moment of delivery.
 //
@@ -11,7 +11,7 @@
 //   changed  — the same fact, different numbers. Send the *current* sentence.
 //   stale    — it no longer holds, and there is nothing nice to say. Silence.
 //   resolved — it no longer holds *because he did the thing*. Send the other copy,
-//              once: "done for the week — 4 of 4".
+//              once: a goal nudge becomes "Finished."
 //
 // `changed` exists because of a real notification: "50 Miles Biked — at 73%,
 // 3 days left", planned at 07:15 for 18:00, after a ride that had already taken it
@@ -39,7 +39,7 @@ const shapeOf = (rev) => String(rev?.identity || rev?.factKey || '').split(':')[
 
 export function createRevalidator({ collect, log = () => {} }) {
   // One collection per drain, not one per entry: a tick with four due entries
-  // should read the habits file once.
+  // should read the stores once.
   return async function revalidateBatch({ at = Date.now() } = {}) {
     let snapshot
     try {
@@ -97,33 +97,8 @@ export function createRevalidator({ collect, log = () => {} }) {
 // little is left in them now: a fact whose numbers merely moved never reaches
 // here, so these only have to recognise a finish.
 const RESOLVERS = {
-  habits(entry, { habits = [], entries = {}, now }) {
-    const shape = shapeOf(entry.revalidate)
-    const id = entry.subject
-
-    // daily — the streak nudge. Resolved once it is logged.
-    if (shape === 'daily') {
-      const date = String(entry.revalidate.factKey).split(':').pop()
-      // A stale date means the plan outlived its day; that is expiry, not a win.
-      if (date !== dateKeyUtc(now)) return { state: 'stale' }
-      const count = Number(entries?.[date]?.[id]?.count || 0)
-      return count > 0 ? { state: 'resolved', body: 'Logged — streak intact.' } : { state: 'stale' }
-    }
-
-    // weekly — the "one more to finish" nudge.
-    if (shape === 'weekly' || shape === 'weekly-behind') {
-      const habit = habits.find((h) => h.id === id)
-      if (!habit) return { state: 'stale' }
-      const target = Math.max(1, Number(habit.target) || 1)
-      const count = weekCount(entries, id, now)
-      // Hit the target: that is the win this nudge existed to produce.
-      if (count >= target) return { state: 'resolved', body: `${count} of ${target} for the week.` }
-      return { state: 'stale' }
-    }
-
-    return { state: 'stale' }
-  },
-
+  // No `habits` resolver: habit nudges are retired (notify/signals.mjs), and one
+  // still queued must not turn into "Streak intact" because he logged it later.
   tasks(entry, { tasks = null, now }) {
     if (!tasks) return { state: 'stale' }
     const today = dateKeyUtc(now)
@@ -158,15 +133,4 @@ const RESOLVERS = {
   // here means the meter stopped being worth mentioning — the window reset, or the
   // burn came back down. Both are good news nobody needs a push about.
   usage: () => ({ state: 'stale' }),
-}
-
-function weekCount(entries, habitId, now) {
-  const d = new Date(now)
-  const weekday = d.getUTCDay()
-  const todayUtc = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
-  let count = 0
-  for (let i = 0; i <= weekday; i++) {
-    count += Math.max(0, Number(entries?.[dateKeyUtc(todayUtc - (weekday - i) * 86_400_000)]?.[habitId]?.count || 0))
-  }
-  return count
 }

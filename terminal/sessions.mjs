@@ -44,7 +44,7 @@ const ENV_ESSENTIALS = new Set([
  * Names the bridge loaded from `.env`.
  *
  * The bridge runs with `node --env-file=.env`, so its own process environment
- * carries BRIDGE_SECRET, WHOOP_CLIENT_SECRET and friends. A shell you open on this
+ * carries BRIDGE_SECRET, BUSHIDO_API_TOKEN and friends. A shell you open on this
  * box normally would have none of them, and inheriting them would put secrets one
  * `env` away in a browser-rendered terminal. Reading the key names back off the
  * file is exact and stays correct as keys are added — no deny-list to maintain.

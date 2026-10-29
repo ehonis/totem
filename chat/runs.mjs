@@ -14,7 +14,9 @@
 const LINGER_MS = 5 * 60_000
 const MAX_EVENTS = 20_000
 
-export function createChatRuns({ log = () => {} } = {}) {
+// `onEnd(run)` hears every run once it has ended (chat/queue.mjs starts the
+// next queued message from it).
+export function createChatRuns({ log = () => {}, onEnd = null } = {}) {
   const runs = new Map() // threadId -> run
 
   function get(threadId) {
@@ -76,7 +78,9 @@ export function createChatRuns({ log = () => {} } = {}) {
         run.subscribers.clear()
         run.lingerTimer = setTimeout(() => { if (runs.get(threadId) === run) runs.delete(threadId) }, LINGER_MS)
         run.lingerTimer.unref?.()
+        if (onEnd) Promise.resolve().then(() => onEnd(run)).catch((e) => log('chat run end hook failed', e?.message || e))
       })
+    run.emit = emit
     return run
   }
 
@@ -98,5 +102,13 @@ export function createChatRuns({ log = () => {} } = {}) {
     return true
   }
 
-  return { start, get, active, subscribe, stop, list, summary }
+  /** An event for whoever is watching the thread's running reply (a queue change). */
+  function notify(threadId, event) {
+    const run = active(threadId)
+    if (!run) return false
+    run.emit(event)
+    return true
+  }
+
+  return { start, get, active, subscribe, stop, notify, list, summary }
 }

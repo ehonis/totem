@@ -111,6 +111,25 @@
    scrolls inside itself. The scroller is also the container the reply-details
    panel measures to decide which way it opens. */
 .vc-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scroll-padding-bottom: 24px; container: vc-scroll / inline-size; }
+/* Behind the reading column only: the glow under the text is dimmed so the
+   words read against it, and the veil fades out to each side so the glow still
+   runs bright at the edges. No backdrop blur: the glow is already soft, so a
+   blur changed almost nothing, and over a glow that moves it re-ran across the
+   whole viewport every frame. */
+.vc-veil { display: none; }
+@media (min-width: 721px) {
+  .vc-veil {
+    --vc-veil-in: calc(50% - var(--vc-col) / 2);
+    --vc-veil-out: calc(50% + var(--vc-col) / 2);
+    display: block; position: absolute; inset: 0; z-index: -1; pointer-events: none; /* over the glow, under the log */
+    background: color-mix(in srgb, var(--bg) 38%, transparent);
+    --vc-veil-fade: 380px; /* how far the veil feathers out past the column, eased */
+    --vc-veil-mask: linear-gradient(to right, rgb(0 0 0 / 0) calc(var(--vc-veil-in) - var(--vc-veil-fade) * 1 + 40px), rgb(0 0 0 / 0.06) calc(var(--vc-veil-in) - var(--vc-veil-fade) * 0.8 + 40px), rgb(0 0 0 / 0.22) calc(var(--vc-veil-in) - var(--vc-veil-fade) * 0.6 + 40px), rgb(0 0 0 / 0.5) calc(var(--vc-veil-in) - var(--vc-veil-fade) * 0.4 + 40px), rgb(0 0 0 / 0.8) calc(var(--vc-veil-in) - var(--vc-veil-fade) * 0.2 + 40px), rgb(0 0 0 / 1) calc(var(--vc-veil-in) + 40px), rgb(0 0 0 / 1) calc(var(--vc-veil-out) - 40px), rgb(0 0 0 / 0.8) calc(var(--vc-veil-out) + var(--vc-veil-fade) * 0.2 - 40px), rgb(0 0 0 / 0.5) calc(var(--vc-veil-out) + var(--vc-veil-fade) * 0.4 - 40px), rgb(0 0 0 / 0.22) calc(var(--vc-veil-out) + var(--vc-veil-fade) * 0.6 - 40px), rgb(0 0 0 / 0.06) calc(var(--vc-veil-out) + var(--vc-veil-fade) * 0.8 - 40px), rgb(0 0 0 / 0) calc(var(--vc-veil-out) + var(--vc-veil-fade) * 1 - 40px));
+    -webkit-mask-image: var(--vc-veil-mask);
+            mask-image: var(--vc-veil-mask);
+  }
+  .vc:has(.vc-empty) .vc-veil { display: none; }
+}
 .vc-log { max-width: var(--vc-col); margin: 0 auto; padding: 12px 24px 40px; display: flex; flex-direction: column; gap: 28px; }
 
 .vc-row { position: relative; display: flex; flex-direction: column; min-width: 0; }
@@ -266,6 +285,18 @@
 .vc-chev { color: var(--vc-faint); transition: transform .15s; }
 .vc-chev.open { transform: rotate(90deg); }
 .vc-worklog-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 4px 7px; padding-left: 14px; border-left: 1px solid var(--vc-line); }
+/* What the agent said between its calls, quieter than the answer. */
+.vc-worklog-note { color: var(--vc-soft); font-size: 13.5px; line-height: 1.6; padding: 2px 8px; }
+/* The connectors a run used, overlapped like T3 Code's. */
+.vc-stack { display: inline-flex; align-items: center; flex: none; }
+.vc-stack-mark {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+  border-radius: 999px; background: var(--vc-raise); color: var(--vc-soft); overflow: hidden;
+  box-shadow: 0 0 0 2px var(--vc-surface);
+}
+.vc-stack-mark + .vc-stack-mark { margin-left: -6px; }
+.vc-stack-more { font-size: 10px; font-variant-numeric: tabular-nums; }
+.vc-tool-logo { display: block; object-fit: contain; border-radius: 3px; }
 
 .vc-tool { border-radius: 10px; }
 .vc-tool-head {
@@ -316,7 +347,13 @@
 }
 
 .vc-lightbox { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; background: #000000e0; animation: vc-fade .15s; }
-.vc-lightbox img { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: 0 20px 60px #000; }
+/* Sized against the window, not the grid track: a percentage max-height of an
+   auto-height track doesn't bind, and a tall screenshot overflowed the screen. */
+.vc-lightbox img {
+  display: block; width: auto; height: auto; object-fit: contain;
+  max-width: calc(100vw - 48px); max-height: calc(100dvh - 48px);
+  border-radius: 10px; box-shadow: 0 20px 60px #000;
+}
 .vc-lightbox-close { position: absolute; top: calc(14px + env(safe-area-inset-top)); right: 14px; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #ffffff1f; color: #fff; display: grid; place-items: center; }
 @keyframes vc-fade { from { opacity: 0; } }
 
@@ -330,16 +367,24 @@
 }
 .vc-composer { position: relative; max-width: var(--vc-col); margin: 0 auto; }
 .vc-dock .vc-composer { padding: 0 8px; }
+/* Glass, as T3 Code's composer: a see-through surface over the glow, a lit top
+   edge, and a shadow that lifts it off the page. No backdrop-filter: nothing but
+   the glow sits behind it (the log fades out above), blurring a soft gradient
+   changes nothing you can see, and the moving glow made it re-blur every frame. */
 .vc-box {
   display: flex; flex-direction: column;
-  background: var(--vc-surface); border: 1px solid var(--vc-line); border-radius: 28px;
-  padding: 10px 10px 8px 12px;
-  /* A soft dark halo, not a band across the page: the box stands off the glow
-     and the text behind it, and the glow still runs to the bottom edge. */
-  box-shadow: 0 8px 28px #00000040, 0 0 44px 16px color-mix(in srgb, var(--bg) 58%, transparent);
+  background: color-mix(in srgb, #0e0f13 78%, transparent);
+  border: 1px solid #ffffff14; border-radius: 20px;
+  padding: 12px 10px 8px 14px;
+  box-shadow:
+    inset 0 1px 0 #ffffff14,
+    0 18px 48px -20px #00000099,
+    0 4px 14px -7px #00000066;
   transition: border-color .15s;
 }
-.vc-box:focus-within { border-color: #3a4152; }
+.vc-box:focus-within { border-color: #ffffff2b; }
+/* Glow off (Settings → Chat): a plain page, so the composer is a solid surface. */
+.vc.no-glow .vc-box { background: var(--vc-surface); }
 .vc-box textarea {
   display: block; width: 100%; resize: none; border: 0; outline: none; background: none; color: var(--text);
   font: inherit; font-size: 16px; line-height: 1.5; padding: 6px 6px 4px; min-height: 36px;
@@ -413,6 +458,15 @@
   background: none; border: 1px solid var(--vc-line); color: var(--vc-soft); font-size: 13.5px;
 }
 .vc-starter:hover { color: var(--text); background: var(--vc-surface); }
+/* Home's new chat: jump to a project and start the chat there. */
+.vc-start-in { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; margin-top: 16px; }
+.vc-start-in-label { color: var(--vc-soft); font-size: 12.5px; margin-right: 2px; }
+.vc-start-in-chip {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 220px; height: 30px; padding: 0 12px 0 10px; border-radius: 999px;
+  background: none; border: 1px solid var(--vc-line); color: var(--vc-soft); font-size: 13px;
+}
+.vc-start-in-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-start-in-chip:hover { color: var(--text); background: var(--vc-surface); }
 
 /* --- drag & drop ---------------------------------------------------------------- */
 .vc-drop { position: absolute; inset: 0; z-index: 50; display: grid; place-items: center; background: #0f1115cc; pointer-events: none; animation: vc-fade .1s; }
@@ -613,11 +667,12 @@
   .vc-assistant-body { font-size: 16px; }
   .vc-dock { padding: 0 10px max(8px, calc(var(--dock-clear) - 8px)); }
   .vc-dock .vc-composer { padding: 0; }
-  .vc-box { border-radius: 24px; padding: 8px 8px 6px 10px; }
+  .vc-box { border-radius: 18px; padding: 8px 8px 6px 10px; }
   .vc-empty { padding: 0 20px 6vh; justify-content: flex-end; }
   .vc-greet { font-size: 26px; text-align: left; margin-bottom: 18px; }
   .vc-empty-note, .vc-empty-warn { text-align: left; margin: -8px 0 16px; }
   .vc-starters { justify-content: flex-start; margin-top: 0; }
+  .vc-start-in { justify-content: flex-start; margin: 0 0 14px; }
   .vc-plus-menu { position: fixed; left: 10px; right: 10px; width: auto; bottom: calc(var(--dock-clear) + 92px); }
   .vc-jump { bottom: calc(var(--dock-clear) + 104px); }
   .vc-orb { width: 170px; height: 170px; }
@@ -652,9 +707,24 @@
 .vc-chip:hover, .vc-chip.on { background: var(--vc-raise); color: var(--text); }
 .vc-chip-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .vc-chip-caret { color: var(--vc-faint); flex: none; }
+.vc-model-chip { max-width: min(220px, 100%); }
 .vc-model-chip { color: var(--vc-text); }
-.vc-box-left { flex: 1; min-width: 0; }
-.vc-picker, .vc-effort { position: relative; min-width: 0; }
+.vc-picker { position: relative; min-width: 0; }
+/* T3 Code's chip at the composer's right: "<logo> Opus 5.5 Medium", the model in
+   bold and its effort muted, each half opening its own menu. */
+.vc-box-right { flex: 1; justify-content: flex-end; }
+.vc-model-group { display: flex; align-items: center; min-width: 0; margin-right: 2px; }
+.vc-model-group .vc-model-chip { height: 32px; gap: 6px; padding: 0 4px 0 8px; border-radius: 9px; font-weight: 600; color: var(--text); }
+.vc-model-group .vc-chip-caret { display: none; }
+.vc-traits { position: relative; flex: none; }
+.vc-traits-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 8px 0 4px; border-radius: 9px;
+  background: none; border: 0; color: var(--vc-faint); font-size: 14px; white-space: nowrap;
+}
+/* No hover fill on either half: the text brightening is the whole affordance. */
+.vc-model-group .vc-model-chip:hover, .vc-model-group .vc-model-chip.on { background: none; }
+.vc-traits-chip:hover, .vc-traits-chip.on { color: var(--vc-soft); }
+.vc-traits-warn { color: #f5a524; }
 
 /* --- model picker (after T3 Code) ------------------------------------------------ */
 /* Where it opens (up or down, and how tall) is measured in ModelPicker
@@ -705,18 +775,7 @@
 .vc-star.on { color: #f5a524; }
 .vc-picker-empty { padding: 28px 12px; text-align: center; color: var(--vc-faint); font-size: 14px; }
 
-/* --- thinking effort (after ChatGPT) ---------------------------------------------- */
-.vc-effort-pop {
-  position: absolute; right: -40px; bottom: calc(100% + 10px); z-index: 45; width: 300px;
-  padding: 14px 12px 14px; border-radius: 22px;
-  background: #23262f; border: 1px solid #343846; box-shadow: 0 18px 50px #000000a6;
-  animation: vc-pop .12s ease-out;
-}
-.vc-effort-name {
-  display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%; height: 34px; margin-bottom: 12px;
-  background: none; border: 0; color: var(--text); font-size: 17px; font-weight: 500;
-}
-.vc-effort-name .vc-chev { color: var(--vc-soft); }
+/* --- thinking effort slider (after ChatGPT) --------------------------------------- */
 .vc-effort-track {
   --knob: 46px;
   position: relative; height: var(--knob); border-radius: 999px; background: #2f333e; border: 1px solid #3a3f4c;
@@ -738,31 +797,39 @@
   left: calc((100% - var(--knob)) * var(--pos) - 4px); border-radius: 50%; background: #fff; box-shadow: 0 2px 8px #0008;
   transition: left .15s ease; pointer-events: none;
 }
-.vc-effort-list { display: flex; flex-direction: column; gap: 2px; }
-.vc-effort-list button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 12px; background: none; border: 0; color: var(--text); text-align: left; }
-.vc-effort-list button:hover { background: #2d313c; }
-.vc-effort-list small { color: var(--vc-faint); font-size: 12px; }
 
-/* --- access (after T3 Code) -------------------------------------------------------- */
-.vc-access { position: relative; min-width: 0; }
-.vc-access-pop { width: 320px; padding: 8px; border-radius: 18px; }
-.vc-access-pop .vc-effort-list button { align-items: flex-start; }
-.vc-access-pop .vc-effort-list button > .ti { flex: none; margin-top: 2px; color: var(--vc-soft); }
-.vc-access-pop .vc-effort-list button.current { background: #2d313c; }
-.vc-access-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+/* --- reasoning and access menu (T3 Code nightly's traits menu) ---------------------- */
+.vc-traits-pop {
+  position: absolute; right: -4px; bottom: calc(100% + 10px); z-index: 45; width: 300px;
+  padding: 6px; border-radius: 14px;
+  background: #15171e; border: 1px solid var(--vc-line); box-shadow: 0 22px 60px #000000a6, 0 2px 8px #0006;
+  animation: vc-pop .12s ease-out;
+}
+.vc-traits-label { padding: 6px 8px 6px; font-size: 12px; font-weight: 500; color: var(--vc-faint); }
+.vc-traits-pop .vc-effort-track { --knob: 30px; margin: 4px 8px 0; }
+.vc-traits-current { display: flex; flex-direction: column; gap: 2px; padding: 8px 8px 6px; font-size: 14px; color: var(--text); }
+.vc-traits-current small { min-height: 32px; font-size: 12px; line-height: 16px; color: var(--vc-faint); }
+.vc-traits-sep { height: 1px; margin: 4px 2px 2px; background: var(--vc-line); }
+.vc-traits-seg { display: flex; gap: 2px; margin: 0 4px; padding: 2px; border-radius: 9px; background: #ffffff0a; }
+.vc-traits-seg button {
+  flex: 1; display: grid; place-items: center; height: 26px; border-radius: 7px;
+  background: none; border: 0; color: var(--vc-faint);
+}
+.vc-traits-seg button:hover { color: var(--text); background: #ffffff0a; }
+.vc-traits-seg button.on { color: var(--text); background: #ffffff1c; }
+.vc-traits-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 @media (max-width: 720px) {
-  .vc-effort-pop { position: fixed; left: 50%; right: auto; transform: translateX(-50%); bottom: calc(var(--dock-clear) + 110px); }
+  .vc-traits-pop { position: fixed; left: 50%; right: auto; transform: translateX(-50%); bottom: calc(var(--dock-clear) + 110px); }
   .vc-chip { max-width: 150px; padding: 0 8px; }
-  .vc-effort .vc-chip-label { display: none; }
-  .vc-effort .vc-chip::before { content: 'Effort'; }
-  .vc-access .vc-chip-label { display: none; }
+  .vc-model-chip { max-width: min(150px, 100%); }
+  .vc-model-group .vc-model-chip { max-width: min(130px, 100%); }
 }
 
 /* The empty chat's composer sits mid-page inside the scroller: popovers that open
    upward would be clipped by it, so there they open downward, unclipped. */
 .vc-scroll:has(.vc-empty) { overflow: visible; }
-.vc-empty .vc-effort-pop, .vc-empty .vc-plus-menu, .vc-empty .vc-cmd-menu {
+.vc-empty .vc-traits-pop, .vc-empty .vc-plus-menu, .vc-empty .vc-cmd-menu {
   bottom: auto; top: calc(100% + 10px);
 }
 .vc-voice-engine { color: var(--vc-faint); font-size: 12px; text-align: center; margin-top: 4px; }
@@ -924,6 +991,21 @@
 .vc-usage-wrap.closing .vc-usage-meter, .vc-usage-wrap.closing .vc-usage-col footer, .vc-usage-wrap.closing .vc-usage-name { opacity: 0; transition: opacity .15s; }
 @keyframes vc-usage-fill { from { transform: scaleX(0); } }
 @keyframes vc-usage-rise { from { opacity: 0; transform: translateY(4px); } }
+/* In the rail (Shell.tsx) the pills stack, logo over number, and the panel
+   opens rightwards from their bottom-left. The rail is outside .vc, so the
+   wrap brings the colours. */
+.vc-usage-wrap {
+  --vc-soft: color-mix(in srgb, var(--text) 62%, transparent);
+  --vc-faint: color-mix(in srgb, var(--text) 40%, transparent);
+  --vc-line: #2a2f3c;
+}
+.vc-usage-wrap.rail { margin-right: 0; }
+.vc-usage-wrap.rail .vc-usage { flex-direction: column; gap: 4px; margin-right: 0; border-radius: 12px; }
+.vc-usage-wrap.rail .vc-usage-chip {
+  flex-direction: column; justify-content: center; gap: 3px; width: 44px; height: 42px; padding: 0;
+  border-radius: 12px; font-size: 11px; cursor: pointer;
+}
+.vc-usage-wrap.rail .vc-usage-panel { top: auto; right: auto; bottom: -8px; left: -8px; z-index: 55; }
 /* A phone shows one pill; the panel stacks its accounts in rows instead. */
 @media (max-width: 720px) {
   .vc-usage-panel {
@@ -955,6 +1037,24 @@
   box-shadow: 0 10px 30px -14px rgba(0, 0, 0, .6); transition: box-shadow .3s;
 }
 .vc-browser-frame.live img { box-shadow: 0 0 0 1px color-mix(in srgb, #6fcf97 45%, transparent), 0 10px 30px -14px rgba(0, 0, 0, .6); }
+.vc-browser-frame { position: relative; }
+.vc-browser-frame img { user-select: none; -webkit-user-select: none; }
+.vc-browser-frame.yours img { cursor: default; }
+.vc-browser-frame:not(.yours) img { cursor: not-allowed; }
+.vc-browser-body { flex-direction: column; gap: 12px; }
+.vc-browser-handoff {
+  margin: 0 auto; width: 100%; max-width: 1100px; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px;
+  border-radius: 12px; border: 1px solid color-mix(in srgb, #7aa2ff 45%, transparent); background: color-mix(in srgb, #7aa2ff 12%, var(--vc-surface));
+  color: var(--text); font-size: 13.5px;
+}
+.vc-browser-handoff span { flex: 1; min-width: 0; }
+.vc-browser-handoff button { height: 30px; padding: 0 14px; border-radius: 999px; font-size: 13px; cursor: pointer; flex: none; }
+.vc-browser-handoff-skip { border: 1px solid var(--vc-line); background: none; color: var(--vc-soft); }
+.vc-browser-handoff-done { border: 0; background: #7aa2ff; color: #0b1020; font-weight: 600; }
+.vc-browser-chip.waiting { border-color: color-mix(in srgb, #7aa2ff 55%, transparent); color: #b9ccff; }
+.vc-browser-frame.typing img { box-shadow: 0 0 0 2px color-mix(in srgb, #7aa2ff 60%, transparent), 0 10px 30px -14px rgba(0, 0, 0, .6); }
+/* Catches the owner's keys for the page; off-screen but focusable, 16px so iOS does not zoom. */
+.vc-browser-keys { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; font-size: 16px; pointer-events: none; }
 .vc-browser-frame figcaption { font-size: 12.5px; color: var(--vc-faint); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vc-browser-chip {
   display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px 0 3px; margin-right: 4px; border-radius: 999px;
@@ -968,6 +1068,24 @@
   .vc-browser-chip { padding: 0 3px; }
   .vc-browser-chip span { display: none; }
   .vc-browser-body { padding: 4px 10px calc(20px + env(safe-area-inset-bottom)); }
+}
+/* Files (FilesPanel): the chat's folder on the box as a tree, T3 Code style. */
+.vc-files-body { display: flex; flex-direction: column; padding: 2px 8px 24px; }
+.vc-files-tree { list-style: none; margin: 0; padding: 0; }
+.vc-files-tree li { padding-left: calc(var(--depth, 0) * 16px); }
+.vc-file-row { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 34px; padding: 0 4px 0 6px; border: 0; border-radius: 8px; background: none; color: var(--text); font-size: 13.5px; text-align: left; }
+button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
+.vc-file-row .vc-chev { color: var(--vc-faint); flex: none; }
+.vc-file-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 6px 0 6px 20px; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+.vc-file-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vc-file-size { flex: none; font-size: 12px; color: var(--vc-faint); }
+.vc-file-row .vc-icon-btn { flex: none; width: 30px; height: 30px; }
+.vc-files-note { margin: 10px 8px 0; font-size: 11.5px; color: var(--vc-faint); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vc-art-download { margin: 0 auto; padding: 48px 24px; max-width: 360px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; color: var(--vc-soft); font-size: 13px; line-height: 1.5; }
+.vc-art-download strong { color: var(--text); font-size: 14.5px; font-weight: 600; word-break: break-word; }
+.vc-art-download .vc-btn { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; text-decoration: none; }
+@media (max-width: 720px) {
+  .vc-files-body { padding: 2px 6px calc(24px + env(safe-area-inset-bottom)); }
 }
 /* Agents (AgentsPanel): the agents a chat's agent started, beside the chat in
    the canvas slot, each opening into its own log. Full screen on a phone. */
@@ -1017,19 +1135,43 @@
 .vc-astep-tool .vc-tool-head:not(:disabled):hover { background: var(--vc-raise); }
 .vc-astep-tool .vc-tool-body { margin-left: 22px; }
 .vc-agent-result { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--vc-line); font-size: 13.5px; line-height: 1.55; }
-/* In the reply: the call that started an agent, on its own line. */
-.vc-agent-card { align-self: stretch; }
-.vc-agent-card-head {
-  display: flex; align-items: center; gap: 9px; width: 100%; min-height: 40px; padding: 7px 10px; border-radius: 11px;
-  border: 1px solid var(--vc-line); background: var(--vc-surface); color: var(--vc-soft); font-size: 13.5px; text-align: left;
+/* In the reply: the agents it started, as one group that folds open (T3 Code's). */
+.vc-agent-group { align-self: stretch; display: flex; flex-direction: column; gap: 6px; }
+.vc-agent-group-head {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 10px;
+  background: none; color: var(--vc-faint); text-align: left;
 }
-.vc-agent-card-head:hover { background: var(--vc-raise); color: var(--text); }
-.vc-agent-card.running .vc-agent-card-head { border-color: color-mix(in srgb, #6fa8ff 35%, var(--vc-line)); }
-.vc-agent-card.error .vc-agent-card-state { color: #ff7a8f; }
-.vc-agent-card-name { flex: none; color: var(--text); font-weight: 500; }
-.vc-agent-card-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.vc-agent-card-state { flex: none; display: inline-flex; align-items: center; gap: 6px; color: var(--vc-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
-.vc-agent-card-open { flex: none; font-size: 12px; color: var(--accent); }
+.vc-agent-group-head:hover { background: var(--vc-raise); color: var(--vc-soft); }
+.vc-agent-stack { display: inline-flex; flex: none; }
+.vc-agent-stack .vc-agent-avatar + .vc-agent-avatar { margin-left: -9px; }
+.vc-agent-group-title { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.vc-agent-group-name { color: var(--text); font-size: 13.5px; font-weight: 600; }
+.vc-agent-group-state { font-size: 12px; color: var(--vc-faint); }
+.vc-agent-group-state.live { color: #6fa8ff; }
+.vc-agent-group-state.error { color: #ff7a8f; }
+.vc-agent-time { flex: none; font-size: 12.5px; color: var(--vc-faint); font-variant-numeric: tabular-nums; }
+.vc-agent-avatar {
+  position: relative; flex: none; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--vc-raise); box-shadow: 0 0 0 2px var(--vc-surface);
+}
+.vc-agent-avatar-dot {
+  position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px; border-radius: 50%;
+  background: #6fa8ff; box-shadow: 0 0 0 2px var(--vc-surface);
+}
+.vc-agent-avatar.error .vc-agent-avatar-dot { background: #ff7a8f; }
+.vc-agent-avatar.stopped .vc-agent-avatar-dot { background: var(--vc-faint); }
+.vc-agent-rows { display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--vc-line); border-radius: 12px; background: var(--vc-surface); }
+.vc-agent-row {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 8px 10px; border: 0; border-radius: 9px;
+  background: none; color: var(--vc-faint); text-align: left;
+}
+.vc-agent-row:hover { background: var(--vc-raise); color: var(--vc-soft); }
+.vc-agent-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.vc-agent-row-top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.vc-agent-row-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text); font-size: 13.5px; font-weight: 600; }
+.vc-agent-row-state { flex: none; font-size: 11.5px; color: var(--vc-faint); }
+.vc-agent-row.error .vc-agent-row-state { color: #ff7a8f; }
+.vc-agent-row-now { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; color: var(--vc-soft); }
 .vc-agents-chip {
   display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; margin-right: 4px; border-radius: 999px;
   border: 1px solid var(--vc-line); background: none; color: var(--vc-soft); font-size: 12px;
@@ -1041,7 +1183,6 @@
   .vc-agents-chip { padding: 0 7px; }
   .vc-agents-body { padding: 4px 10px calc(24px + env(safe-area-inset-bottom)); }
   .vc-agent-log { padding-left: 12px; }
-  .vc-agent-card-open { display: none; }
 }
 /* Images in replies (shared screenshots): fit the column, framed like the browser's. */
 .vc .md img { display: block; max-width: 100%; height: auto; margin: 10px 0; border-radius: 10px; border: 1px solid var(--vc-line); }
@@ -1178,6 +1319,11 @@
 .vc-proj-icons button { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: none; border: 1px solid transparent; color: var(--vc-soft); }
 .vc-proj-icons button:hover { background: var(--vc-raise); color: var(--text); }
 .vc-proj-icons button.on { background: var(--vc-raise); border-color: var(--vc-line); color: var(--text); }
+.vc-proj-img { flex: none; object-fit: contain; border-radius: 4px; }
+.vc-proj-picture { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.vc-proj-picture-now { display: inline-flex; align-items: center; gap: 6px; }
+.vc-proj-favicon { display: inline-flex; gap: 6px; }
+.vc-proj-favicon input { width: 180px; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--vc-line); background: none; color: var(--text); font: inherit; font-size: 13px; }
 .vc-proj-model { display: flex; }
 .vc-proj-model .vc-model-trigger { border: 1px solid var(--vc-line); }
 
@@ -1299,3 +1445,128 @@
   .vc-runs-body { max-height: 38vh; }
   .app.shell.drawer-open .vc-runs, .app.shell.drawer-open .vc-runs-pill { opacity: 0; pointer-events: none; }
 }
+
+/* The agent's questions (QuestionsPanel.tsx): above the composer, one at a time. */
+.vc-questions {
+  /* The composer's width: its column less the dock's 8px inset each side. */
+  width: calc(100% - 16px); max-width: calc(var(--vc-col) - 16px);
+  margin: 0 auto 8px; padding: 10px 12px 12px; border-radius: 18px;
+  background: var(--vc-surface); border: 1px solid var(--vc-line);
+  box-shadow: 0 8px 28px -14px rgba(0, 0, 0, .55);
+}
+.vc-questions.collapsed { padding-bottom: 10px; }
+.vc-q-head { display: flex; align-items: center; gap: 8px; color: var(--vc-soft); font-size: 12.5px; min-width: 0; }
+.vc-q-chip { padding: 1px 8px; border-radius: 6px; font-weight: 600; color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); white-space: nowrap; }
+.vc-q-count { font-variant-numeric: tabular-nums; }
+.vc-q-peek { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.vc-q-spacer { flex: 1; }
+.vc-icon-btn.sm { width: 28px; height: 28px; }
+.vc-q-text { margin: 10px 2px 2px; font-size: 15px; line-height: 1.45; color: var(--text); }
+.vc-q-hint { margin: 2px 2px 0; font-size: 12.5px; color: var(--vc-soft); }
+.vc-q-files { padding: 8px 0 0; }
+.vc-q-options { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; max-height: 42vh; overflow-y: auto; }
+.vc-q-option {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 9px 10px; text-align: left;
+  border-radius: 12px; border: 1px solid var(--vc-line); background: none; color: var(--text); cursor: pointer;
+}
+.vc-q-option:hover { background: var(--vc-raise); }
+.vc-q-option.on { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.vc-q-key {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-top: 1px;
+  border-radius: 6px; font-size: 11.5px; font-weight: 600; color: var(--vc-soft); background: var(--vc-raise); font-variant-numeric: tabular-nums;
+}
+.vc-q-option.on .vc-q-key { color: var(--bg); background: var(--accent); }
+.vc-q-option-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vc-q-label { font-size: 14px; font-weight: 550; }
+.vc-q-desc { font-size: 12.5px; line-height: 1.4; color: var(--vc-soft); }
+.vc-answer-btn { background: var(--accent); border-color: transparent; color: var(--bg); font-weight: 600; gap: 6px; }
+.vc-answer-btn:disabled { opacity: .45; cursor: default; }
+/* Asked questions in the transcript, a row that opens to each answer. */
+.vc-q-record { margin: 8px 0; max-width: 620px; border-radius: 12px; border: 1px solid var(--vc-line); }
+.vc-q-record-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; background: none; border: 0;
+  color: var(--vc-soft); font-size: 13px; text-align: left; cursor: pointer; min-width: 0;
+}
+.vc-q-record-label { color: var(--text); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-q-record-answer { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-q-record.pending .vc-q-record-answer { color: var(--accent); }
+.vc-q-record-list { margin: 0; padding: 0 12px 10px 34px; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
+.vc-q-record-q { color: var(--vc-soft); }
+.vc-q-record-a { color: var(--text); white-space: pre-wrap; }
+.vc-asking {
+  flex: none; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 600; white-space: nowrap;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+/* Queued messages (QueuedMessages.tsx), T3 Code's drawer: a strip tucked under
+   the composer's top edge, the box drawn over its lower lip. */
+.vc-queue {
+  position: relative; margin: 0 30px -22px; padding: 4px 6px 26px;
+  border: 1px solid #ffffff17; border-bottom: 0; border-radius: 16px 16px 0 0;
+  background: color-mix(in srgb, var(--vc-surface) 70%, transparent);
+  font-size: 12px; line-height: 16px;
+}
+.vc.no-glow .vc-queue { background: var(--vc-surface); }
+.vc-composer > .vc-box { position: relative; z-index: 1; }
+.vc-queue-head {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 6px;
+  background: none; border: 0; color: var(--vc-soft); font: inherit; cursor: pointer; text-align: left;
+}
+.vc-queue-head:hover { color: var(--text); }
+.vc-queue-count {
+  min-width: 16px; padding: 0 5px; border-radius: 99px; text-align: center;
+  background: var(--vc-raise); color: var(--text); font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.vc-queue-spacer { flex: 1; }
+.vc-queue-chevron { transition: transform .15s; }
+.vc-queue-chevron.collapsed { transform: rotate(180deg); }
+.vc-queue-list { list-style: none; margin: 0; padding: 0; max-height: 128px; overflow-y: auto; }
+.vc-queue-row {
+  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px;
+  padding: 2px 2px 2px 0; border-radius: 8px; color: var(--text);
+}
+.vc-queue-row:hover { background: color-mix(in srgb, var(--vc-raise) 60%, transparent); }
+.vc-queue-row.editing { background: var(--vc-raise); }
+.vc-queue-row.dragging { opacity: .5; }
+.vc-queue-drop { position: absolute; left: 0; right: 0; height: 2px; border-radius: 2px; background: color-mix(in srgb, var(--accent) 70%, transparent); }
+.vc-queue-drop.top { top: 0; }
+.vc-queue-drop.bottom { bottom: 0; }
+.vc-queue-grip-space { width: 4px; }
+.vc-queue-content { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.vc-queue-thumb {
+  flex: none; width: 16px; height: 16px; overflow: hidden; border-radius: 4px;
+  border: 1px solid #ffffff1f; background: color-mix(in srgb, var(--vc-raise) 60%, transparent);
+}
+.vc-queue-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vc-queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-queue-actions { display: flex; align-items: center; gap: 2px; }
+.vc-queue-btn {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px;
+  background: none; border: 0; color: var(--vc-faint); cursor: pointer;
+}
+.vc-queue-btn:hover { color: var(--text); background: var(--vc-raise); }
+.vc-queue-grip { cursor: grab; }
+.vc-queue-grip:active { cursor: grabbing; }
+.vc-queue-pill {
+  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px; border-radius: 6px;
+  background: none; border: 0; color: var(--vc-soft); font: inherit; font-size: 12px; cursor: pointer;
+}
+.vc-queue-pill:hover:not(:disabled) { color: var(--text); background: var(--vc-raise); }
+.vc-queue-pill:disabled { opacity: .45; cursor: default; }
+
+/* The follow-up button's glyph swaps (queue ↔ steer) as Ctrl/⌘ goes down. */
+.vc-morph { display: inline-grid; place-items: center; animation: vc-morph .16s ease-out; }
+@keyframes vc-morph { from { transform: scale(.6) rotate(-20deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .vc-morph { animation: none; } }
+
+/* T3 Code's steer marker: a small label over the owner's bubble. */
+.vc-steer { flex-direction: column; align-items: flex-end; }
+.vc-steer-label { display: flex; align-items: center; gap: 4px; margin: 0 4px 4px 0; font-size: 12px; line-height: 1; color: var(--vc-soft); }
+
+/* A chat moving to another account (HandoffMark.tsx): a rule across the log
+   where it moved, and the same line as a row over the composer before it does. */
+.vc-handoff { display: flex; align-items: center; gap: 10px; color: var(--vc-faint); font-size: 12px; }
+.vc-handoff::before, .vc-handoff::after { content: ''; flex: 1; height: 1px; background: var(--vc-line); }
+.vc-handoff-who { display: inline-flex; align-items: center; gap: 5px; color: var(--vc-soft); }
+.vc-handoff-who .vc-logo { margin-left: 2px; }
+.vc-handoff.pending { margin: 0 auto 6px; max-width: 760px; padding: 0 4px; }

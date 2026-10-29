@@ -95,6 +95,12 @@ export const getGmailAccounts = () => getJSON('/api/gmail/accounts') // { config
 export const renameGmailAccount = (from: string, to: string) => sendJSON('/api/gmail/accounts/rename', 'POST', { from, to })
 export const removeGmailAccount = (label: string) => sendJSON('/api/gmail/accounts/remove', 'POST', { label })
 export const startGmailAccountAuth = (label: string) => sendJSON('/api/gmail/accounts/auth', 'POST', { label })
+// Google Drive accounts (Drive, Sheets, Docs): the same shape again, in
+// data/drive-tokens.json, with their own sign-in for the full `drive` scope.
+export const getDriveAccounts = () => getJSON('/api/drive/accounts') // { configured, accounts: [...] }
+export const renameDriveAccount = (from: string, to: string) => sendJSON('/api/drive/accounts/rename', 'POST', { from, to })
+export const removeDriveAccount = (label: string) => sendJSON('/api/drive/accounts/remove', 'POST', { label })
+export const startDriveAccountAuth = (label: string) => sendJSON('/api/drive/accounts/auth', 'POST', { label })
 
 export const getBrain = () => getJSON('/api/brain')
 
@@ -335,18 +341,17 @@ export const markHabitCheckin = (date: string) => sendJSON('/api/habits/checkin'
 // in, and `habits` the same refreshed payload every other habit mutation returns.
 export const syncSleep = (opts: { days?: number; force?: boolean } = {}) =>
   sendJSON('/api/habits/sync-sleep', 'POST', opts)
-// Is WHOOP configured (client id/secret present) and connected (refresh token)?
+// WHOOP's state as Bushido reports it: Bushido holds the grant, and connecting
+// happens there (`bushidoUrl` says where).
 export const getWhoopStatus = () => getJSON('/api/habits/whoop/status')
-// Start the WHOOP OAuth flow; returns { authUrl } for the app to open.
-export const connectWhoop = () => sendJSON('/api/habits/whoop/connect', 'POST', {})
 
 // ---- Strava ------------------------------------------------------------------
-// The bridge holds the token; the dashboard only ever sees status and totals.
-// Everything else Strava offers is reached by the agents (strava/cli.mjs, the
-// gateway's strava__* tools) and by external MCP clients (totem_strava_*).
+// Bushido holds the grant and the bridge reads it from there; the dashboard only
+// ever sees status and totals. Connecting happens in Bushido (`bushidoUrl` in the
+// status says where). Everything else Strava offers is reached by the agents
+// (strava/cli.mjs, the gateway's strava__* tools) and by external MCP clients
+// (totem_strava_*).
 export const getStravaStatus = () => getJSON('/api/strava/status')
-export const connectStrava = () => sendJSON('/api/strava/connect', 'POST', {})
-export const disconnectStrava = () => sendJSON('/api/strava/disconnect', 'POST', {})
 // Incremental by default; full walks history backwards in bounded pages and is
 // resumable — the response's `complete` says whether there is more.
 export const syncStrava = (opts: { full?: boolean; pages?: number } = {}) => sendJSON('/api/strava/sync', 'POST', opts)
@@ -706,17 +711,13 @@ export interface IntegrationField {
   masked: string | null
 }
 export interface IntegrationInfo {
-  id: 'whoop' | 'strava' | 'sheet'
+  id: 'sheet'
   label: string
   configured: boolean
   console: string
-  /** null for integrations without an OAuth redirect (the task sheet). */
-  redirectUri: string | null
   restartRequired?: boolean
   docs?: string
   credentialsFile?: { name: string; state: 'unset' | 'found' | 'missing' }
-  redirectFromEnv: boolean
-  callbackDomain?: string
   fields: IntegrationField[]
 }
 export interface IntegrationsPayload {

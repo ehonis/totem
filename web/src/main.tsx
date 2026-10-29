@@ -6,6 +6,7 @@ import '@fontsource-variable/inter'
 import '@fontsource-variable/unbounded'
 import App from './App'
 import { registerServiceWorker, reportNotificationOpen } from './push'
+import { watchForNewBuild } from './newBuild'
 import './tailwind.css'
 import './styles.css'
 import './shell.css'
@@ -23,5 +24,7 @@ if ('serviceWorker' in navigator) {
 // A notification tap lands on /whatever?n=<entryId>. Reporting that back is the
 // strongest feedback signal there is and costs the user nothing.
 reportNotificationOpen()
+
+watchForNewBuild()
 
 createRoot(document.getElementById('root')!).render(<App />)

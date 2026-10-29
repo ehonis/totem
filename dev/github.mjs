@@ -11,6 +11,8 @@ export const AI_REVIEW_VAR = 'AI_REVIEW'
 export const REVIEW_WORKFLOW = 'review.yml'
 export const CI_KEY_SECRET = 'CLIPROXY_API_KEY'
 const CODEX_LOGIN = 'chatgpt-codex-connector'
+const DAY_MS = 86_400_000
+const SLICE_DAYS = 14
 const FAILED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required'])
 
 /** One word for a run or check: success, failure, pending, cancelled or neutral. */
@@ -233,6 +235,37 @@ export function createDevGithub({ run }) {
     }
   }
 
+  /**
+   * Every PR the gh login authored and merged since `since` (YYYY-MM-DD), in any
+   * repo. Search answers at most 1,000 results per query, so the range is asked
+   * for in two-week slices, each paged 100 at a time.
+   */
+  async function mergedPulls(since, { today = new Date() } = {}) {
+    const day = (d) => d.toISOString().slice(0, 10)
+    const ranges = []
+    for (let start = new Date(`${since}T00:00:00Z`); start <= today; start = new Date(start.getTime() + SLICE_DAYS * DAY_MS)) {
+      const end = new Date(start.getTime() + (SLICE_DAYS - 1) * DAY_MS)
+      ranges.push(end >= today ? `>=${day(start)}` : `${day(start)}..${day(end)}`)
+    }
+    const slices = await mapLimit(ranges, 2, async (range) => {
+      const q = encodeURIComponent(`is:pr is:merged author:@me merged:${range}`)
+      const items = []
+      for (let page = 1; page <= 10; page++) {
+        const { items: batch = [] } = await get(`search/issues?q=${q}&per_page=100&page=${page}`)
+        items.push(...batch)
+        if (batch.length < 100) break
+      }
+      return items
+    })
+    const byUrl = new Map()
+    for (const item of slices.flat()) {
+      const repo = String(item.repository_url || '').split('/repos/')[1]
+      const mergedAt = item.pull_request?.merged_at || item.closed_at
+      if (repo && mergedAt) byUrl.set(item.html_url, { repo, number: item.number, title: item.title, url: item.html_url, mergedAt })
+    }
+    return [...byUrl.values()].sort((a, b) => a.mergedAt.localeCompare(b.mergedAt))
+  }
+
   /** The cheaper subset the background watcher needs: CI on main and runners. */
   async function watchStatus(repo) {
     const branch = await defaultBranch(repo)
@@ -240,5 +273,5 @@ export function createDevGithub({ run }) {
     return { repo, defaultBranch: branch, ci, ...runnerInfo }
   }
 
-  return { repoStatus, watchStatus, setAiReview, aiReview, repoVisible, dispatchReview }
+  return { repoStatus, watchStatus, setAiReview, aiReview, repoVisible, dispatchReview, mergedPulls }
 }

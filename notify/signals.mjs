@@ -69,6 +69,10 @@ function describePerson(person) {
   return person.name
 }
 
+// The note the people come from (brain/people/people.md, read by the bridge and
+// notify/cli.mjs). The Brain tab opens a note from `/brain#<path>`.
+const PEOPLE_URL = '/brain#people/people.md'
+
 export function birthdayFacts({ people = [], now, tz, leadDays = [7] }) {
   const today = localParts(now, tz)
   const out = []
@@ -87,7 +91,7 @@ export function birthdayFacts({ people = [], now, tz, leadDays = [7] }) {
         // characters and always cuts the end. See notify/text.mjs.
         title: fitTitle(`${person.name.split(' ')[0]} turns ${age} today`),
         body: bodyOf(`${describePerson(person)} turns ${age} today.`),
-        url: '/brain',
+        url: PEOPLE_URL,
         expiresAt: endOfDay(now, tz),
         revalidate: {
           collector: 'birthdays',
@@ -106,7 +110,7 @@ export function birthdayFacts({ people = [], now, tz, leadDays = [7] }) {
         subject: person.name,
         title: fitTitle(`${person.name.split(' ')[0]}'s birthday in ${days} days`),
         body: bodyOf(`${describePerson(person)} birthday is ${days} days out — enough time to get something.`),
-        url: '/brain',
+        url: PEOPLE_URL,
         expiresAt: endOfDay(now, tz),
         revalidate: {
           collector: 'birthdays',
@@ -142,134 +146,10 @@ function anniversaryInYear(birthday, year) {
 
 const dateKeyUtc = (ms) => new Date(ms).toISOString().slice(0, 10)
 
-function metTarget(entry, target) {
-  return Number(entry?.count || 0) >= Math.max(1, Number(target) || 1)
-}
-
-// Consecutive days met, counting back from (and excluding) `fromDay`.
-export function streakBefore(entries, habitId, target, fromDayMs) {
-  let streak = 0
-  for (let i = 1; i <= 400; i++) {
-    const key = dateKeyUtc(fromDayMs - i * 86_400_000)
-    if (!metTarget(entries?.[key]?.[habitId], target)) break
-    streak++
-  }
-  return streak
-}
-
-// The week runs Monday to Sunday — the same week goals/periods.mjs cuts, the habit
-// grid draws, and Bushido's quotas have always used. (It ran Sunday to Saturday until
-// 2026-09-20; the scheduler's 0-6 weekday convention is unchanged, only what counts
-// as "this week" moved.) Returns { count, daysLeft } where daysLeft includes today —
-// "one more, and you have tonight" is a different message from "one more, and the
-// week is over".
-export function weekProgress(entries, habitId, target, now, tz) {
-  const p = localParts(now, tz)
-  const todayUtc = Date.UTC(p.year, p.month - 1, p.day)
-  const dayOfWeek = (p.weekday + 6) % 7 // 0 = Monday … 6 = Sunday
-  const weekStart = todayUtc - dayOfWeek * 86_400_000
-  // "4 per week" counts occurrences, so a day logged twice counts twice.
-  let count = 0
-  for (let i = 0; i <= dayOfWeek; i++) {
-    const entry = entries?.[dateKeyUtc(weekStart + i * 86_400_000)]?.[habitId]
-    count += Math.max(0, Number(entry?.count || 0))
-  }
-  return { count, daysLeft: 7 - dayOfWeek, weekStart: dateKeyUtc(weekStart) }
-}
-
-export function habitFacts({ habits = [], entries = {}, now, tz }) {
-  const p = localParts(now, tz)
-  const today = dayKey(now, tz)
-  const todayUtc = Date.UTC(p.year, p.month - 1, p.day)
-  const out = []
-
-  for (const habit of habits) {
-    const target = Math.max(1, Number(habit.target) || 1)
-    const loggedToday = metTarget(entries?.[today]?.[habit.id], habit.cadence === 'daily' ? target : 1)
-
-    if (habit.cadence === 'daily') {
-      if (loggedToday) continue
-      const streak = streakBefore(entries, habit.id, target, todayUtc)
-      // A one-day streak is not a streak, and nobody needs telling about it.
-      if (streak < 2) continue
-      out.push({
-        kind: 'habit.streak-ending',
-        category: 'habit.slipping',
-        salience: Math.min(40 + streak * 3, 85),
-        slot: 'evening',
-        subject: habit.id,
-        title: fitTitle('Streak ends tonight', habit.name),
-        body: `${habit.name} — ${streak} days running, and not logged yet today.`,
-        url: '/productivity/habits',
-        // Worthless after midnight: by then the streak has already broken.
-        expiresAt: endOfDay(now, tz),
-        revalidate: {
-          collector: 'habits',
-          identity: `daily:${habit.id}:${today}`,
-          factKey: `daily:${habit.id}:${today}`,
-        },
-        resolvedTitle: fitTitle('Streak intact', habit.name),
-      })
-      continue
-    }
-
-    if (habit.cadence === 'weekly' && target > 1) {
-      const { count, daysLeft, weekStart } = weekProgress(entries, habit.id, target, now, tz)
-      const remaining = target - count
-      if (remaining <= 0) continue
-
-      // Within reach, with time to act: the nudge that pushes toward a finish
-      // rather than reporting a slip.
-      if (remaining <= 2 && remaining <= daysLeft) {
-        out.push({
-          kind: 'habit.near-target',
-          category: 'goal.nearcomplete',
-          salience: 55 + (2 - remaining) * 10 + (remaining === daysLeft ? 15 : 0),
-          slot: 'evening',
-          subject: habit.id,
-          title: fitTitle(remaining === 1 ? 'One more to finish' : `${remaining} more to finish`, habit.name),
-          body: `${habit.name} — ${count} of ${target} so far, ${daysLeft} day${daysLeft === 1 ? '' : 's'} left including today.`,
-          url: '/productivity/habits',
-          // Still useful tomorrow, useless once the week is over.
-          expiresAt: endOfDay(now, tz, daysLeft - 1),
-          // Identity is the nudge ("this habit, this week"); the count lives in
-          // the fact key, so logging a third of four re-words this rather than
-          // silencing it.
-          revalidate: {
-            collector: 'habits',
-            identity: `weekly:${habit.id}:${weekStart}`,
-            factKey: `weekly:${habit.id}:${weekStart}:${count}`,
-          },
-          resolvedTitle: fitTitle('Done for the week', habit.name),
-        })
-        continue
-      }
-
-      // Behind pace and not within reach: worth saying once, without pretending
-      // it is still achievable.
-      if (remaining > daysLeft) {
-        out.push({
-          kind: 'habit.behind-pace',
-          category: 'habit.slipping',
-          salience: 45,
-          slot: 'night',
-          subject: habit.id,
-          title: fitTitle('Short this week', habit.name),
-          body: `${habit.name} — ${count} of ${target}, with ${daysLeft} day${daysLeft === 1 ? '' : 's'} left.`,
-          url: '/productivity/habits',
-          expiresAt: endOfDay(now, tz, daysLeft - 1),
-          revalidate: {
-            collector: 'habits',
-            identity: `weekly-behind:${habit.id}:${weekStart}`,
-            factKey: `weekly-behind:${habit.id}:${weekStart}:${count}`,
-          },
-        })
-      }
-    }
-  }
-
-  return out
-}
+// No completion nudges for habits: no "streak ends tonight", no "one more to
+// finish", no "short this week". A habit can be logged for any past day, so a
+// deadline on it is invented urgency, and the owner asked for them to stop
+// (2026-10-14). The notifier also drops any still queued (`isRetiredNudge`).
 
 // A metric habit trending away from its goal. Deliberately requires a run of days
 // rather than one bad night — a single low sleep score is weather, not a trend,
@@ -520,4 +400,4 @@ function daysBetween(fromKey, toKey) {
   return Math.round((b - a) / 86_400_000)
 }
 
-export const COLLECTORS = { birthdayFacts, habitFacts, metricFacts, goalFacts, taskFacts }
+export const COLLECTORS = { birthdayFacts, metricFacts, goalFacts, taskFacts }
