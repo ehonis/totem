@@ -61,17 +61,26 @@ function segments(command) {
   return out
 }
 
-// Words of one segment with quotes removed ("a b" is one word).
+// Words of one segment with quotes removed ("a b" is one word). Adjacent pieces
+// join into one word the way a shell joins them, so Codex's quoting of a prompt
+// holding a quote or a `$` ("…Historical "'$199 pricing…') stays one argument.
 function words(segment) {
   const out = []
-  const re = /\$'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g
+  const re = /\$'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\s'"$]+|\$)|(\s+)/g
+  let text = ''
+  let quoted = false
+  let open = false
+  const end = () => { if (open) out.push({ text, quoted }); text = ''; quoted = false; open = false }
   let m
   while ((m = re.exec(segment))) {
-    if (m[1] != null) out.push({ text: m[1].replace(/\\n/g, '\n').replace(/\\(.)/g, '$1'), quoted: true })
-    else if (m[2] != null) out.push({ text: m[2].replace(/\\(["\\$`])/g, '$1'), quoted: true })
-    else if (m[3] != null) out.push({ text: m[3], quoted: true })
-    else out.push({ text: m[4], quoted: false })
+    if (m[5] != null) { end(); continue }
+    open = true
+    if (m[1] != null) { text += m[1].replace(/\\n/g, '\n').replace(/\\(.)/g, '$1'); quoted = true }
+    else if (m[2] != null) { text += m[2].replace(/\\(["\\$`])/g, '$1'); quoted = true }
+    else if (m[3] != null) { text += m[3]; quoted = true }
+    else text += m[4]
   }
+  end()
   return out
 }
 
@@ -116,10 +125,13 @@ function cliIn(segment, command, depth) {
   else if (head === 'opencode' && flags[0] === 'run') provider = 'opencode'
   else if (head === 'gemini' && flags.some((f) => f === '-p' || f === '--prompt')) provider = 'gemini'
   if (!provider) return null
-  // The prompt: the longest quoted argument, else the heredoc it reads.
-  const quoted = rest.filter((w) => w.quoted).map((w) => w.text).sort((a, b) => b.length - a.length)[0] || ''
+  // The prompt: the longest quoted argument, else the heredoc it reads. Codex
+  // quotes every argument, so a flag is never the prompt.
+  const quoted = rest.filter((w) => w.quoted && !/^-/.test(w.text)).map((w) => w.text).sort((a, b) => b.length - a.length)[0] || ''
   const prompt = (quoted.length >= 12 ? quoted : heredoc(command) || quoted).trim()
-  return { provider, prompt: truncate(prompt, AGENT_PROMPT) }
+  // `claude -p --no-session-persistence` writes no session log to tail.
+  const noLog = provider === 'claude' && flags.includes('--no-session-persistence')
+  return { provider, prompt: truncate(prompt, AGENT_PROMPT), ...(noLog ? { noLog } : {}) }
 }
 
 /**
@@ -299,10 +311,12 @@ export function foldAgent(current, event) {
 
 /** A stored `part.agent`, cleaned (chat/store.mjs › normalizePart). */
 export function normalizeAgent(a) {
-  if (!a || typeof a !== 'object') return null
+  // Every real agent is named its provider when it starts; one without was
+  // never an agent (a background Bash command's task events, before the fix).
+  if (!a || typeof a !== 'object' || !a.provider) return null
   const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '')
   const num = (v) => (Number.isFinite(v) && v >= 0 ? v : 0)
-  const out = { provider: str(a.provider, 40) || 'agent', status: AGENT_STATUSES.has(a.status) ? a.status : 'done' }
+  const out = { provider: str(a.provider, 40), status: AGENT_STATUSES.has(a.status) ? a.status : 'done' }
   for (const [k, n] of [['via', 20], ['name', 80], ['title', 300], ['prompt', AGENT_PROMPT], ['model', 120], ['progress', 300], ['summary', AGENT_SUMMARY], ['log', 20]]) {
     const v = str(a[k], n)
     if (v) out[k] = v
@@ -515,7 +529,7 @@ export function createCliAgentWatch({ emit, env = process.env, log = () => {} })
       const startedAt = Date.now()
       const info = { provider: hit.provider, via: 'cli', title: firstLine(hit.prompt) || `Ran ${agentLabel(hit.provider)}`, prompt: hit.prompt, status: 'running', startedAt }
       emit({ toolId: t.id, agent: info })
-      const canTail = sessionRoots(hit.provider, env).length > 0
+      const canTail = !hit.noLog && sessionRoots(hit.provider, env).length > 0
       const watcher = canTail
         ? watchSessionLog({
           provider: hit.provider, prompt: hit.prompt, startedAt, env, log,
@@ -523,7 +537,7 @@ export function createCliAgentWatch({ emit, env = process.env, log = () => {} })
           onPatch: (patch) => emit({ toolId: t.id, agent: patch }),
         })
         : null
-      if (!canTail) emit({ toolId: t.id, agent: { log: 'none' } })
+      if (!canTail) emit({ toolId: t.id, agent: { log: hit.noLog ? 'off' : 'none' } })
       live.set(t.id, { watcher, info, steps: 0 })
       return
     }
@@ -531,6 +545,14 @@ export function createCliAgentWatch({ emit, env = process.env, log = () => {} })
     if (!entry) return
     live.delete(t.id)
     finish(t.id, entry, t.status === 'error' ? 'error' : 'done', t.output || '')
+  }
+
+  /** A steer interrupted the parent: the delegation it was waiting on is cut off. */
+  function cut(toolId) {
+    const entry = live.get(toolId)
+    if (!entry) return
+    live.delete(toolId)
+    finish(toolId, entry, 'stopped', '')
   }
 
   async function finish(toolId, entry, status, output) {
@@ -546,7 +568,7 @@ export function createCliAgentWatch({ emit, env = process.env, log = () => {} })
     await Promise.all(open.map(([id, entry]) => finish(id, entry, status === 'error' ? 'error' : status === 'stopped' ? 'stopped' : 'done', '')))
   }
 
-  return { tool, close }
+  return { tool, cut, close }
 }
 
 const firstLine = (s) => truncate(String(s || '').split('\n').map((l) => l.trim()).find(Boolean) || '', 140)

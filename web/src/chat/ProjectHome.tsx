@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   useChat, loadProject, updateProject, saveProjectMemory, addProjectFiles, removeProjectFiles, deleteProject, openArtifact,
-  setActive, threadTitle, threadChoice, groupThreads, openProject, foldersOf, moveMemoryUp, moveFilesUp,
+  setActive, threadTitle, threadChoice, groupThreads, openProject, foldersOf, moveMemoryUp, moveFilesUp, setProjectFavicon,
 } from './store'
 import { memoryEntries } from './memoryEntries'
 import { uploadFile } from './api'
@@ -14,7 +14,7 @@ import { shelve } from './settle'
 import { THREAD_ICONS } from './threadIcons.gen'
 import type { ChatThread, Project, ProjectFile } from './types'
 import { TI, formatBytes } from './ui'
-import { IconUpload, IconTrash, IconExternalLink, IconPaperclip, IconFolderUp, IconChevronRight } from './icons'
+import { IconUpload, IconTrash, IconExternalLink, IconPaperclip, IconFolderUp, IconChevronRight, IconWorld, IconX } from './icons'
 import { pushError, pushToast } from '../toast'
 
 // A project's own page: what shows in the chat pane when a project is open and
@@ -340,6 +340,43 @@ function MemoryTab({ project }: { project: Project }) {
   )
 }
 
+/** A picture instead of an icon: an uploaded image, or a website's own icon. */
+function PictureField({ project }: { project: Project }) {
+  const [site, setSite] = useState('')
+  const [busy, setBusy] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
+  async function upload(file?: File) {
+    if (!file) return
+    setBusy(true)
+    try {
+      const up = await uploadFile(file, file.name)
+      if (up.kind !== 'image' && !/icon$/.test(up.mime)) throw new Error('that is not a PNG, JPEG, GIF, WebP or ICO image')
+      await updateProject(project.id, { image: up.id })
+    } catch (e: any) { pushError(`Couldn't use that picture: ${e.message}`) } finally { setBusy(false) }
+  }
+  async function fetchIcon(e: React.FormEvent) {
+    e.preventDefault()
+    if (!site.trim()) return
+    setBusy(true)
+    try { await setProjectFavicon(project.id, site.trim()); setSite('') } catch (err: any) { pushError(`Couldn't get that site's icon: ${err.message}`) } finally { setBusy(false) }
+  }
+  return (
+    <div className="vc-proj-picture">
+      {project.imageUrl && (
+        <span className="vc-proj-picture-now"><ProjectIcon p={project} size={22} />
+          <button type="button" className="vc-btn sm ghost" disabled={busy} onClick={() => updateProject(project.id, { image: null })}><TI icon={IconX} size={14} />Remove picture</button>
+        </span>
+      )}
+      <button type="button" className="vc-btn sm" disabled={busy} onClick={() => input.current?.click()}><TI icon={IconUpload} size={15} />Upload image</button>
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,.ico" hidden onChange={(e) => { upload(e.target.files?.[0]); e.target.value = '' }} />
+      <form className="vc-proj-favicon" onSubmit={fetchIcon}>
+        <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="example.com" aria-label="Website to take the icon from" disabled={busy} />
+        <button type="submit" className="vc-btn sm" disabled={busy || !site.trim()}><TI icon={IconWorld} size={15} />Use site icon</button>
+      </form>
+    </div>
+  )
+}
+
 function SettingsTab({ project }: { project: Project }) {
   const [name, setName] = useState(project.name)
   useEffect(() => setName(project.name), [project.name])
@@ -369,12 +406,16 @@ function SettingsTab({ project }: { project: Project }) {
       <div className="vc-proj-field">
         <span>Icon</span>
         <div className="vc-proj-icons" role="radiogroup" aria-label="Project icon">
-          {PROJECT_ICONS.map((icon) => (
-            <button key={icon} type="button" role="radio" aria-checked={(project.icon || 'folder') === icon} className={(project.icon || 'folder') === icon ? 'on' : ''} onClick={() => updateProject(project.id, { icon })} title={icon}>
-              <TI icon={THREAD_ICONS[icon]} size={18} />
-            </button>
-          ))}
+          {PROJECT_ICONS.map((icon) => {
+            const on = !project.image && (project.icon || 'folder') === icon
+            return (
+              <button key={icon} type="button" role="radio" aria-checked={on} className={on ? 'on' : ''} onClick={() => updateProject(project.id, { icon, ...(project.image ? { image: null } : {}) })} title={icon}>
+                <TI icon={THREAD_ICONS[icon]} size={18} />
+              </button>
+            )
+          })}
         </div>
+        <PictureField project={project} />
       </div>
       <div className="vc-proj-field">
         <span>Default model</span>

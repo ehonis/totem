@@ -13,7 +13,11 @@ import { mapLimit } from './github.mjs'
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const CACHE_MS = 60_000
+const SHIPPED_CACHE_MS = 10 * 60_000
+export const SHIPPED_RANGES = [14, 30, 90]
 const HEALTH_TIMEOUT_MS = 5_000
+const MAX_GROUPS = 24
+const MAX_GROUP_NAME = 40
 
 function readJsonSafe(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return null }
@@ -40,7 +44,32 @@ export function loadDevConfig(file) {
       expect: Array.isArray(h.expect) && h.expect.length ? h.expect.map(Number).filter(Number.isFinite) : [200],
     }))
   const pollMinutes = Number(raw.pollMinutes) >= 1 ? Number(raw.pollMinutes) : 5
-  return { enabled: repos.length > 0, repos, health, pollMinutes }
+  const shippedHidden = [...new Set((Array.isArray(raw.shippedHidden) ? raw.shippedHidden : []).map(String).filter((r) => REPO_RE.test(r)))]
+  const shippedGroups = normalizeGroups(raw.shippedGroups)
+  return { enabled: repos.length > 0, repos, health, pollMinutes, shippedHidden, shippedGroups }
+}
+
+/**
+ * Named sets of repos for PRs per day ("Work", "Side projects"). A name is kept
+ * once (case aside) and a repo in its first group only, so a stray hand edit
+ * never draws a PR twice.
+ */
+export function normalizeGroups(raw) {
+  const names = new Set()
+  const taken = new Set()
+  const groups = []
+  for (const g of Array.isArray(raw) ? raw : []) {
+    const name = String(g?.name ?? '').trim().slice(0, MAX_GROUP_NAME)
+    if (!name || names.has(name.toLowerCase()) || groups.length >= MAX_GROUPS) continue
+    names.add(name.toLowerCase())
+    const repos = []
+    for (const r of Array.isArray(g.repos) ? g.repos : []) {
+      const repo = String(r).trim()
+      if (REPO_RE.test(repo) && !taken.has(repo)) { taken.add(repo); repos.push(repo) }
+    }
+    groups.push({ name, repos })
+  }
+  return groups
 }
 
 export async function checkHealth(entry, { fetchImpl = fetch, timeoutMs = HEALTH_TIMEOUT_MS } = {}) {
@@ -58,6 +87,7 @@ export async function checkHealth(entry, { fetchImpl = fetch, timeoutMs = HEALTH
 export function createDevService({ configFile, github, alerts, fetchImpl = fetch, now = () => Date.now(), cacheMs = CACHE_MS }) {
   if (!configFile) throw new TypeError('createDevService requires configFile')
   let cache = null // { at, key, repos, health }
+  const shippedCache = new Map() // days -> { at, pulls }
   let writing = Promise.resolve()
 
   const config = () => loadDevConfig(configFile)
@@ -81,28 +111,75 @@ export function createDevService({ configFile, github, alerts, fetchImpl = fetch
     if (!config().repos.includes(repo)) throw badRequest(`${repo} is not watched in the Dev tab.`)
   }
 
-  /**
-   * Add or remove one repo from the watched list. Adding needs a repo gh can see,
-   * so a typo never becomes a card that only ever shows an error. One write at a
-   * time, so two quick clicks cannot drop each other's change.
-   */
-  function setWatch(repo, watch) {
-    repo = String(repo || '').trim()
-    if (!REPO_RE.test(repo)) return Promise.reject(badRequest('repo must look like owner/name'))
+  // One write at a time, so two quick clicks cannot drop each other's change.
+  // `change` gets the file as it is now and returns the keys to replace.
+  function updateConfig(change) {
     const result = writing.then(async () => {
-      if (watch && !config().repos.includes(repo) && !(await github.repoVisible(repo))) {
-        throw badRequest(`gh cannot see ${repo}.`)
-      }
       const raw = readJsonSafe(configFile)
       const file = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
-      const repos = (Array.isArray(file.repos) ? file.repos : []).filter((r) => r !== repo)
-      if (watch) repos.push(repo)
-      await writeJsonAtomic(configFile, { ...file, repos })
-      cache = null
-      return { repo, watch: Boolean(watch), watched: config().repos }
+      await writeJsonAtomic(configFile, { ...file, ...(await change(file)) })
     })
     writing = result.catch(() => {})
     return result
+  }
+
+  /**
+   * Add or remove one repo from the watched list. Adding needs a repo gh can see,
+   * so a typo never becomes a card that only ever shows an error.
+   */
+  async function setWatch(repo, watch) {
+    repo = String(repo || '').trim()
+    if (!REPO_RE.test(repo)) throw badRequest('repo must look like owner/name')
+    await updateConfig(async (file) => {
+      if (watch && !config().repos.includes(repo) && !(await github.repoVisible(repo))) {
+        throw badRequest(`gh cannot see ${repo}.`)
+      }
+      const repos = (Array.isArray(file.repos) ? file.repos : []).filter((r) => r !== repo)
+      if (watch) repos.push(repo)
+      return { repos }
+    })
+    cache = null
+    return { repo, watch: Boolean(watch), watched: config().repos }
+  }
+
+  /**
+   * The owner's merged PRs over the last `days`, in every repo, for the PRs per
+   * day chart. Not gated on watched repos: it is about the owner, not a repo.
+   * Search is rate-limited, so results are kept for ten minutes.
+   */
+  async function shipped({ days = 30, refresh = false } = {}) {
+    days = Number(days)
+    if (!SHIPPED_RANGES.includes(days)) throw badRequest(`days must be one of ${SHIPPED_RANGES.join(', ')}`)
+    let hit = shippedCache.get(days)
+    if (refresh || !hit || now() - hit.at >= SHIPPED_CACHE_MS) {
+      // A day of slack before the range, so the browser can bucket by its own
+      // timezone without losing the first morning.
+      const since = new Date(now() - (days + 1) * 86_400_000).toISOString().slice(0, 10)
+      hit = { at: now(), pulls: await github.mergedPulls(since, { today: new Date(now()) }) }
+      shippedCache.set(days, hit)
+    }
+    const cfg = config()
+    return { days, pulls: hit.pulls, hidden: cfg.shippedHidden, groups: cfg.shippedGroups, fetchedAt: new Date(hit.at).toISOString() }
+  }
+
+  /** Hide a repo from the chart, or show it again (kept in `shippedHidden`). */
+  async function setShippedHidden(repo, hidden) {
+    repo = String(repo || '').trim()
+    if (!REPO_RE.test(repo)) throw badRequest('repo must look like owner/name')
+    await updateConfig((file) => {
+      const list = (Array.isArray(file.shippedHidden) ? file.shippedHidden : []).filter((r) => r !== repo)
+      if (hidden) list.push(repo)
+      return { shippedHidden: list }
+    })
+    return { repo, hidden: Boolean(hidden), shippedHidden: config().shippedHidden }
+  }
+
+  /** Replace the repo groups (kept in `shippedGroups`). */
+  async function setShippedGroups(groups) {
+    if (!Array.isArray(groups)) throw badRequest('groups must be a list')
+    const clean = normalizeGroups(groups)
+    await updateConfig(() => ({ shippedGroups: clean }))
+    return { shippedGroups: config().shippedGroups }
   }
 
   /** A one-off review of one PR, whatever the AI review switch says. */
@@ -121,5 +198,5 @@ export function createDevService({ configFile, github, alerts, fetchImpl = fetch
     return { repo, aiReview }
   }
 
-  return { config, status, setAiReview, setWatch, dispatchReview }
+  return { config, status, setAiReview, setWatch, dispatchReview, shipped, setShippedHidden, setShippedGroups }
 }

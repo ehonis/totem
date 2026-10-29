@@ -48,6 +48,23 @@ Store builds use the production host, debug builds the sandbox, and a token sent
 the wrong one comes back `BadDeviceToken`. `410 Unregistered` (the app was deleted)
 expires the device, the same as a removed Home Screen app.
 
+### Taking a chat's notification back
+
+A chat notification (`chat.finished`, `chat.question`) is tagged `chat:<thread id>`.
+Once that chat is read anywhere (a device reports it is looking at it through
+`/api/chat/presence`, it is marked read, or it is deleted), the bridge calls
+`notifier.dismiss(tag)`. APNs cannot delete a delivered notification, so that sends a
+silent push (`apns-push-type: background`, priority 5, `{ aps: { content-available: 1 },
+dismiss: [tag] }`) and the app's background task (`mobile/src/shell/pushDismiss.ts`)
+takes the notification down. The notifier remembers in memory which tags reached a
+phone, so the 20-second presence heartbeat sends nothing once one is cleared.
+
+iOS throttles silent pushes and never wakes an app the owner swiped away, so the app
+also sweeps whenever it comes to the front: a chat notification goes if its chat is
+gone, or read with nothing running and no questions pending. That sweep also covers
+what the bridge forgot across a restart. Web Push has no silent push (Safari revokes a
+subscription that gets one), so Home Screen web app notifications are not taken back.
+
 ## Where things live
 
 | Thing | Location |
@@ -136,7 +153,7 @@ there holding the phone, so a receipt that waits until 07:00 is not a receipt.
 
 `journal.ingested` goes out the moment a journal entry's digest finishes — a few minutes after he
 saved it, so he is usually still holding the phone. The body is built from what the digest
-reported ("2 memory updates · 1 proposal in the inbox · 1 habit logged") and the link is `/inbox`
+reported ("2 memory updates · 1 proposal in the inbox · 1 habit logged") and the link is the first proposal (`/inbox#P12`)
 when there is something to decide, the Journal otherwise. It is deferred in quiet hours but not
 pinned: a morning ritual he already knows happened is the one thing here he might reasonably
 learn to silence. `journal.failed` (transcription or digest broke; the entry keeps what it can and
@@ -342,8 +359,8 @@ source with the key in `.env` rather than scraped.
   none of them and returns whatever it thinks is close — in testing, an OCR post
   and a YC launch. Fetch wide on the points floor and filter on keywords in
   `readSource`, which is what `match` does.
-- **A queue entry must carry its `subject`.** The revalidator looks the goal or
-  habit up by it at delivery. Without it the goals resolver looked up `undefined`,
+- **A queue entry must carry its `subject`.** The revalidator looks the goal
+  up by it at delivery. Without it the goals resolver looked up `undefined`,
   found no goal, and reported the goal *finished* — a congratulation for something
   sitting at 73%.
 - **A fact key with a number in it and no identity beside it goes silent, not
@@ -388,7 +405,7 @@ because a plan built at 07:15 fires all day and the ride may have happened at
 |---|---|---|
 | `fresh` | still true, numbers and all | what was planned, in Totem's voice |
 | `changed` | same fact, different numbers | the collector's **current** sentence |
-| `resolved` | it stopped being true because he did it | the other copy — "done for the week, 4 of 4" |
+| `resolved` | it stopped being true because he did it | the other copy — a goal nudge becomes "Finished." |
 | `stale` | it stopped being true, and there is nothing nice to say | nothing |
 
 `changed` is the one that earns the file. A real notification read *"50 Miles
@@ -416,6 +433,15 @@ The same rule shapes what is allowed to be *raised* at all: **only raise a nudge
 whose truth outlives the gap between planning it and delivering it.** That is why
 `notify/usage.mjs` will not schedule "your 5-hour window is at 82%" — by the time
 it lands, that window has reset.
+
+**Habits get no completion nudges.** There is no "streak ends tonight", "one more
+to finish" or "short this week": a habit can be logged for any past day, so a
+deadline on it is invented urgency. `habitFacts` is gone, the revalidator has no
+`habits` resolver (so nothing turns into "Streak intact" or "Done for the week"),
+and the drain finishes any such entry still queued as `stale` before sending
+(`isRetiredNudge` in `notify/notifier.mjs`), whether it was filed under
+`habit.slipping` or `goal.nearcomplete`. Metric trends on a habit ("Under goal",
+`metricFacts`) still go out; they report a run of days, not a deadline.
 
 Anything that cannot be verified is still treated as stale, including a collector
 that throws: a notification that could not be checked is exactly the one not

@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from '../components/Markdown'
-import { useChat, openArtifact, type Artifact } from './store'
+import { useChat, openArtifact, showFiles, type Artifact } from './store'
 import { TI, useDismiss, formatBytes } from './ui'
-import { IconChevronDown, IconX, IconArrowDown, IconFileText, IconFileTypePdf, IconWorld, IconClipboardText, IconCopy, IconCheck, IconLayoutSidebar } from './icons'
+import { IconChevronDown, IconX, IconArrowDown, IconFileText, IconFileTypePdf, IconWorld, IconClipboardText, IconCopy, IconCheck, IconLayoutSidebar, IconFileSpreadsheet, IconFileWord, IconPresentation, IconFileZip, IconFile, IconFolder, IconPhoto } from './icons'
 
 // The canvas beside the chat — ChatGPT's document panel. A file the agent made
 // (or one the owner attached) opens here rendered, not as a download:
@@ -11,27 +11,37 @@ import { IconChevronDown, IconX, IconArrowDown, IconFileText, IconFileTypePdf, I
 //              gives the page an opaque origin, so a generated page can run its
 //              own JavaScript but cannot read Totem's storage or call its API.
 //   CSV      → a table;  PDF → the browser's viewer;  SVG/images → as images;
-//   other text → a code block.
+//   other text → a code block;  Office files, archives → a download.
 
 export const ARTIFACT_PREVIEWABLE = /^(text\/|application\/(json|xml|pdf)|image\/svg)/
 
 export function artifactKind(mime: string, name = '') {
+  if (/spreadsheet|ms-excel/.test(mime) || /\.xlsx?$/i.test(name)) return 'sheet'
+  if (/wordprocessing|msword/.test(mime) || /\.docx?$/i.test(name)) return 'doc'
+  if (/presentation/.test(mime) || /\.pptx?$/i.test(name)) return 'slides'
+  if (/zip/.test(mime) || /\.zip$/i.test(name)) return 'archive'
   if (/markdown/.test(mime) || /\.(md|markdown)$/i.test(name)) return 'markdown'
   if (/html/.test(mime) || /\.html?$/i.test(name)) return 'html'
   if (/csv|tab-separated/.test(mime) || /\.(csv|tsv)$/i.test(name)) return 'table'
   if (/pdf/.test(mime)) return 'pdf'
   if (/^image\//.test(mime)) return 'image'
+  if (mime && !ARTIFACT_PREVIEWABLE.test(mime)) return 'binary'
   return 'text'
 }
 
+/** Kinds the panel cannot show, only hand over. */
+const DOWNLOAD_ONLY = new Set(['sheet', 'doc', 'slides', 'archive', 'binary'])
+const LABEL: Record<string, string> = { markdown: 'Document', html: 'Web page', table: 'Table', pdf: 'PDF', image: 'Image', sheet: 'Spreadsheet', doc: 'Word document', slides: 'Presentation', archive: 'Archive' }
+const ICON: Record<string, any> = { html: IconWorld, pdf: IconFileTypePdf, table: IconClipboardText, sheet: IconFileSpreadsheet, doc: IconFileWord, slides: IconPresentation, archive: IconFileZip, image: IconPhoto, binary: IconFile }
+
+export const downloadUrl = (url = '') => `${url}${url.includes('?') ? '&' : '?'}download=1`
+
 export function artifactLabel(mime: string, name = '') {
-  const k = artifactKind(mime, name)
-  return k === 'markdown' ? 'Document' : k === 'html' ? 'Web page' : k === 'table' ? 'Table' : k === 'pdf' ? 'PDF' : k === 'image' ? 'Image' : 'File'
+  return LABEL[artifactKind(mime, name)] || 'File'
 }
 
 export function artifactIcon(mime: string, name = '') {
-  const k = artifactKind(mime, name)
-  return k === 'html' ? IconWorld : k === 'pdf' ? IconFileTypePdf : k === 'table' ? IconClipboardText : IconFileText
+  return ICON[artifactKind(mime, name)] || IconFileText
 }
 
 // Small CSV reader: quoted fields, escaped quotes, commas or tabs.
@@ -57,6 +67,16 @@ const LANG: Record<string, string> = { json: 'json', yml: 'yaml', yaml: 'yaml', 
 
 function Body({ a, text }: { a: Artifact; text: string | null }) {
   const kind = artifactKind(a.mime, a.name)
+  if (DOWNLOAD_ONLY.has(kind)) {
+    return (
+      <div className="vc-art-download">
+        <TI icon={artifactIcon(a.mime, a.name)} size={44} stroke={1.25} />
+        <strong>{a.name}</strong>
+        <span>{artifactLabel(a.mime, a.name)}{a.size ? ` · ${formatBytes(a.size)}` : ''}. No preview here; download it to open it.</span>
+        <a className="vc-btn" href={downloadUrl(a.url)} download={a.name}><TI icon={IconArrowDown} size={16} /> Download</a>
+      </div>
+    )
+  }
   if (kind === 'pdf') return <iframe className="vc-art-frame" src={a.url} title={a.name} />
   if (kind === 'image') return <div className="vc-art-image"><img src={a.url} alt={a.name} /></div>
   if (text === null) return <div className="vc-art-loading">Loading…</div>
@@ -103,7 +123,7 @@ export default function ArtifactPanel({ threadId, expanded, onExpand }: { thread
   useEffect(() => {
     if (!a?.url) return
     const kind = artifactKind(a.mime, a.name)
-    if (kind === 'pdf' || kind === 'image') return
+    if (kind === 'pdf' || kind === 'image' || DOWNLOAD_ONLY.has(kind)) return
     let alive = true
     setText(null)
     fetch(a.url).then((r) => r.text()).then((t) => { if (alive) setText(t) }).catch(() => { if (alive) setText('Couldn’t load this file.') })
@@ -117,7 +137,8 @@ export default function ArtifactPanel({ threadId, expanded, onExpand }: { thread
   }, [menu])
 
   if (!a) return null
-  const canCopy = text !== null && !['pdf', 'image'].includes(artifactKind(a.mime, a.name))
+  const kind = artifactKind(a.mime, a.name)
+  const canCopy = text !== null && kind !== 'pdf' && kind !== 'image' && !DOWNLOAD_ONLY.has(kind)
   return (
     <aside className="vc vc-artifact" aria-label={a.name}>
       <header className="vc-art-head">
@@ -145,7 +166,10 @@ export default function ArtifactPanel({ threadId, expanded, onExpand }: { thread
               <TI icon={copied ? IconCheck : IconCopy} size={18} />
             </button>
           )}
-          <a className="vc-icon-btn" href={`${a.url}${a.url?.includes('?') ? '&' : '?'}download=1`} download={a.name} title="Download" aria-label="Download">
+          {a.path && (
+            <button type="button" className="vc-icon-btn" onClick={() => showFiles(true)} title="Show in Files" aria-label="Show in Files"><TI icon={IconFolder} size={18} /></button>
+          )}
+          <a className="vc-icon-btn" href={downloadUrl(a.url)} download={a.name} title="Download" aria-label="Download">
             <TI icon={IconArrowDown} size={18} />
           </a>
           <button type="button" className={`vc-icon-btn vc-art-expand ${expanded ? 'on' : ''}`} onClick={() => onExpand(!expanded)} title={expanded ? 'Show the chat' : 'Full width'} aria-label={expanded ? 'Show the chat' : 'Full width'}>

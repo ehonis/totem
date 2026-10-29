@@ -38,7 +38,7 @@ or an auth proxy in front of it, and its defaults reflect that. Formerly named V
   recommends the cheapest model that can do the job. Each remembers what it has seen, has its
   own chat, and notifies you only when something matters. The built-in jobs (morning brief,
   digests, ingests, syncs; all off until enabled) are totems too.
-- **Integrations.** WHOOP (sleep and recovery), Strava (activities, gear, mileage), Plaud
+- **Integrations.** WHOOP (sleep and recovery) and Strava (activities, gear, mileage), both read from the Bushido training app, which holds the grants; Plaud
   (voice recorder, via its MCP server), GitHub (App or `gh` CLI), Google Calendar, web push
   notifications, Open-Meteo weather and Google News headlines, and a plug-in-the-camera photo
   sync to Apple Photos. On a Mac: your Messages (read and send from the dashboard), Contacts and
@@ -46,8 +46,9 @@ or an auth proxy in front of it, and its defaults reflect that. Formerly named V
   for you to send.
 - **Operational pieces.** An action log of every mutation, approval leases, an optional web
   terminal (off by default), an optional Screen tab that shows and controls the machine's
-  desktop over VNC with a screenshot tool for agents (off by default), and a usage view of
-  what the assistant is actually used for.
+  desktop over VNC with a screenshot tool for agents (off by default), a usage view of
+  what the assistant is actually used for, and a Fleet tab (off by default) that shows each of
+  your machines' uptime, resources, processes, power draw and estimated electricity cost.
 
 ## Architecture
 
@@ -121,8 +122,8 @@ Codex, Claude Code, OpenCode or Cursor CLIs on the same machine, signed in or gi
    so and everything else works.
 
 5. Optional, in any order:
-   - **Settings -> Integrations**: set the public URL, add WHOOP or Strava app credentials,
-     copy the redirect URI it shows into the provider's console, and press Connect.
+   - **Settings -> Integrations**: set the public URL and the Google Sheet task sync. WHOOP and
+     Strava are connected in Bushido; set `BUSHIDO_URL` and `BUSHIDO_API_TOKEN` to read them.
    - **Settings -> Connections**: add MCP servers (Google Calendar, Plaud, GitHub, ...) and sync
      them into each CLI.
    - **Totems**: switch on the built-in jobs you want, or build your own. A fresh install has none
@@ -164,6 +165,7 @@ directly.
 - [SETUP.md](SETUP.md): phone shortcut, Tailscale, MCP servers, scheduled jobs
 - [docs/self-hosting.md](docs/self-hosting.md): sign-in, settings vs. env, Docker, systemd, data layout
 - [AGENTS.md](AGENTS.md): the operating manual (architecture, ops, gotchas, roadmap)
+- [desktop/README.md](desktop/README.md): the macOS and Windows app (own window, global hotkeys, tray)
 - [TOTEM-OVERVIEW.md](TOTEM-OVERVIEW.md): a design write-up of why it is built this way
 - `docs/`: one file per subsystem (providers, jobs, skills, journal, notifications, Strava,
   WHOOP, GitHub App, terminal, inbound MCP server, camera sync, shortcuts)

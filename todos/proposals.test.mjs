@@ -56,6 +56,6 @@ test('github proposal becomes an explicit GitHub task command', () => {
   assert.deepEqual(input, {
     title: 'Fix import', area: 'Personal', ventureTag: null,
     description: 'Complete issue body', syncTarget: 'github',
-    github: { repo: 'alexdev/example', body: 'Complete issue body', labels: ['bug'] },
+    repo: 'alexdev/example', labels: ['bug'],
   });
 });

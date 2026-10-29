@@ -100,7 +100,9 @@ export const DEFAULT_SOURCES = [
     // YouTube publishes a real Atom feed per channel, no key and no scraping.
     // X itself has no free API and no reliable public feed — see the note in
     // docs/notifications.md — so this is the closest honest proxy.
-    url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCtuO2h6OwDueF7h3p8DYYjQ',
+    feeds: [{ url: 'https://www.youtube.com/feeds/videos.xml?channel_id=UCtuO2h6OwDueF7h3p8DYYjQ' }],
+    // What a tap opens (the overflow push): the channel, not the Atom XML.
+    url: 'https://www.youtube.com/channel/UCtuO2h6OwDueF7h3p8DYYjQ/videos',
     category: 'news.creator',
     salience: 60,
     maxPerScan: 2,

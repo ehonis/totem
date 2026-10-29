@@ -12,6 +12,10 @@ import { ProviderLogo } from './ui'
 // a FLIP animation: the panel is laid out at its final size, then every logo is
 // moved back to where its pill drew it and released — while the panel's clip
 // opens out from the pills' outline and each limit's bar fills in turn.
+//
+// On desktop the same pills also stand in the rail, stacked above Settings, on
+// every page but the chat (whose header has them), so the quota is never a tab
+// switch away. There the panel opens out to the right, over the page.
 
 function pick(meters: any[]) {
   const usable = (meters || []).filter((m) => typeof m.remainingPct === 'number')
@@ -42,7 +46,7 @@ const CHIP_LOGO = 13
 const PANEL_LOGO = 18
 const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
-export default function UsageChips({ compact = false }: { compact?: boolean }) {
+export default function UsageChips({ compact = false, rail = false }: { compact?: boolean; rail?: boolean }) {
   const live = useAiUsageLive() as any
   const accounts: any[] = (live?.data?.accounts || []).filter((a: any) => a.status === 'ok' && a.meters?.length)
   const [phase, setPhase] = useState<'closed' | 'open' | 'closing'>('closed')
@@ -135,7 +139,7 @@ export default function UsageChips({ compact = false }: { compact?: boolean }) {
 
   return (
     <div
-      className={`vc-usage-wrap ${expanded ? 'expanded' : ''} ${phase === 'closing' ? 'closing' : ''}`}
+      className={`vc-usage-wrap ${rail ? 'rail' : ''} ${expanded ? 'expanded' : ''} ${phase === 'closing' ? 'closing' : ''}`}
       onPointerEnter={(e) => { if (e.pointerType === 'mouse') open() }}
       onPointerLeave={(e) => { if (e.pointerType === 'mouse') close() }}
       onFocus={open}

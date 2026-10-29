@@ -1,6 +1,6 @@
 {
   "name": "totem-mobile",
-  "main": "expo-router/entry",
+  "main": "index.ts",
   "version": "1.0.0",
   "dependencies": {
     "@config-plugins/react-native-webrtc": "^15.0.2",
@@ -37,6 +37,7 @@
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.3",
     "expo-system-ui": "~57.0.4",
+    "expo-task-manager": "~57.0.21",
     "expo-updates": "~57.0.25",
     "expo-web-browser": "~57.0.3",
     "marked": "^18.1.0",

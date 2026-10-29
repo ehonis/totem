@@ -1,12 +1,16 @@
 // The web's ToastHost (components/ToastHost.tsx) on a phone: one solid fill per
-// kind, white text, full width under the top bar (the composer owns the bottom), stacked as T3 Code's
-// deck (newest in front, two peeking behind; tap to spread, which holds them).
+// kind, white text, full width at the bottom of the screen, stacked as T3 Code's
+// deck (newest in front, two peeking above it; tap to spread upward, which holds them).
+// The deck sits on whatever owns the bottom (toastFloor.ts): an open chat's composer,
+// the floating buttons beside it, and the keyboard when it is up.
 // Reads the same toast store (lib/toast.ts) so ported code that calls
 // pushError() just works.
 import React, { useCallback, useEffect, useState } from 'react'
-import { View, StyleSheet, Pressable } from 'react-native'
+import { StyleSheet, Pressable } from 'react-native'
 import Animated, { FadeInUp, FadeOut, cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useReanimatedKeyboardAnimation } from 'react-native-keyboard-controller'
+import { useToastFloor } from './toastFloor'
 import { useToasts, dismissToast, holdToasts, type Toast } from '../lib/toast'
 import { Hi, XMarkIcon, ArrowUturnLeftIcon, ExclamationTriangleIcon, CheckCircleIcon, InformationCircleIcon } from '../lib/icons'
 import { colors } from '../theme'
@@ -22,6 +26,7 @@ const PEEK = 10
 const SHRINK = 0.06
 const GAP = 8
 const EASE = { duration: 420, easing: Easing.bezier(0.22, 1, 0.36, 1) }
+const FAB_SPACE = 16 + 54 + 10 // Screen.tsx: the buttons' right margin and size, plus a gap
 
 /** Time left on screen, flush with the top edge; holds while the deck is spread. */
 function Countdown({ duration, held, restart }: { duration: number; held: boolean; restart: number }) {
@@ -45,7 +50,7 @@ function Item({ t, index, open, offset, frontHeight, onHeight }: {
   const scale = useSharedValue(1)
   const fade = useSharedValue(1)
   useEffect(() => {
-    y.value = withTiming(open ? offset : index * PEEK, EASE)
+    y.value = withTiming(-(open ? offset : index * PEEK), EASE)
     scale.value = withTiming(open ? 1 : 1 - index * SHRINK, EASE)
     fade.value = withTiming(behind ? 0 : 1, { duration: 200 })
   }, [open, offset, index, behind, y, scale, fade])
@@ -82,12 +87,21 @@ function Item({ t, index, open, offset, frontHeight, onHeight }: {
 export default function ToastHost() {
   const toasts = useToasts()
   const insets = useSafeAreaInsets()
+  const floor = useToastFloor()
+  const keyboard = useReanimatedKeyboardAnimation()
+  // Over the chat's dock when one is open, else just off the home indicator; the
+  // keyboard lifts either, past whatever bottom gap already covers it.
+  const rest = floor.dock ? floor.dock + GAP : Math.max(insets.bottom, 14) + 8
+  const covered = floor.dock ? floor.lift : rest - 8
+  const place = useAnimatedStyle(() => ({ bottom: rest + Math.max(0, Math.abs(keyboard.height.value) - covered) }), [rest, covered])
   const [open, setOpen] = useState(false)
   const [heights, setHeights] = useState<Record<number, number>>({})
   const onHeight = useCallback((id: number, h: number) => setHeights((m) => (m[id] === h ? m : { ...m, [id]: h })), [])
   const shown = toasts.slice(-SHOWN).reverse() // front first
   useEffect(() => { if (shown.length < 2 && open) { setOpen(false); holdToasts(false) } }, [shown.length, open])
   if (!shown.length) return null
+  // Beside the floating buttons, not over them; a chat's dock sits above them anyway.
+  const right = floor.fab && !floor.dock ? FAB_SPACE : 12
 
   const hOf = (t: Toast) => heights[t.id] || 48
   const frontHeight = hOf(shown[0])
@@ -97,20 +111,20 @@ export default function ToastHost() {
   const toggle = () => { if (shown.length < 2) return; tap(); setOpen(!open); holdToasts(!open) }
 
   return (
-    <View pointerEvents="box-none" style={[st.wrap, { top: insets.top + 58, height }]}>
+    <Animated.View pointerEvents="box-none" style={[st.wrap, { right, height }, place]}>
       <Pressable onPress={toggle} style={StyleSheet.absoluteFill} accessibilityLabel={open ? 'Stack notifications' : 'Show all notifications'}>
         {shown.map((t, i) => (
           <Item key={t.id} t={t} index={i} open={open} offset={offsets[i]} frontHeight={frontHeight} onHeight={onHeight} />
         ))}
       </Pressable>
-    </View>
+    </Animated.View>
   )
 }
 
 const st = StyleSheet.create({
-  wrap: { position: 'absolute', left: 12, right: 12, zIndex: 1000 },
+  wrap: { position: 'absolute', left: 12, zIndex: 1000 },
   toast: {
-    position: 'absolute', left: 0, right: 0, top: 0, transformOrigin: 'top',
+    position: 'absolute', left: 0, right: 0, bottom: 0, transformOrigin: 'bottom',
     borderRadius: 12, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 14, shadowOffset: { width: 0, height: 8 },
   },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingTop: 14, paddingBottom: 12, paddingLeft: 14, paddingRight: 12 },

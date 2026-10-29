@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Hi, ChevronDownIcon, HeartIcon, ArrowPathIcon, ExclamationTriangleIcon, CheckCircleIcon } from '../icons'
-import { getWhoopStatus, connectWhoop, AuthError } from '../api'
-import { pushToast, pushError } from '../toast'
+import { getWhoopStatus, AuthError } from '../api'
 import { StravaConnectionRow } from './StravaConnection'
 
 // The WHOOP connection, in one place so every surface tells the same story.
@@ -13,22 +12,27 @@ import { StravaConnectionRow } from './StravaConnection'
 // stays `true` forever. The Habits tab therefore hid its Connect button and
 // offered a Sync that could only fail, with no way to reconnect from the UI.
 //
-// So: reconnect is always available, never conditional on a health check that
-// can be wrong. The server's `state` drives the wording, not the button's
+// So: the way to reconnect is always shown, never conditional on a health check
+// that can be wrong. The server's `state` drives the wording, not the link's
 // existence.
+//
+// The grant is Bushido's (since 2026-10-14): Totem reads the owner's WHOOP from
+// there (whoop/remote.mjs), so connecting happens in Bushido and these surfaces
+// link to it rather than offering it.
 
 export interface WhoopStatus {
   configured: boolean
   connected: boolean
   needsReauth?: boolean
-  state?: 'unconfigured' | 'disconnected' | 'needs-reauth' | 'missing-scopes' | 'ready'
+  state?: 'unconfigured' | 'disconnected' | 'needs-reauth' | 'missing-scopes' | 'ready' | 'unreachable'
+  source?: 'bushido'
+  bushidoUrl?: string | null
   detail?: string
   lastError?: string | null
   lastErrorAt?: string | null
   scopes?: string[]
   missingScopes?: string[]
   connectedAt?: string | null
-  redirectUri?: string
   valueField?: string
 }
 
@@ -43,7 +47,7 @@ export function useWhoopStatus(enabled = true) {
   }, [enabled])
 
   useEffect(() => { reload() }, [reload])
-  // A reconnect finishes in another tab, so re-check when this one is focused
+  // A reconnect finishes in Bushido, in another tab, so re-check when this one is focused
   // again rather than making the user reload to see it worked.
   useEffect(() => {
     if (!enabled) return
@@ -61,6 +65,7 @@ const TONE: Record<string, 'ok' | 'warn' | 'bad'> = {
   'needs-reauth': 'bad',
   disconnected: 'warn',
   unconfigured: 'bad',
+  unreachable: 'bad',
 }
 
 const LABEL: Record<string, string> = {
@@ -69,6 +74,7 @@ const LABEL: Record<string, string> = {
   'needs-reauth': 'Reconnect needed',
   disconnected: 'Not connected',
   unconfigured: 'Not set up',
+  unreachable: 'Bushido unreachable',
 }
 
 function stateOf(status: WhoopStatus | null): string {
@@ -83,52 +89,31 @@ function stateOf(status: WhoopStatus | null): string {
 }
 
 /**
- * Start the OAuth flow in a new tab.
+ * Where WHOOP is connected: a link to Bushido, which holds the grant.
  *
- * Always enabled when WHOOP is configured, including when the status says
- * everything is fine — a token can be dead while the server still believes it
- * isn't, and that is precisely when you need this button.
+ * Shown whenever Bushido's address is known, including when the status says
+ * everything is fine: a token can be dead while Bushido still believes it isn't,
+ * and that is precisely when you need the way there.
  */
-export function WhoopConnectButton({
+export function WhoopBushidoLink({
   status,
-  onDone,
   className = 'btn compact',
 }: {
   status: WhoopStatus | null
-  onDone?: () => void
   className?: string
 }) {
-  const [busy, setBusy] = useState(false)
   const state = stateOf(status)
-  const fresh = state === 'disconnected' || state === 'unconfigured'
-
-  async function go() {
-    setBusy(true)
-    try {
-      const { authUrl } = await connectWhoop()
-      window.open(authUrl, '_blank', 'noopener')
-      pushToast('Finish authorizing in the new tab, then come back — this will update itself.', 'info', { duration: 7000 })
-      onDone?.()
-    } catch (e: any) {
-      pushError(e?.message || 'Could not start the WHOOP sign-in.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
+  if (!status?.bushidoUrl) return null
   return (
-    <button
-      className={`${className} ${state === 'needs-reauth' ? 'primary' : ''}`}
-      onClick={go}
-      disabled={busy || status?.configured === false}
-      title={status?.configured === false
-        ? 'Set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET in .env first'
-        : fresh
-          ? 'Authorize this dashboard to read your WHOOP data'
-          : 'Authorize again — use this whenever the sync starts failing'}
+    <a
+      className={`${className} ${state === 'ready' ? 'ghost' : 'primary'}`}
+      href={status.bushidoUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="WHOOP is connected in Bushido: profile → Settings → Connect WHOOP"
     >
-      {busy ? 'Opening…' : fresh ? 'Connect WHOOP' : 'Reconnect WHOOP'}
-    </button>
+      {state === 'ready' ? 'Open Bushido' : 'Connect in Bushido'}
+    </a>
   )
 }
 
@@ -166,8 +151,7 @@ export function WhoopConnectionPanel({ onAuthError }: { onAuthError?: () => void
     <div className="app-group">
       <div className="settings-section-title"><span /><strong>Wearables &amp; fitness</strong></div>
       <p className="app-row-hint">
-        OAuth integrations Totem holds a token for directly. Reconnecting is always safe — it replaces the
-        saved grant with a fresh one.
+        Read from Bushido, which holds the grants. Connect, reconnect or disconnect them there.
       </p>
       <div className="app-list">
         {status && <section className={`app-row ${expanded ? 'open' : ''} ${state === 'ready' ? '' : 'disabled'}`}>
@@ -188,8 +172,9 @@ export function WhoopConnectionPanel({ onAuthError }: { onAuthError?: () => void
           {expanded && (
             <div className="app-row-body">
               <p className="app-row-desc">
-                Fills the sleep habit each morning and gives Bushido per-session heart rate, recovery and max
-                heart rate. See <code>docs/whoop-sleep-ingest.md</code>.
+                Fills the sleep habit each morning with last night's performance, stages and recovery. The grant
+                lives in Bushido, which Totem reads it from; connect, reconnect or disconnect it there (profile →
+                Settings). See <code>docs/whoop-sleep-ingest.md</code>.
               </p>
 
               <WhoopStatusNote status={status} />
@@ -208,24 +193,18 @@ export function WhoopConnectionPanel({ onAuthError }: { onAuthError?: () => void
                     </span>
                   ))}
                   {status.missingScopes?.map((s) => (
-                    <span key={s} className="skill-var-chip" title="Not granted — reconnect to add it">{s}</span>
+                    <span key={s} className="skill-var-chip" title="Not granted — reconnect in Bushido to add it">{s}</span>
                   ))}
                 </div>
               ) : null}
 
               <div className="app-row-controls">
-                <WhoopConnectButton status={status} onDone={reload} />
-                <button className="btn compact ghost" onClick={reload} title="Re-read the saved grant">
+                <WhoopBushidoLink status={status} />
+                <button className="btn compact ghost" onClick={reload} title="Ask Bushido for the grant's state again">
                   <Hi icon={ArrowPathIcon} size={13} /> Refresh status
                 </button>
               </div>
 
-              {status.redirectUri && (
-                <p className="app-row-desc muted">
-                  Redirect URI (must match the WHOOP developer dashboard byte for byte):{' '}
-                  <code>{status.redirectUri}</code>
-                </p>
-              )}
             </div>
           )}
         </section>}

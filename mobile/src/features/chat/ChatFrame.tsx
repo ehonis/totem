@@ -4,12 +4,14 @@
 // and the list lifting with the keyboard only while it is at the end (ChatGPT's
 // behaviour; scrolled up to read, it stays put). While a reply streams the list
 // stays pinned to the end, until a finger scrolls it away.
-import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react'
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { ScrollView, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native'
 import { KeyboardAvoidingView, KeyboardStickyView } from 'react-native-keyboard-controller'
 import { KeyboardAwareLegendList } from '@legendapp/list/keyboard'
 import { LinearGradient } from 'expo-linear-gradient'
 import type { LegendListRef } from '@legendapp/list/react-native'
+import { useIsFocused } from 'expo-router'
+import { setToastFloor } from '../../ui/toastFloor'
 
 export interface ChatFrameHandle { scrollToEnd: (animated?: boolean) => void }
 
@@ -34,6 +36,13 @@ function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, d
   const atEnd = useRef(true)
   const [dockHeight, setDockHeight] = useState(120)
   useImperativeHandle(ref, () => ({ scrollToEnd: (animated = true) => { listRef.current?.scrollToEnd({ animated }).catch?.(() => {}) } }), [])
+  // Toasts stack just above the dock, so they never cover the composer.
+  const focused = useIsFocused()
+  useEffect(() => {
+    if (!focused) return
+    setToastFloor({ dock: dockHeight, lift: Math.max(0, dockBottom - 8) })
+    return () => setToastFloor({ dock: 0, lift: 0 })
+  }, [focused, dockHeight, dockBottom])
 
   const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement, contentInset } = e.nativeEvent

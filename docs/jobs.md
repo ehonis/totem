@@ -1,7 +1,7 @@
 # Jobs — scheduled work
 
 Everything Totem does on a timer: the defaults Totem ships with and anything you add.
-Every job is also a **totem** and is managed in the Totems tab (`docs/totems.md`);
+Every job is also a **totem** and is managed on the Totems page (`docs/totems.md`);
 this file is the scheduler underneath. One store, one scheduler, one place that tells you whether a
 job ran.
 
@@ -193,7 +193,7 @@ any unusable source (`isCompleteTrigger`) rather than quietly dropping it;
 Each job picks an AI, or `default` to follow the Providers tab. Two exceptions,
 both flagged in the payload so the UI shows a note instead of a dead knob:
 
-- `agentless` — the WHOOP sync is two HTTP calls; there is no AI to choose.
+- `agentless` — the WHOOP sync is one HTTP call and a file write; there is no AI to choose.
 - `fixedProvider` — a runner whose internals take no provider override always
   uses the default. No shipped runner sets this today.
 
@@ -266,7 +266,7 @@ rendering a toggle the scheduler disagrees with.
 Three possibilities, in precedence order:
 
 1. **`runner`** — names a code entrypoint in `JOB_RUNNERS`. Used where the work
-   genuinely isn't a prompt (the WHOOP sync is two HTTP calls) or where a run needs
+   genuinely isn't a prompt (the WHOOP sync is one HTTP call) or where a run needs
    bookkeeping a prompt can't be trusted with (a watermark that must not advance on
    failure). The name is *data*, so a job with a runner is still renameable and
    deletable like any other.
@@ -282,7 +282,21 @@ the common shape: the instructions are yours to edit, the state handling isn't.
 | `morning-brief` | Runs the job's skill, files it on the morning channel |
 | `journal-ingest` | Runs the job's skill, then advances the journal watermark — only on success |
 | `plaud-meetings-ingest` | Runs the job's skill, stamps the processed-meetings ledger |
-| `whoop-sleep` | Two HTTP calls and a file write. Agentless — no AI to pick |
+| `whoop-sleep` | One call to Bushido and a file write. Agentless — no AI to pick |
+| `git-sync` | Keeps the watched repo current on several hosts: on each one in the job's `gitSync` list it fetches the ref, fast-forwards only, and runs the optional install script. Agentless, so no sandbox or permission prompt can block it. Skipped when every host was already current, ok when something moved, and a failure (ssh, a checkout that can't fast-forward or is on another branch, an installer that skipped something) fails the run so it notifies |
+
+`gitSync` lives on the job in `data/jobs.json`, so host names never reach the code.
+Set it with `PATCH /api/jobs`:
+
+```json
+{ "id": "job_…", "runner": "git-sync", "gitSync": {
+  "hosts": [ { "name": "here" }, { "name": "laptop", "ssh": "laptop", "dir": "~/repo" } ],
+  "install": "scripts/install.sh" } }
+```
+
+A host without `ssh` runs on this machine, in `dir` or the watched repo. A remote host
+needs `dir` and key-based ssh that works from the service (`BatchMode=yes`).
+`jobs/git-sync.mjs` drops any host, path or script it can't use safely.
 
 A job pointing at a runner the bridge no longer defines is flagged `runnerMissing`
 and fails with a message saying so, rather than silently falling through.

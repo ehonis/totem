@@ -254,6 +254,15 @@ test('create embeds an immutable marker and ambiguous retry finds it before crea
   close();
 });
 
+test('create passes staged labels through the outbox to the issue', async () => {
+  const { calls, connector, close } = connectorFixture();
+  await connector.create({ title: 'Labelled', area: 'Personal', repo: 'acme/acme', labels: ['enhancement', ' '] });
+  const create = calls.find(call => call[0] === 'create');
+  assert.equal(create[1].repo, 'acme/acme');
+  assert.deepEqual(create[1].labels, ['enhancement']);
+  close();
+});
+
 test('pull failure does not suppress an independently queued GitHub write', async () => {
   const { actions, connector, db, service, close } = connectorFixture({
     async listAssignedRepos() { throw Object.assign(new Error('search unavailable'), { status: 403 }); },

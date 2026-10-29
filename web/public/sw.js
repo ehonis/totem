@@ -60,9 +60,19 @@ self.addEventListener('notificationclick', (event) => {
   // The entry id rides on the URL so the app can report the open back to the
   // bridge. That single fact is the strongest feedback signal there is, and it
   // costs the user nothing.
-  const target = data.entryId
-    ? `${data.url || '/'}${(data.url || '/').includes('?') ? '&' : '?'}n=${encodeURIComponent(data.entryId)}`
-    : (data.url || '/')
+  // It goes in the query, ahead of any #section (`/inbox#P12`): appended after
+  // the hash it became part of it, and the section never matched. Only on our
+  // own pages; another site has no use for the id.
+  const target = (() => {
+    const raw = data.url || '/'
+    if (!data.entryId) return raw
+    let url
+    // A feed's link is whatever the feed said; a malformed one still opens as given.
+    try { url = new URL(raw, self.location.origin) } catch { return raw }
+    if (url.origin !== self.location.origin) return raw
+    url.searchParams.set('n', data.entryId)
+    return url.pathname + url.search + url.hash
+  })()
 
   event.waitUntil((async () => {
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })

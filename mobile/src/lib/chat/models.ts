@@ -73,6 +73,18 @@ export function defaultSettingsFor(provider: ProviderRow | undefined, defaultPro
   return { ...DEFAULT_MODEL_SETTINGS, modelId, speed: 'default', effort: 'default', context: 'default' }
 }
 
+/**
+ * Settings for a model picked from the picker. The default's speed and context
+ * belong to the default's model: Cursor takes bracket params only on Composer and
+ * spells them into the id everywhere else (`gpt-5.3-codex-fast`), so `auto` or
+ * `gpt-5.2` carrying `[fast=true]` is refused outright.
+ */
+export function settingsForPick(provider: ProviderRow | undefined, modelId: string | undefined, defaultProvider: string, defaultModel: string | null): ModelSettings {
+  const base = defaultSettingsFor(provider, defaultProvider, defaultModel)
+  if (!modelId || modelId === base.modelId) return { ...base, effort: 'default' }
+  return { ...base, modelId, speed: 'default', effort: 'default', context: 'default' }
+}
+
 export function modelLabel(models: ModelRow[] | undefined, id: string): string {
   return (models || []).find((m) => m.id === id)?.name || id
 }

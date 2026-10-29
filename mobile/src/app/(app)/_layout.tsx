@@ -4,6 +4,7 @@ import React, { useEffect } from 'react'
 import { useWindowDimensions } from 'react-native'
 import { Drawer } from 'expo-router/drawer'
 import AppDrawer from '../../shell/AppDrawer'
+import { keepDrawerPan } from '../../shell/drawerGesture'
 import { useQuickActions } from '../../shell/quickActions'
 import { usePush } from '../../shell/push'
 import { useAccessReauth } from '../../shell/accessReauth'
@@ -36,6 +37,7 @@ export default function AppLayout() {
         overlayColor: 'rgba(0,0,0,0.35)',
         swipeEnabled: true,
         swipeEdgeWidth: 40,
+        configureGestureHandler: keepDrawerPan,
         sceneStyle: { backgroundColor: colors.bg },
       }}
     >
@@ -45,6 +47,7 @@ export default function AppLayout() {
       <Drawer.Screen name="chat" options={{ title: 'Chat' }} />
       <Drawer.Screen name="productivity" options={{ title: 'Productivity' }} />
       <Drawer.Screen name="inbox" options={{ title: 'Inbox' }} />
+      <Drawer.Screen name="fleet" options={{ title: 'Fleet' }} />
       <Drawer.Screen name="settings" options={{ title: 'Settings' }} />
     </Drawer>
   )

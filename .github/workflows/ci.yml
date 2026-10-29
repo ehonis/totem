@@ -5,9 +5,15 @@ on:
   push:
     branches: [main]
 
+# The private repo runs on the owner's own runner (label `box`); the public copy
+# keeps GitHub's hosted runner. A new push to a PR cancels the run it replaces.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'box' || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: web
@@ -24,7 +30,7 @@ jobs:
       - run: npm test
 
   bridge:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'box' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,7 +44,7 @@ jobs:
       - run: npm test
 
   mobile:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'box' || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: mobile

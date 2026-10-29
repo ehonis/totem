@@ -87,6 +87,13 @@ function Viewer({ wsPath, screenshots, rememberMinutes }: { wsPath: string; scre
     setPhase('connecting')
     setMessage('')
     triedSaved.current = false
+    stage.classList.add('cursor-pending')
+    const cursorWatch = new MutationObserver(() => {
+      if (!stage.querySelector('canvas')?.style.cursor.startsWith('url(')) return
+      stage.classList.remove('cursor-pending')
+      cursorWatch.disconnect()
+    })
+    cursorWatch.observe(stage, { subtree: true, attributes: true, attributeFilter: ['style'] })
     import('@novnc/novnc').then(({ default: RFBClass }) => {
       if (cancelled) return
       const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -151,6 +158,7 @@ function Viewer({ wsPath, screenshots, rememberMinutes }: { wsPath: string; scre
     })
     return () => {
       cancelled = true
+      cursorWatch.disconnect()
       rfbRef.current = null
       try { rfb?.disconnect() } catch {}
     }

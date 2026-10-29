@@ -126,7 +126,7 @@ const available = (value, readAt) => ({ available: true, value, reason: null, re
 /**
  * Build the resolver the service uses.
  *
- * `strava` is the client the bridge already constructs (`createStravaClient`), or null
+ * `strava` is the client the bridge already constructs (`createRemoteStravaClient`), or null
  * when the connector was never wired up — in which case every sourced metric reports
  * unavailable, which is the correct degraded state rather than an error that breaks the
  * whole list.

@@ -1,0 +1,202 @@
+name: Deploy
+
+# Continuous deployment for an install that wants it: when CI passes on main, a
+# self-hosted runner on the machine that serves Totem fast-forwards the live
+# checkout, rebuilds, restarts the service and checks it answers, rolling back
+# if any of that fails. If the iPhone app's code changed, it then ships that too:
+# an over-the-air update, and a new App Store build when native code changed.
+#
+# Off unless the repository says where the install is (repository variables), so
+# a fork or a copy of this repository never runs it.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time, in order; a deploy is never cancelled halfway.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  server:
+    if: >-
+      vars.DEPLOY_DIR != '' && (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+    runs-on: totem-deploy
+    timeout-minutes: 45
+    outputs:
+      sha: ${{ steps.pull.outputs.after }}
+      mobile: ${{ steps.pull.outputs.mobile }}
+    env:
+      DEPLOY_SERVICE: ${{ vars.DEPLOY_SERVICE || 'totem' }}
+      DEPLOY_HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL || 'http://127.0.0.1:8787/health' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ vars.DEPLOY_DIR }}
+    steps:
+      # Someone's uncommitted work in the live folder is never deployed over. Untracked
+      # files are left alone; a pull that would overwrite one fails on its own.
+      - name: The live checkout is clean and on main
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "::error::The live checkout has uncommitted changes; nothing was deployed."
+            git status --short --untracked-files=no
+            exit 1
+          fi
+          if [ "$(git branch --show-current)" != main ]; then
+            echo "::error::The live checkout is on $(git branch --show-current), not main; nothing was deployed."
+            exit 1
+          fi
+
+      - name: Pull
+        id: pull
+        run: |
+          set -euo pipefail
+          before=$(git rev-parse HEAD)
+          git fetch --quiet origin main
+          git merge --ff-only --quiet origin/main
+          after=$(git rev-parse HEAD)
+          echo "before=$before" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
+          # Nothing new is nothing to do, unless someone asked for a deploy by hand.
+          if [ "$before" = "$after" ] && [ "${{ github.event_name }}" != workflow_dispatch ]; then
+            echo "Already at $(git log --oneline -1); nothing to deploy."
+            exit 0
+          fi
+          echo "go=true" >> "$GITHUB_OUTPUT"
+          changed=$(git diff --name-only "$before" "$after")
+          # Install when the dependencies changed, or when the live folder has lost its
+          # install (npm ci always writes node_modules/.package-lock.json).
+          if printf '%s\n' "$changed" | grep -qE '(^|/)package(-lock)?\.json$' || [ ! -f node_modules/.package-lock.json ]; then
+            echo "deps=true" >> "$GITHUB_OUTPUT"
+          fi
+          # What the iPhone app is built from: its own folder.
+          printf '%s\n' "$changed" | grep -qE '^mobile/' && echo "mobile=true" >> "$GITHUB_OUTPUT" || true
+          echo "Deploying $(git log --oneline -1) (was ${before:0:7})"
+          git log --oneline "$before..$after"
+
+      - name: Install dependencies
+        if: steps.pull.outputs.deps == 'true'
+        run: |
+          npm ci --no-audit --no-fund
+          # node-pty ships its macOS helper without the execute bit.
+          chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true
+
+      - name: Build
+        if: steps.pull.outputs.go == 'true'
+        run: npm run build
+
+      # A restart kills every chat reply and job in flight, so wait until no agent CLI is
+      # running under the bridge (checked every 15 s, for up to 30 minutes), as the
+      # bridge's own restartBridgeSoon does.
+      - name: Restart once nothing is running
+        if: steps.pull.outputs.go == 'true'
+        run: |
+          set -uo pipefail
+          deadline=$(( $(date +%s) + 1800 ))
+          while :; do
+            if [ "$(uname)" = Darwin ]; then
+              pid=$(launchctl print "gui/$(id -u)/$DEPLOY_SERVICE" 2>/dev/null | awk '/^\tpid =/{print $3}')
+            else
+              pid=$(systemctl --user show -p MainPID --value "$DEPLOY_SERVICE")
+            fi
+            busy=0
+            if [ -n "$pid" ] && [ "$pid" != 0 ]; then
+              busy=$(ps -A -o ppid=,comm= | awk -v p="$pid" '$1==p && $2~/(claude|codex|cursor-agent|opencode)$/' | wc -l | tr -d ' ')
+            fi
+            [ "$busy" = 0 ] && break
+            if [ "$(date +%s)" -gt "$deadline" ]; then echo "::warning::Waited 30 minutes; restarting with $busy run(s) going"; break; fi
+            echo "$busy run(s) going; waiting"
+            sleep 15
+          done
+          set -e
+          if [ "$(uname)" = Darwin ]; then
+            launchctl kickstart -k "gui/$(id -u)/$DEPLOY_SERVICE"
+          else
+            systemctl --user restart "$DEPLOY_SERVICE"
+          fi
+
+      - name: The service answers
+        if: steps.pull.outputs.go == 'true'
+        run: |
+          sleep 2
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 2 "$DEPLOY_HEALTH_URL" > /dev/null; then echo "Up after ${i}s"; exit 0; fi
+            sleep 1
+          done
+          echo "::error::$DEPLOY_HEALTH_URL did not answer within 60s"
+          exit 1
+
+      # A failed build or a service that will not start puts the last good version back.
+      # It always reinstalls: a broken install fails the old version just the same.
+      - name: Roll back
+        if: failure() && steps.pull.outputs.before != ''
+        run: |
+          set -uo pipefail
+          echo "::warning::Rolling back to ${{ steps.pull.outputs.before }}"
+          git reset --hard --quiet "${{ steps.pull.outputs.before }}"
+          npm ci --no-audit --no-fund
+          # node-pty ships its macOS helper without the execute bit.
+          chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true
+          npm run build
+          if [ "$(uname)" = Darwin ]; then
+            launchctl kickstart -k "gui/$(id -u)/$DEPLOY_SERVICE"
+          else
+            systemctl --user restart "$DEPLOY_SERVICE"
+          fi
+
+  # The iPhone app. Installed builds take an over-the-air update only when their native
+  # code matches (runtimeVersion is a fingerprint of it). When no App Store build has
+  # this fingerprint yet, one is started and submitted to TestFlight on its own.
+  iphone:
+    needs: server
+    if: needs.server.outputs.mobile == 'true' && vars.EAS_PROJECT_ID != ''
+    runs-on: ${{ github.event.repository.private && 'box' || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.server.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      # The install's identity is not in the repository (mobile/app.config.js).
+      - name: The install's app identity
+        env:
+          BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID }}
+          PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+        run: |
+          node -e 'require("fs").writeFileSync("app.local.json", JSON.stringify({ bundleIdentifier: process.env.BUNDLE_ID, easProjectId: process.env.PROJECT_ID }))'
+
+      - name: Is there a build with this native code?
+        id: native
+        run: |
+          set -euo pipefail
+          rv=$(npx expo-updates runtimeversion:resolve --platform ios | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).runtimeVersion')
+          builds=$(npx eas-cli build:list --platform ios --build-profile production --runtime-version "$rv" --limit 10 --json --non-interactive)
+          live=$(printf '%s' "$builds" | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).filter(b => !["ERRORED", "CANCELED"].includes(b.status)).length')
+          echo "runtime=$rv" >> "$GITHUB_OUTPUT"
+          if [ "$live" = 0 ]; then echo "build=true" >> "$GITHUB_OUTPUT"; echo "Native code changed: no build has runtime $rv yet."; else echo "A build has runtime $rv."; fi
+
+      - name: Publish the update
+        run: npx eas-cli update --channel production --platform ios --environment production --non-interactive --message "$(git log -1 --format=%s)"
+
+      - name: Start an App Store build
+        if: steps.native.outputs.build == 'true'
+        run: |
+          npx eas-cli build --platform ios --profile production --auto-submit --non-interactive --no-wait --message "$(git log -1 --format=%s)"
+          echo "::notice::Native code changed, so a new App Store build was started and will be submitted to TestFlight. The update above reaches only that build."

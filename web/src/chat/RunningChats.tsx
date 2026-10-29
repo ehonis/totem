@@ -9,6 +9,7 @@ import SnoozeMenu from './SnoozeMenu'
 import { TI } from './ui'
 import { IconPlayerStopFilled, IconClock, IconCheck, IconMailOpened, IconChevronDown, IconHome } from './icons'
 import type { ChatThread, Project } from './types'
+import { pendingQuestions } from './questions'
 
 // The running-chats panel, bottom-right on every screen. It lists the chats that
 // are answering and the finished ones he hasn't read yet (`needsReply`), that he
@@ -68,7 +69,10 @@ function Row({ t, run, now, onOpen, onSnooze }: {
 }) {
   const title = threadTitle(t)
   const failed = !run && failedReply(t)
-  const status = run
+  const asking = pendingQuestions(t)
+  const status = asking
+    ? <span className="vc-asking">{asking.part.questions.length === 1 ? 'A question for you' : `${asking.part.questions.length} questions for you`}</span>
+    : run
     ? <><span className="vc-live-dot" aria-hidden /><span>{elapsed(now - run.startedAt)} · {run.activity || 'Working'}</span></>
     : failed
       ? <span>Failed {ago(t.updatedAt, now) !== 'now' ? `${ago(t.updatedAt, now)} ago` : 'just now'}</span>
@@ -145,7 +149,7 @@ export default function RunningChats({ onOpenChat, onShowPanel, narrow }: { onOp
   }, [runs, open])
 
   const candidates = useMemo(() => threads.filter((t) => (
-    !t.totemId && (runs[t.id] || (t.needsReply && !onPlacePage)) && !onScreen.rows.has(t.id) && !onScreen.open.has(t.id)
+    !t.totemId && (runs[t.id] || pendingQuestions(t) || (t.needsReply && !onPlacePage)) && !onScreen.rows.has(t.id) && !onScreen.open.has(t.id)
     && !isSnoozed(t, now) && t.settledOverride !== 'settled'
   )), [threads, runs, onScreen, now, onPlacePage])
 

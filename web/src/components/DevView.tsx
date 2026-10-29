@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import GithubView from './GithubView'
+import ShippedCard from './ShippedCard'
 import {
   getDevStatus, setDevAiReview, setDevWatch, requestDevReview, AuthError,
   type DevAlert, type DevHealth, type DevPull, type DevRepo, type DevStatus,
 } from '../api'
 import { relTime } from '../usageMeta'
+import { readDevCache, writeDevCache } from '../devCache'
 import { pushToast } from '../toast'
 import { Hi, ArrowPathIcon, ClipboardDocumentIcon, WarnIcon } from '../icons'
 
@@ -38,7 +40,8 @@ const runnerState = (r: { status: string; busy: boolean }) =>
   r.status !== 'online' ? 'failure' : r.busy ? 'pending' : 'success'
 
 export default function DevView({ onAuthError }: { onAuthError: () => void }) {
-  const [data, setData] = useState<DevStatus | null>(null)
+  // Last visit's answer paints at once; the first load refreshes it quietly.
+  const [data, setData] = useState<DevStatus | null>(() => readDevCache<DevStatus>('status'))
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -61,7 +64,8 @@ export default function DevView({ onAuthError }: { onAuthError: () => void }) {
     }
   }, [auth])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load(false, !!readDevCache('status')) }, [load])
+  useEffect(() => { if (data) writeDevCache('status', data) }, [data])
 
   const patchRepo = (repo: string, aiReview: DevRepo['aiReview']) =>
     setData((d) => d && { ...d, repos: d.repos?.map((r) => (r.repo === repo ? { ...r, aiReview } : r)) })
@@ -112,9 +116,10 @@ export default function DevView({ onAuthError }: { onAuthError: () => void }) {
         </button>
       </div>
 
-      {error ? (
-        <div className="muted inline-warn"><WarnIcon /> {error}</div>
-      ) : loading || !data ? (
+      <ShippedCard onAuthError={onAuthError} />
+
+      {error && <div className="muted inline-warn"><WarnIcon /> {error}</div>}
+      {error && !data ? null : !data ? (
         <div className="spinner">Asking GitHub…</div>
       ) : (
         <>

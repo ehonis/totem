@@ -11,6 +11,37 @@ background check, `alerts.mjs` the alert record, `ingest.mjs` the public alert r
 
 ## What it shows
 
+### PRs per day
+
+The first card, shown whether or not any repo is watched: every pull request the server's
+`gh` login authored and merged, in any repo it can see, as one stacked column per day split by
+repo. 14, 30 or 90 days. The line above it gives the total, the daily average, how many days
+had a merge and the busiest day.
+
+- **Source**: GitHub search, `is:pr is:merged author:@me merged:<range>`
+  (`GET /api/dev/shipped?days=14|30|90`). Search answers at most 1,000 results per query, so
+  the range is asked for in two-week slices, each paged 100 at a time; a 90-day range is a
+  handful of calls. Results are cached for ten minutes per range (search is rate-limited);
+  the card's Refresh asks again. The server fetches a day more than asked, and the browser
+  buckets by its own timezone.
+- **Colours**: the eight repos with the most PRs in the range get one colour each, in a fixed
+  order checked for colour-blind separation on the card surface; every other repo is grey
+  ("Other"). Colour follows rank, so it can change with the range.
+- **Hiding a repo**: click its chip under the chart. The list is kept as `shippedHidden` in
+  the config file (`PUT /api/dev/shipped/hidden` with `{ "repo", "hidden" }`). Use it for a
+  public mirror whose PRs repeat a private repo's.
+- **Groups**: Edit groups names sets of repos (Work, Side projects) and puts each repo in
+  at most one. Once a group exists, a switch picks how the chart splits: **Repos** (one colour
+  per repo, as above), **Groups** (one colour per group; an ungrouped repo keeps its own) or
+  **Both** (one segment per repo, shaded in its group's colour). In the group views the chips
+  sit under their group's name, the eight busiest groups or loose repos get a colour, and a
+  day's list prefixes each PR with its group. Groups are kept as `shippedGroups` in the config
+  file (`PUT /api/dev/shipped/groups` with `{ "groups": [{ "name", "repos" }] }`, replacing
+  the list); the switch is per browser.
+- **A day's PRs**: click a column to list that day's PRs (title, repo, number, time merged).
+
+### Repo cards
+
 Per configured repo, one card:
 
 - **CI on the default branch**: the newest run of each workflow, with its result, age and link.
@@ -42,6 +73,8 @@ Per configured repo, one card:
 
 Above the cards, the health checks; below them, the last alerts. GitHub results are cached in
 memory for 60 seconds; Refresh bypasses the cache.
+The browser keeps the last status and each range's PRs in localStorage (`web/src/devCache.ts`),
+so opening the tab paints them at once and swaps in the fresh answer when it arrives.
 
 ## Watching repos
 
@@ -70,6 +103,8 @@ needed. The tab maintains `repos`; health checks and the poll interval are edite
 - `health`: optional. Each URL gets a GET with a 5-second timeout; it is healthy when the status
   is in `expect` (default `[200]`). Redirects are not followed, so list a 3xx if one is fine.
 - `pollMinutes`: how often the watcher looks, default 5.
+- `shippedHidden`: repos left out of PRs per day, normally set by clicking a chip.
+- `shippedGroups`: `[{ "name": "Work", "repos": ["owner/name"] }]`, normally set from Edit groups.
 
 GitHub is read with the `gh` CLI as the user Totem runs as (`gh auth login` there). Its token
 needs repo and workflow scope to read runs and set variables, and admin on a repo to list its

@@ -9,7 +9,7 @@ services:
         required: false
     volumes:
       - totem-data:/app/data          # tasks, goals, settings, sign-in, skills, jobs
-      - totem-secrets:/app/secrets    # OAuth tokens (WHOOP, Strava) and key files
+      - totem-secrets:/app/secrets    # OAuth client files and key files
       - totem-home:/home/node         # agent CLI logins (~/.claude, ~/.codex)
     restart: unless-stopped
 

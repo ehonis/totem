@@ -525,3 +525,15 @@ test('recoverInterrupted fails runs a restart cut off, so the job can run again'
   assert.deepEqual(await store.recoverInterrupted(), [job.id].slice(0, 1), 'the new claim is itself running')
   assert.deepEqual(await store.recoverInterrupted(), [])
 })
+
+test('a job keeps its gitSync hosts across a reload, minus any it cannot use', async () => {
+  const store = await freshStore()
+  await store.list()
+  const patched = await store.update('daily-brief', {
+    gitSync: { hosts: [{ name: 'here' }, { name: 'box', ssh: '-oProxyCommand=x', dir: '~/r' }], install: 'scripts/i.sh' },
+  })
+  assert.deepEqual(patched.gitSync, { hosts: [{ name: 'here', ssh: null, dir: null }], install: 'scripts/i.sh' })
+  const again = (await store.list()).find((j) => j.id === 'daily-brief')
+  assert.deepEqual(again.gitSync, patched.gitSync)
+  assert.equal((await store.update('daily-brief', { gitSync: null })).gitSync, null)
+})

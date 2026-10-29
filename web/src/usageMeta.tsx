@@ -1,7 +1,7 @@
 // Shared usage vocabulary + tiny presentational pieces used by both the Usage
 // view and the Overview tab. Kept in one place so the channel/provider colors,
 // number formatting, and quota-bar rendering stay identical across the app.
-import React, { useState } from 'react'
+import React, { useLayoutEffect, useRef, useState } from 'react'
 import {
   Hi,
   ChatBubbleLeftRightIcon,
@@ -124,6 +124,27 @@ function dayKeyToDate(key: string): Date {
   return new Date(key)
 }
 
+// Where a chart's hover tooltip sits: level with the top of the bars, beside the
+// hovered column (on whichever side has more room), and kept inside the chart, so
+// it neither covers that column nor leaves the screen. It is measured before
+// paint, so it never shows in the wrong place first.
+function useTipPosition(hover: number | null, count: number) {
+  const chartRef = useRef<HTMLDivElement>(null)
+  const tipRef = useRef<HTMLDivElement>(null)
+  const [left, setLeft] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    if (hover == null || !chartRef.current || !tipRef.current) return
+    const width = chartRef.current.clientWidth
+    const tip = tipRef.current.offsetWidth
+    const column = width / count
+    const center = (hover + 0.5) * column
+    const beside = center > width / 2 ? center - column / 2 - 8 - tip : center + column / 2 + 8
+    setLeft(Math.min(Math.max(0, beside), Math.max(0, width - tip)))
+  }, [hover, count])
+  const style: React.CSSProperties = left == null ? { visibility: 'hidden' } : { left, transform: 'none' }
+  return { chartRef, tipRef, style }
+}
+
 // Shared 30-day stacked activity graph. One column per day, each split into the
 // segments that made up that day. Hovering a column reveals a floating tooltip
 // with the day's total and per-segment breakdown. Defaults to the AI-request
@@ -135,6 +156,9 @@ interface ActivityChartProps {
   order?: string[]
   meta?: Record<string, any>
   unit?: string
+  // A click on a column; `picked` keeps that column lit after the pointer leaves.
+  onPick?: (index: number) => void
+  picked?: number | null
 }
 
 export function ActivityChart({
@@ -143,22 +167,24 @@ export function ActivityChart({
   order = CHANNEL_ORDER,
   meta = CHANNEL_META,
   unit = 'request',
+  onPick,
+  picked = null,
 }: ActivityChartProps) {
   const [hover, setHover] = useState<number | null>(null) // hovered column index, or null
+  const tip = useTipPosition(hover, daily?.length || 0)
   if (!daily?.length) return null
   const max = Math.max(1, ...daily.map((d) => d.count))
   const active = hover != null ? daily[hover] : null
-  // Keep the tooltip from spilling past the chart edges near the first/last days.
-  const tipLeft = hover == null ? 0 : Math.min(92, Math.max(8, ((hover + 0.5) / daily.length) * 100))
 
   return (
-    <div className="activity-chart" style={{ '--activity-h': `${height}px` } as React.CSSProperties}>
+    <div className="activity-chart" ref={tip.chartRef} style={{ '--activity-h': `${height}px` } as React.CSSProperties}>
       <div className="activity-bars" onMouseLeave={() => setHover(null)}>
         {daily.map((d, i) => (
           <div
             key={d.date}
-            className={`activity-col${hover === i ? ' is-hover' : ''}`}
+            className={`activity-col${hover === i || picked === i ? ' is-hover' : ''}${onPick ? ' is-pickable' : ''}`}
             onMouseEnter={() => setHover(i)}
+            onClick={onPick ? () => onPick(i) : undefined}
           >
             <div
               className="activity-bar"
@@ -181,7 +207,7 @@ export function ActivityChart({
       </div>
 
       {active && (
-        <div className="activity-tip" style={{ left: `${tipLeft}%` }}>
+        <div className="activity-tip" ref={tip.tipRef} style={tip.style}>
           <div className="activity-tip-day">
             {dayKeyToDate(active.date).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
           </div>
@@ -225,12 +251,12 @@ export function ComboActivityChart({ top, bottom, height = 160 }: { top: ComboSe
   const topByDate: Record<string, any> = Object.fromEntries((top.daily || []).map((d) => [d.date, d]))
   const botByDate: Record<string, any> = Object.fromEntries((bottom.daily || []).map((d) => [d.date, d]))
   const cols = dates.map((date) => ({ date, top: topByDate[date], bottom: botByDate[date] }))
+  const tip = useTipPosition(hover, cols.length)
   if (!cols.length) return null
   const topMax = Math.max(1, ...cols.map((c) => c.top?.count || 0))
   const botMax = Math.max(1, ...cols.map((c) => c.bottom?.count || 0))
   const half = Math.floor((height - 1) / 2)
   const active = hover != null ? cols[hover] : null
-  const tipLeft = hover == null ? 0 : Math.min(92, Math.max(8, ((hover + 0.5) / cols.length) * 100))
 
   const halfBar = (day: any, series: ComboSeries, max: number, dir: 'up' | 'down') => (
     <div className={`combo-bar ${dir}`} style={{ height: `${day?.count ? Math.max(5, Math.round((day.count / max) * 100)) : 0}%` }}>
@@ -263,7 +289,7 @@ export function ComboActivityChart({ top, bottom, height = 160 }: { top: ComboSe
   )
 
   return (
-    <div className="activity-chart combo-chart" style={{ '--combo-half': `${half}px` } as React.CSSProperties}>
+    <div className="activity-chart combo-chart" ref={tip.chartRef} style={{ '--combo-half': `${half}px` } as React.CSSProperties}>
       <div className="combo-axis up">{top.label}</div>
       <div className="combo-bars" onMouseLeave={() => setHover(null)}>
         <div className="combo-baseline" />
@@ -277,7 +303,7 @@ export function ComboActivityChart({ top, bottom, height = 160 }: { top: ComboSe
       <div className="combo-axis down">{bottom.label}</div>
 
       {active && (
-        <div className="activity-tip combo-tip" style={{ left: `${tipLeft}%` }}>
+        <div className="activity-tip combo-tip" ref={tip.tipRef} style={tip.style}>
           <div className="activity-tip-day">
             {dayKeyToDate(active.date).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
           </div>

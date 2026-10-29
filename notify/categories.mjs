@@ -97,6 +97,8 @@ export const CATEGORIES = {
     dedupeWindowMinutes: 24 * HOUR,
     slot: 'morning',
   },
+  // Nothing raises this any more (habit nudges were retired 2026-10-14); kept so
+  // past notifications and their feedback still have a label.
   'habit.slipping': {
     label: 'Habits slipping',
     quietHours: 'defer',
@@ -229,6 +231,15 @@ export const CATEGORIES = {
     dedupeWindowMinutes: 60,
     slot: null,
   },
+  // The Fleet tab: a machine that stopped reporting for five minutes, and its
+  // return. Deferred through quiet hours: a box down at 2am is still down at 7am.
+  'fleet.offline': {
+    label: 'Machine offline',
+    quietHours: 'defer',
+    defaultEnabled: true,
+    dedupeWindowMinutes: 60,
+    slot: null,
+  },
   'approval.pending': {
     label: 'Approval codes',
     quietHours: 'override',
@@ -268,6 +279,16 @@ export const CATEGORIES = {
   // viewer is attached, so an answer read as it streams never also buzzes.
   'chat.finished': {
     label: 'Chat answers you walked away from',
+    quietHours: 'override',
+    defaultEnabled: true,
+    pinned: true,
+    dedupeWindowMinutes: 0,
+    slot: null,
+  },
+  // A chat whose agent stopped to ask the owner questions (chat/questions.mjs)
+  // while nobody was watching it. The reply waits on the answers.
+  'chat.question': {
+    label: 'Chats waiting on your answers',
     quietHours: 'override',
     defaultEnabled: true,
     pinned: true,

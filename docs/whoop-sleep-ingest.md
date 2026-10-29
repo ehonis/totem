@@ -1,20 +1,27 @@
 # WHOOP sleep sync
 
-Fills the **Sleep** habit with last night's sleep performance *and* its stage
-breakdown from the WHOOP API. Runs at 11:00 by default — late enough that the
-band has synced, and that a night edited in the WHOOP app has been re-scored.
+Fills the **Sleep** habit with last night's sleep performance, its stage
+breakdown and the morning's recovery from WHOOP. Runs at 11:00 by default: late
+enough that the band has synced, and that a night edited in the WHOOP app has been
+re-scored.
 
-This replaced a Garmin Connect scrape. WHOOP publishes a real API (OAuth 2.0,
-versioned REST, documented schemas), so the whole thing is a few `fetch` calls in
-`bridge.mjs` — no Python sidecar, no venv, no TLS impersonation, nothing to break
-when a vendor tightens a screw.
+**The grant is Bushido's** (since 2026-10-14). Bushido, the training app, holds the
+owner's WHOOP login and OAuth client; Totem holds no WHOOP credentials and asks
+Bushido for the nights through `whoop/remote.mjs`. WHOOP rotates the refresh token
+on every refresh and voids the old one, so exactly one process may hold it. Never
+give Totem a grant of its own again, or two refreshers rotate each other's tokens
+away and one of them stops working without a sound.
+
+What stays in Totem: the habit, the job, which date a night is filed under, and the
+rule about which entries a sync may rewrite (`syncWhoopSleep` in `bridge.mjs`).
 
 ## Where to manage it
 
-- **Settings → Connections → Wearables** — status, granted scopes, the redirect URI,
-  and Reconnect. This is the home for it.
-- **Bushido** shows the nights (score, time asleep, stages, bedtime and wake). It
-  reads them from `GET /api/whoop/training` (`sleep[]`, below).
+- **Settings → Connections → Wearables & fitness**: WHOOP's state as Bushido reports
+  it, the granted scopes, and a link to Bushido to connect or reconnect
+  (`web/src/components/WhoopConnection.tsx`).
+- **Bushido** connects WHOOP (profile → Settings) and shows the nights, workouts and
+  recovery. It reads WHOOP itself.
 
 The sleep habit is hidden from Totem's Habits tab and Overview (`isSyncedSleep` in
 `HabitsView.tsx`): nobody logs it by hand. The habit, this sync and every night's
@@ -65,33 +72,29 @@ cycles, sleep debt) are in the hover tooltip, which is where a number belongs wh
 it has no time series worth drawing. Recovery also appears there as an exact
 percentage alongside its colored trend line.
 
+
 ## Setup (once)
 
-1. **Create an app** at [developer.whoop.com](https://developer.whoop.com) →
-   Dashboard. You need an active WHOOP membership. Set:
-   - **Scopes:** `read:sleep` and `offline` for this sync (offline is what makes
-     WHOOP return a refresh token — without it the sync dies after an hour,
-     permanently), plus `read:workout`, `read:recovery`, `read:cycles` and
-     `read:body_measurement`, which are what Bushido reads through this bridge. See
-     "Training data for Bushido" below.
-   - **Redirect URI:** `http://localhost:8787/whoop-oauth/callback`, exactly.
-     If WHOOP rejects a loopback URL, use the tunnel hostname instead and set
-     `WHOOP_REDIRECT_URI` to the same string — it must match byte for byte.
-2. **Put the credentials in `.env`** (gitignored):
-   ```
-   WHOOP_CLIENT_ID=…
-   WHOOP_CLIENT_SECRET=…
-   ```
-3. **Restart the bridge** so it reads them: `systemctl --user restart assistant-bridge`
-4. **Authorize.** Habits tab → the Sleep graph → **Connect WHOOP**. That opens
-   WHOOP's consent screen and lands back on `/whoop-oauth/callback`, which stores
-   the token pair in `secrets/whoop-oauth.json`. Click it again any time WHOOP
-   invalidates the session.
-5. **Turn the job on** in Totems → *WHOOP sleep sync*. `WHOOP_SLEEP_INGEST_ENABLED=true`
-   only seeds the default on first boot — after that `data/jobs.json` is authoritative,
+1. **In Bushido**: create a WHOOP app at [developer.whoop.com](https://developer.whoop.com)
+   (an active WHOOP membership is needed), give Bushido its client ID and secret, and
+   connect from profile → Settings → **Connect WHOOP**. Bushido's docs have the scopes
+   and the redirect URI.
+2. **In Totem**: set `BUSHIDO_URL` and `BUSHIDO_API_TOKEN` (Bushido's own
+   `BUSHIDO_API_TOKEN`), the same two Strava uses. When `BUSHIDO_URL` sits behind an auth
+   proxy a server cannot pass, set `BUSHIDO_API_URL` to an address the bridge can reach
+   directly, such as `http://127.0.0.1:8099` when both run on one machine. Restart the
+   bridge.
+3. **Turn the job on** in Totems → *WHOOP sleep sync*. `WHOOP_SLEEP_INGEST_ENABLED=true`
+   only seeds the default on first boot; after that `data/jobs.json` is authoritative,
    so the toggle in the UI is the one that decides. See `docs/jobs.md`.
 
-**Sync** next to the graph runs it on demand — the quickest way to confirm setup.
+**Sync** next to the graph runs it on demand, the quickest way to confirm setup.
+
+Moving an existing install's grant from Totem to Bushido: stop Totem, move (do not
+copy) `secrets/whoop-oauth.json` to Bushido's data directory as `whoop-oauth.json` (0600), give
+Bushido the same client ID and secret, then start Totem with the settings in step 2.
+Remove `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` and `WHOOP_REDIRECT_URI` from Totem's
+`.env` and Settings → Integrations; nothing reads them now.
 
 ## How it runs
 
@@ -99,14 +102,20 @@ Scheduling is the job engine's (`docs/jobs.md`), not this feature's: it's an
 agentless job, so it picks no AI, and a run the box slept through is caught up
 within the job's grace window rather than lost.
 
-`syncWhoopSleep` in `bridge.mjs` pulls `GET /developer/v2/activity/sleep` and
-`GET /developer/v2/recovery` for the last `WHOOP_SLEEP_DAYS` (3) nights, following
-`next_token`. A recovery is joined to its sleep by `cycle_id` before the sleep's
-local wake date is chosen; dating the recovery independently would put it on the
-previous evening. Each merged night is written through `logHabitRecord` — the
-same path the dashboard and the agent use, so there's one writer and one set of
-guard rails. Explicit API syncs accept up to 90 days for a bounded backfill;
-scheduled runs keep the 3-day default.
+`syncWhoopSleep` in `bridge.mjs` asks Bushido for the nights over the last
+`WHOOP_SLEEP_DAYS` (3) days: `whoop.sleepNights({ start, end, value })`, which is
+`POST <BUSHIDO_API_URL or BUSHIDO_URL>/api/whoop/owner` with
+`{ method: 'sleepNights', args: [{ start, end, value }] }` and `BUSHIDO_API_TOKEN`.
+Bushido pulls the sleep and recovery collections, drops naps and unscored nights,
+shapes each night (below), picks the headline number named by `value`
+(`WHOOP_SLEEP_VALUE`), and joins recovery to its sleep by `cycle_id` into
+`stats.recovery`. Totem then picks each night's date, keeps one night per date, and
+writes it through `logHabitRecord`: the same path the dashboard and the agent use,
+so there's one writer and one set of guard rails. Explicit API syncs accept up to
+90 days for a bounded backfill; scheduled runs keep the 3-day default.
+
+Each night Bushido returns is `{ id, updatedAt, date, wakeDate, value, parts, stats,
+window, totalMin }`, from these WHOOP fields:
 
 | What | Where it lands |
 |---|---|
@@ -152,8 +161,9 @@ Details worth knowing:
   `WHOOP_SLEEP_VALUE=efficiency|consistency` switches it.
 - **Which date.** WHOOP timestamps a sleep at its *start*. `WHOOP_SLEEP_DATE_MODE=wake`
   (what this box uses) files a night under the morning you woke; `night`, the code
-  default, uses the local date of `start`. The record's `timezone_offset` is applied
-  before taking the date, because habit days are local days.
+  default, uses the local date of `start`. Bushido applies the record's
+  `timezone_offset` when it computes `date` and `wakeDate`, because habit days are
+  local days.
 
   **`night` is wrong if you go to bed after midnight.** A 00:13 bedtime and the
   *following* night's 22:36 bedtime share a local start date, so two nights collapse
@@ -162,7 +172,7 @@ Details worth knowing:
   nights reduced to three dates (`checked: 3`), last night's 79 discarded because
   the date already held the night before's 70. `wake` gives every night its own
   date and is what a year of this habit's history was already filed under.
-- **Naps are skipped** (`nap: true`), as are records that aren't `SCORED` yet. If
+- **Naps are skipped** (`nap: true`) by Bushido, as are records that aren't `SCORED` yet. If
   two sleeps land on the same local day, the longer one wins.
 - **Already-logged nights are left alone**, so a number you typed yourself is
   never overwritten. `{"force": true}` overrides. That rule guards the *value*,
@@ -170,104 +180,47 @@ Details worth knowing:
   `stats` backfilled if they're missing (reported as `enriched`), because
   "don't clobber what I typed" was never a reason to withhold readings WHOOP owns
   and nobody enters by hand. Those calls pass neither `value` nor `parts`.
+- **A night the sync wrote is rewritten when WHOOP revises it** (`whoopOwnsEntry`):
+  a different record won the day, the record's `updatedAt` moved, or recovery was
+  scored after the sleep was.
 - **Three nights every run**, so a morning the box was asleep for heals itself.
-- **Logging a number ticks the habit off** — sleep data only exists if you wore
+- **Logging a number ticks the habit off**: sleep data only exists if you wore
   the band.
-- **Refresh tokens rotate.** WHOOP invalidates the old pair on every refresh, so
-  the new one is persisted immediately. Nothing else may write that file — which
-  is why Bushido asks this bridge for WHOOP data rather than holding its own copy of
-  the credentials.
-- **A refresh cannot widen a grant.** `whoopAccessToken` refreshes with the scope
-  the stored token actually has, not with `WHOOP_SCOPES`. Asking for more than was
-  authorized is how a working 11:00 job turns into `invalid_scope`, and widening
-  the constant only affects the NEXT authorization.
-
-## Training data for Bushido
-
-Bushido (`~/bushido`, the training app) shows per-session heart rate and daily recovery,
-and it gets both from here rather than from WHOOP directly. That is not tidiness:
-the refresh token rotates and invalidates its predecessor, so exactly one process
-may hold it. A second copy of the credentials would mean two grants for one member
-and one of them dying silently — and for this sync, dying silently means a quiet
-gap in a habit rather than an error anybody sees.
-
-- `GET /api/whoop/training?days=N` → `{ok, fetchedAt, days, maxHeartRate, workouts[], recovery[], sleep[]}`
-
-`sleep[]` is one night per wake date, newest first, on the same calendar as
-`recovery[]`: `{date, score, asleepMin, inBedMin, neededMin, debtMin, efficiency,
-consistency, respiratoryRate, disturbances, stages: {deep, rem, light, awake},
-bedtime, wake}` (minutes; `bedtime`/`wake` are local wall-clock `YYYY-MM-DDTHH:MM`).
-It is built from the same record as the habit (`whoopNightFromRecord`), so the two agree.
-
-`whoopTraining` in `bridge.mjs` fans out over four collections — workouts, cycles,
-recoveries and the body measurement — and normalizes them: milliseconds become
-minutes, kilojoules also come back as calories, and every record carries the LOCAL
-date derived from WHOOP's own `timezone_offset`, because a 9pm session belongs to
-that evening and a naive UTC date gets that wrong.
-
-**Recovery is dated by the morning you woke up, via a two-hop join.** It's scored
-against a physiological cycle rather than a calendar day, so a recovery is joined
-`cycle_id` → cycle → the cycle's sleep → that sleep's local *wake* date. The last
-hop is the one that matters and the one this got wrong at first: WHOOP opens a
-cycle at sleep onset, so the cycle's own `start` is the evening *before* the day it
-describes. A cycle beginning 22:36 on the 18th is the 19th's day.
-
-Dating by `start` failed exactly the way the sleep sync's `night` mode does. On
-2026-08-19 it filed this morning's recovery of 74 under the 18th, where it was
-overwritten by the 18th's own 72 — so Bushido was handed yesterday's recovery, HRV and
-resting HR as if they were this morning's, told there was "no reading for today",
-and reasoned about a workout off the wrong day. The 17th's recovery of 62 was lost
-the same way, and the missing days skewed the HRV/RHR baselines on top of it. Any
-bedtime either side of midnight collapses two cycles onto one date.
-
-Joining through the sleep also keeps this endpoint and the sleep habit on one
-calendar, since the sync files a night by its wake date too. A cycle with no sleep
-to join (still `PENDING_SCORE`, or clipped by the fetch window) falls back to its
-start date, plus a day if that start is 18:00 or later — see the comment on
-`cycleDate` for why the cutoff isn't noon.
-
-Read-only, and it writes no habit. Bushido keeps its own disposable cache in
-`data/whoop.json` and its own log; this endpoint is a window, not a second store.
-
-**Scopes are checked before the request goes out.** `requireWhoopScopes` reads the
-stored grant and fails with the fix — "authorized without read:workout — click
-Connect WHOOP again to grant it" — because a 403 from inside a fetch surfaces two
-processes away as "something went wrong". `GET /api/habits/whoop/status` reports
-`scopes` and `missingScopes` for the same reason: **connected** and **can read
-workouts** are different questions, and a grant older than a scope change answers
-yes to the first and no to the second.
 
 ## API surface
 
-- `GET /api/habits/whoop/status` → `{configured, connected, needsReauth, state, detail,
-  lastError, lastErrorAt, redirectUri, valueField, connectedAt, scopes, missingScopes}`
+- `GET /api/habits/whoop/status` → Bushido's status plus `source: 'bushido'`,
+  `bushidoUrl` (the address the owner opens) and `valueField`:
+  `{configured, connected, needsReauth, state, detail, lastError, lastErrorAt,
+  connectedAt, scopes, missingScopes, source, bushidoUrl, valueField}`
 
-  **`connected` is not a health check.** It only means a refresh token is on disk,
-  and stays `true` after WHOOP rotates that token away. Switch on `state` instead:
+  **`connected` is not a health check.** It only means a refresh token is on disk in
+  Bushido, and stays `true` after WHOOP rotates that token away. Switch on `state`:
 
   | `state` | Means |
   |---|---|
-  | `ready` | As far as we know, working |
-  | `needs-reauth` | A refresh was rejected outright. Reconnect is the only fix |
-  | `missing-scopes` | Grant is live but predates a scope you now need |
-  | `disconnected` | Never connected, or the token file is gone |
-  | `unconfigured` | No `WHOOP_CLIENT_ID` / `WHOOP_CLIENT_SECRET` |
+  | `ready` | As far as Bushido knows, working |
+  | `needs-reauth` | A refresh was rejected outright. Reconnecting in Bushido is the only fix |
+  | `missing-scopes` | Grant is live but predates a scope now needed |
+  | `disconnected` | Not connected in Bushido |
+  | `unconfigured` | Totem has no `BUSHIDO_URL`/`BUSHIDO_API_TOKEN` |
+  | `unreachable` | Bushido did not answer, refused the token, or has no WHOOP app set up; `detail` says which |
 
-  `needs-reauth` is *latched*, not probed: the first call that gets a 400 writes
-  the flag into the token file, and any successful exchange clears it by writing a
-  fresh object. So the status can read `ready` for a grant that is already dead —
-  nothing short of spending a rotation can tell the difference, which is why
-  **Reconnect is offered unconditionally in the UI** rather than only when the
-  server thinks something is wrong.
-- `POST /api/habits/whoop/connect` → `{authUrl}` to open
-- `GET /whoop-oauth/callback` — unauthenticated by necessity (a browser redirect
-  can't carry the bearer); the unguessable `state` is the guard
-- `POST /api/habits/sync-sleep` `{days?, force?}` → `{updated, enriched, skipped, errors, checked, habits}`;
-  `days` is clamped to 1–90, while omission uses the routine 3-day default
+  `needs-reauth` is latched by Bushido, not probed, so the status can read `ready`
+  for a grant that is already dead. That is why the link to Bushido is shown
+  unconditionally on the Connections row rather than only when something looks wrong.
+- `POST /api/habits/sync-sleep` `{days?, force?}` → `{updated, revised, enriched, skipped, errors, checked, habits}`;
+  `days` is clamped to 1–90, while omission uses the routine 3-day default. A failure
+  from Bushido answers 502 (429 for a rate limit) with `{error, needsReauth?,
+  missingScope?, rateLimited?}`.
 
   `checked` is the number of distinct dates the run resolved, which is worth
   watching: fewer than the nights fetched means two nights collapsed onto one
   date, and one of them is being dropped. See "Which date" above.
+
+Totem no longer serves WHOOP to anyone: `GET /api/whoop/training`,
+`POST /api/habits/whoop/connect` and `/whoop-oauth/callback` are gone. Bushido and
+Krakatoa read WHOOP from Bushido.
 
 Any importer can write a habit metric the same way the sync does:
 
@@ -284,41 +237,18 @@ curl -X POST http://localhost:8787/api/habits/log \
 
 ## When it breaks
 
-Far less likely than the Garmin path, but not impossible:
-
-- **401 / "reconnect WHOOP"** — the refresh token was invalidated (password
-  change, revoked app, or something else overwrote `secrets/whoop-oauth.json`).
-  Click Connect WHOOP again.
-- **502s and generic 400s from the token endpoint are usually a WHOOP outage, not
-  your grant.** Observed 2026-08-18: a Cloudflare `502 Bad gateway` in front of
-  `api.prod.whoop.com`, then several minutes of `400 invalid_request` on refreshes,
-  then full recovery with the *same* refresh token. Don't reconnect on the first
-  failure — check whether it's still failing 20 minutes later.
-
-  A 5xx is retried once automatically. That's deliberate: WHOOP rotates the refresh
-  token on every exchange, so a gateway error is ambiguous about whether the origin
-  already rotated. Retrying is still strictly better — if it didn't rotate the retry
-  fixes it, and if it did we were broken either way.
-- **`invalid_grant` is the one that means reconnect.** Only that error latches
-  `needsReauth` and turns the UI red. A bare 400 (`invalid_request`) does not,
-  because an outage produces those in bulk and telling you to re-authorize a
-  perfectly good connection is worse than saying nothing.
-- **Refreshes send the grant's full scope, not `scope=offline`.** WHOOP's docs show
-  `offline` in their refresh example, and this was briefly changed to match — don't.
-  RFC 6749 §6 treats the scope on a refresh as *the scope being requested*, so
-  asking for `offline` alone can hand back an access token that can't read sleep.
-  The full-grant form is observed to work against the live API. Separately,
-  `whoopTokenExchange` takes a `grantedScope` and persists that rather than the
-  response's echo, so a narrower echo can never shrink a five-scope grant to
-  `offline` and make every Bushido workout call fail with "authorized without
-  read:workout".
-- **429** — rate limit (100/min, 10k/day). Nothing here comes close unless the
-  Sync button is mashed.
-- **No refresh token after connecting** — the app is missing the `offline` scope.
-- **Nothing written, no error** — the night may be `PENDING_SCORE`, or it was a
-  nap, or the number was already there (check `skipped`).
+- **`unreachable`**: Bushido is down, `BUSHIDO_API_TOKEN` does not match Bushido's, or
+  Bushido has no WHOOP app configured (it answers 409). `detail` carries Bushido's
+  words. When `BUSHIDO_URL` is behind Cloudflare Access, set `BUSHIDO_API_URL`.
+- **`needs-reauth` / "reconnect WHOOP"**: the refresh token was invalidated (password
+  change, revoked app, or a second holder rotated it). Reconnect in Bushido.
+- **429**: WHOOP's rate limit (100/min, 10k/day), passed through from Bushido. Nothing
+  here comes close unless the Sync button is mashed.
+- **Nothing written, no error**: the night may be `PENDING_SCORE`, or it was a nap,
+  or the number was already there (check `skipped`).
 
 Worth knowing about the terms: WHOOP's API Terms of Use say not to "create
 permanent copies of WHOOP Data," and reserve the right to limit or revoke access
 at their discretion. Storing your own nightly history in `habits.json` is the
 normal thing every personal dashboard does, but it isn't blessed in writing.
+

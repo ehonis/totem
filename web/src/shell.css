@@ -37,7 +37,14 @@
 }
 .sh-rail-btn:hover { background: #181b24; color: var(--text); }
 .sh-rail-btn.on { background: #1f2330; color: var(--text); }
-.sh-rail-bottom { margin-top: auto; }
+.sh-rail-foot { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+/* The running version under Settings; inline at the foot of the phone drawer. */
+.sh-version {
+  display: flex; flex-direction: column; align-items: center; gap: 1px; cursor: default;
+  color: var(--muted); font-size: 10px; line-height: 1.2; font-variant-numeric: tabular-nums;
+}
+.sh-version-date { opacity: .7; }
+.sh-version.inline { flex-direction: row; gap: 6px; margin-right: auto; padding-left: 10px; align-self: center; font-size: 11.5px; }
 .sh-badge {
   position: absolute; top: 4px; right: 3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
   background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
@@ -107,7 +114,7 @@
 .sh-drawer .sh-new { height: 44px; font-size: 15.5px; }
 /* Settings, pinned bottom right below the chats, as the rail pins it on desktop. */
 .sh-drawer-foot {
-  flex: none; display: flex; justify-content: flex-end; padding: 6px 4px calc(8px + env(safe-area-inset-bottom));
+  flex: none; display: flex; align-items: center; justify-content: flex-end; padding: 6px 4px calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
 }
 .sh-drawer-bottom { width: 44px; height: 44px; }

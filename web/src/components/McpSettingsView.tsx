@@ -5,6 +5,7 @@ import {
   setMcpMode, getGatewayStatus, startGatewayOAuth, resetGatewayOAuth, AuthError,
   getCalendarAccounts, renameCalendarAccount, removeCalendarAccount, startCalendarAccountAuth,
   getGmailAccounts, renameGmailAccount, removeGmailAccount, startGmailAccountAuth,
+  getDriveAccounts, renameDriveAccount, removeDriveAccount, startDriveAccountAuth,
 } from '../api'
 import { Hi, ArrowPathIcon, CheckCircleIcon, ExclamationTriangleIcon, TrashIcon, WrenchScrewdriverIcon, ChevronDownIcon, BoltIcon } from '../icons'
 import DataConnectionsPanel from './DataConnectionsPanel'
@@ -13,7 +14,7 @@ import { WhoopConnectionPanel } from './WhoopConnection'
 import { useErrorToast } from '../toast'
 import {
   siLinear, siNotion, siAsana, siAtlassian, siGithub, siSentry, siVercel,
-  siIntercom, siStripe, siPaypal, siAirtable, siHuggingface, siActualbudget, siGmail,
+  siIntercom, siStripe, siPaypal, siAirtable, siHuggingface, siActualbudget, siGmail, siGoogledrive,
 } from 'simple-icons'
 import googleCalendarIcon from '../assets/connection-icons/google-calendar.svg'
 import plaudIcon from '../assets/connection-icons/plaud.png'
@@ -49,6 +50,7 @@ const CONNECTION_GLYPHS: Record<string, any> = {
   huggingface: siHuggingface,
   actual: siActualbudget,
   gmail: siGmail,
+  'google-drive': siGoogledrive,
 }
 
 // Deterministic accent per id so letter-avatar fallbacks read as distinct
@@ -195,7 +197,7 @@ function ConnectForm({ app, busy, onAdd }: ConnectFormProps) {
   )
 }
 
-// The four calls behind a set of Google accounts. Calendar and Gmail each keep
+// The four calls behind a set of Google accounts. Calendar, Gmail and Drive each keep
 // their own token store, so each passes its own.
 interface GoogleAccountsApi {
   list: () => Promise<any>
@@ -216,12 +218,17 @@ const GMAIL_ACCOUNTS: GoogleAccountsApi = {
   removes: 'Agents lose access to its mail, and Totem asks Google to revoke the grant.',
 }
 
+const DRIVE_ACCOUNTS: GoogleAccountsApi = {
+  list: getDriveAccounts, rename: renameDriveAccount, remove: removeDriveAccount, start: startDriveAccountAuth,
+  removes: 'Agents lose access to its files, and Totem asks Google to revoke the grant.',
+}
+
 interface GoogleAccountsPanelProps {
   onAuthError: () => void
   accountsApi?: GoogleAccountsApi
 }
 
-// Manage a set of saved Google accounts (Calendar's, or Gmail's): see each login's
+// Manage a set of saved Google accounts (Calendar's, Gmail's or Drive's): see each login's
 // real email, rename its label, disconnect it, or add another via Google sign-in.
 // Loads the account list when first shown.
 function GoogleAccountsPanel({ onAuthError, accountsApi = CALENDAR_ACCOUNTS }: GoogleAccountsPanelProps) {
@@ -345,51 +352,88 @@ function GoogleAccountsPanel({ onAuthError, accountsApi = CALENDAR_ACCOUNTS }: G
   )
 }
 
-// Gmail, under "Mail". Not a manifest server: the bridge holds the grant and
-// serves the tools itself (gmail__* through the gateway), so this row only
-// manages accounts. Sending is never a tool; see docs/gmail.md.
-function GmailConnectionPanel({ onAuthError }: { onAuthError: () => void }) {
+interface GoogleServiceRowProps {
+  onAuthError: () => void
+  section: string
+  id: string
+  name: string
+  summary: string
+  accountsApi: GoogleAccountsApi
+  children: React.ReactNode
+}
+
+// A Google service the bridge serves itself (Gmail, Drive). Not a manifest server:
+// the bridge holds the grant and serves the tools (gmail__*, drive__* through the
+// gateway), so the row only manages accounts.
+function GoogleServiceRow({ onAuthError, section, id, name, summary, accountsApi, children }: GoogleServiceRowProps) {
   const [expanded, setExpanded] = useState(false)
   const [info, setInfo] = useState<any>(null)
   useEffect(() => {
-    getGmailAccounts().then(setInfo).catch((e) => { if (e instanceof AuthError) onAuthError(); else setInfo({ error: e.message }) })
-  }, [onAuthError, expanded])
+    accountsApi.list().then(setInfo).catch((e) => { if (e instanceof AuthError) onAuthError(); else setInfo({ error: e.message }) })
+  }, [onAuthError, expanded, accountsApi])
   const count = info?.accounts?.length || 0
   const broken = info?.accounts?.some((a: any) => a.status === 'error')
   const chip = !info ? '' : info.error ? 'Error' : !info.configured ? 'Not set up' : !count ? 'Not connected' : broken ? 'Reconnect needed' : `${count} account${count === 1 ? '' : 's'}`
   const tone = info?.configured && count && !broken ? 'on' : broken || info?.error ? 'bad' : 'warn'
   return (
     <div className="app-group">
-      <div className="settings-section-title"><span /><strong>Mail</strong></div>
+      <div className="settings-section-title"><span /><strong>{section}</strong></div>
       <div className="app-list">
         <section className={`app-row ${expanded ? 'open' : ''} ${tone === 'on' ? '' : 'disabled'}`}>
           <button className="app-row-head" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
-            <ConnectionIcon id="gmail" name="Gmail" size={30} />
+            <ConnectionIcon id={id} name={name} size={30} />
             <span className="app-row-title">
-              <strong>Gmail</strong>
-              <span>Search, read, label, archive, trash and draft. Sending goes through your inbox.</span>
+              <strong>{name}</strong>
+              <span>{summary}</span>
             </span>
             <span className="app-row-status">{chip && <span className={`app-row-chip ${tone}`}>{chip}</span>}</span>
             <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />
           </button>
           {expanded && (
             <div className="app-row-body">
-              <p className="app-row-desc">
-                Agents get <code>gmail__*</code> tools for every account here. They cannot send: an email they write
-                waits in your Inbox, where you send it or save it as a draft. The same sign-in adds the account's
-                Google Calendar too, unless it is already connected. Uses the same Google OAuth client as
-                Calendar, with the Gmail API enabled on its project (<code>docs/gmail.md</code>).
-              </p>
+              <p className="app-row-desc">{children}</p>
               {info && !info.configured ? (
                 <p className="app-row-hint">No Google OAuth client yet. Set one up as for Calendar, then come back.</p>
               ) : (
-                <GoogleAccountsPanel onAuthError={onAuthError} accountsApi={GMAIL_ACCOUNTS} />
+                <GoogleAccountsPanel onAuthError={onAuthError} accountsApi={accountsApi} />
               )}
             </div>
           )}
         </section>
       </div>
     </div>
+  )
+}
+
+// Gmail, under "Mail". Sending is never a tool; see docs/gmail.md.
+function GmailConnectionPanel({ onAuthError }: { onAuthError: () => void }) {
+  return (
+    <GoogleServiceRow
+      onAuthError={onAuthError} section="Mail" id="gmail" name="Gmail" accountsApi={GMAIL_ACCOUNTS}
+      summary="Search, read, label, archive, trash and draft. Sending goes through your inbox."
+    >
+      Agents get <code>gmail__*</code> tools for every account here. They cannot send: an email they write
+      waits in your Inbox, where you send it or save it as a draft. The same sign-in adds the account's
+      Google Calendar too, unless it is already connected. Uses the same Google OAuth client as
+      Calendar, with the Gmail API enabled on its project (<code>docs/gmail.md</code>).
+    </GoogleServiceRow>
+  )
+}
+
+// Google Drive, under "Files": every file the account can open, with Sheets and Docs
+// edited in place. No sharing, no permanent delete; see docs/drive.md.
+function DriveConnectionPanel({ onAuthError }: { onAuthError: () => void }) {
+  return (
+    <GoogleServiceRow
+      onAuthError={onAuthError} section="Files" id="google-drive" name="Google Drive" accountsApi={DRIVE_ACCOUNTS}
+      summary="Find, read, create and organise files. Edit Sheets and Docs in place."
+    >
+      Agents get <code>drive__*</code> tools for every account here: every file the account can open, shared
+      drives included, with cell-level edits to Google Sheets and text edits to Google Docs. They cannot share
+      a file or delete one for good (trash only). Uses the same Google OAuth client as Calendar, with the Drive,
+      Sheets and Docs APIs enabled on its project and the <code>drive</code> scope on its consent
+      screen (<code>docs/drive.md</code>).
+    </GoogleServiceRow>
   )
 }
 
@@ -1097,6 +1141,8 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
             <WhoopConnectionPanel onAuthError={onAuthError} />
 
             <GmailConnectionPanel onAuthError={onAuthError} />
+
+            <DriveConnectionPanel onAuthError={onAuthError} />
 
             <DataConnectionsPanel onAuthError={onAuthError} />
 

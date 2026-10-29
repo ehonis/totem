@@ -52,9 +52,15 @@ export function providerToken({ keyPem, keyId, teamId }, at = Date.now()) {
 /**
  * The notification as APNs wants it. The app reads `url` and `entryId` the way the
  * service worker reads Web Push's `data`; `thread-id` groups a category together
- * on the lock screen.
+ * on the lock screen. `tag` is what a later dismissal names (apnsDismissPayload).
+ *
+ * expo-notifications builds a remote notification's `content.data` from the
+ * payload's `body` key only, so the fields go there. Without it every tap opened
+ * the app on whatever screen it was last on. They stay at the top level too for
+ * builds that read the raw payload.
  */
-export function apnsPayload({ title, body = '', url = null, entryId = null, badge = 0, category = null }) {
+export function apnsPayload({ title, body = '', url = null, entryId = null, badge = 0, category = null, tag = null }) {
+  const data = { url, entryId, category, ...(tag ? { tag } : {}) }
   return {
     aps: {
       alert: body ? { title, body } : { title },
@@ -62,10 +68,18 @@ export function apnsPayload({ title, body = '', url = null, entryId = null, badg
       badge,
       ...(category ? { 'thread-id': category } : {}),
     },
-    url,
-    entryId,
-    category,
+    ...data,
+    body: data,
   }
+}
+
+/**
+ * A silent push that wakes the app to take down notifications it already showed,
+ * the ones carrying these tags (mobile/src/shell/push.ts). APNs has no way to
+ * delete a delivered notification itself, so the app has to.
+ */
+export function apnsDismissPayload(tags) {
+  return { aps: { 'content-available': 1 }, dismiss: tags }
 }
 
 /**
@@ -100,7 +114,9 @@ export function createApnsSender(config, { connectImpl = connect, now = () => Da
     return s
   }
 
-  function send({ deviceToken, environment = 'production', payload, collapseId = null }) {
+  // `background` is a silent push (apnsDismissPayload): Apple requires its own
+  // push type and priority 5 for those, and drops one sent at priority 10.
+  function send({ deviceToken, environment = 'production', payload, collapseId = null, background = false }) {
     return new Promise((resolve) => {
       let req
       try {
@@ -109,8 +125,8 @@ export function createApnsSender(config, { connectImpl = connect, now = () => Da
           ':path': `/3/device/${deviceToken}`,
           authorization: `bearer ${bearer()}`,
           'apns-topic': config.topic,
-          'apns-push-type': 'alert',
-          'apns-priority': '10',
+          'apns-push-type': background ? 'background' : 'alert',
+          'apns-priority': background ? '5' : '10',
           // Apple caps the collapse id at 64 bytes.
           ...(collapseId ? { 'apns-collapse-id': String(collapseId).slice(0, 64) } : {}),
         })

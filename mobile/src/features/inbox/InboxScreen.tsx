@@ -2,7 +2,7 @@
 // On a phone a card also swipes: right to accept, left to deny, each confirmed
 // first, because a swipe is easier to do by accident than a tap on a button.
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
+import { Linking, RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
 import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import { AuthError, getInbox, resolveInboxItem } from '../../lib/api'
@@ -87,7 +87,7 @@ function InboxDetails({ item }: { item: any }) {
       ) : null}
       {isIssue ? (
         <View>
-          <T size={11.5} muted style={{ marginBottom: 5 }}>Issue body</T>
+          <T size={11.5} muted style={{ marginBottom: 5 }}>{item.kind === 'prompt' ? 'Prompt' : 'Issue body'}</T>
           <View style={st.issueBody}><Markdown text={p.body} size={13} /></View>
         </View>
       ) : null}
@@ -123,8 +123,19 @@ function InboxCard({ item, busy, focused, onResolve }: {
   // the whole point of the deep link is to read what will run before saying yes.
   const [open, setOpen] = useState(focused)
   const swipe = useRef<SwipeableMethods>(null)
-  const detailLabel = item.kind === 'imessage' ? 'message' : item.preview?.body ? 'proposed issue' : 'details'
-  const acceptLabel = item.kind === 'imessage' ? `Send this message to ${item.meta?.recipient || 'them'}` : `Accept - add to ${item.destination}`
+  const isPrompt = item.kind === 'prompt'
+  const detailLabel = item.kind === 'imessage' ? 'message' : isPrompt ? 'prompt' : item.preview?.body ? 'proposed issue' : 'details'
+  const acceptLabel = item.kind === 'imessage' ? `Send this message to ${item.meta?.recipient || 'them'}`
+    : isPrompt ? 'Accept - open it in a new T3 Code thread' : `Accept - add to ${item.destination}`
+  // A prompt is accepted by opening it as a new T3 Code thread.
+  const t3Url: string | undefined = isPrompt ? item.preview?.openUrl : undefined
+  async function accept() {
+    if (isPrompt) {
+      if (!t3Url) return
+      Linking.openURL(t3Url).catch(() => {})
+    }
+    await onResolve(item, 'accept')
+  }
 
   async function swiped(direction: 'left' | 'right') {
     const action = direction === 'right' ? 'accept' : 'deny'
@@ -134,7 +145,7 @@ function InboxCard({ item, busy, focused, onResolve }: {
       destructive: action === 'deny',
     })
     swipe.current?.close()
-    if (ok) await onResolve(item, action)
+    if (ok) await (action === 'accept' ? accept() : onResolve(item, action))
   }
 
   return (
@@ -181,9 +192,9 @@ function InboxCard({ item, busy, focused, onResolve }: {
           </View>
           <View style={st.actions}>
             <Press
-              disabled={busy}
+              disabled={busy || (isPrompt && !t3Url)}
               accessibilityLabel={acceptLabel}
-              onPress={() => onResolve(item, 'accept')}
+              onPress={() => { void accept() }}
               style={st.btn}
             >
               <Hi icon={CheckCircleIcon} size={20} color={colors.muted} />

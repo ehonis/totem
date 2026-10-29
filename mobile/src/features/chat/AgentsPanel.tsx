@@ -20,7 +20,7 @@ import { tap } from '../../ui/haptics'
 import { colors, fonts } from '../../theme'
 import Spark, { Shimmer } from './Spark'
 import { TI, ProviderLogo, toolApp, toolIcon, formatDuration, agentName, vc } from './ui'
-import { IconCheck, IconChevronRight, IconBrain, IconRobot, IconX } from './icons'
+import { IconCheck, IconChevronRight, IconChevronDown, IconChevronUp, IconBrain, IconRobot, IconX } from './icons'
 
 export interface AgentEntry { toolId: string; agent: AgentInfo; part: ToolPart }
 
@@ -178,11 +178,11 @@ function AgentLog({ agent: a }: { agent: AgentInfo }) {
       {running && !a.steps.length ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Spark size={13} />
-          <T size={12.5} color={vc.faint} style={{ flexShrink: 1 }}>{a.log === 'none' ? `${name} is working. Its steps aren't visible from here; what it hands back appears when it finishes.` : `Waiting for ${name}'s first step…`}</T>
+          <T size={12.5} color={vc.faint} style={{ flexShrink: 1 }}>{a.log === 'none' || a.log === 'off' ? `${name} is working. Its steps aren't visible from here; what it hands back appears when it finishes.` : `Waiting for ${name}'s first step…`}</T>
         </View>
       ) : null}
-      {a.log === 'none' && !running && !a.steps.length ? (
-        <T size={12.5} color={vc.faint}>{a.via === 'cli' && (a.provider === 'codex' || a.provider === 'claude') ? `${name}'s own log wasn't found, so only what it printed is shown.` : `${name} keeps no log Totem can read, so only what it printed is shown.`}</T>
+      {(a.log === 'none' || a.log === 'off') && !running && !a.steps.length ? (
+        <T size={12.5} color={vc.faint}>{a.log === 'off' ? `${name} was started without a session log, so only what it printed is shown.` : a.via === 'cli' && (a.provider === 'codex' || a.provider === 'claude') ? `${name}'s own log wasn't found, so only what it printed is shown.` : `${name} keeps no log Totem can read, so only what it printed is shown.`}</T>
       ) : null}
       {showResult ? (
         <View style={st.result}>
@@ -232,24 +232,75 @@ function StepRow({ step }: { step: AgentStep }) {
   )
 }
 
-/** In the reply: the call that started an agent, always in view. Opens the sheet on it. */
-export function AgentCard({ tool }: { tool: ToolPart }) {
+const ROW_STATE: Record<AgentInfo['status'], string> = { running: 'Running', done: 'Done', error: 'Failed', stopped: 'Stopped' }
+const DOT: Partial<Record<AgentInfo['status'], string>> = { running: '#6fa8ff', error: '#ff7a8f', stopped: vc.faint }
+
+function AgentAvatar({ a, dot, overlap }: { a: AgentInfo; dot?: boolean; overlap?: boolean }) {
+  return (
+    <View style={[st.avatar, overlap && { marginLeft: -9 }]}>
+      <ProviderLogo driver={a.provider} name={agentName(a.provider)} size={14} />
+      {dot && DOT[a.status] ? <View style={[st.avatarDot, { backgroundColor: DOT[a.status] }]} /> : null}
+    </View>
+  )
+}
+
+/**
+ * In the reply: the agents it started back to back, as one group the way T3
+ * Code draws them (web AgentGroup): avatars, how many are working, the time
+ * since the first started, folding open to one row per agent. A row opens the
+ * sheet on it.
+ */
+export function AgentGroup({ tools }: { tools: ToolPart[] }) {
+  const agents = tools.map((t) => t.agent!)
+  const running = agents.filter((a) => a.status === 'running').length
+  const failed = agents.filter((a) => a.status === 'error').length
+  const [open, setOpen] = useState(true)
+  useTick(running > 0)
+  const starts = agents.map((a) => a.startedAt).filter((n): n is number => !!n)
+  const ends = agents.map((a) => (a.status === 'running' ? Date.now() : a.endedAt)).filter((n): n is number => !!n)
+  const ms = starts.length && ends.length ? Math.max(...ends) - Math.min(...starts) : 0
+  const state = running ? `${running} working` : failed ? `${failed} failed` : 'Finished'
+  const label = `${agents.length} ${agents.length === 1 ? 'subagent' : 'subagents'}`
+  return (
+    <View style={{ gap: 6 }}>
+      <Press onPress={() => { tap(); setOpen((o) => !o) }} style={st.groupHead} accessibilityLabel={`${label}, ${state}`} accessibilityState={{ expanded: open }}>
+        <View style={{ flexDirection: 'row' }}>
+          {agents.slice(0, 3).map((a, i) => <AgentAvatar key={i} a={a} overlap={i > 0} />)}
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <T size={13.5} weight={600}>{label}</T>
+          <T size={12} color={running ? '#6fa8ff' : failed ? '#ff7a8f' : vc.faint}>{state}</T>
+        </View>
+        {ms >= 1500 ? <T size={12.5} color={vc.faint} style={{ fontVariant: ['tabular-nums'] }}>{formatDuration(ms)}</T> : null}
+        <TI icon={open ? IconChevronUp : IconChevronDown} size={15} color={vc.faint} />
+      </Press>
+      {open ? (
+        <View style={st.rows}>
+          {tools.map((t) => <GroupRow key={t.id} tool={t} />)}
+        </View>
+      ) : null}
+    </View>
+  )
+}
+
+function GroupRow({ tool }: { tool: ToolPart }) {
   const a = tool.agent!
   const running = a.status === 'running'
-  useTick(running)
   const ms = elapsedOf(a)
+  const name = a.title || firstLine(a.prompt) || tool.title || agentHeading(a)
+  const now = running ? `Running ${agentNow(a)}` : firstLine(a.summary) || agentHeading(a)
   return (
-    <Press onPress={() => openAgents(tool.id)} style={st.card} accessibilityLabel={`${agentHeading(a)}. ${running ? 'Watch' : 'View'}`}>
-      <ProviderLogo driver={a.provider} name={agentName(a.provider)} size={18} />
+    <Press onPress={() => openAgents(tool.id)} style={st.row} accessibilityLabel={`${name}, ${ROW_STATE[a.status]}`}>
+      <AgentAvatar a={a} dot />
       <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-        <T size={13.5} weight={500} numberOfLines={1}>{agentHeading(a)}</T>
-        {running ? <Shimmer text={agentNow(a)} size={12.5} /> : <T size={12.5} color={vc.faint} numberOfLines={1}>{a.title || firstLine(a.prompt) || tool.title}</T>}
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+          <T size={13.5} weight={600} numberOfLines={1} style={{ flexShrink: 1 }}>{name}</T>
+          <T size={11.5} color={a.status === 'error' ? '#ff7a8f' : vc.faint}>{ROW_STATE[a.status]}</T>
+        </View>
+        <T size={12.5} color={vc.soft} numberOfLines={1}>{now}</T>
       </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-        {running ? <Spark size={13} /> : a.status === 'error' ? <TI icon={IconX} size={14} color="#ff7a8f" /> : <TI icon={IconCheck} size={14} color={vc.faint} />}
-        {ms >= 1500 ? <T size={12} color={vc.faint} style={{ fontVariant: ['tabular-nums'] }}>{formatDuration(ms)}</T> : null}
-      </View>
-      <T size={13} weight={500} color={colors.accent}>{running ? 'Watch' : 'View'}</T>
+      {ms >= 1500 ? <T size={12} color={vc.faint} style={{ fontVariant: ['tabular-nums'] }}>{formatDuration(ms)}</T> : null}
+      <TI icon={IconChevronRight} size={15} color={vc.faint} />
     </Press>
   )
 }
@@ -284,9 +335,13 @@ const st = StyleSheet.create({
   toolHead: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 40, paddingHorizontal: 10 },
   toolIcon: { width: 22, height: 22, borderRadius: 6, backgroundColor: vc.raise, alignItems: 'center', justifyContent: 'center' },
   result: { gap: 6, padding: 12, borderRadius: 10, backgroundColor: vc.surface },
-  card: {
-    flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 56, paddingVertical: 9, paddingHorizontal: 12,
-    borderRadius: 14, borderWidth: 1, borderColor: vc.line, backgroundColor: vc.surface,
+  groupHead: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, paddingVertical: 4, paddingHorizontal: 4 },
+  avatar: {
+    width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: vc.raise, borderWidth: 2, borderColor: vc.surface,
   },
+  avatarDot: { position: 'absolute', right: -3, bottom: -3, width: 10, height: 10, borderRadius: 5, borderWidth: 2, borderColor: vc.surface },
+  rows: { padding: 4, borderRadius: 14, borderWidth: 1, borderColor: vc.line, backgroundColor: vc.surface },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 11, minHeight: 56, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10 },
   chip: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 26, paddingHorizontal: 8, borderRadius: 999, borderWidth: 1, borderColor: vc.line, marginRight: 4 },
 })

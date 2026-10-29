@@ -29,10 +29,14 @@ turn starts, then takes the bridge's copy: `start` carries the real message ids,
 | `GET /api/chat/runs` | | `{runs: [{threadId, status, mode, startedAt, …}]}` — what to re-attach to after a reload. `mode` is always `chat` now. |
 | `GET /api/chat/runs/:threadId/stream?since=N` | | SSE: every event after `seq` N, then live ones. |
 | `POST /api/chat/stop` | `{threadId}` | `{ok}`. The only way to end a run early. |
-| `POST /api/chat/steer` | `{threadId, text}` | `{ok, steer: {id, text, via: 'live'\|'restart'}}`. A message for the running reply (see Steering). 409 if nothing is running, the run is wrapping up, or it is a skill command. |
+| `POST /api/chat/questions` | `{threadId, messageId, partId, action: 'answer'\|'dismiss', answers?: {questionId: string[]}, attachments?: {questionId: uploadId[]}}` | `{status, live, message, attachments}`. The owner's answers to the agent's questions (see Questions). `live: false` means the run that asked had ended; `message` is the answers as text and `attachments` the upload ids sent with them, for the client to send as the next message. 409 if already answered. |
+| `POST /api/chat/steer` | `{threadId, text, attachments?: [uploadId]}` | `{ok, steer: {id, text, via: 'live'\|'restart', attachments?}}`. A message (words, files or both) for the running reply (see Steering). 409 if nothing is running, the run is wrapping up, or it is a skill command. |
+| `POST /api/chat/queue` | `{threadId, action, …}`: `add` `{text, attachments, provider?, model?, effort?, modelSettings?}`, `edit` `{id, text, attachments}`, `remove` `{id}`, `move` `{id, beforeId\|null}`, `steer` `{id}`, `resume` | `{queue, queueHeld}` as they now stand (`steer` adds `steer`). The thread's queue (see Queue). 404 when the message is no longer queued; 409 for `steer` with nothing running. |
 | `POST /api/chat/uploads?name=&mime=[&kind=text]` | raw bytes, ≤ `CHAT_MAX_UPLOAD_MB` | `{id, name, mime, size, kind, url, preview?}` |
 | `GET /api/chat/uploads/:id?sig=` | | The file. Authorised by `sig` (HMAC of the id) **or** the bearer header. |
 | `DELETE /api/chat/uploads/:id` | | Removes an attachment nobody has sent yet. |
+| `GET /api/chat/files?thread=<id>` (or `?path=<abs dir>`) | | `{root, entries: [{path, rel, name, dir, size?, mtime?, mime?}], truncated}`: the chat's outputs folder as a tree (see Files panel). A chat with no folder yet lists empty. |
+| `GET /api/chat/files/raw?path=<abs>[&download]` | | The file, streamed. 403 outside the shared folders, 404 when missing. |
 | `POST /api/chat/transcribe` | raw audio (`audio/webm`, `audio/mp4`, …) | `{text}` |
 | `GET /api/chat/capabilities` | | Per enabled account: `{driver, state, fix, images: 'native'\|'file', resume, computerUse}`; `transcription`; `maxUploadBytes`. |
 | `POST /api/chat/capabilities/probe` | | Re-asks each Codex account for computer-use tools; caches in `data/chat-capabilities.json`. A chat run on that account gets computer use when its entry says `available`. |
@@ -46,11 +50,13 @@ Every event has a `seq`. Viewers replay with `since`.
 
 | `type` | Fields | Meaning |
 |---|---|---|
-| `start` | `userMessage`, `assistantMessage`, `provider` | The turn as the bridge stored it. |
+| `start` | `userMessage`, `assistantMessage`, `provider`, `queuedId?` | The turn as the bridge stored it. `queuedId`: it was that queued message. |
+| `queue` | `queue`, `queueHeld` | The thread's queue changed while this reply runs. |
 | `delta` | `text` | Reply text. |
-| `tool` | `tool: {id, phase: 'start'\|'end', kind, title, detail, server?, tool?, input?, status?, output?}` | A card opens on `start` and settles on `end`. |
+| `tool` | `tool: {id, phase: 'start'\|'end', kind, title, detail, server?, tool?, app?, logo?, input?, status?, output?}` | A card opens on `start` and settles on `end`. `app`/`logo` are a connector's own name and https logo (see Steps and connectors). |
 | `image` | `uploadId`, `url` | A screenshot from a tool result. |
-| `steer` | `steer: {id, text, via, createdAt}` | The owner wrote mid-reply. Becomes a `steer` part where it landed. |
+| `steer` | `steer: {id, text, via, createdAt, attachments?}` | The owner wrote mid-reply. Becomes a `steer` part where it landed. |
+| `questions` | `questions: {id, questions?, status, answers?, askedAt?, answeredAt?}` | The agent asked the owner questions (a `questions` part, added where asked), or they were answered or dismissed (the same part, updated by id). |
 | `activity` | `text` | The current step, one line. Not persisted. |
 | `browser` | `tabId`, `url`, `title`, `image` (JPEG data URL), `at` | What the chat's browser shows after a page change. Not persisted; `GET /api/chat/browser?threadId=` returns the latest. |
 | `title` | `title`, `icon?` | The AI title (and icon) for a new chat. |
@@ -116,15 +122,49 @@ produces nothing is retried once fresh.
 | codex | `exec resume <thread_id> -c sandbox_mode=…` | `--image=<path>`, plus path |
 | opencode | `--session <id>` | `--file <path>`, plus path |
 
+### Switching accounts
+
+A chat can start on Codex and carry on with Claude, the way T3 Code hands a thread between
+providers. The picker offers every account on a started chat; the thread's `provider` is
+whichever account the last message was sent on, and each account keeps its own entry in
+`sessions`, so Codex → Claude → Codex resumes Codex's own session and replays only the Claude
+turns.
+
+When the replay holds replies from another account (`handoffReplay` in `bridge.mjs`), it is
+rendered as a handoff (`renderTranscript` options in `chat/turn.mjs`): each reply's steps, one
+line per tool call (last 12) with failures marked; the owner's first message kept however far
+back it was, with `(…)` where the middle was cut; a heading naming the account it came from and
+saying it is context, not a new request, and that the agent did not take those steps itself;
+and, with the gateway on, how many messages did not fit and that `threads__read` on this chat's
+own id from 0 reads them. Attachments are named, not re-sent. No summary model runs.
+
+In the log, `providerSwitches` (`web/src/chat/handoff.ts`, ported to `mobile/src/lib/chat/`)
+puts a "Context handed off" divider above the owner message that started the first turn on the
+new account. Once another account is picked, a "Handoff with your next message" row sits over
+the composer until that message is sent. Switching while a reply runs leaves that reply on its
+account; the switch applies to the next message.
+
 ## Steering
 
-Copied from T3 Code: while a reply is running, typing in the composer steers it.
-Enter (or the corner-arrow button, with Stop beside it) sends the text into the
-run, rather than waiting for a next turn. Files can't go with a steer; they wait
-in the box. The message shows inside the reply where it landed, as the owner's
-bubble marked "Steered".
+Copied from T3 Code: a message sent while a reply is running either steers it
+(the agent takes it in mid-turn) or waits in the queue for the reply to finish
+(see Queue). Settings → Chat › Follow-up behaviour picks which one Enter and the
+send button do (`followUp`, `queue` or `steer`; fresh installs queue, as T3
+does, and installs that had steering before the queue keep steering). Ctrl/⌘ +
+Enter, or Ctrl/⌘-click on send, does the other for one message, and holding
+Ctrl/⌘ swaps the button's glyph (list-plus for queue, corner arrow for steer).
+With the box empty the button is Stop. In the iPhone app a long press on send
+does the other.
 
-`run.steer(text)` in `handleChatSend` hands it to `chat/steer.mjs`:
+A steer carries files as a message does: images and files added by the + menu,
+paste or drop go with it. The message shows inside the reply where it landed,
+the owner's files and bubble under T3's small "Steer" label.
+
+`run.steer(text, {files, images})` in `startChatTurn` hands it to `chat/steer.mjs`
+(`steerRun` loads the uploads first; `steerText` lists their paths before the
+words). Claude gets the images as image blocks in the stdin line; a restarted
+attempt passes them as its images (`--image=` for Codex), and the rest read the
+paths:
 
 | Provider | How | What it costs |
 |---|---|---|
@@ -138,16 +178,86 @@ after the first get a `~n` suffix because Codex numbers items per process.
 Transcripts replay a steered reply in order, with `[Owner, mid-reply: …]` between
 the text before and after it.
 
-T3 Code also queues follow-ups (send after the run ends) and steers Codex live
-through `codex app-server`'s `turn/steer`; Totem does neither yet.
+T3 Code also steers Codex live through `codex app-server`'s `turn/steer`;
+Totem restarts it instead.
+
+## Queue
+
+T3 Code's follow-up queue (`chat/queue.mjs`). A queued message waits on the
+thread (`thread.queue`, written only by the bridge; a client's copy of a thread
+never sets it), so like a run it outlives the browser. It keeps the model the
+composer showed when it was queued. When a run ends (`chatRuns`' `onEnd`,
+`drainChatQueue`) the bridge starts the first one itself through
+`startChatTurn`, the same path a send takes, and the next one after that reply,
+one at a time. A reply that was stopped or failed holds the queue
+(`thread.queueHeld`): nothing starts until Resume (the ▶ button an empty
+composer shows) or any new message of the owner's. A message that cannot start
+goes back at the front and the queue holds.
+
+The queue is a drawer on the composer's top edge (`QueuedMessages.tsx`):
+"Queued" and a count, collapsible, then one row per message, first in line
+first: image thumbnails, the text on one line, Edit (the message goes into the
+composer, the draft there is put aside and comes back after; send shows a check,
+the row Cancel), Steer (send it into the running reply instead; off with nothing
+running) and remove. Rows drag by their grip to reorder, or move with the arrow
+keys on it; the app has no reordering. If an edited message starts meanwhile,
+the edit is kept as the draft when the box had none, otherwise dropped, with a
+toast either way. Viewers of the running reply hear changes as `queue` events,
+and a client that sees a reply end with messages queued looks for the next run
+(`watchQueue`).
+
+## Questions
+
+Copied from T3 Code: the agent can stop and ask the owner questions, and the
+chat waits for the answers. The questions show above the composer one at a
+time: a header chip, `N/M`, the question, and its options (click, or keys 1–9
+when the caret is not in a text box; multi-select toggles). The composer's box
+is the typed answer for the question on screen, and typed words win over a
+pick. Single-select moves to the next question by itself; the last one's button
+submits them all. Previous goes back, X dismisses. The chat list shows "Awaiting
+input", the running-chats panel lists the chat, and the phone gets a
+`chat.question` push when nobody is looking. Answered questions stay in the
+reply as a row that opens to each answer. The app has the same panel.
+
+**Images and files.** A photo or file added in the composer (the + menu, paste
+or drop) while a question is on screen goes with that question's answer, with or
+without words; it shows under the question and can be removed there. The agent
+gets each file's path on the box in the tool's result and opens it with its own
+file tools, as it does a message's attachments. Answered late, the files go as
+the next message's attachments, or into the steer when a reply is running
+(`POST /api/chat/steer` takes `attachments` for this). The part keeps them as
+`attachments` by question id, and a deleted chat deletes them. The iPhone app's
+panel does not attach files yet.
+
+**No cap.** T3 catches the CLIs' own question tools, and those set the limits:
+Claude Code's AskUserQuestion takes at most 4 questions of 2–4 options, Codex's
+`request_user_input` at most 3 and only in Plan mode (which `codex exec` never
+reaches). Totem serves its own `ask_questions` instead (`chat/questions.mjs`),
+with no limit on questions or options, on each run's `/agent-mcp` endpoint
+beside the browser. Claude and Codex get it directly; Cursor and OpenCode as
+`browser__ask_questions` through the gateway (only with the gateway on). Claude
+Code's own AskUserQuestion is denied on those runs. Voice turns, the phone
+shortcut, jobs and totems don't get it.
+
+**Live, then as a message.** The call holds its HTTP request open as an SSE
+stream (headers at once, a comment every 15 s) until the owner answers, and
+the run's clock stops while it waits (`createHolds`/`holdableTimeout`), so an
+hour deciding is not an hour off the reply's budget. The answers come back as
+the tool's result and the reply carries on. Each CLI is told to wait up to a
+day for the call (Claude's per-server `timeout`, Codex's `tool_timeout_sec`).
+If the run ends first (Stop, a steer that cut the call off, a bridge restart,
+a CLI giving up on the call), the questions stay pending on the reply; answering
+them then sends the answers as the next message (T3's "message mode"), which
+resumes the session. A double submit is refused with 409.
 
 ## Choosing a model
 
 The composer's model picker (`web/src/chat/ModelPicker.tsx`) is the only way a chat picks its
 account and model: favourites, then one tab per account, with search. A new chat starts on the
 default account's default model (Settings → AI), or a project's default model inside a project.
-Once a chat has a reply it stays on that account; the picker then offers only that account's
-models. A temporary chat is held to the default account. A model that takes an effort level
+A chat that has started can still move to another account: pick one of its models and the next
+message hands the chat over (see "Switching accounts" below). A temporary chat is held to the
+default account. A model that takes an effort level
 shows the effort control beside the picker.
 
 Auto, Instant and Thinking (Totem picking the model from the message, with a power dial) were
@@ -187,7 +297,8 @@ run already gets the hour). New messages no longer store `mode`; old ones keep t
 
 ## Access
 
-The composer's access control (`chat/AccessControl.tsx`, stored as
+The Permissions row in the composer's effort menu (the muted half of the model chip,
+`chat/ComposerTraits.tsx`, stored as
 `modelSettings.access` on the thread or project) sets what the agent may do without
 asking. Unset means **Full access**. Every CLI runs in print mode and cannot stop to
 ask, so "ask" means "refuse". Only chats pass an access mode; jobs and phone
@@ -273,8 +384,47 @@ only when the model chooses to share one (`save: true`, then the path as a Markd
 image). The browser's own images are kept out of the reply on Claude, which would
 otherwise post every snapshot.
 
+The owner can drive the same page from the panel: a click on the frame, keys, paste and
+the wheel go to `POST /api/chat/browser/input` (click by viewport pixels, type, press,
+scroll, or `look` for a fresh frame), which answers with the frame the input left. That
+is how he signs in to something: the prompt tells the agent to ask him to sign in there
+and stop, never to type a password. Typed text is never written to the tab's action
+timeline or the log. Keys go through a hidden textarea so a phone raises its keyboard.
+While a run is live the page is look-only, so the owner and the agent don't fight over it.
+
+The agent hands the page over with `preview_handoff({ reason })` (`browser/handoff.mjs`,
+served on `/agent-mcp` beside the browser tools, so the gateway's `preview_*` filter
+passes it to Cursor and OpenCode too). The panel opens, phone included, with a "Your
+turn" banner and Done / Skip; the owner gets a push if he isn't looking. The call waits
+like `ask_questions`: it holds the run's clock, Done or Skip answers it
+(`POST /api/chat/browser/handoff`), and it gives up after Codex's live window or when
+the CLI drops the call. Then the banner stays, and Done sends "I'm done in the browser"
+as his next message. Any new message settles a leftover handoff. Totems with the
+browser switch don't get the tool, since nobody is watching their runs.
+
 The sessions live in memory: a bridge restart closes every chat's browser, and the
 next `preview_open` starts a fresh one.
+
+## Steps and connectors
+
+A reply's working steps fold into one line above its answer, as T3 Code does
+(`web/src/chat/workFold.ts`, `WorkLog.tsx`; the app's `features/chat/` mirrors them). The fold
+takes every tool call and the text the agent said before its last call ("Let me check your
+inbox…"); the text after the last call is the answer. A proposal, a file, a picture, a
+sub-agent's card, a question or a steer stays outside it, in place. Only a settled reply folds:
+while it runs, what the agent says between calls stays in the reply and each run of calls is its
+own line showing the running call, so the owner can follow along; when the answer is in, they
+close into one line, "Used Microsoft 365, Tasks and 1 more · 7 steps", led by those sources'
+marks stacked (three, then +N). A stopped or failed reply has no answer and stays unfolded. Open,
+the fold reads in order: what the agent said, and each call as a card.
+
+A connector's mark is its own logo when the CLI sent one: Claude Code's assistant events carry
+`tool_use_meta` (`display_name`, `server_display_name`, `icon_url`) for connector tools, and a
+Codex `mcp_tool_call` may carry `app_context`. `connectorLook` (`chat/tools.mjs`) turns that into
+the card's `title`, `app` and `logo`; Totem's own gateway and browser keep their names and glyphs.
+Only an https logo is kept, it loads without a referrer, and a broken one falls back to a glyph
+(`APPS` in `web/src/chat/ui.tsx`). A claude.ai connector's server is `claude_ai_<Name>`, read as
+`<name>`.
 
 ## Pictures in replies
 
@@ -306,6 +456,26 @@ get them too):
   a wrong guess is easy to correct. Writes to memory and project memory are never
   snapshotted as file cards (`collectArtifacts`).
 
+### Files panel
+
+T3 Code's files viewer, for a chat (`chat/files.mjs`, `web/src/chat/FilesPanel.tsx`). The
+owner reads chats from other devices, so a path on the box means nothing to him until the
+bridge lists and serves it. The panel shows the chat's outputs folder
+(`data/chat-outputs/<thread>/`) as a tree; a file opens in the canvas, and every row
+downloads. Office files, images and zips become file cards too (`ARTIFACT_EXT`); the
+canvas shows those that it cannot render as a download.
+
+- **What it may serve.** Anything under `CHAT_OUTPUTS_DIR` plus each folder in
+  `FILES_ROOTS` (colon-separated, off by default), compared by real path so a symlink
+  cannot lead out. Never Totem's `data/`, `secrets/`, `.env` or `.git`, whatever the roots
+  say; only a root inside `data/` (the outputs folder) is let through.
+- **Path links.** A Markdown link to an absolute path (`/Users/…`, `/home/…`) carries
+  `data-file-path` and opens in the canvas (`totem:open-file`, handled by ChatView).
+  Opened as a URL, a path under the outputs folder is redirected to
+  `/chat?thread=<id>&file=<path>` (`chatFileRedirect`), decided from its shape alone so the
+  redirect says nothing about which files exist; the store reads `?file=` at load.
+- **Not in the iPhone app yet.**
+
 ## Mac mini
 
 Computer use only exists where Codex has a signed-in desktop to drive. Once
@@ -333,6 +503,10 @@ do (`chat/projects.mjs`, `web/src/chat/Project*.tsx`):
 | Memory | `<CHAT_PROJECTS_DIR>/<id>/memory.md` | The agent, with its own file tools; the owner can edit it on the Memory tab. |
 | Files | `project.json` → `files` (upload ids) | Uploaded on the Files tab, attached in any of the project's chats, or made by the agent in one (`source`: `upload`, `chat`, `agent`). |
 
+Home's new chat shows a "Start in" row under the composer: the six most recently
+updated top-level projects, each with its icon. Picking one opens that project's
+home for a new chat and carries over anything already typed.
+
 Every turn of a project chat, resumed or not, carries `projectBlock` (`chat/turn.mjs`):
 the instructions, the memory text with its path and the rule for keeping it, and every
 file's path. Chats never read each other's transcripts; the memory is how one chat's
@@ -353,6 +527,13 @@ conclusions reach the next.
   still shows it. **Deleting a project** deletes its files, instructions and memory (and
   its folders') and moves its chats to Home. Thread deletion and the orphan sweep leave
   project files alone.
+- **A picture instead of an icon.** Settings → Icon also takes an uploaded image or a
+  website's own icon (`image`, an upload id; the bridge adds a signed `imageUrl`). "Use
+  site icon" has the bridge read the page's `<link rel=icon>`/apple-touch-icon tags, then
+  `/apple-touch-icon.png` and `/favicon.ico`, and keep the first that is really a PNG,
+  JPEG, GIF, WebP or ICO (`chat/favicon.mjs`; SVG is refused because uploads are served
+  inline from the bridge's origin). Picking an icon, or replacing the picture, drops the
+  old upload; the orphan sweep leaves a project's picture alone.
 - **Project context can be off for one chat.** `projectContextOff` on the thread (the
   folder button in the top bar, or the chat's menu) leaves out `projectBlock`, keeps the
   chat's attachments and documents out of the project's files, and drops the memory from
@@ -425,21 +606,24 @@ exactly what was there.
 | Route | Body | Returns |
 |---|---|---|
 | `GET /api/chat/projects` | | `{projects}` with `fileCount`, `chatCount` (no files or memory) |
-| `POST /api/chat/projects` | `{name, icon?, instructions?, provider?, modelSettings?, parentId?}` | `{project}` (with `parentId`, a folder) |
+| `POST /api/chat/projects` | `{name, icon?, image?, instructions?, provider?, modelSettings?, parentId?}` (`image`: an image upload id) | `{project}` (with `parentId`, a folder) |
 | `GET /api/chat/projects/:id` | | `{project}` with signed `files` and `memory` |
 | `PATCH /api/chat/projects/:id` | any of the create fields (`null` clears) | `{project}` |
 | `DELETE /api/chat/projects/:id` | | `{ok, movedChats, removedFolders}` |
 | `POST /api/chat/projects/:id/memory/move` | `{entries}` (entry texts; folder only) | `{moved, project}` |
 | `POST /api/chat/projects/:id/files/move` | `{ids}` (folder only) | `{moved, project}` |
+| `POST /api/chat/projects/:id/favicon` | `{site}` (a domain or URL) | `{project}` wearing the site's icon |
 | `PUT /api/chat/projects/:id/memory` | `{memory}` | `{memory}` |
 | `POST /api/chat/projects/:id/files` | `{uploadIds}` (uploaded via `/api/chat/uploads` first) | `{added, project}` |
 | `DELETE /api/chat/projects/:id/files[/:uploadId]` | `{ids}` without a path id | `{removed, project}` |
 
 ### Agents panel
 
-When a chat's agent hands work to another agent, the reply shows the call as its own card
-("Claude sub-agent · …", "Asked Codex · …"), never folded into the step list, and the chat
-header gets an Agents chip. Either opens the Agents panel (`web/src/chat/AgentsPanel.tsx`)
+When a chat's agent hands work to another agent, the reply shows the call outside the step
+list, in a group T3 Code style (`AgentGroup`): agents started back to back share one group
+headed "N subagents · N working" with their avatars and the time since the first started,
+folding open (open by default) to one row per agent with its status and what it is doing
+now. The chat header gets an Agents chip. A row or the chip opens the Agents panel (`web/src/chat/AgentsPanel.tsx`)
 in the canvas slot beside the chat, full screen on a phone. It lists every agent the chat
 started, in order, with its status, model, elapsed time, tokens and step count, and what it
 is doing right now. A row opens into that agent's own log: the prompt it was given, its
@@ -511,7 +695,10 @@ well without context that clearly lives in one. The tool descriptions say the sa
 | `totem_threads_list` (`threads__list`) | Other chats with title, `project` ("Work / Hiring"), `running`, `waitingOnOwner`, `shelf` (active/snoozed/settled, auto-settle included), last request and reply. Filters: `project` (an id, its folders included, or `home`), `status` (`running`, `waiting`, `active`), `query` (titles plus the search index's chat messages, best first, with `matches` snippets), `exclude` (the calling chat), `limit`. |
 | `totem_threads_read` (`threads__read`) | One chat's last `last` messages (default 12) or a page from `from`, each clipped to `maxChars`, with one line per tool call so a running chat shows what it is doing. |
 
-Both are read-only and local (`ANN.readLocal`), so ChatGPT and Claude on `/mcp` get them too.
+| `totem_threads_projects` (`threads__projects`) | Every chat project with its folders: id, name, chat count, the project's instructions clipped. |
+| `totem_threads_create` (`threads__create`) | Makes a chat. `project` is a project or folder by id or name (`home` or nothing for none); `folder` is a folder inside it, made when none there has that name (folders stay one level deep). `message` is the Markdown the chat opens with, as an assistant message, and marks it waiting on the owner (`needsReply`). `start` also sends a first request and starts a run in the new chat through `startChatTurn`, on the project's default account and model. `key` (a ticket number, an email id) is stored as `sourceKey`, and a second call with the same key returns the chat already made (`created: false`). Logged as `chat.create`. |
+
+List, read and projects are read-only and local (`ANN.readLocal`), so ChatGPT and Claude on `/mcp` get them too. Create is a local write; it exists so a totem that finds new work (a ticket, an email) can open a chat for it where the owner will look.
 
 ## Testing
 

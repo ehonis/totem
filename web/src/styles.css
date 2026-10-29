@@ -474,9 +474,8 @@ a { color: var(--accent); }
 .activity-col:not(.is-hover) .activity-bar { opacity: .92; }
 .activity-seg { width: 100%; flex: none; }
 .activity-tip {
-  position: absolute; bottom: calc(var(--activity-h, 104px) + 8px);
-  transform: translateX(-50%); pointer-events: none; z-index: 5;
-  min-width: 132px; background: var(--bg); border: 1px solid var(--line);
+  position: absolute; top: 0; pointer-events: none; z-index: 5;
+  min-width: 132px; max-width: 100%; background: var(--bg); border: 1px solid var(--line);
   border-radius: 10px; padding: 9px 11px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
 }
 .activity-tip-day { font-size: 11px; color: var(--muted); }
@@ -3036,7 +3035,7 @@ a { color: var(--accent); }
 .gh-quick:hover { color: var(--text); border-color: #39405280; background: #232838; }
 
 /* Dev tab: one card per repo, health chips above, alerts below. */
-.dev-card { padding: 14px 16px; margin-bottom: 12px; max-width: 860px; }
+.dev-card { padding: 14px 16px; margin-bottom: 12px; }
 .gh-embedded { margin-top: 28px; }
 .dev-card h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
 .dev-card h3 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 14px 0 4px; }
@@ -3070,6 +3069,31 @@ a { color: var(--accent); }
 .dev-dot-success { background: var(--green); }
 .dev-dot-failure { background: var(--red); }
 .dev-dot-pending { background: var(--amber); }
+.shipped .activity-bars { gap: 1px; }
+.shipped .activity-col { min-width: 2px; }
+.activity-col.is-pickable { cursor: pointer; }
+.shipped-sub { font-size: 12.5px; margin-top: 2px; }
+.shipped-sub b { color: var(--text); font-weight: 600; }
+.shipped-axis { display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px; }
+.shipped-legend { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 10px; }
+.shipped-key { display: inline-flex; align-items: center; gap: 6px; background: none; border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; font-size: 12px; color: var(--text); }
+.shipped-key:hover { background: var(--bg-3); }
+.shipped-key .activity-tip-dot { border: 2px solid transparent; box-sizing: border-box; }
+.shipped-key.off { color: var(--muted); text-decoration: line-through; }
+.shipped-day { margin-top: 4px; }
+.shipped-hint { font-size: 12px; margin-top: 10px; }
+.shipped-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; flex-basis: 100%; }
+.shipped-group-name { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-right: 2px; min-width: 7em; }
+.shipped-groups-edit { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 10px; }
+.shipped-groups-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.shipped-groups-item { display: inline-flex; gap: 4px; align-items: center; }
+.shipped-groups-item .model-select { width: 11em; }
+.shipped-groups-repos { max-height: 280px; overflow: auto; }
+.shipped-groups-repos .dev-row { font-size: 13px; }
+.shipped-groups-actions { display: flex; justify-content: flex-end; gap: 6px; }
+@media (max-width: 640px) {
+  .shipped .dev-card-head { flex-wrap: wrap; }
+}
 .dev-health { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .dev-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; font-size: 12px; }
 @media (max-width: 720px) {

@@ -8,6 +8,7 @@ import { router, useNavigationContainerRef } from 'expo-router'
 import { getHabits, markHabitCheckin } from '../lib/api'
 import { shouldOpenCheckin } from '../lib/habitCheckin'
 import { setHabits } from '../features/habits/store'
+import { tappedNotificationRecently } from './push'
 
 /** True when the drawer is on top: no sheet or pushed screen over it. */
 function drawerOnTop(state: any): boolean {
@@ -33,7 +34,8 @@ export function useMorningCheckin() {
         const payload = await getHabits()
         setHabits(payload)
         if (!shouldOpenCheckin(payload) || openedFor.current === payload.today) return
-        if (!drawerOnTop(nav.getRootState())) return
+        // A tapped notification opened a screen on purpose; ask on the next open instead.
+        if (tappedNotificationRecently() || !drawerOnTop(nav.getRootState())) return
         openedFor.current = payload.today
         try { setHabits(await markHabitCheckin(payload.today)) } catch { /* still open it */ }
         router.push('/habit/checkin')

@@ -16,6 +16,7 @@ import { useChat, getState, setActive, stop, settleThread, snoozeThread, markRea
 import { useOnScreen, getOnScreen } from '../../lib/chat/onScreen'
 import { isSnoozed, ago, snoozePresets } from '../../lib/chat/settle'
 import type { ChatThread, Project } from '../../lib/chat/types'
+import { pendingQuestions } from '../../lib/chat/questions'
 import { pushToast } from '../../lib/toast'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
@@ -67,7 +68,9 @@ function Row({ t, run, now, onOpen }: { t: ChatThread; run?: RunState; now: numb
   const title = threadTitle(t)
   const failed = !run && failedReply(t)
   const when = ago(t.updatedAt, now)
-  const status = run ? `${elapsed(now - run.startedAt)} · ${run.activity?.split('\n')[0] || 'Working'}`
+  const asking = pendingQuestions(t)
+  const status = asking ? (asking.part.questions.length === 1 ? 'A question for you' : `${asking.part.questions.length} questions for you`)
+    : run ? `${elapsed(now - run.startedAt)} · ${run.activity?.split('\n')[0] || 'Working'}`
     : failed ? `Failed ${when !== 'now' ? `${when} ago` : 'just now'}`
       : when !== 'now' ? `Done ${when} ago` : 'Done just now'
   const presets = snoozePresets(new Date(now))
@@ -151,7 +154,7 @@ export default function RunningChats({ onOpenChat }: { onOpenChat?: (id: string)
   }, [runs, open])
 
   const candidates = useMemo(() => threads.filter((t) => (
-    !t.totemId && (runs[t.id] || t.needsReply) && !onScreen.open.has(t.id)
+    !t.totemId && (runs[t.id] || pendingQuestions(t) || t.needsReply) && !onScreen.open.has(t.id)
     && !isSnoozed(t, now) && t.settledOverride !== 'settled'
   )), [threads, runs, onScreen, now])
 

@@ -203,7 +203,8 @@ export function createGitHubConnector({ db, service, client, now = () => new Dat
     if (!task) throw new TodoDomainError('TODO_NOT_FOUND', 'Todo not found.', { status: 404 });
     const marker = `<!-- totem-id:${task.id} -->`;
     const body = [input.description ?? task.description, marker].filter(Boolean).join('\n\n');
-    const outboxId = enqueueOutbox(task.id, 'create', { repo, body }, callerContext);
+    const labels = Array.isArray(input.labels) ? input.labels.map(String).map(s => s.trim()).filter(Boolean) : [];
+    const outboxId = enqueueOutbox(task.id, 'create', { repo, body, ...(labels.length ? { labels } : {}) }, callerContext);
     return finishQueued(outboxId, task.id);
   }
 
@@ -335,7 +336,7 @@ export function createGitHubConnector({ db, service, client, now = () => new Dat
       }
       if (!remote) {
         try {
-          remote = await client.createIssue({ repo: payload.repo, title: task.title, body: payload.body });
+          remote = await client.createIssue({ repo: payload.repo, title: task.title, body: payload.body, labels: payload.labels });
         } catch (error) {
           const matches = await searchByMarker(payload.repo, task.id);
           if (matches.length !== 1) throw error;

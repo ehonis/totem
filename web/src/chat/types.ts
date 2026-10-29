@@ -14,6 +14,8 @@ export interface Attachment {
 export interface TextPart { type: 'text'; text: string }
 /** What the chat's browser is showing (bridge `browser` events). `image` is a JPEG data URL. */
 export interface BrowserFrame { tabId: string; url: string; title: string; image: string; at: number }
+/** The agent handing the browser to the owner (preview_handoff): what it needs done. */
+export interface BrowserHandoff { id: string; reason: string; at: number }
 
 export interface ImagePart { type: 'image'; uploadId: string; alt?: string; url?: string }
 export interface ToolPart {
@@ -25,6 +27,9 @@ export interface ToolPart {
   status: 'running' | 'done' | 'error'
   server?: string
   tool?: string
+  /** A connector's own name and https logo, as its CLI reported them (Microsoft 365, Notion…). */
+  app?: string
+  logo?: string
   input?: string
   output?: string
   startedAt?: number
@@ -66,7 +71,7 @@ export interface AgentInfo {
   tokens?: number
   toolUses?: number
   /** `live`: its own log is being read; `none`: only its final output is known. */
-  log?: 'live' | 'none'
+  log?: 'live' | 'none' | 'off'
   startedAt?: number
   endedAt?: number
   /** Earlier steps not kept (the list is capped). */
@@ -86,8 +91,41 @@ export interface TotemProposalPart {
   status: 'pending' | 'accepted' | 'dismissed'
 }
 /** Something the owner sent while the reply was still running. `live`: taken into the running turn; `restart`: the agent was interrupted and resumed with it. */
-export interface SteerPart { type: 'steer'; id: string; text: string; via: 'live' | 'restart'; createdAt: number }
-export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | SteerPart
+export interface SteerPart { type: 'steer'; id: string; text: string; via: 'live' | 'restart'; createdAt: number; attachments?: Attachment[] }
+
+/** A message waiting for the running reply to finish (chat/queue.mjs on the bridge). */
+export interface QueuedMessage {
+  id: string
+  text: string
+  attachments?: Attachment[]
+  createdAt: number
+  provider?: string
+  modelSettings?: Partial<ModelSettings>
+}
+/** One question the agent asked (chat/questions.mjs on the bridge). */
+export interface Question {
+  id: string
+  header: string
+  question: string
+  options: { label: string; description?: string }[]
+  multiSelect?: boolean
+}
+/**
+ * Questions the agent asked the owner. `pending` until answered or dismissed;
+ * `answers` maps question id to the chosen labels or the owner's own words.
+ */
+export interface QuestionsPart {
+  type: 'questions'
+  id: string
+  questions: Question[]
+  status: 'pending' | 'answered' | 'dismissed'
+  answers?: Record<string, string[]>
+  /** Images or files the owner sent with an answer, by question id. */
+  attachments?: Record<string, Attachment[]>
+  askedAt?: number
+  answeredAt?: number
+}
+export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | SteerPart | QuestionsPart
 
 export interface ChatMessage {
   id: string
@@ -139,7 +177,7 @@ export interface ModelSettings {
   context: string
   /** Set only on settings saved under the retired Auto/Instant/Thinking presets (see `fromPreset`). */
   preset?: string
-  /** What the agent may do without asking (chat/AccessControl.tsx). Unset = Full access. */
+  /** What the agent may do without asking (chat/ComposerTraits.tsx). Unset = Full access. */
   access?: Access
 }
 
@@ -175,6 +213,10 @@ export interface ChatThread {
   snoozedUntil?: number
   snoozedAt?: number
   messages: ChatMessage[]
+  /** Messages waiting for the running reply, first in line first. The bridge owns it. */
+  queue?: QueuedMessage[]
+  /** The reply before them was stopped or failed: the queue waits for Resume or a new message. */
+  queueHeld?: boolean
   createdAt: number
   updatedAt: number
   expiresAt?: number
@@ -199,6 +241,10 @@ export interface Project {
   id: string
   name: string
   icon?: string
+  /** An uploaded picture (an upload id), worn instead of the icon. */
+  image?: string
+  /** The picture's signed URL, set by the bridge when there is one. */
+  imageUrl?: string
   instructions: string
   provider?: string
   modelSettings?: Partial<ModelSettings>
@@ -266,14 +312,17 @@ export interface DraftAttachment {
 }
 
 export type StreamEvent =
-  | { type: 'start'; threadId: string; userMessage: ChatMessage; assistantMessage: ChatMessage; provider: string; seq: number }
+  | { type: 'start'; threadId: string; userMessage: ChatMessage; assistantMessage: ChatMessage; provider: string; queuedId?: string; seq: number }
+  | { type: 'queue'; queue: QueuedMessage[]; queueHeld: boolean; seq: number }
   | { type: 'delta'; text: string; seq: number }
   | { type: 'tool'; tool: any; seq: number }
   | { type: 'agent'; toolId: string; agent?: Partial<AgentInfo>; step?: AgentStep; seq: number }
   | { type: 'image'; uploadId: string; alt?: string; url?: string; seq: number }
   | ({ type: 'browser'; seq: number } & BrowserFrame)
+  | { type: 'handoff'; handoff: BrowserHandoff | null; seq: number }
   | { type: 'file'; file: FilePart; seq: number }
   | { type: 'steer'; steer: Omit<SteerPart, 'type'>; seq: number }
+  | { type: 'questions'; questions: Partial<QuestionsPart> & { id: string }; seq: number }
   | { type: 'activity'; text: string; seq: number }
   | { type: 'title'; title: string; icon?: string; seq: number }
   | { type: 'done'; message: ChatMessage; seq: number }

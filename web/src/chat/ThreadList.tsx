@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import { useChat, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread, markRead, markUnread, setProjectContext, settleThread, unsettleThread, snoozeThread, wakeThread } from './store'
+import { pendingQuestions } from './questions'
 import type { ChatThread, Project } from './types'
 import { TI, useDismiss } from './ui'
 import { IconDots, IconPinned, IconPencil, IconTrash, IconSearch, IconX, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconHome, IconChevronLeft, IconMail, IconMailOpened, IconClock, IconAlarmOff, IconArrowBackUp, IconChevronUp, IconChevronDown, IconPlus } from './icons'
@@ -133,12 +134,15 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
     : shelf === 'settled'
       ? <span className="vc-thread-meta" title={t.settledOverride === 'settled' ? 'Settled' : `Settled after ${autoDays} ${autoDays === 1 ? 'day' : 'days'} without activity`}>{ago(settledAt(t, now, autoDays), now)}</span>
       : null
+  // Questions from the agent outrank everything else on the row, as in T3.
+  const asking = !!pendingQuestions(t)
   return (
     <div ref={rowRef} className={`vc-thread shelf-${shelf} ${active ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''} ${(t.needsReply && !live) || woke ? 'waiting' : ''}`} {...dragThreadProps(t.id)}>
       <button type="button" className="vc-thread-main" onClick={() => onOpen(t.id)} title={title}>
         <ThreadIcon t={t} size={16} busy={retitling} />
         <span className={`vc-thread-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{title}</span>
-        {live ? <span className="vc-live-dot" aria-label="Answering" />
+        {asking ? <span className="vc-asking" title="Totem asked you questions">Awaiting input</span>
+          : live ? <span className="vc-live-dot" aria-label="Answering" />
           : woke ? <span className="vc-woke" title={`Woke ${wakeDescription(wokeAt(t, now), now)}`}>Woke</span>
           : t.needsReply && <span className="vc-reply-dot" aria-label="Waiting on you" title="Waiting on you" />}
         {meta}

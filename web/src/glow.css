@@ -50,11 +50,14 @@
 .page-glow { transition: filter 1.2s ease, --glow-a 1.4s ease, --glow-b 1.4s ease; }
 
 /* While an agent is replying the lights swing, slide and pulse. Three phase
-   values loop on the chat's glow all the time, at different speeds, and
-   --glow-amp scales how far they move: it rises from 0 when a reply starts and
-   falls back when it ends, so the motion swells in and dies away rather than
-   switching. The swing rides on the separate scale/rotate/translate properties,
-   on top of the slow drift. */
+   values loop on the chat's glow at different speeds, and --glow-amp scales
+   how far they move: it rises from 0 when a reply starts and falls back when it
+   ends, so the motion swells in and dies away rather than switching. The swing
+   rides on the separate scale/rotate/translate properties, on top of the slow
+   drift. The phases are paused between replies: animated custom properties run
+   on the main thread, restyling and repainting the glow every frame, and with
+   --glow-amp at 0 they move nothing. Paused, they hold their values, so the
+   swing still dies away smoothly. */
 @property --glow-amp { syntax: '<number>'; inherits: true; initial-value: 0; }
 @property --glow-w { syntax: '<number>'; inherits: true; initial-value: 0; }
 @property --glow-v { syntax: '<number>'; inherits: true; initial-value: 0; }
@@ -62,9 +65,14 @@
 .vc .page-glow {
   animation: glow-phase-w 2.6s ease-in-out infinite alternate, glow-phase-v 3.4s ease-in-out infinite alternate, glow-phase-p 1.1s ease-in-out infinite alternate;
   transition: --glow-amp 1.1s ease, --glow-a 1.4s ease, --glow-b 1.4s ease;
+  animation-play-state: paused;
+}
+/* Only while a reply runs or its swing dies away (ChatView's settling, 1.2 s):
+   even at brightness(1) a filter costs a full-size render pass every frame. */
+.vc .page-glow.live, .vc .page-glow.settling {
   filter: brightness(calc(1 + var(--glow-amp) * (.3 + .55 * var(--glow-p)))) saturate(calc(1 + var(--glow-amp) * .12));
 }
-.vc .page-glow.live { --glow-amp: 1; }
+.vc .page-glow.live { --glow-amp: 1; animation-play-state: running; }
 /* In a chat the lights sit lower, their brightest at the page's foot under the composer. */
 .vc .page-glow { --glow-y: 84%; }
 .vc .page-glow::before {
@@ -91,6 +99,12 @@
   50%  { transform: translate3d(-5%, -5%, 0) scale(1); }
   100% { transform: translate3d(-9%, 1%, 0) scale(1.14); }
 }
+/* The drift runs at the display's refresh rate for as long as a page is open, and
+   anything see-through over it is recomposited each frame. Nobody is watching
+   it while the window is in the background, so it holds still (App.tsx sets
+   glow-paused on blur). The reply swing is left running. */
+:root.glow-paused .page-glow::before,
+:root.glow-paused .page-glow::after { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
   .page-glow::before, .page-glow::after, .vc .page-glow { animation: none; }
 }
@@ -99,5 +113,6 @@
 .main[data-glow='productivity'] { --glow-a: #10b981; --glow-b: #0ea5e9; --glow-speed: 32s; }
 .main[data-glow='inbox']        { --glow-a: #f59e0b; --glow-b: #f43f5e; --glow-speed: 26s; }
 .main[data-glow='search']       { --glow-a: #06b6d4; --glow-b: #6366f1; --glow-speed: 30s; }
+.main[data-glow='fleet']        { --glow-a: #14b8a6; --glow-b: #6366f1; --glow-speed: 34s; }
 .main[data-glow='messages']     { --glow-a: #22c55e; --glow-b: #14b8a6; --glow-speed: 34s; }
 .main[data-glow='settings']     { --glow-a: #ec4899; --glow-b: #8b5cf6; --glow-speed: 36s; }

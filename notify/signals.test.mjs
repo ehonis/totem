@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { zonedToUtc } from '../jobs/schedule.mjs'
-import { parsePeople, birthdayFacts, daysUntilAnniversary, goalFacts, habitFacts, metricFacts, streakBefore, weekProgress, taskFacts } from './signals.mjs'
+import { parsePeople, birthdayFacts, daysUntilAnniversary, goalFacts, metricFacts, taskFacts, COLLECTORS } from './signals.mjs'
 import { CATEGORY_NAMES } from './categories.mjs'
 import { TITLE_MAX } from './text.mjs'
 
@@ -62,6 +62,8 @@ test('a birthday today is a pinned, maximum-salience fact', () => {
   assert.equal(today[0].slot, 'morning')
   assert.equal(today[0].title, 'Marion turns 65 today')
   assert.match(today[0].body, /Your mom, Marion, turns 65 today/)
+  // The tap opens the people note the birthday came from, not the bare Brain graph.
+  assert.equal(today[0].url, '/brain#people/people.md')
 })
 
 test('a birthday a week out gets a lead-time fact, and six days out gets nothing', () => {
@@ -105,75 +107,27 @@ const ENTRIES = {
   '2026-09-11': { sleep: { count: 1, value: 75 } },
 }
 
-test('streaks count back from today and stop at the first miss', () => {
-  const friday = Date.UTC(2026, 8, 11)
-  assert.equal(streakBefore(ENTRIES, 'journal', 1, friday), 5)
-  // Move was missed on the 7th, so the streak back from Friday is three days.
-  assert.equal(streakBefore(ENTRIES, 'move', 1, friday), 3)
-})
-
-test('a daily habit not yet logged today warns that the streak ends tonight', () => {
-  const facts = habitFacts({ habits: HABITS, entries: ENTRIES, now: at('2026-09-11 18:00'), tz: TZ })
-  const journal = facts.find((f) => f.subject === 'journal')
-  assert.equal(journal.kind, 'habit.streak-ending')
-  assert.equal(journal.category, 'habit.slipping')
-  assert.equal(journal.slot, 'evening')
-  // 'Streak ends tonight: 3 Year Journal' is 35 characters, past what a phone
-  // shows, so the habit name drops to the body rather than being truncated.
-  assert.equal(journal.title, 'Streak ends tonight')
-  assert.match(journal.body, /5 days running/)
-  // The other copy, for when it gets logged before the nudge fires.
-  assert.match(journal.resolvedTitle, /Streak intact/)
-})
-
-test('a habit already logged today produces no fact at all', () => {
-  const entries = { ...ENTRIES, '2026-09-11': { ...ENTRIES['2026-09-11'], journal: { count: 1 } } }
-  const facts = habitFacts({ habits: HABITS, entries, now: at('2026-09-11 18:00'), tz: TZ })
-  assert.equal(facts.find((f) => f.subject === 'journal'), undefined)
-})
-
-test('a one-day streak is not worth a notification', () => {
-  const entries = { '2026-09-10': { journal: { count: 1 } } }
-  const facts = habitFacts({ habits: HABITS, entries, now: at('2026-09-11 18:00'), tz: TZ })
-  assert.equal(facts.find((f) => f.subject === 'journal'), undefined)
-})
-
-test('a weekly target within reach is a nudge toward finishing, not a complaint', () => {
-  // Help the Business: 3 of 4, Friday, three days left including today — the week
-  // runs to Sunday.
-  const progress = weekProgress(ENTRIES, 'business', 4, at('2026-09-11 18:00'), TZ)
-  assert.deepEqual({ count: progress.count, daysLeft: progress.daysLeft, weekStart: progress.weekStart }, { count: 3, daysLeft: 3, weekStart: '2026-09-07' })
-
-  const facts = habitFacts({ habits: HABITS, entries: ENTRIES, now: at('2026-09-11 18:00'), tz: TZ })
-  const business = facts.find((f) => f.subject === 'business')
-  assert.equal(business.category, 'goal.nearcomplete')
-  assert.equal(business.title, 'One more to finish')
-  assert.match(business.body, /Help the Business — 3 of 4 so far, 3 days left/)
-  assert.match(business.resolvedTitle, /Done for the week/)
-})
-
-test('the near-target nudge gets more urgent on the last day', () => {
-  const friday = habitFacts({ habits: HABITS, entries: ENTRIES, now: at('2026-09-11 18:00'), tz: TZ })
-    .find((f) => f.subject === 'business')
-  const sunday = habitFacts({ habits: HABITS, entries: ENTRIES, now: at('2026-09-13 18:00'), tz: TZ })
-    .find((f) => f.subject === 'business')
-  assert.ok(sunday.salience > friday.salience)
-  assert.match(sunday.body, /1 day left/)
-})
-
-test('a weekly target already met says nothing', () => {
-  const entries = { ...ENTRIES, '2026-09-11': { ...ENTRIES['2026-09-11'], business: { count: 1 } } }
-  const facts = habitFacts({ habits: HABITS, entries, now: at('2026-09-11 18:00'), tz: TZ })
-  assert.equal(facts.find((f) => f.subject === 'business'), undefined)
-})
-
-test('a weekly target that can no longer be hit is reported once, without pretending', () => {
-  // Saturday, 1 of 4, one day left: three more is not happening.
-  const entries = { '2026-09-08': { business: { count: 1 } } }
-  const facts = habitFacts({ habits: HABITS, entries, now: at('2026-09-12 20:30'), tz: TZ })
-  const business = facts.find((f) => f.subject === 'business')
-  assert.equal(business.kind, 'habit.behind-pace')
-  assert.equal(business.category, 'habit.slipping')
+test('no collector nudges a habit toward a deadline', () => {
+  // A habit can be logged for any past day, so "streak ends tonight", "one more to
+  // finish" and "short this week" were invented urgency. The fixtures below used
+  // to produce all three.
+  const cases = [
+    // Journal: five days running, not logged yet on Friday evening.
+    { entries: ENTRIES, now: at('2026-09-11 18:00') },
+    // Help the Business: 3 of 4 with three days left.
+    { entries: ENTRIES, now: at('2026-09-13 18:00') },
+    // Help the Business: 1 of 4 on Saturday night.
+    { entries: { '2026-09-08': { business: { count: 1 } } }, now: at('2026-09-12 20:30') },
+  ]
+  for (const { entries, now } of cases) {
+    const facts = Object.values(COLLECTORS).flatMap((collect) => collect({ habits: HABITS, entries, now, tz: TZ }))
+    const kinds = facts.map((f) => f.kind)
+    for (const retired of ['habit.streak-ending', 'habit.near-target', 'habit.behind-pace']) {
+      assert.ok(!kinds.includes(retired), `${retired} raised at ${new Date(now).toISOString()}`)
+    }
+    assert.ok(!facts.some((f) => f.category === 'habit.slipping'))
+    assert.ok(!facts.some((f) => f.revalidate?.collector === 'habits'))
+  }
 })
 
 test('a metric under goal for several days is a trend; one bad night is not', () => {
@@ -298,22 +252,7 @@ test('collectors survive empty and malformed input without throwing', () => {
   assert.deepEqual(parsePeople(''), [])
   assert.deepEqual(parsePeople(null), [])
   assert.deepEqual(birthdayFacts({ people: [], now: at('2026-09-11 07:15'), tz: TZ }), [])
-  assert.deepEqual(habitFacts({ now: at('2026-09-11 07:15'), tz: TZ }), [])
   assert.deepEqual(metricFacts({ now: at('2026-09-11 07:15'), tz: TZ }), [])
-})
-
-test('facts carry an expiry that matches what they are about', () => {
-  const now = at('2026-09-11 18:00')
-  const habits = habitFacts({ habits: HABITS, entries: ENTRIES, now, tz: TZ })
-  // A streak nudge is worthless after midnight tonight.
-  const journal = habits.find((f) => f.subject === 'journal')
-  assert.equal(new Date(journal.expiresAt).toISOString() > new Date(now).toISOString(), true)
-  assert.ok(journal.expiresAt < at('2026-09-12 00:00'))
-  // A weekly target is still worth saying tomorrow and the day after — the week runs
-  // to Sunday.
-  const business = habits.find((f) => f.subject === 'business')
-  assert.ok(business.expiresAt > at('2026-09-13 00:00'))
-  assert.ok(business.expiresAt < at('2026-09-14 00:00'))
 })
 
 test('a birthday fact expires with the day it is about', () => {
@@ -434,7 +373,6 @@ test('every fact a collector can produce fits on a lock screen', () => {
   }
 
   const facts = [
-    ...habitFacts({ habits: longHabits, entries: days, now, tz: TZ }),
     ...metricFacts({ habits: longHabits, entries: days, now, tz: TZ }),
     ...birthdayFacts({ people: parsePeople(PEOPLE_MD), now: at('2026-09-11 07:15'), tz: TZ }),
     ...taskFacts({
@@ -443,7 +381,7 @@ test('every fact a collector can produce fits on a lock screen', () => {
     }),
   ]
 
-  assert.ok(facts.length >= 4, 'expected the fixture to produce facts')
+  assert.ok(facts.length >= 3, 'expected the fixture to produce facts')
   for (const f of facts) {
     assert.ok(f.title.length <= TITLE_MAX, `title too long (${f.title.length}): ${f.title}`)
     if (f.resolvedTitle) {

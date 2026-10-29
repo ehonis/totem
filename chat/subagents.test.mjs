@@ -19,6 +19,18 @@ test('detectAgentCli finds another agent CLI and its prompt', () => {
   assert.equal(detectAgentCli("codex exec - <<'EOF'\nGenerate a mountain totem icon\nEOF\n").prompt, 'Generate a mountain totem icon')
 })
 
+test('detectAgentCli keeps a Codex-quoted prompt whole and never takes a flag for it', () => {
+  // Codex quotes every argument, and a prompt holding `$` is spliced from a
+  // double-quoted and a single-quoted piece.
+  const cmd = `/bin/zsh -lc "'/Users/x/.local/bin/claude' '--safe-mode' '--no-session-persistence' '--model' 'sonnet' '-p' 'You are a market research analyst. Historical "'$199/$99 pricing uncommitted. Research the competition.'"'"`
+  const hit = detectAgentCli(cmd)
+  assert.equal(hit.provider, 'claude')
+  assert.equal(hit.prompt, 'You are a market research analyst. Historical $199/$99 pricing uncommitted. Research the competition.')
+  assert.equal(hit.noLog, true)
+  assert.equal(detectAgentCli("claude -p '--no-session-persistence' 'short'").prompt, 'short')
+  assert.equal(detectAgentCli(`claude -p 'it'"'"'s a prompt with a quote'`).prompt, "it's a prompt with a quote")
+})
+
 test('detectAgentCli ignores commands that do not run a prompt', () => {
   for (const cmd of ['codex --version', 'codex login status', 'claude mcp list', 'claude --help', 'grep -r "codex exec" docs', 'ls ~/.codex/sessions', 'echo claude -p', 'npm test']) {
     assert.equal(detectAgentCli(cmd), null, cmd)
@@ -92,6 +104,11 @@ test('an agent survives the reply fold, finalize and a save', () => {
   assert.equal(saved.agent.provider, 'codex')
   assert.equal(saved.agent.steps.length, 1)
   assert.equal(normalizeAgent({ provider: 'x', steps: [{ kind: 'bogus' }] }).steps.length, 0)
+  // A background Bash command's task events once made an agent with no provider.
+  const bash = { parts: [{ type: 'tool', id: 'b1', kind: 'command', title: 'Edit skill, open PR', status: 'done' }] }
+  applyEvent(bash, { type: 'agent', toolId: 'b1', agent: { status: 'done', summary: 'Edit skill, open PR' } })
+  assert.equal(bash.parts[0].agent, undefined)
+  assert.equal(normalizeAgent({ status: 'done', summary: 'Edit skill, open PR', steps: [] }), null)
 })
 
 async function tempHome() {

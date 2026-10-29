@@ -3,6 +3,7 @@
 // bottom-left corner. This is a tiny external store so non-React code (and
 // components without a shared parent) can raise toasts without prop drilling.
 import { useSyncExternalStore, useEffect, type ComponentType } from 'react'
+import { isWakeNetworkError } from './wake'
 
 export type ToastKind = 'error' | 'success' | 'info'
 
@@ -50,6 +51,8 @@ export function pushToast(
 ): number | null {
   const text = typeof message === 'string' ? message : (message && message.message) || String(message || '')
   if (!text) return null
+  // A request the phone dropped while the app slept or was waking is not news.
+  if (kind === 'error' && isWakeNetworkError(text)) return null
   const ms = duration ?? DEFAULT_MS[kind]
   // The same message again joins the toast already showing it, back at the front.
   const same = !action && toasts.find((t) => t.text === text && t.kind === kind && !t.action)

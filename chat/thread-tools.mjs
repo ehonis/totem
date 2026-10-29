@@ -137,3 +137,56 @@ export function threadsRule(thread, projects = []) {
     + 'well without context that clearly lives in another chat. Never look by habit, to be thorough, or at the start of a turn. '
     + 'When you do, narrow it (this project, a query, exclude this chat), read only what you need, and tell the owner which chat you drew on.'
 }
+
+const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase()
+
+/** One project or folder by id, or by name when only one has it. */
+function pickPlace(rows, want, what) {
+  const byId = rows.find((p) => p.id === want)
+  if (byId) return byId
+  const named = rows.filter((p) => sameName(p.name, want))
+  if (named.length > 1) throw new Error(`${named.length} ${what}s are called "${want}"; pass one's id (${named.map((p) => p.id).join(', ')})`)
+  return named[0] || null
+}
+
+/**
+ * Where threads__create puts a chat. `project` is a project or folder (id or
+ * name; "home" or nothing for no project); `folder` is a folder inside that
+ * project, by id or name, made when no folder has that name yet
+ * (`newFolder`). Folders go one level deep, as in the dashboard.
+ */
+export function findChatPlace(projects, { project, folder } = {}) {
+  const p = String(project ?? '').trim()
+  const f = String(folder ?? '').trim()
+  if (!p || sameName(p, 'home')) {
+    if (f) throw new Error('a folder lives in a project: pass the project as well')
+    return { projectId: null, newFolder: null }
+  }
+  const tops = projects.filter((x) => !x.parentId)
+  const parent = pickPlace(tops, p, 'project')
+  if (!parent) {
+    const sub = pickPlace(projects.filter((x) => x.parentId), p, 'folder')
+    if (sub && f) throw new Error(`"${sub.name}" is a folder, and a folder cannot hold folders`)
+    if (sub) return { projectId: sub.id, newFolder: null }
+    const names = tops.map((x) => `"${x.name}" (${x.id})`).join(', ')
+    throw new Error(`no project or folder called "${p}"${names ? `. Projects: ${names}` : '; the owner has no projects yet'}. See threads__projects.`)
+  }
+  if (!f) return { projectId: parent.id, newFolder: null }
+  const child = pickPlace(projects.filter((x) => x.parentId === parent.id), f, 'folder')
+  if (child) return { projectId: child.id, newFolder: null }
+  return { projectId: null, newFolder: { name: f.slice(0, 80), parentId: parent.id } }
+}
+
+/** threads__projects: every project with its folders, and how many chats each holds. */
+export function listChatPlaces(projects, threads = []) {
+  const count = (id) => threads.filter((t) => t.projectId === id && (t.messages || []).length).length
+  const row = (p) => ({ id: p.id, name: p.name, chats: count(p.id) })
+  return {
+    home: { chats: threads.filter((t) => !(t.projectId && projects.some((p) => p.id === t.projectId)) && (t.messages || []).length).length },
+    projects: projects.filter((p) => !p.parentId).map((p) => ({
+      ...row(p),
+      ...(p.instructions ? { instructions: clip(p.instructions, 240) } : {}),
+      folders: projects.filter((f) => f.parentId === p.id).map(row),
+    })),
+  }
+}

@@ -3,6 +3,7 @@ import { clearSecret, getTerminalStatus } from './api'
 import { getSettings, useSettings } from './settings'
 import { parseLocation, buildPath, toRoute, resolveTarget, type NavTarget, type Route } from './router'
 import { COMMANDS } from './shortcuts'
+import { installDesktopHooks } from './desktop'
 import { useShortcuts, useCommand } from './useShortcuts'
 import { useInboxCount, describeInboxCount } from './useInboxCount'
 import AuthGate from './components/AuthGate'
@@ -13,6 +14,7 @@ import ProductivityView from './components/ProductivityView'
 import BrainView from './components/BrainView'
 import SearchView from './components/SearchView'
 import DevView from './components/DevView'
+import FleetView from './fleet/FleetView'
 import ChatView from './components/ChatView'
 import MessagesView from './messages/MessagesView'
 import { useAppleStatus } from './messages/useAppleStatus'
@@ -49,6 +51,7 @@ import {
   ChevronDownIcon,
   EllipsisHorizontalIcon,
   WrenchScrewdriverIcon,
+  ServerStackIcon,
 } from './icons'
 
 interface TabDef {
@@ -61,22 +64,24 @@ interface TabDef {
 const PRIMARY_TABS: TabDef[] = [
   { id: 'overview', label: 'Overview', icon: Squares2X2Icon },
   { id: 'search', label: 'Search', icon: MagnifyingGlassIcon },
-  { id: 'totems', label: 'Totems', icon: TotemsIcon },
   { id: 'chat', label: 'Chat', icon: ChatBubbleLeftRightIcon },
   { id: 'productivity', label: 'Productivity', icon: CalendarDaysIcon },
   { id: 'inbox', label: 'Inbox', icon: InboxArrowDownIcon },
   // CI, reviews and runners across the repos in data/dev.json, plus outside alerts.
   { id: 'dev', label: 'Dev', icon: WrenchScrewdriverIcon },
+  // The owner's machines: health, uptime, resources, power and its cost.
+  { id: 'fleet', label: 'Fleet', icon: ServerStackIcon },
 ]
 
 // No longer on the nav: Brain opens from the Overview's app row, Code is the last
-// section of Dev, and the AI workshop (Studio's skills/jobs/connections, and Logs)
-// lives in Settings.
+// section of Dev, the AI workshop (Studio's skills/jobs/connections, and Logs)
+// lives in Settings, and Totems live in the chats panel (its Totems switch, and a
+// totem chat's gear opens /totems on that totem's settings).
 // Their routes still work, so links and shortcuts to them keep landing.
 const MORE_TABS: TabDef[] = []
 
-// Messages from the Mac Totem runs on. On the rail only when the bridge says
-// Apple data is on (APPLE_ENABLED on a Mac); the route works either way and
+// Messages from the Mac Totem runs on. Last on the rail, and only when the bridge
+// says Apple data is on (APPLE_ENABLED on a Mac); the route works either way and
 // explains itself. Chat's double bubble is taken, so this is the single oval.
 const MESSAGES_TAB_DEF: TabDef = { id: 'messages', label: 'Messages', icon: ChatBubbleOvalLeftIcon }
 
@@ -84,13 +89,16 @@ const MESSAGES_TAB_DEF: TabDef = { id: 'messages', label: 'Messages', icon: Chat
 // only, never in the phone drawer; /screen on a phone explains itself.
 const SCREEN_TAB_DEF: TabDef = { id: 'screen', label: 'Screen', icon: ComputerDesktopIcon }
 
+// Off the nav (see MORE_TABS), but /totems still needs a name in the phone's top bar.
+const TOTEMS_TAB_DEF: TabDef = { id: 'totems', label: 'Totems', icon: TotemsIcon }
+
 // Settings lives at the bottom of the sidebar (replacing the old Disconnect link).
 // It isn't in the tab arrays because it's pinned separately — except on a phone,
 // where it folds into the More flyout with everything else that doesn't fit.
 const SETTINGS_TAB = 'settings'
 // Pages drawn over a moving colour glow (glow.css). The chat, editors and the
 // Totems scene keep a plain background.
-const GLOW_TABS = new Set(['overview', 'productivity', 'inbox', 'search', 'messages', SETTINGS_TAB])
+const GLOW_TABS = new Set(['overview', 'productivity', 'inbox', 'search', 'messages', 'fleet', SETTINGS_TAB])
 const SETTINGS_TAB_DEF: TabDef = { id: SETTINGS_TAB, label: 'Settings', icon: Cog6ToothIcon }
 
 // The bottom bar fits five items with a readable label under each; past that the
@@ -111,13 +119,6 @@ function useNarrow() {
     return () => mq.removeEventListener('change', onChange)
   }, [])
   return narrow
-}
-
-/** The tab list with Messages after Chat, when the bridge reads Messages. */
-function withMessages(tabs: TabDef[], on: boolean): TabDef[] {
-  if (!on) return tabs
-  const at = tabs.findIndex((t) => t.id === 'chat')
-  return [...tabs.slice(0, at + 1), MESSAGES_TAB_DEF, ...tabs.slice(at + 1)]
 }
 
 const safeDecode = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
@@ -274,6 +275,7 @@ export default function App() {
   // sidebar uses, so a shortcut and a click land on exactly the same route —
   // including the "return to the pane you left" memory.
   const chord = useShortcuts(navigate)
+  useEffect(() => installDesktopHooks(navigate), [navigate])
 
   const terminalVisible = Boolean(terminalAvailable) && terminalOpen
 
@@ -284,12 +286,26 @@ export default function App() {
     root.classList.toggle('density-compact', settings.compact)
   }, [settings.reduceMotion, settings.compact])
 
+  // The page glows hold still while the window is in the background (glow.css).
+  useEffect(() => {
+    const root = document.documentElement
+    const sync = () => root.classList.toggle('glow-paused', !document.hasFocus())
+    sync()
+    window.addEventListener('focus', sync)
+    window.addEventListener('blur', sync)
+    return () => { window.removeEventListener('focus', sync); window.removeEventListener('blur', sync) }
+  }, [])
+
   // Every tab is on the rail (desktop) or in the drawer (phone); nothing is
   // folded under "More" any more.
-  const allTabs = withMessages([...PRIMARY_TABS, ...MORE_TABS], appleEnabled(appleStatus))
-  const railTabs = screenEnabled(screenStatus) ? [...allTabs, SCREEN_TAB_DEF] : allTabs
+  const allTabs = [...PRIMARY_TABS, ...MORE_TABS]
+  const railTabs = [
+    ...allTabs,
+    ...(screenEnabled(screenStatus) ? [SCREEN_TAB_DEF] : []),
+    ...(appleEnabled(appleStatus) ? [MESSAGES_TAB_DEF] : []),
+  ]
   const badges = inboxOpen ? { inbox: { count: inboxOpen, title: describeInboxCount(inboxOpen, inboxByKind) } } : {}
-  const tabLabel = [...allTabs, MESSAGES_TAB_DEF, SCREEN_TAB_DEF, SETTINGS_TAB_DEF].find((t) => t.id === tab)?.label || 'Totem'
+  const tabLabel = [...allTabs, MESSAGES_TAB_DEF, SCREEN_TAB_DEF, TOTEMS_TAB_DEF, SETTINGS_TAB_DEF].find((t) => t.id === tab)?.label || 'Totem'
   const openChat = () => selectTab('chat')
   const newChat = () => { setActive(null); selectTab('chat') }
   const showPanel = useCallback(() => { if (!narrow) setPanelOpen(true) }, [narrow, setPanelOpen])
@@ -302,11 +318,12 @@ export default function App() {
         <Rail
           tabs={railTabs}
           bottom={SETTINGS_TAB_DEF}
-          active={tab}
+          active={tab === 'totems' ? 'chat' : tab}
           onSelect={selectTab}
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpen(!panelOpen)}
           badges={badges}
+          usage={tab !== 'chat'}
         />
       )}
       {!narrow && panelOpen && (
@@ -335,6 +352,9 @@ export default function App() {
         {tab === 'search' && <SearchView onAuthError={onAuthError} onNavigate={navigate} />}
         {tab === 'brain' && <BrainView onAuthError={onAuthError} openPath={route.hash ? safeDecode(route.hash) : undefined} />}
         {tab === 'dev' && <DevView onAuthError={onAuthError} />}
+        {tab === 'fleet' && (
+          <FleetView onAuthError={onAuthError} deviceId={route.hash ? safeDecode(route.hash) : null} onOpen={(id) => navigate({ tab: 'fleet', hash: id })} />
+        )}
         {tab === 'messages' && (
           <MessagesView status={appleStatus} onRefreshStatus={refreshAppleStatus} onAuthError={onAuthError} narrow={narrow} />
         )}
@@ -356,9 +376,9 @@ export default function App() {
           onClose={() => setDrawerOpen(false)}
           // No Messages on a phone: the Messages app is right there. /messages
           // still opens, and agents still read Messages through apple__*.
-          tabs={allTabs.filter((t) => t.id !== 'messages')}
+          tabs={allTabs}
           bottom={SETTINGS_TAB_DEF}
-          active={tab}
+          active={tab === 'totems' ? 'chat' : tab}
           onSelect={selectTab}
           onOpenChat={openChat}
           badges={badges}

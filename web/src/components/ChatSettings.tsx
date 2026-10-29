@@ -2,9 +2,10 @@ import React, { useEffect } from 'react'
 import { useChat, ensureModels, savePrefs, providerById, type ChatPrefs } from '../chat/store'
 import { visibleModels, EFFORT_LABELS } from '../chat/models'
 import { pushError } from '../toast'
+import { useSettings, setSetting } from '../settings'
 
-// Settings → Chat: when quiet chats settle, whether chats bring in totems, and
-// who writes chat titles.
+// Settings → Chat: when quiet chats settle, the chat's glow (this device only),
+// whether chats bring in totems, and who writes chat titles.
 // "Pick for me" keeps Totem's own rule.
 
 function Lane({ lane, title, hint }: { lane: 'titles'; title: string; hint: string }) {
@@ -63,12 +64,26 @@ export default function ChatSettings() {
   const providers = useChat((s) => s.providers)
   useEffect(() => { for (const p of providers) ensureModels(p.id) }, [providers])
   const save = (patch: Partial<ChatPrefs>) => savePrefs(patch).catch((e) => pushError(e.message))
+  const glowOn = useSettings().chatGlow
   return (
     <div className="settings-pane">
       <header className="settings-pane-head">
         <h2>Chat</h2>
-        <p>How the chat list tidies itself and who names chats. New chats start on your default model (Settings → AI); pick another in the composer.</p>
+        <p>What sending does mid-reply, how the chat list tidies itself, how a chat looks, and who names chats. New chats start on your default model (Settings → AI); pick another in the composer.</p>
       </header>
+
+      <div className="settings-section-title"><span /><strong>Sending</strong></div>
+      <div className="setting-list">
+        <div className="setting-row">
+          <div className="setting-copy"><strong>Follow-up behaviour</strong><span>Queue follow-ups while the agent runs or steer the current run. Press Ctrl/⌘ + Enter (or Ctrl/⌘-click send) to do the opposite for one message. A queued message can still be sent as a steer from the queue.</span></div>
+          <div className="setting-control">
+            <select className="model-select" aria-label="Follow-up behaviour" value={prefs.followUp ?? 'queue'} onChange={(e) => save({ followUp: e.target.value as 'queue' | 'steer' })}>
+              <option value="queue">Queue</option>
+              <option value="steer">Steer</option>
+            </select>
+          </div>
+        </div>
+      </div>
 
       <div className="settings-section-title"><span /><strong>Chat list</strong></div>
       <div className="setting-list">
@@ -78,6 +93,19 @@ export default function ChatSettings() {
             <select className="model-select" value={String(prefs.autoSettleDays ?? 3)} onChange={(e) => save({ autoSettleDays: Number(e.target.value) })}>
               {[1, 2, 3, 7, 14, 30].map((d) => <option key={d} value={d}>After {d} {d === 1 ? 'day' : 'days'}</option>)}
               <option value="0">Never</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="settings-section-title"><span /><strong>Appearance</strong></div>
+      <div className="setting-list">
+        <div className="setting-row">
+          <div className="setting-copy"><strong>Colour glow</strong><span>Each chat’s moving colour glow. It keeps the graphics card busy for as long as a chat is open; turn it off for a plain background. Applies to this device only.</span></div>
+          <div className="setting-control">
+            <select className="model-select" value={glowOn ? 'on' : 'off'} onChange={(e) => setSetting('chatGlow', e.target.value === 'on')}>
+              <option value="on">On</option>
+              <option value="off">Off</option>
             </select>
           </div>
         </div>

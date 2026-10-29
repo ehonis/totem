@@ -10,7 +10,7 @@
 const APP_LABELS = {
   tasks: 'Tasks', goals: 'Goals', lists: 'Lists', strava: 'Strava', plaud: 'Plaud', github: 'GitHub',
   'google-calendar': 'Calendar', calendar: 'Calendar', krakatoa: 'Krakatoa', vercel: 'Vercel', habits: 'Habits',
-  'youtube-transcript': 'YouTube', notion: 'Notion', gmail: 'Gmail', slack: 'Slack', linear: 'Linear',
+  'youtube-transcript': 'YouTube', notion: 'Notion', gmail: 'Gmail', drive: 'Drive', slack: 'Slack', linear: 'Linear',
   'computer-use': 'Computer', computer_use: 'Computer', browser: 'Browser', playwright: 'Browser', totems: 'Totems',
 }
 
@@ -44,6 +44,8 @@ export function parseToolName(raw, serverHint = '') {
   let server = String(serverHint || '').trim()
   const claude = /^mcp__([^_]+(?:[-_][^_]+)*?)__(.+)$/.exec(name)
   if (claude) { server = server || claude[1]; name = claude[2] }
+  // A claude.ai connector (Microsoft 365, Notion…) is `claude_ai_<Name>`.
+  server = server.replace(/^claude_ai_/, '')
   // opencode prefixes the server with a single underscore; cursor with a dash.
   for (const prefix of [`${server}-`, `${server}_`, 'totem-gateway-', 'totem-gateway_']) {
     if (prefix.length > 1 && name.startsWith(prefix)) { name = name.slice(prefix.length); break }
@@ -181,11 +183,32 @@ const CLAUDE_TOOL_TITLES = {
   Skill: 'Used a skill',
 }
 
-export function chatToolFromClaude(block) {
+/** A logo the CLI handed us, kept only if it is a plain https image URL. */
+export function logoUrl(raw) {
+  if (typeof raw !== 'string' || raw.length > 2048) return ''
+  try { return new URL(raw).protocol === 'https:' ? raw : '' } catch { return '' }
+}
+
+/**
+ * Who a connector is and what it looks like, from the CLI's own display data:
+ * Claude Code's `tool_use_meta` entry for the block, or a Codex `app_context`.
+ * Totem's own gateway and browser keep the names and glyphs the chat gives them.
+ */
+export function connectorLook(tool, meta, server) {
+  if (!meta || tool.kind !== 'mcp' || tool.browser || /^totem[-_]/.test(server || '')) return {}
+  const name = (v) => (typeof v === 'string' ? v.trim().replace(/\s+/g, ' ').slice(0, 80) : '')
+  const app = name(meta.server_display_name ?? meta.app_name ?? meta.appName)
+  const title = name(meta.display_name ?? meta.action_name ?? meta.actionName)
+  const logo = logoUrl(meta.icon_url ?? meta.logo_url ?? meta.logoUrl)
+  return { ...(title ? { title } : {}), ...(app ? { app } : {}), ...(logo ? { logo } : {}) }
+}
+
+/** `meta` is the block's entry in the assistant event's `tool_use_meta`, when Claude Code sent one. */
+export function chatToolFromClaude(block, meta) {
   const raw = block.name || 'tool'
   let tool
   if (raw === 'Bash') tool = describeCommand(block.input?.command, block.input?.description)
   else if (raw.startsWith('mcp__')) tool = describeMcpCall({ name: raw, input: block.input })
   else tool = { kind: raw, title: CLAUDE_TOOL_TITLES[raw] || humanizeTool(raw), detail: genericToolDetail(block.input), input: stringifyInput(block.input) }
-  return { id: block.id, phase: 'start', ...tool }
+  return { id: block.id, phase: 'start', ...tool, ...connectorLook(tool, meta, parseToolName(raw).server) }
 }

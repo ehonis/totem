@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The bundled setup page only. The Totem server's pages get no IPC: no remote URLs are listed.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

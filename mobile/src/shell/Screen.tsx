@@ -1,10 +1,10 @@
 // Every screen but the chat: ChatGPT's top bar (☰, the screen's name, new chat),
 // the content, and in the bottom-right corner the voice + new-chat pair
 // (shell.css .sh-mbar / .sh-fab). Mirrors Shell.tsx's MobileBar and NewChatFab.
-import React from 'react'
+import React, { useEffect } from 'react'
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useNavigation } from 'expo-router'
+import { useIsFocused, useNavigation } from 'expo-router'
 import { colors, textAlpha } from '../theme'
 import { T } from '../ui/Text'
 import { IconBtn, Press } from '../ui/kit'
@@ -13,6 +13,7 @@ import { IconEdit, IconMenu, IconWaveSine } from '../lib/chat/icons'
 import { newChat, openDrawer, startVoice } from './nav'
 import { PageGlow, type GlowPage } from '../ui/PageGlow'
 import { impact } from '../ui/haptics'
+import { setToastFloor } from '../ui/toastFloor'
 
 export function MobileBar({ title, right }: { title: string; right?: React.ReactNode }) {
   const navigation = useNavigation()
@@ -34,6 +35,13 @@ const FAB_GAP = 14
  */
 export function NewChatFab({ bottomOffset = 0 }: { bottomOffset?: number }) {
   const insets = useSafeAreaInsets()
+  // Toasts at the bottom keep left of the pair.
+  const focused = useIsFocused()
+  useEffect(() => {
+    if (!focused) return
+    setToastFloor({ fab: true })
+    return () => setToastFloor({ fab: false })
+  }, [focused])
   const base = Math.max(insets.bottom, 14) + 8 + bottomOffset
   return (
     <>

@@ -1,7 +1,7 @@
 // Chat's bridge calls. Streaming endpoints are read as Server-Sent Events over
 // fetch (EventSource cannot send the bearer header).
 import { authHeaders, AuthError, api } from '../api'
-import type { Attachment, ChatCapabilities, Project, StreamEvent } from './types'
+import type { Attachment, ChatCapabilities, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
 
 export interface SendArgs {
   threadId: string
@@ -79,9 +79,20 @@ export function attachRun(threadId: string, since: number, onEvent: (e: StreamEv
 export const stopChat = (threadId: string) =>
   api('/api/chat/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId }) })
 
-/** Send a message to a chat that is still answering: it steers that run. */
-export const steerChat = (threadId: string, text: string) =>
-  api<{ ok: boolean; steer: { id: string; via: 'live' | 'restart' } }>('/api/chat/steer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, text }) })
+/** Send a message to a chat that is still answering: it steers that run. `attachments`: upload ids. */
+export const steerChat = (threadId: string, text: string, attachments?: string[]) =>
+  api<{ ok: boolean; steer: { id: string; via: 'live' | 'restart' } }>('/api/chat/steer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, text, ...(attachments?.length ? { attachments } : {}) }) })
+
+export type QueueAction =
+  | { action: 'add'; text: string; attachments: string[]; provider?: string; model?: string; effort?: string; modelSettings?: Partial<ModelSettings> }
+  | { action: 'edit'; id: string; text: string; attachments: string[] }
+  | { action: 'remove' | 'steer'; id: string }
+  | { action: 'move'; id: string; beforeId: string | null }
+  | { action: 'resume' }
+
+/** Change a chat's queue (chat/queue.mjs): answers with the queue as it now stands. */
+export const changeQueue = (threadId: string, change: QueueAction) =>
+  api<{ queue: QueuedMessage[]; queueHeld: boolean }>('/api/chat/queue', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, ...change }) })
 
 export const getRuns = () => api<{ runs: { threadId: string; status: string; mode: string; startedAt: number }[] }>('/api/chat/runs')
 
@@ -135,6 +146,7 @@ export const listProjects = () => api<{ projects: Project[] }>('/api/chat/projec
 export const getProject = (id: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`)
 export const createProjectApi = (body: Partial<Project>) => api<{ project: Project }>('/api/chat/projects', json('POST', body))
 export const patchProjectApi = (id: string, body: Record<string, unknown>) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('PATCH', body))
+export const projectFaviconApi = (id: string, site: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/favicon`, json('POST', { site }))
 export const deleteProjectApi = (id: string) => api<{ ok: boolean; movedChats: number; removedFolders?: number }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('DELETE'))
 export const putProjectMemory = (id: string, memory: string) => api<{ memory: string }>(`/api/chat/projects/${encodeURIComponent(id)}/memory`, json('PUT', { memory }))
 export const addProjectFilesApi = (id: string, uploadIds: string[]) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/files`, json('POST', { uploadIds }))

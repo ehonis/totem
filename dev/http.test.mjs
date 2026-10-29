@@ -199,3 +199,45 @@ test('a one-off review is dispatched only for a watched repo with the workflow',
   const bare = await fixture({ config: CONFIG, routes: repoRoutes('owner/repo', { reviewWorkflow: false }) })
   assert.equal((await bare.request('POST', '/api/dev/repos/owner/repo/pulls/4/review')).status, 400)
 })
+
+test('merged PRs: any repo, cached per range, and a hidden list kept in the config file', async () => {
+  const routes = (key) => (key.startsWith('search/issues')
+    ? { items: [{ number: 3, title: 'Ship it', html_url: 'https://github.com/x/y/pull/3', repository_url: 'https://api.github.com/repos/x/y', pull_request: { merged_at: '2026-10-01T10:00:00Z' } }] }
+    : undefined)
+  const { request, gh, configFile } = await fixture({ routes })
+  const first = await request('GET', '/api/dev/shipped?days=14')
+  assert.equal(first.status, 200)
+  assert.deepEqual([first.body.days, first.body.pulls.map((p) => p.repo), first.body.hidden], [14, ['x/y'], []])
+  const calls = gh.calls.length
+  await request('GET', '/api/dev/shipped?days=14')
+  assert.equal(gh.calls.length, calls, 'cached')
+  await request('GET', '/api/dev/shipped?days=14&refresh=1')
+  assert.ok(gh.calls.length > calls, 'refresh asks again')
+  assert.equal((await request('GET', '/api/dev/shipped?days=7')).status, 400)
+
+  writeFileSync(configFile, JSON.stringify(CONFIG))
+  const hid = await request('PUT', '/api/dev/shipped/hidden', { repo: 'x/y', hidden: true })
+  assert.deepEqual(hid.body.shippedHidden, ['x/y'])
+  assert.deepEqual(JSON.parse(readFileSync(configFile, 'utf8')).repos, CONFIG.repos, 'other keys stay')
+  assert.deepEqual((await request('GET', '/api/dev/shipped?days=14')).body.hidden, ['x/y'])
+  assert.deepEqual((await request('PUT', '/api/dev/shipped/hidden', { repo: 'x/y', hidden: false })).body.shippedHidden, [])
+  assert.equal((await request('PUT', '/api/dev/shipped/hidden', { repo: 'nope', hidden: true })).status, 400)
+})
+
+test('repo groups: replaced whole, cleaned, and returned with the merged PRs', async () => {
+  const { request, configFile } = await fixture({ config: CONFIG, routes: (key) => (key.startsWith('search/issues') ? { items: [] } : undefined) })
+  const put = await request('PUT', '/api/dev/shipped/groups', {
+    groups: [
+      { name: ' Work ', repos: ['a/b', 'c/d', 'bad'] },
+      { name: 'work', repos: ['e/f'] },
+      { name: 'Side', repos: ['a/b', 'g/h'] },
+      { name: '', repos: ['i/j'] },
+    ],
+  })
+  assert.equal(put.status, 200)
+  const want = [{ name: 'Work', repos: ['a/b', 'c/d'] }, { name: 'Side', repos: ['g/h'] }]
+  assert.deepEqual(put.body.shippedGroups, want)
+  assert.deepEqual(JSON.parse(readFileSync(configFile, 'utf8')).repos, CONFIG.repos, 'other keys stay')
+  assert.deepEqual((await request('GET', '/api/dev/shipped?days=14')).body.groups, want)
+  assert.equal((await request('PUT', '/api/dev/shipped/groups', { groups: 'Work' })).status, 400)
+})

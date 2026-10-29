@@ -10,6 +10,7 @@ export const DEFAULTS = {
   compact: false, // tighter spacing/density
   autoRefresh: true, // background polling on data views (e.g. Usage)
   landingTab: 'overview', // which tab to open on a fresh load
+  chatGlow: true, // the chat's moving colour glow; off saves the GPU on this device
   // Overview tile order, set by dragging cards around on desktop. Empty = the
   // built-in order; OverviewView reconciles it against the tiles that exist.
   overviewOrder: [] as string[],

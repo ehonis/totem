@@ -316,7 +316,8 @@ export function createJournalService({
         level: 'info', category: 'journal.ingested',
         title: result.title ? `Journal: ${result.title}` : 'Journal digested',
         body: describeIngestResult(result),
-        url: result.proposals.length ? '/inbox' : '/productivity/journal',
+        // The first proposal is focused (`/inbox#P12`); the rest sit beside it.
+        url: result.proposals.length ? `/inbox#${result.proposals[0]}` : '/productivity/journal',
         tag: `journal:${id}`,
       }).catch(() => {})
       return next

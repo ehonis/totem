@@ -9,7 +9,7 @@ import Animated, {
 } from 'react-native-reanimated'
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg'
 
-export type GlowPage = 'overview' | 'productivity' | 'inbox' | 'search' | 'settings'
+export type GlowPage = 'overview' | 'productivity' | 'inbox' | 'search' | 'settings' | 'fleet'
 
 const GLOWS: Record<GlowPage, { a: string; b: string; speed: number }> = {
   overview: { a: '#6633ee', b: '#4f46e5', speed: 28 },
@@ -17,6 +17,7 @@ const GLOWS: Record<GlowPage, { a: string; b: string; speed: number }> = {
   inbox: { a: '#f59e0b', b: '#f43f5e', speed: 26 },
   search: { a: '#06b6d4', b: '#6366f1', speed: 30 },
   settings: { a: '#ec4899', b: '#8b5cf6', speed: 36 },
+  fleet: { a: '#14b8a6', b: '#6366f1', speed: 34 },
 }
 
 // An eased falloff; a straight one shows a band where the slope changes.

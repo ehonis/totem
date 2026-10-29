@@ -2,16 +2,18 @@
 //
 // The bridge decides what to send and when (notify/ — categories, quiet hours, the
 // queue, the bell); the app only has to (1) hand the bridge its device token,
-// (2) open the right screen when a notification is tapped, and (3) keep the icon's
-// badge equal to the unread notification count. See the bridge's notify/apns.mjs.
+// (2) open the right screen when a notification is tapped, (3) keep the icon's
+// badge equal to the unread notification count, and (4) take down a chat's
+// notification once the chat is read (pushDismiss.ts). See the bridge's notify/apns.mjs.
 import { useEffect } from 'react'
-import { Platform } from 'react-native'
+import { AppState, Platform } from 'react-native'
 import * as Notifications from 'expo-notifications'
 import * as Device from 'expo-device'
 import { api, authHeaders } from '../lib/api'
 import { bridgeFetch } from '../lib/connection'
 import { openDashboardUrl } from '../features/notifications/openUrl'
 import { refreshUnread } from '../features/notifications/useUnread'
+import { pushData, sweepStale } from './pushDismiss'
 
 // While the app is open a notification still shows as a banner (the Settings gear's dot
 // updates too), the way Messages does it.
@@ -49,18 +51,28 @@ export async function registerForPush({ prompt = false } = {}): Promise<PushStat
   }
 }
 
+let lastTapAt = 0
+
+/** True just after a notification opened the app, so nothing else takes the screen it opened. */
+export const tappedNotificationRecently = (ms = 15_000) => Date.now() - lastTapAt < ms
+
 function open(response: Notifications.NotificationResponse | null) {
-  const data = (response?.notification.request.content.data || {}) as { url?: string; entryId?: string }
-  if (!response) return
-  // Opening from a notification is the strongest signal the bridge's ranking has.
-  if (data.entryId) {
-    bridgeFetch('/api/push/opened', {
-      method: 'POST',
-      headers: authHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ entryId: data.entryId }),
-    }).catch(() => {})
+  if (!response || response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return
+  lastTapAt = Date.now()
+  const data = pushData(response.notification)
+  try {
+    // Opening from a notification is the strongest signal the bridge's ranking has.
+    if (typeof data.entryId === 'string' && data.entryId) {
+      bridgeFetch('/api/push/opened', {
+        method: 'POST',
+        headers: authHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ entryId: data.entryId }),
+      }).catch(() => {})
+    }
+    if (typeof data.url === 'string' && data.url) void openDashboardUrl(data.url)
+  } catch {
+    // A throw here runs inside a timer or a native callback, and kills a release build.
   }
-  if (data.url) openDashboardUrl(data.url)
   refreshUnread()
 }
 
@@ -79,6 +91,10 @@ export function usePush() {
     })
     // A notification arriving while open: the gear's dot and the badge catch up now.
     const received = Notifications.addNotificationReceivedListener(() => refreshUnread())
-    return () => { sub.remove(); received.remove() }
+    // Chats read elsewhere while the silent dismissal didn't get through.
+    const sweep = () => { sweepStale().catch(() => {}) }
+    sweep()
+    const active = AppState.addEventListener('change', (s) => { if (s === 'active') sweep() })
+    return () => { sub.remove(); received.remove(); active.remove() }
   }, [])
 }

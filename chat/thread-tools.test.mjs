@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { listThreads, readThread, shelfOf, threadsRule, projectPath } from './thread-tools.mjs'
+import { listThreads, readThread, shelfOf, threadsRule, projectPath, findChatPlace, listChatPlaces } from './thread-tools.mjs'
 
 const NOW = Date.UTC(2026, 9, 6, 12)
 const H = 3_600_000
@@ -63,4 +63,24 @@ test('the prompt rule names the chat and says to look rarely', () => {
   assert.match(rule, /this chat's id is abc, in the owner's project "Work \/ Hiring" \(project id hiring\)/)
   assert.match(rule, /Never look by habit/)
   assert.doesNotMatch(threadsRule({ id: 'abc' }, projects), /owner's project/)
+})
+
+test('finds where a new chat goes: project, folder, a folder by name alone, or a folder to make', () => {
+  const ps = [...projects, { id: 'mn', name: 'M+N', parentId: 'work' }, { id: 'home2', name: 'Personal' }]
+  assert.deepEqual(findChatPlace(ps, {}), { projectId: null, newFolder: null })
+  assert.deepEqual(findChatPlace(ps, { project: 'home' }), { projectId: null, newFolder: null })
+  assert.equal(findChatPlace(ps, { project: 'work' }).projectId, 'work')
+  assert.equal(findChatPlace(ps, { project: 'WORK' }).projectId, 'work')
+  assert.equal(findChatPlace(ps, { project: 'Work', folder: 'm+n' }).projectId, 'mn')
+  assert.equal(findChatPlace(ps, { project: 'm+n' }).projectId, 'mn')
+  assert.deepEqual(findChatPlace(ps, { project: 'Work', folder: 'Tickets' }), { projectId: null, newFolder: { name: 'Tickets', parentId: 'work' } })
+  assert.throws(() => findChatPlace(ps, { project: 'Nope' }), /no project or folder called "Nope".*"Work" \(work\)/)
+  assert.throws(() => findChatPlace(ps, { folder: 'x' }), /lives in a project/)
+  assert.throws(() => findChatPlace(ps, { project: 'M+N', folder: 'x' }), /cannot hold folders/)
+  assert.throws(() => findChatPlace([...ps, { id: 'w2', name: 'work' }], { project: 'Work' }), /2 projects are called/)
+})
+
+test('lists projects with their folders and chat counts', () => {
+  const out = listChatPlaces(projects, [chat('a', { projectId: 'work' }), chat('b', { projectId: 'hiring' }), chat('c'), chat('d', { projectId: 'gone' }), { id: 'e', projectId: 'work', messages: [] }])
+  assert.deepEqual(out, { home: { chats: 2 }, projects: [{ id: 'work', name: 'Work', chats: 1, folders: [{ id: 'hiring', name: 'Hiring', chats: 1 }] }] })
 })

@@ -63,6 +63,7 @@ export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): Chat
         type: 'tool', id: t.id || `t${parts.length}`, kind: t.kind || 'tool', title: t.title || 'Tool call',
         detail: t.detail || '', status: 'running', startedAt: now,
         ...(t.server ? { server: t.server } : {}), ...(t.tool ? { tool: t.tool } : {}), ...(t.input ? { input: t.input } : {}),
+        ...(t.app ? { app: t.app } : {}), ...(t.logo ? { logo: t.logo } : {}),
       })
       return next
     }
@@ -71,6 +72,8 @@ export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): Chat
       const i = event.toolId ? parts.findIndex((p) => p.type === 'tool' && p.id === event.toolId) : -1
       if (i < 0) return msg
       const p = parts[i] as ToolPart
+      // An agent starts with its provider; anything else on a plain card is not one.
+      if (!p.agent && !event.agent?.provider) return msg
       parts[i] = { ...p, agent: foldAgent(p.agent, event) }
       return next
     }
@@ -82,11 +85,21 @@ export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): Chat
       if (!event.file?.uploadId) return msg
       parts.push({ type: 'file', ...event.file })
       return next
+    case 'questions': {
+      // Questions the agent asked: added where they were asked, updated in place
+      // when answered or dismissed.
+      const q = event.questions || {}
+      if (!q.id) return msg
+      const at = parts.findIndex((p) => p.type === 'questions' && p.id === q.id)
+      if (at >= 0) parts[at] = { ...parts[at], ...q }
+      else parts.push({ type: 'questions', ...q })
+      return next
+    }
     case 'steer': {
       // The owner's words mid-reply, kept where they landed among the steps.
       const st = event.steer || {}
-      if (!st.text || parts.some((p) => p.type === 'steer' && p.id === st.id)) return msg
-      parts.push({ type: 'steer', id: st.id || `s${parts.length}`, text: st.text, via: st.via || 'live', createdAt: st.createdAt || now })
+      if ((!st.text && !st.attachments?.length) || parts.some((p) => p.type === 'steer' && p.id === st.id)) return msg
+      parts.push({ type: 'steer', id: st.id || `s${parts.length}`, text: st.text || '', via: st.via || 'live', createdAt: st.createdAt || now, ...(st.attachments?.length ? { attachments: st.attachments } : {}) })
       // What it says after the steer is a new paragraph in the copyable text too.
       if (msg.content) next.content = msg.content.replace(/\s*$/, '\n\n')
       return next

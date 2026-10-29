@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { generateKeyPairSync, verify } from 'node:crypto'
-import { apnsConfigFromEnv, apnsPayload, createApnsSender, providerToken } from './apns.mjs'
+import { apnsConfigFromEnv, apnsDismissPayload, apnsPayload, createApnsSender, providerToken } from './apns.mjs'
 
 const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
 const CONFIG = { keyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }), keyId: 'KEY123', teamId: 'TEAM45', topic: 'com.example.totem' }
@@ -22,8 +22,21 @@ test('the payload carries the alert, a badge, and what the app needs to open it'
   assert.deepEqual(apnsPayload({ title: 'Due', body: 'Pay rent', url: '/inbox', entryId: 'n1', badge: 3, category: 'task.due' }), {
     aps: { alert: { title: 'Due', body: 'Pay rent' }, sound: 'default', badge: 3, 'thread-id': 'task.due' },
     url: '/inbox', entryId: 'n1', category: 'task.due',
+    body: { url: '/inbox', entryId: 'n1', category: 'task.due' },
   })
   assert.deepEqual(apnsPayload({ title: 'Only a title' }).aps.alert, { title: 'Only a title' })
+  assert.equal(apnsPayload({ title: 'Done', tag: 'chat:t1' }).tag, 'chat:t1')
+})
+
+// expo-notifications sets a remote notification's content.data to userInfo.body and
+// nothing else; with the fields only at the top level the app saw no url.
+test('the app-facing fields sit under body, where expo-notifications reads data', () => {
+  const p = apnsPayload({ title: 'Reply ready', url: '/chat?thread=t1', entryId: 'n2', category: 'chat.finished', tag: 'chat:t1' })
+  assert.deepEqual(p.body, { url: '/chat?thread=t1', entryId: 'n2', category: 'chat.finished', tag: 'chat:t1' })
+})
+
+test('a dismissal is silent: no alert, no sound, only the tags to take down', () => {
+  assert.deepEqual(apnsDismissPayload(['chat:t1']), { aps: { 'content-available': 1 }, dismiss: ['chat:t1'] })
 })
 
 test('config is off unless every setting is present', () => {
@@ -65,6 +78,16 @@ test('a send goes to the right host with the topic, collapse id and bearer', asy
   assert.equal(seen[0].headers['apns-topic'], 'com.example.totem')
   assert.equal(seen[0].headers['apns-collapse-id'], 'job:x')
   assert.match(seen[0].headers.authorization, /^bearer [\w-]+\.[\w-]+\.[\w-]+$/)
+})
+
+test('a background send is a background push at priority 5, never collapsed', async () => {
+  const seen = []
+  const apns = createApnsSender(CONFIG, { connectImpl: fakeConnect(() => ({ status: 200 }), seen) })
+  await apns.send({ deviceToken: 'ab'.repeat(32), payload: apnsDismissPayload(['chat:t1']), background: true })
+  assert.equal(seen[0].headers['apns-push-type'], 'background')
+  assert.equal(seen[0].headers['apns-priority'], '5')
+  assert.equal(seen[0].headers['apns-collapse-id'], undefined)
+  assert.deepEqual(seen[0].body.dismiss, ['chat:t1'])
 })
 
 test('a deleted app is gone; throttling is worth retrying', async () => {

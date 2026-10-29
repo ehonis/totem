@@ -185,7 +185,7 @@ function HabitForm({ initial, palette, usedColors }: { initial: import('./logic'
             </Field>
             {metric.source === 'whoop-sleep' && (
               <T size={11} muted>
-                A scheduled job pulls last night's sleep performance and stages from the WHOOP API each late
+                A scheduled job pulls last night's sleep performance and stages from WHOOP (through Bushido) each late
                 morning (Studio → Workflows → WHOOP sleep sync). Nights you've already filled in are left alone.
               </T>
             )}

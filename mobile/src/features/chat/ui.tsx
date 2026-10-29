@@ -8,8 +8,8 @@ import { textAlpha } from '../../theme'
 import { T } from '../../ui/Text'
 import {
   IconBrandGithub, IconBrandStrava, IconCalendarEvent, IconChecklist, IconDeviceDesktop, IconFileText, IconListCheck,
-  IconMicrophone, IconTarget, IconTerminal2, IconTool, IconWorld, IconBrain, IconMail, IconNotebook, IconPhoto,
-  IconSearch, IconPencil, IconDatabase, IconRobot,
+  IconMicrophone, IconTarget, IconTerminal2, IconTool, IconWorld, IconBrain, IconMail, IconBrandGoogleDrive, IconNotebook, IconPhoto,
+  IconSearch, IconPencil, IconDatabase, IconRobot, IconBrandOffice, IconBrandNotion, IconBrandSlack, IconBrandFigma,
 } from './icons'
 
 /** chat.css `.vc` custom properties. */
@@ -60,8 +60,14 @@ const APPS: Record<string, { icon: IconType; label: string }> = {
   plaud: { icon: IconMicrophone, label: 'Plaud' },
   krakatoa: { icon: IconNotebook, label: 'Krakatoa' },
   gmail: { icon: IconMail, label: 'Mail' },
+  drive: { icon: IconBrandGoogleDrive, label: 'Drive' },
   'computer-use': { icon: IconDeviceDesktop, label: 'Computer' },
   computer_use: { icon: IconDeviceDesktop, label: 'Computer' },
+  // claude.ai connectors, for when the CLI sent no logo (an older reply, another CLI).
+  microsoft_365: { icon: IconBrandOffice, label: 'Microsoft 365' },
+  notion: { icon: IconBrandNotion, label: 'Notion' },
+  slack: { icon: IconBrandSlack, label: 'Slack' },
+  figma: { icon: IconBrandFigma, label: 'Figma' },
 }
 
 const KINDS: Record<string, IconType> = {

@@ -13,7 +13,7 @@
 // category, quiet hour and queue rule is upstream of this, so both get the same
 // notifications.
 import { sendPush, pushPayload } from './push.mjs'
-import { apnsPayload } from './apns.mjs'
+import { apnsDismissPayload, apnsPayload } from './apns.mjs'
 
 export function createNotifier({
   store,
@@ -29,6 +29,11 @@ export function createNotifier({
   // A device whose transport has no keys is skipped, not failed: Web Push keys
   // missing says nothing about whether the iPhone app can be reached.
   const reachable = (sub) => (isNative(sub) ? Boolean(apns) : webConfigured())
+  // Tags of notifications the app was sent and nothing has taken down yet, so
+  // dismiss() is a no-op (no push) unless there is something on the phone to
+  // clear. In memory: after a restart the app's own check on opening
+  // (mobile/src/shell/push.ts) clears what this forgot.
+  const shown = new Set()
 
   // Send one message to every active device. Returns a per-device report rather
   // than a boolean, because "it went to the iPhone but the iPad is gone" is the
@@ -50,7 +55,7 @@ export function createNotifier({
 
     const unread = record ? (await store.ledger({ limit: 1 })).unread + 1 : 0
     const payload = pushPayload({ title, body, url, entryId, badge: unread, category, declarative })
-    const nativePayload = apnsPayload({ title, body, url, entryId, badge: unread, category })
+    const nativePayload = apnsPayload({ title, body, url, entryId, badge: unread, category, tag })
 
     const results = await Promise.all(targets.map(async (sub) => {
       let result
@@ -71,6 +76,7 @@ export function createNotifier({
 
       if (result.ok) {
         await store.markDelivered(sub.endpoint)
+        if (isNative(sub) && tag) shown.add(tag)
       } else if (result.gone) {
         // On iOS this means the web app was removed from the Home Screen, or the
         // native app was deleted.
@@ -98,6 +104,28 @@ export function createNotifier({
     }
   }
 
+  // Take a notification back off every phone that showed it: the chat it was
+  // about has been read, somewhere. Only the native app can do this; Web Push has
+  // no silent push.
+  async function dismiss(tag) {
+    if (!apns || !tag || !shown.delete(tag)) return { ok: false, sent: 0 }
+    const targets = (await store.listSubscriptions()).filter((s) => s.state === 'active' && isNative(s))
+    const payload = apnsDismissPayload([tag])
+    const results = await Promise.all(targets.map(async (sub) => {
+      let result
+      try {
+        result = await apns.send({ deviceToken: sub.token, environment: sub.environment || 'production', payload, background: true })
+      } catch (e) {
+        result = { ok: false, gone: false, status: 0, error: e.message || String(e) }
+      }
+      if (result.gone) await store.expireSubscription(sub.endpoint, `http ${result.status}`)
+      else if (!result.ok) log('push dismiss failed', sub.label, result.status, result.error)
+      return result
+    }))
+    const sent = results.filter((r) => r.ok).length
+    return { ok: sent > 0, sent }
+  }
+
   // Drain the queue: everything due, revalidated, sent, and finished. Called by
   // the job tick. `revalidate` is injected so the collectors stay out of here.
   async function drain({ at = Date.now(), revalidate = null, limit = 10 } = {}) {
@@ -108,6 +136,13 @@ export function createNotifier({
       let title = entry.title
       let body = entry.body
       let url = entry.url
+
+      // Planned before the habit nudges were retired. Finished as stale rather
+      // than cancelled, so the queue keeps its history.
+      if (isRetiredNudge(entry)) {
+        await store.finish(entry.id, { outcome: 'stale' })
+        continue
+      }
 
       // Seconds before sending, hours after planning: is this still true?
       if (revalidate && entry.revalidate) {
@@ -185,7 +220,19 @@ export function createNotifier({
     return { sent, expired: expired.length, claimed: claimed.length }
   }
 
-  return { deliver, drain, configured, nativeConfigured: () => Boolean(apns) }
+  return { deliver, dismiss, drain, configured, nativeConfigured: () => Boolean(apns) }
+}
+
+// Habit completion nudges ("streak ends tonight", "one more to finish", "short
+// this week") are no longer raised; see notify/signals.mjs. Matched on any of the
+// three marks a queued one carries, since the weekly one was filed under
+// goal.nearcomplete and real goal nudges share that category.
+const RETIRED_FACT_KINDS = new Set(['habit.streak-ending', 'habit.near-target', 'habit.behind-pace'])
+
+export function isRetiredNudge(entry) {
+  return entry.category === 'habit.slipping'
+    || RETIRED_FACT_KINDS.has(entry.factKind)
+    || entry.revalidate?.collector === 'habits'
 }
 
 function verdictSuffix(entry, at) {

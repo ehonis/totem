@@ -5,6 +5,7 @@ import { Hi } from '../icons'
 import { iconFor } from '../studio'
 import { THREAD_ICONS } from '../chat/threadIcons.gen'
 import { TI } from '../chat/ui'
+import { IconLoader2, IconPlayerPlay } from '../chat/icons'
 import { syncThreads, setActive } from '../chat/store'
 import { relativeTime } from '../components/JobsView'
 
@@ -79,6 +80,48 @@ export async function runTotemNow(job: any): Promise<any | null> {
     pushToast(status === 'error' ? `${job.name} failed: ${r.run?.error || 'no error text'}` : status === 'skipped' ? `${job.name} checked: nothing new` : `${job.name} ran. Its report is in its chat.`, status === 'error' ? 'error' : 'info')
     return (r.jobs || []).find((j: any) => j.id === job.id) || null
   } catch (e: any) { pushError(e.message); return null }
+}
+
+// Runs this window started and is still waiting on, kept outside any component so
+// the button still shows the run after the owner leaves the chat and comes back.
+const runningHere = new Set<string>()
+const runSubs = new Set<() => void>()
+const bumpRuns = () => runSubs.forEach((f) => f())
+
+/** Start a run of this totem now; its report lands in its chat, which is refreshed. */
+export async function startTotemRun(job: any) {
+  if (runningHere.has(job.id)) return
+  runningHere.add(job.id)
+  bumpRuns()
+  try {
+    await runTotemNow(job)
+    await syncThreads()
+    refreshTotemDirectory(true)
+  } finally {
+    runningHere.delete(job.id)
+    bumpRuns()
+  }
+}
+
+/** The play button in a totem's chat: run it now instead of waiting for its schedule or watch. */
+export function TotemRunButton({ job }: { job: any }) {
+  const [, bump] = React.useState(0)
+  React.useEffect(() => {
+    const f = () => bump((n) => n + 1)
+    runSubs.add(f)
+    return () => { runSubs.delete(f) }
+  }, [])
+  if (!job) return null
+  const running = runningHere.has(job.id) || job.lastRun?.status === 'running'
+  return (
+    <button
+      type="button" className="vc-icon-btn" aria-disabled={running} onClick={() => { if (!running) void startTotemRun(job) }}
+      aria-label={running ? `${job.name} is running` : `Run ${job.name} now`}
+      title={running ? 'Running now. Its report will appear here.' : 'Run now, without waiting for its schedule'}
+    >
+      {running ? <TI icon={IconLoader2} size={19} className="vc-spin" /> : <TI icon={IconPlayerPlay} size={19} />}
+    </button>
+  )
 }
 
 // Totem names and icons by id, for chat surfaces that only hold an id (a group

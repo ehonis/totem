@@ -1,8 +1,9 @@
 // The chat's composer (web chat/Composer.tsx): the box, the files waiting in it,
 // the + menu, the model and effort chips, the mic, and one round button that is
-// Send, Stop, Steer or Voice depending on what's going on. Sending while a reply
-// is running steers it (T3 Code's follow-up): the agent takes the words in
-// mid-turn, and if it can't they go back in the box.
+// Send, Stop, Queue, Steer, Resume or Voice depending on what's going on. Sending
+// while a reply is running queues the message or steers the reply (T3 Code's
+// follow-ups, Settings → Chat), files and all; a long press does the other. If
+// it can't go, it all goes back in the box.
 //
 // Typing "/" or "$" anywhere opens the skills menu above the box (mentions.ts);
 // a cited skill is tinted in the text, as the web marks it. Task mode, the
@@ -12,11 +13,13 @@ import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, u
 import { ActivityIndicator, Keyboard, Platform, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native'
 import Animated, { FadeIn, FadeOut, useAnimatedStyle, withTiming } from 'react-native-reanimated'
 import { MenuView, type MenuAction } from '@react-native-menu/menu'
+import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect'
 import * as ImagePicker from 'expo-image-picker'
 import * as DocumentPicker from 'expo-document-picker'
 import { deleteUpload } from '../../lib/chat/api'
 import { insertMention, mentionAtCaret, splitMentions } from '../../lib/chat/mentions'
 import type { Attachment, ChatMode, DraftAttachment } from '../../lib/chat/types'
+import type { Answering } from './QuestionsPanel'
 import { getChatCommands, subscribeChatCommands, type ChatCommand } from '../../lib/studio'
 import { pushError } from '../../lib/toast'
 import { Hi } from '../../lib/icons'
@@ -30,22 +33,44 @@ import { useDictation } from './dictation'
 import { TI, vc } from './ui'
 import {
   IconArrowUp, IconPlayerStopFilled, IconPlus, IconMicrophone, IconWaveSine, IconX, IconCheck, IconCornerUpRight, IconPuzzle,
+  IconPlaylistAdd, IconPlayerPlayFilled,
 } from './icons'
 
 export interface ComposerHandle {
   /** An upload that already exists (Search's "Add to chat"). */
   addAttachment: (a: Attachment) => void
+  /** The box's finished uploads, taken out of it (not deleted): a queued edit stashes the draft. */
+  takeAttachments: () => Attachment[]
+  /** Put uploads in the box in place of what is there (a queued message being edited, a stashed draft). */
+  setAttachments: (list: Attachment[]) => void
   focus: () => void
   /** Start the mic: voice mode falls back to this when the bridge has no realtime voice. */
   dictate: () => void
 }
+
+export type FollowUp = 'queue' | 'steer'
+export interface FollowUpPayload { text: string; attachments: Attachment[] }
 
 export interface ComposerProps {
   value: string
   onChange: (v: string) => void
   onSend: (payload: { text: string; attachments: Attachment[]; mode: ChatMode }) => void
   onStop: () => void
-  onSteer?: (text: string) => Promise<boolean> | boolean
+  /**
+   * A message while the reply is still running (T3 Code's follow-ups): it waits
+   * its turn (`onQueue`) or the agent takes it in mid-turn (`onSteer`). The
+   * button does `followUp`, a long press the other. Resolves false when it could
+   * not be sent, and the words and files go back in the box.
+   */
+  onSteer?: (p: FollowUpPayload) => Promise<boolean> | boolean
+  onQueue?: (p: FollowUpPayload) => Promise<boolean> | boolean
+  followUp?: FollowUp
+  /** A queued message is in the box being edited: sending saves it. */
+  queueEdit?: { onSave: (p: FollowUpPayload) => Promise<boolean> | boolean }
+  /** The queue is held (the last reply was stopped or failed): an empty box offers Resume. */
+  onResume?: () => void
+  /** Attached to the box's top edge: the queued messages (QueuedMessages.tsx). */
+  above?: React.ReactNode
   onVoice?: () => void
   busy: boolean
   placeholder?: string
@@ -53,9 +78,10 @@ export interface ComposerProps {
   allowCommands?: boolean
   maxUploadBytes?: number
   leftSlot?: React.ReactNode
-  rightSlot?: React.ReactNode
   /** Tells the chat the box grew, so the list keeps its last message above it. */
   onFocus?: () => void
+  /** The agent's questions are open (QuestionsPanel.tsx): the box is the typed answer. */
+  answering?: Answering
 }
 
 type Draft = DraftAttachment & { progress?: number; localUri?: string }
@@ -80,7 +106,7 @@ function rankCommands(catalog: ChatCommand[], prefix: string, term: string, alon
 }
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onSend, onStop, onSteer, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, leftSlot, rightSlot, onFocus } = props
+  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, above, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, leftSlot, onFocus, answering } = props
   const input = useRef<TextInput>(null)
   const { height } = useWindowDimensions()
   const [drafts, setDrafts] = useState<Draft[]>([])
@@ -128,13 +154,26 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     }]))
   }, [])
 
-  useImperativeHandle(ref, () => ({ addAttachment, focus: () => input.current?.focus(), dictate: () => { void dictation.start() } }), [addAttachment, dictation])
+  const draftsRef = useRef(drafts)
+  draftsRef.current = drafts
+  const takeAttachments = useCallback(() => {
+    const taken = draftsRef.current.filter((x) => x.status === 'ready' && x.uploaded).map((x) => x.uploaded!)
+    setDrafts([])
+    return taken
+  }, [])
+  const setAttachments = useCallback((list: Attachment[]) => {
+    setDrafts([])
+    list.forEach(addAttachment)
+  }, [addAttachment])
+
+  useImperativeHandle(ref, () => ({ addAttachment, takeAttachments, setAttachments, focus: () => input.current?.focus(), dictate: () => { void dictation.start() } }), [addAttachment, takeAttachments, setAttachments, dictation])
 
   function removeDraft(key: string) {
     tap()
     setDrafts((d) => {
       const gone = d.find((x) => x.key === key)
-      if (gone?.uploaded) deleteUpload(gone.uploaded.id)
+      // One that was already an upload (Search's, a queued message's) may still be in use there.
+      if (gone?.uploaded && !gone.key.startsWith('ctx-')) deleteUpload(gone.uploaded.id)
       return d.filter((x) => x.key !== key)
     })
   }
@@ -214,25 +253,53 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
 
   // --- sending ------------------------------------------------------------------
   const uploading = drafts.some((d) => d.status === 'uploading')
+  const failed = drafts.some((d) => d.status === 'error')
   const ready = drafts.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
-  const canSend = !busy && !uploading && (value.trim().length > 0 || ready.length > 0)
-  // Steering is words only; files wait in the box for the next message.
-  const steerable = busy && !!onSteer
-  const canSteer = steerable && value.trim().length > 0 && !drafts.length
-  const placeholder = steerable ? 'Steer this reply: add context or change course' : idlePlaceholder
+  const hasContent = value.trim().length > 0 || drafts.length > 0
+  const sendable = !uploading && !failed && (value.trim().length > 0 || ready.length > 0)
+  const canSend = !busy && sendable
+  // While a reply runs, a message waits its turn or steers it (T3 Code). The
+  // button does the chosen one, a long press the other; with one on offer, that one.
+  const followUps = busy && !!(onQueue || onSteer)
+  const actionFor = (alternate: boolean): FollowUp => {
+    if (!onSteer) return 'queue'
+    if (!onQueue) return 'steer'
+    return alternate ? (followUp === 'queue' ? 'steer' : 'queue') : followUp
+  }
+  const action = actionFor(false)
+  const placeholder = answering ? answering.placeholder
+    : followUps ? (action === 'steer' ? 'Steer this reply: add context or change course' : 'Queue a message for when this reply finishes')
+    : idlePlaceholder
+  const handing = useRef(false)
 
-  async function steerNow() {
-    if (!canSteer || !onSteer) return
+  /** Empty the box into a follow-up (or a queued edit); put it all back if that fails. */
+  async function hand(fn: (p: FollowUpPayload) => Promise<boolean> | boolean) {
+    if (!sendable || handing.current) return
+    handing.current = true
     impact()
     const text = value.trim()
+    const attachments = ready
+    const kept = drafts
     onChange('')
+    setDrafts([])
     Keyboard.dismiss()
-    const ok = await onSteer(text)
-    // Not sent: give the words back, unless he has started typing something else.
-    if (!ok && !valueRef.current.trim()) onChange(text)
+    try {
+      if (await fn({ text, attachments })) return
+      // Not sent: give it back, unless he has started on something else.
+      if (!valueRef.current.trim()) onChange(text)
+      setDrafts((d) => (d.length ? d : kept))
+    } finally {
+      handing.current = false
+    }
+  }
+
+  function followUpNow(alternate: boolean) {
+    const fn = actionFor(alternate) === 'queue' ? onQueue : onSteer
+    if (fn) void hand(fn)
   }
 
   function send() {
+    if (queueEdit) { void hand(queueEdit.onSave); return }
     if (!canSend) return
     impact()
     onSend({ text: value.trim(), attachments: ready, mode: 'chat' })
@@ -243,7 +310,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
 
   const d = dictation.state
   const secs = d ? Math.floor((Date.now() - d.startedAt) / 1000) : 0
-  const showVoice = !!onVoice && !busy && !value.trim() && !drafts.length && !d
+  const showVoice = !!onVoice && !busy && !value.trim() && !drafts.length && !d && !onResume
   const dot = useAnimatedStyle(() => ({ transform: [{ scale: withTiming(1 + Math.min((d?.level || 0) * 6, 0.8), { duration: 90 }) }] }), [d?.level])
 
   // The cited skills, tinted inside the box. iOS takes styled runs as the input's
@@ -281,7 +348,8 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
         </Press>
       </Animated.View>
     ) : null}
-    <View style={st.box}>
+    {above}
+    <Box>
       {drafts.length > 0 ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.tray} style={{ flexGrow: 0 }}>
           {drafts.map((x) => (
@@ -343,21 +411,36 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
             </>
           ) : (
             <>
-              {rightSlot}
-              {!busy || steerable ? (
+              {!busy || followUps ? (
                 <Press style={st.iconBtn} onPress={() => { tap(); dictation.start() }} accessibilityLabel="Dictate">
                   <TI icon={IconMicrophone} size={20} color={vc.soft} />
                 </Press>
               ) : null}
-              {busy && steerable && value.trim() ? (
+              {answering ? (
                 <>
-                  <Press style={st.iconBtn} onPress={() => { impact(); onStop() }} accessibilityLabel="Stop the reply"><TI icon={IconPlayerStopFilled} size={14} color={vc.soft} /></Press>
-                  <Press style={[st.send, !canSteer && st.sendOff]} onPress={steerNow} disabled={!canSteer} accessibilityLabel="Steer: send this into the running reply">
-                    <TI icon={IconCornerUpRight} size={18} color={canSteer ? '#0f1115' : colors.muted} stroke={2.25} />
+                  {answering.onBack ? (
+                    <Press style={st.textBtn} onPress={() => { tap(); answering.onBack!() }} accessibilityLabel="Previous question"><T size={13} weight={500} color={vc.soft}>Previous</T></Press>
+                  ) : null}
+                  {busy ? <Press style={st.iconBtn} onPress={() => { impact(); onStop() }} accessibilityLabel="Stop the reply"><TI icon={IconPlayerStopFilled} size={14} color={vc.soft} /></Press> : null}
+                  <Press style={[st.answerBtn, !answering.canSubmit && st.sendOff]} disabled={!answering.canSubmit} onPress={() => { Keyboard.dismiss(); answering.onSubmit() }} accessibilityLabel={answering.submitLabel}>
+                    {answering.submitting ? <ActivityIndicator size="small" color={colors.muted} /> : <T size={13} weight={600} color={answering.canSubmit ? '#0f1115' : colors.muted}>{answering.submitLabel}</T>}
                   </Press>
                 </>
+              ) : queueEdit ? (
+                <Press style={[st.send, !sendable && st.sendOff]} onPress={send} disabled={!sendable} accessibilityLabel={uploading ? 'Waiting for uploads' : 'Update queued message'}>
+                  {uploading ? <ActivityIndicator size="small" color={colors.muted} /> : <TI icon={IconCheck} size={18} color={sendable ? '#0f1115' : colors.muted} stroke={2.25} />}
+                </Press>
+              ) : followUps && hasContent ? (
+                // T3 Code's follow-up button: what Settings → Chat chose, and the other on a long press.
+                <Press style={[st.send, !sendable && st.sendOff]} onPress={() => followUpNow(false)} onLongPress={onQueue && onSteer ? () => followUpNow(true) : undefined} disabled={!sendable}
+                  accessibilityLabel={uploading ? 'Waiting for uploads' : action === 'queue' ? 'Queue message' : 'Steer message'}
+                  accessibilityHint={onQueue && onSteer ? `Long press to ${action === 'queue' ? 'steer' : 'queue'} instead` : undefined}>
+                  {uploading ? <ActivityIndicator size="small" color={colors.muted} /> : <TI icon={action === 'queue' ? IconPlaylistAdd : IconCornerUpRight} size={18} color={sendable ? '#0f1115' : colors.muted} stroke={2.25} />}
+                </Press>
               ) : busy ? (
                 <Press style={st.send} onPress={() => { impact(); onStop() }} accessibilityLabel="Stop"><TI icon={IconPlayerStopFilled} size={14} color="#0f1115" /></Press>
+              ) : onResume && !hasContent ? (
+                <Press style={st.send} onPress={() => { impact(); onResume() }} accessibilityLabel="Resume thread"><TI icon={IconPlayerPlayFilled} size={16} color="#0f1115" /></Press>
               ) : showVoice ? (
                 <Press style={st.send} onPress={() => { impact(); onVoice!() }} accessibilityLabel="Start voice"><TI icon={IconWaveSine} size={19} color="#0f1115" stroke={2} /></Press>
               ) : (
@@ -369,12 +452,25 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
           )}
         </View>
       </View>
-    </View>
+    </Box>
     </View>
   )
 })
 
 export default Composer
+
+// iOS 26's liquid glass, as T3 Code's composer: the chat's glow shows through,
+// bent and blurred. Older iOS and the web preview keep the solid box.
+const GLASS = Platform.OS === 'ios' && isGlassEffectAPIAvailable()
+
+function Box({ children }: { children: React.ReactNode }) {
+  if (!GLASS) return <View style={st.box}>{children}</View>
+  return (
+    <GlassView glassEffectStyle="clear" isInteractive tintColor="rgba(23,26,34,0.45)" colorScheme="dark" style={[st.box, st.glass]}>
+      {children}
+    </GlassView>
+  )
+}
 
 const st = StyleSheet.create({
   box: {
@@ -382,6 +478,7 @@ const st = StyleSheet.create({
     paddingTop: 8, paddingRight: 8, paddingBottom: 6, paddingLeft: 10,
     shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 14, shadowOffset: { width: 0, height: 8 },
   },
+  glass: { backgroundColor: 'transparent', borderColor: 'rgba(255,255,255,0.09)' },
   tray: { gap: 10, paddingTop: 8, paddingBottom: 10, paddingHorizontal: 2 },
   input: {
     color: colors.text, fontSize: 16, lineHeight: 24, fontFamily: fonts[400],
@@ -395,6 +492,8 @@ const st = StyleSheet.create({
   iconBtn: { flexShrink: 0, width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   send: { flexShrink: 0, width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.text },
   sendOff: { backgroundColor: '#3a3f4d' },
+  answerBtn: { flexShrink: 0, height: 36, paddingHorizontal: 14, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.text },
+  textBtn: { flexShrink: 0, height: 36, paddingHorizontal: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   mention: { color: '#b7c9ff', backgroundColor: alpha(colors.accent, 0.24), fontFamily: fonts[500] },
   cmdMenu: {
     marginBottom: 8, backgroundColor: vc.menu, borderWidth: 1, borderColor: vc.line, borderRadius: 16,

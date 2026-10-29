@@ -8,8 +8,9 @@
 // answering "how far did I ride in August" does not do the conversion itself.
 //
 // Nothing in here touches the network or the filesystem, which is what makes
-// it testable as arithmetic (strava/shape.test.mjs). The client
-// (strava/client.mjs) fetches; this decides what a record looks like.
+// it testable as arithmetic (strava/shape.test.mjs). Bushido's client fetches and
+// shapes what the API answers; what is left here is what Totem computes itself
+// over the activity cache: goal metrics (goals/sources.mjs) and weight input.
 
 const METERS_PER_MILE = 1609.344
 const METERS_PER_FOOT = 0.3048
@@ -29,7 +30,6 @@ export const metersToFt = (m, dp = 0) => (num(m) === null ? null : num(num(m) / 
 export const mpsToMph = (v, dp = 1) => (num(v) === null ? null : num((num(v) * 3600) / METERS_PER_MILE, dp))
 export const mpsToKph = (v, dp = 1) => (num(v) === null ? null : num(num(v) * 3.6, dp))
 export const secToMin = (s, dp = 0) => (num(s) === null ? null : num(num(s) / 60, dp))
-export const kgToLb = (kg, dp = 1) => (num(kg) === null ? null : num(num(kg) * 2.20462, dp))
 export const lbToKg = (lb, dp = 2) => (num(lb) === null ? null : num(num(lb) / 2.20462, dp))
 export const cToF = (c, dp = 0) => (num(c) === null ? null : num((num(c) * 9) / 5 + 32, dp))
 
@@ -127,7 +127,7 @@ export const activityUrl = (id) => (id ? `https://www.strava.com/activities/${id
  * One activity as everything downstream wants to see it: the SummaryActivity
  * fields, every quantity in metric AND imperial, minutes as well as seconds,
  * and a stable family label. Works on a DetailedActivity too — the summary
- * fields are a subset — and `detailActivity` layers the extra ones on top.
+ * fields are a subset.
  */
 export function summarizeActivity(a) {
   if (!a || typeof a !== 'object') return null
@@ -215,309 +215,6 @@ export function summarizeActivity(a) {
     mapId: a.map?.id || null,
     summaryPolyline: a.map?.summary_polyline || null,
     url: activityUrl(a.id),
-  }
-}
-
-/** A Lap or a Split, as one compact row. */
-export function shapeLap(l, i = 0) {
-  if (!l) return null
-  const distance = num(l.distance)
-  const moving = num(l.moving_time)
-  return {
-    index: num(l.lap_index ?? l.split ?? i + 1),
-    name: l.name || null,
-    distanceMeter: distance,
-    distanceMi: metersToMi(distance),
-    distanceKm: metersToKm(distance),
-    movingSec: moving,
-    movingMin: secToMin(moving, 1),
-    elapsedSec: num(l.elapsed_time),
-    elevationM: num(l.total_elevation_gain ?? l.elevation_difference, 1),
-    elevationFt: metersToFt(l.total_elevation_gain ?? l.elevation_difference),
-    avgMph: mpsToMph(l.average_speed),
-    avgKph: mpsToKph(l.average_speed),
-    maxMph: mpsToMph(l.max_speed),
-    paceMinPerMi: paceMinPer(distance, moving, METERS_PER_MILE),
-    avgHr: num(l.average_heartrate, 0),
-    maxHr: num(l.max_heartrate, 0),
-    avgWatts: num(l.average_watts, 0),
-    avgCadence: num(l.average_cadence, 1),
-    paceZone: num(l.pace_zone),
-    startIndex: num(l.start_index),
-    endIndex: num(l.end_index),
-  }
-}
-
-function shapeEffort(e) {
-  if (!e) return null
-  return {
-    id: e.id,
-    name: e.name || e.segment?.name || null,
-    segmentId: e.segment?.id ?? null,
-    elapsedSec: num(e.elapsed_time),
-    movingSec: num(e.moving_time),
-    distanceMeter: num(e.distance),
-    distanceMi: metersToMi(e.distance),
-    startLocal: localStamp(e.start_date_local),
-    avgHr: num(e.average_heartrate, 0),
-    maxHr: num(e.max_heartrate, 0),
-    avgWatts: num(e.average_watts, 0),
-    avgCadence: num(e.average_cadence, 1),
-    prRank: num(e.pr_rank),
-    komRank: num(e.kom_rank),
-    achievements: Array.isArray(e.achievements) ? e.achievements.map((x) => ({ type: x.type, rank: num(x.rank) })) : [],
-    hidden: Boolean(e.hidden),
-    segment: e.segment ? {
-      distanceMi: metersToMi(e.segment.distance),
-      avgGrade: num(e.segment.average_grade, 1),
-      maxGrade: num(e.segment.maximum_grade, 1),
-      climbCategory: num(e.segment.climb_category),
-      city: e.segment.city || null,
-      starred: Boolean(e.segment.starred),
-    } : null,
-  }
-}
-
-/**
- * Everything the detail endpoint adds on top of the summary. `include` controls
- * the heavy lists: `segment_efforts` alone can be a hundred rows on a long ride.
- */
-export function detailActivity(a, { segmentEfforts = true, maxRows = 200 } = {}) {
-  const base = summarizeActivity(a)
-  if (!base) return null
-  return {
-    ...base,
-    description: a.description || null,
-    calories: num(a.calories, 0),
-    perceivedExertion: num(a.perceived_exertion),
-    preferPerceivedExertion: Boolean(a.prefer_perceived_exertion),
-    hideFromHome: Boolean(a.hide_from_home),
-    gear: a.gear ? shapeGear(a.gear) : null,
-    polyline: a.map?.polyline || null,
-    photos: a.photos ? {
-      count: num(a.photos.count),
-      primaryUrl: a.photos.primary?.urls ? Object.values(a.photos.primary.urls).pop() || null : null,
-    } : null,
-    splitsMetric: (a.splits_metric || []).slice(0, maxRows).map(shapeLap),
-    splitsStandard: (a.splits_standard || []).slice(0, maxRows).map(shapeLap),
-    laps: (a.laps || []).slice(0, maxRows).map(shapeLap),
-    bestEfforts: (a.best_efforts || []).slice(0, maxRows).map((e) => ({
-      name: e.name || null,
-      elapsedSec: num(e.elapsed_time),
-      movingSec: num(e.moving_time),
-      distanceMeter: num(e.distance),
-      prRank: num(e.pr_rank),
-      startIndex: num(e.start_index),
-      endIndex: num(e.end_index),
-    })),
-    segmentEfforts: segmentEfforts ? (a.segment_efforts || []).slice(0, maxRows).map(shapeEffort) : undefined,
-    segmentEffortCount: Array.isArray(a.segment_efforts) ? a.segment_efforts.length : null,
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Athlete, gear, stats, zones
-// ---------------------------------------------------------------------------
-
-export function shapeGear(g) {
-  if (!g) return null
-  return {
-    id: g.id,
-    name: g.name || null,
-    nickname: g.nickname || null,
-    primary: Boolean(g.primary),
-    retired: Boolean(g.retired),
-    brand: g.brand_name || null,
-    model: g.model_name || null,
-    frameType: num(g.frame_type),
-    description: g.description || null,
-    weightKg: num(g.weight, 2),
-    weightLb: kgToLb(g.weight),
-    // The odometer. Strava keeps this itself, so a mileage goal on a bike is
-    // this one number rather than a sum over every ride ever tagged with it.
-    distanceMeter: num(g.distance),
-    distanceMi: metersToMi(g.distance, 1),
-    distanceKm: metersToKm(g.distance, 1),
-    convertedDistance: num(g.converted_distance),
-    kind: typeof g.id === 'string' ? (g.id.startsWith('b') ? 'bike' : g.id.startsWith('g') ? 'shoes' : null) : null,
-  }
-}
-
-export function shapeAthlete(a) {
-  if (!a) return null
-  return {
-    id: a.id,
-    username: a.username || null,
-    firstname: a.firstname || null,
-    lastname: a.lastname || null,
-    name: [a.firstname, a.lastname].filter(Boolean).join(' ') || null,
-    city: a.city || null,
-    state: a.state || null,
-    country: a.country || null,
-    sex: a.sex || null,
-    premium: Boolean(a.premium ?? a.summit),
-    createdAt: a.created_at || null,
-    updatedAt: a.updated_at || null,
-    profile: a.profile || null,
-    profileMedium: a.profile_medium || null,
-    followerCount: num(a.follower_count),
-    friendCount: num(a.friend_count),
-    measurementPreference: a.measurement_preference || null,
-    datePreference: a.date_preference || null,
-    ftp: num(a.ftp),
-    weightKg: num(a.weight, 2),
-    weightLb: kgToLb(a.weight),
-    bikes: (a.bikes || []).map(shapeGear),
-    shoes: (a.shoes || []).map(shapeGear),
-    clubs: (a.clubs || []).map((c) => ({ id: c.id, name: c.name, memberCount: num(c.member_count), sportType: c.sport_type || null, url: c.url || null })),
-    url: a.id ? `https://www.strava.com/athletes/${a.id}` : null,
-  }
-}
-
-function shapeTotals(t) {
-  if (!t) return null
-  return {
-    count: num(t.count),
-    distanceMeter: num(t.distance),
-    distanceMi: metersToMi(t.distance, 1),
-    distanceKm: metersToKm(t.distance, 1),
-    movingSec: num(t.moving_time),
-    movingHours: num(t.moving_time) === null ? null : num(t.moving_time / 3600, 1),
-    elapsedSec: num(t.elapsed_time),
-    elevationM: num(t.elevation_gain),
-    elevationFt: metersToFt(t.elevation_gain),
-    achievementCount: num(t.achievement_count),
-  }
-}
-
-/** ActivityStats: recent (4 weeks), year-to-date and all-time, per ride/run/swim. */
-export function shapeStats(s) {
-  if (!s) return null
-  return {
-    biggestRideDistanceMi: metersToMi(s.biggest_ride_distance, 1),
-    biggestClimbElevationFt: metersToFt(s.biggest_climb_elevation_gain),
-    ride: { recent: shapeTotals(s.recent_ride_totals), ytd: shapeTotals(s.ytd_ride_totals), all: shapeTotals(s.all_ride_totals) },
-    run: { recent: shapeTotals(s.recent_run_totals), ytd: shapeTotals(s.ytd_run_totals), all: shapeTotals(s.all_run_totals) },
-    swim: { recent: shapeTotals(s.recent_swim_totals), ytd: shapeTotals(s.ytd_swim_totals), all: shapeTotals(s.all_swim_totals) },
-    note: '"recent" is Strava\'s trailing four weeks; "ytd" is the calendar year to date.',
-  }
-}
-
-export function shapeZones(z) {
-  if (!z) return null
-  const ranges = (zs) => (zs?.zones || []).map((r, i) => ({ zone: i + 1, min: num(r.min), max: num(r.max) }))
-  return {
-    heartRate: z.heart_rate ? { customZones: Boolean(z.heart_rate.custom_zones), zones: ranges(z.heart_rate) } : null,
-    power: z.power ? { zones: ranges(z.power) } : null,
-  }
-}
-
-/** ActivityZone[] — time in each HR/power zone for one activity, in minutes. */
-export function shapeActivityZones(list) {
-  return (Array.isArray(list) ? list : []).map((z) => ({
-    type: z.type || null,
-    sensorBased: Boolean(z.sensor_based),
-    customZones: Boolean(z.custom_zones),
-    points: num(z.points),
-    score: num(z.score),
-    max: num(z.max),
-    buckets: (z.distribution_buckets || []).map((b, i) => ({
-      zone: i + 1, min: num(b.min), max: num(b.max), seconds: num(b.time), minutes: secToMin(b.time, 1),
-    })),
-  }))
-}
-
-/**
- * StreamSet → { key: { type, seriesType, originalSize, resolution, data } }.
- * Works on both the keyed (`key_by_type=true`) and array response shapes.
- */
-export function shapeStreams(raw) {
-  const out = {}
-  const put = (s) => {
-    if (!s?.type) return
-    out[s.type] = { type: s.type, seriesType: s.series_type || null, originalSize: num(s.original_size), resolution: s.resolution || null, data: Array.isArray(s.data) ? s.data : [] }
-  }
-  if (Array.isArray(raw)) raw.forEach(put)
-  else if (raw && typeof raw === 'object') for (const [k, v] of Object.entries(raw)) put({ ...v, type: v?.type || k })
-  return out
-}
-
-export function shapeRoute(r) {
-  if (!r) return null
-  return {
-    id: r.id_str || r.id,
-    name: r.name || null,
-    description: r.description || null,
-    type: r.type === 1 ? 'ride' : r.type === 2 ? 'run' : num(r.type),
-    subType: num(r.sub_type),
-    distanceMeter: num(r.distance),
-    distanceMi: metersToMi(r.distance),
-    elevationM: num(r.elevation_gain),
-    elevationFt: metersToFt(r.elevation_gain),
-    estimatedMovingSec: num(r.estimated_moving_time),
-    estimatedMovingMin: secToMin(r.estimated_moving_time),
-    private: Boolean(r.private),
-    starred: Boolean(r.starred),
-    createdAt: r.created_at || null,
-    updatedAt: r.updated_at || null,
-    summaryPolyline: r.map?.summary_polyline || null,
-    segments: (r.segments || []).map(shapeSegment),
-    url: r.id ? `https://www.strava.com/routes/${r.id_str || r.id}` : null,
-  }
-}
-
-export function shapeSegment(s) {
-  if (!s) return null
-  return {
-    id: s.id,
-    name: s.name || null,
-    activityType: s.activity_type || null,
-    distanceMeter: num(s.distance),
-    distanceMi: metersToMi(s.distance),
-    avgGrade: num(s.average_grade, 1),
-    maxGrade: num(s.maximum_grade, 1),
-    elevHighM: num(s.elevation_high, 1),
-    elevLowM: num(s.elevation_low, 1),
-    climbCategory: num(s.climb_category),
-    city: s.city || null,
-    state: s.state || null,
-    country: s.country || null,
-    private: Boolean(s.private),
-    starred: Boolean(s.starred),
-    hazardous: Boolean(s.hazardous),
-    effortCount: num(s.effort_count),
-    athleteCount: num(s.athlete_count),
-    starCount: num(s.star_count),
-    prTime: num(s.athlete_segment_stats?.pr_elapsed_time),
-    prDate: s.athlete_segment_stats?.pr_date || null,
-    myEffortCount: num(s.athlete_segment_stats?.effort_count),
-    startLatLng: s.start_latlng || null,
-    endLatLng: s.end_latlng || null,
-    url: s.id ? `https://www.strava.com/segments/${s.id}` : null,
-  }
-}
-
-export const shapeSegmentEffort = shapeEffort
-
-export function shapeClub(c) {
-  if (!c) return null
-  return {
-    id: c.id,
-    name: c.name || null,
-    sportType: c.sport_type || null,
-    activityTypes: c.activity_types || [],
-    city: c.city || null,
-    state: c.state || null,
-    country: c.country || null,
-    memberCount: num(c.member_count),
-    private: Boolean(c.private),
-    verified: Boolean(c.verified),
-    url: c.url ? `https://www.strava.com/clubs/${c.url}` : null,
-    profile: c.profile_medium || c.profile || null,
-    description: c.description || null,
-    membership: c.membership || null,
-    admin: Boolean(c.admin),
-    owner: Boolean(c.owner),
   }
 }
 
@@ -611,10 +308,4 @@ export function mileage(activities, { group = 'week', sport = null, gearId = nul
     total: { ...total, distanceMi: metersToMi(total.distanceMeter, 1), distanceKm: metersToKm(total.distanceMeter, 1) },
     buckets: rows,
   }
-}
-
-/** YYYY-MM-DD for `now` minus N days, in the given IANA zone. */
-export function daysAgoLocal(days, { now = new Date(), timeZone = 'UTC' } = {}) {
-  const d = new Date(now.getTime() - Math.max(0, Number(days) || 0) * 86_400_000)
-  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
 }

@@ -21,7 +21,7 @@ const TEXT_MIME = /^(text\/|application\/(json|xml|x-yaml|yaml|csv|javascript|x-
 const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|ya?ml|xml|html?|log|ini|toml|js|ts|tsx|jsx|py|sh|sql|css|rtf)$/i
 const MIME_BY_EXT = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
-  '.heic': 'image/heic', '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown',
+  '.heic': 'image/heic', '.ico': 'image/x-icon', '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown',
   '.csv': 'text/csv', '.json': 'application/json',
 }
 

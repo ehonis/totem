@@ -11,7 +11,8 @@ export const PROJECT_ICONS = [
   'shopping-cart', 'gift', 'palette', 'camera', 'music', 'robot', 'flask', 'leaf', 'paw', 'chef-hat',
 ].filter((name) => THREAD_ICONS[name])
 
-export default function ProjectIcon({ p, size = 16, className = '' }: { p?: Pick<Project, 'icon'> | null; size?: number; className?: string }) {
+export default function ProjectIcon({ p, size = 16, className = '' }: { p?: Pick<Project, 'icon' | 'imageUrl'> | null; size?: number; className?: string }) {
+  if (p?.imageUrl) return <img src={p.imageUrl} alt="" width={size} height={size} className={`vc-proj-icon vc-proj-img ${className}`.trim()} aria-hidden />
   const icon = (p?.icon && THREAD_ICONS[p.icon]) || IconFolder
   return <TI icon={icon} size={size} className={`vc-proj-icon ${className}`.trim()} />
 }
