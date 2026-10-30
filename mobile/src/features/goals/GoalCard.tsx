@@ -23,6 +23,8 @@ import { formatAmount } from '../../lib/goals/types'
 import type { Goal, GoalMetric, GoalPeriodType, SubGoal } from '../../lib/goals/types'
 import { NativeMenu } from './NativeMenu'
 import { openUrl } from '../../lib/siblingApps'
+import { goalContext } from '../../lib/chat/about/context'
+import { CHAT_ABOUT_ACTION, chatAbout } from '../../ui/chatAbout'
 
 /** One hue per horizon (.period-week …), shared with the tabs and the overview. */
 export const PERIOD_COLOR: Record<GoalPeriodType, string> = {
@@ -300,6 +302,7 @@ export default function GoalCard({ goal, busy, bushidoHosts = [], actions }: {
     ],
     [
       { id: 'note', title: goal.notes ? 'Edit note' : 'Add a note', image: 'bubble.left', onPress: () => openEdit('note') },
+      { ...CHAT_ABOUT_ACTION, onPress: () => chatAbout(() => goalContext(goal)) },
       { id: 'edit', title: 'Edit goal', image: 'square.and.pencil', onPress: () => openEdit('all') },
       {
         id: 'abandon', title: goal.abandoned ? 'Start doing this again' : 'Not doing this', image: goal.abandoned ? 'play' : 'nosign',

@@ -15,6 +15,8 @@ import { Btn, Card, Input, Spinner, Toggle } from '../../ui/kit'
 import { success } from '../../ui/haptics'
 import IconChevronRight from '@tabler/icons-react-native/dist/esm/icons/IconChevronRight.mjs'
 import { Bar, HEALTH_COLOR, Stat, StatusDot, rateLabel } from './parts'
+import { fleetDeviceContext } from '../../lib/chat/about/context'
+import { chatAboutMenu } from '../../ui/chatAbout'
 
 const POLL_MS = 5_000
 
@@ -55,7 +57,7 @@ function DeviceCard({ device }: { device: FleetDevice }) {
     ? [device.os, device.bootedAt ? `up ${uptimeSince(device.bootedAt)}` : null].filter(Boolean).join(' · ')
     : [device.os, device.lastSeen ? `last seen ${duration((Date.now() - device.lastSeen) / 1000)} ago` : 'never reported'].filter(Boolean).join(' · ')
   return (
-    <Card style={st.card} onPress={() => openFleetDevice(device.id)}>
+    <Card style={st.card} onPress={() => openFleetDevice(device.id)} onLongPress={() => chatAboutMenu(() => fleetDeviceContext(device))}>
       <View style={st.cardHead}>
         <StatusDot level={device.health.level} />
         <View style={{ flex: 1, minWidth: 0 }}>

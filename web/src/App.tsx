@@ -4,6 +4,7 @@ import { getSettings, useSettings } from './settings'
 import { parseLocation, buildPath, toRoute, resolveTarget, type NavTarget, type Route } from './router'
 import { COMMANDS } from './shortcuts'
 import { installDesktopHooks } from './desktop'
+import { installChatAbout } from './chat/about/start'
 import { useShortcuts, useCommand } from './useShortcuts'
 import { useInboxCount, describeInboxCount } from './useInboxCount'
 import AuthGate from './components/AuthGate'
@@ -276,6 +277,8 @@ export default function App() {
   // including the "return to the pane you left" memory.
   const chord = useShortcuts(navigate)
   useEffect(() => installDesktopHooks(navigate), [navigate])
+  // "Chat about this" on any card opens the chat through the same router.
+  useEffect(() => installChatAbout({ navigate, onAuthError }), [navigate, onAuthError])
 
   const terminalVisible = Boolean(terminalAvailable) && terminalOpen
 

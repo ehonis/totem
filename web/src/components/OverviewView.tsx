@@ -17,6 +17,8 @@ import {
 import { clock, dueDiff, dueLabel, periodTotal, startOfDay, until } from './overview/time'
 import './overview/overview.css'
 import { useOwnerName } from '../useOwnerName'
+import ChatAbout from '../chat/about/ChatAbout'
+import { goalsContext, habitMetricContext, habitsContext, scheduleContext, systemContext, tasksContext, type ChatContext } from '../chat/about/context'
 
 // Usage lives partway down Settings ▸ Providers; Jobs is Studio's second pane,
 // whose route id is still 'workflows' for the sake of old links.
@@ -55,8 +57,10 @@ interface OverviewViewProps {
 // ---------------------------------------------------------------------------
 // Pieces
 
-function Section({ title, meta, onOpen, openLabel = 'Open', className = '', children }: {
+function Section({ title, meta, onOpen, openLabel = 'Open', className = '', about, children }: {
   title: string
+  /** "Chat about this": what the card shows. */
+  about?: () => ChatContext | null
   meta?: React.ReactNode
   onOpen?: () => void
   openLabel?: string
@@ -68,6 +72,7 @@ function Section({ title, meta, onOpen, openLabel = 'Open', className = '', chil
       <header className="ovx-card-head">
         <h2>{title}</h2>
         {meta != null && meta !== '' && <span className="ovx-card-meta">{meta}</span>}
+        {about && <ChatAbout of={about} host=".ovx-card" />}
         {onOpen && (
           <button type="button" className="ovx-link" onClick={onOpen}>
             {openLabel}<TI icon={IconChevronRight} size={15} />
@@ -419,6 +424,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
               title="Schedule"
               meta={data.cal ? (todayEvents.length ? `${todayEvents.length} today` : '') : null}
               onOpen={() => onNavigate({ tab: 'productivity', app: 'calendar' })}
+              about={() => data.cal && scheduleContext({ allDay: allDayToday, timed: timedToday, tomorrow: showTomorrow ? tomorrowEvents : [] }, now)}
             >
               {errs.cal ? <Failed msg={errs.cal} />
                 : !data.cal ? <Loading />
@@ -475,6 +481,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
               title="Tasks"
               meta={data.todos ? (overdue.length ? <span className="ovx-overdue">{overdue.length} overdue</span> : `${todos.length} open`) : null}
               onOpen={() => onNavigate({ tab: 'productivity', app: 'todos' })}
+              about={() => data.todos && tasksContext(taskShown, { open: todos.length, overdue: overdue.length })}
             >
               {errs.todos ? <Failed msg={errs.todos} />
                 : !data.todos ? <Loading />
@@ -512,7 +519,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
                   </div>
                 )}
             </Section>
-            <Section title="Goals" meta={data.week?.period?.label} onOpen={() => onNavigate({ tab: 'productivity', app: 'goals' })}>
+            <Section title="Goals" meta={data.week?.period?.label} onOpen={() => onNavigate({ tab: 'productivity', app: 'goals' })} about={() => goalGroups.length ? goalsContext(goalGroups) : null}>
               {errs.week ? <Failed msg={errs.week} />
                 : !data.week ? <Loading />
                 : !goalGroups.length ? (
@@ -554,6 +561,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
               title="Habits"
               meta={data.habits && habits.length ? `${habitsDoneToday} of ${habits.length} done` : null}
               onOpen={() => onNavigate({ tab: 'productivity', app: 'habits' })}
+              about={() => habits.length ? habitsContext(habits, entries, habitDay, (h) => periodTotal(h, entries, habitDay)) : null}
             >
               {errs.habits ? <Failed msg={errs.habits} />
                 : !data.habits ? <Loading />
@@ -588,7 +596,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
         {pinned.length > 0 && (
           <div className="ovx-pinned">
             {pinned.map((h) => (
-              <Section key={h.id} className="ovx-metric" title={h.metric.label} meta={h.name !== h.metric.label ? `from ${h.name}` : null} onOpen={() => onNavigate({ tab: 'productivity', app: 'habits' })}>
+              <Section key={h.id} className="ovx-metric" title={h.metric.label} meta={h.name !== h.metric.label ? `from ${h.name}` : null} onOpen={() => onNavigate({ tab: 'productivity', app: 'habits' })} about={() => habitMetricContext(h, entries, habitDay)}>
                 <HabitMetricSection habit={h} entries={entries} today={habitDay} compact days={30} />
               </Section>
             ))}
@@ -596,6 +604,12 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
         )}
 
         <section className="ovx-system" aria-label="Totem">
+          <ChatAbout button={false} of={() => systemContext({
+            quotas: accounts.map((a) => ({ name: a.displayName || a.label, label: tightest(a)?.label, remainingPct: tightest(a)?.remainingPct })),
+            jobsOn: jobsOn.length, jobsTotal: jobs.length,
+            failing: failing.map((j) => ({ name: j.name, error: j.lastRun?.error })),
+            nextJob, requestsToday: data.assistant?.today,
+          })} />
           <button type="button" className="ovx-sys" onClick={() => onNavigate(USAGE_SECTION)}>
             <span className="ovx-sys-head">AI limits<TI icon={IconChevronRight} size={15} /></span>
             {!ai ? <Loading />

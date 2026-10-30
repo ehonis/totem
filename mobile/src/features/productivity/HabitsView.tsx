@@ -22,6 +22,8 @@ import { CheckRow, QuotaDots, st as rowSt } from '../habits/CheckRow'
 import HabitGrid from '../habits/HabitGrid'
 import { HabitMetricSection } from '../habits/MetricChart'
 import { openLinkedApp } from '../habits/LinkedApp'
+import { habitContext } from '../../lib/chat/about/context'
+import { chatAboutMenu } from '../../ui/chatAbout'
 
 // The check-in steps back as far as the loaded history (a year).
 const MAX_DAYS_BACK = 365
@@ -164,7 +166,7 @@ export default function HabitsView({ active: shown }: { active: boolean }) {
           {data && active.map((h) => {
             const streak = streakOf(h, data.entries, today)
             return (
-              <Card key={h.id} style={[s.card, s.habitCard]}>
+              <Card key={h.id} style={[s.card, s.habitCard]} onLongPress={() => chatAboutMenu(() => habitContext(h, data.entries, today, { streak, periodCount: periodTotal(h, data.entries, today) }))}>
                 <View style={s.cardHead}>
                   <Press onPress={() => openEdit(h)} accessibilityLabel={`${h.name}, edit habit`} style={s.cardName}>
                     <View style={[rowSt.dot, { backgroundColor: h.color }]} />

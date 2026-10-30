@@ -4,6 +4,8 @@ import { ActivityChart, relTime } from '../usageMeta'
 import { pushToast } from '../toast'
 import { Hi, PlusIcon, TrashIcon, WarnIcon } from '../icons'
 import { readDevCache, writeDevCache } from '../devCache'
+import ChatAbout from '../chat/about/ChatAbout'
+import { shippedContext } from '../chat/about/context'
 
 // PRs per day: every PR the server's gh login authored and merged, in any repo,
 // one column per day split by repo. The busiest eight repos in the range get a
@@ -236,6 +238,7 @@ export default function ShippedCard({ onAuthError }: { onAuthError: () => void }
           </div>
         </div>
         <span className="dev-card-actions">
+          <ChatAbout of={() => data && shippedContext({ ...data, hidden })} host=".dev-card" />
           {groups.length > 0 && (
             <span className="cal-viewswitch" aria-label="Split the chart by">
               {GROUP_BY.map((g) => (

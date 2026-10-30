@@ -3,7 +3,7 @@
 // pushed screen. Asking for the detail is also what makes the machine send its
 // process list, so it polls every 3 s while on screen.
 import React, { useCallback, useMemo, useState } from 'react'
-import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
 import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { getFleetDevice, type FleetDeviceDetail, type FleetProcess, type PowerPart } from '../../lib/fleet/api'
 import { MEASURED_LABEL, bytes, duration, money, pct, rate, uptimeSince, watts } from '../../lib/fleet/format'
@@ -12,6 +12,8 @@ import { colors, textAlpha } from '../../theme'
 import { T } from '../../ui/Text'
 import { Btn, Press, Segmented, Spinner } from '../../ui/kit'
 import { Bar, Box, HEALTH_COLOR, HEALTH_LABEL, MeterRow, Sparkline, Stat, StatusDot, heatColor } from './parts'
+import { fleetDeviceContext } from '../../lib/chat/about/context'
+import { chatAboutMenu } from '../../ui/chatAbout'
 
 const POLL_MS = 3_000
 const PROCESS_PAGE = 40
@@ -314,7 +316,10 @@ export default function FleetDeviceScreen() {
           refreshControl={<RefreshControl refreshing={pulling} tintColor={colors.muted} onRefresh={async () => { setPulling(true); await load(); setPulling(false) }} />}
         >
           {error ? <T size={13} color={colors.amber}>Couldn’t refresh: {error}</T> : null}
-          <Head d={device} />
+          {/* Hold the machine's header to chat about the whole page. */}
+          <Pressable onLongPress={() => chatAboutMenu(() => fleetDeviceContext(device))} delayLongPress={400} accessible={false}>
+            <Head d={device} />
+          </Pressable>
           <Cpu d={device} />
           <Memory d={device} />
           <Disks d={device} />
