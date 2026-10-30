@@ -6,6 +6,8 @@ import {
   FlagIcon, NoSymbolIcon, PencilSquareIcon, PlusIcon, TrashIcon,
 } from '../icons'
 import { useVentureTags, ventureTagStyle } from './ventureTags'
+import ChatAbout from '../chat/about/ChatAbout'
+import { todoContext } from '../chat/about/context'
 import { priorityLabel, priorityMarks, todoSource, type Todo, type TodoStatus } from './types'
 
 const STATUS_LABEL: Record<TodoStatus, string> = { todo: 'To Do', doing: 'Doing', done: 'Done' }
@@ -276,6 +278,7 @@ export default function TodoCard({
         {notDoing && <span className="todo-outcome">Not doing</span>}
         {todo.syncState.status !== 'idle' && todo.syncState.status !== 'synced' && <span className={`todo-sync-state ${todo.syncState.status}`} title={todo.syncState.lastError || undefined}>{todo.syncState.status}</span>}
         <span className="todo-card-tools">
+          <ChatAbout of={() => todoContext(todo)} host=".todo-board-card" />
           {todo.status !== 'done' && onSnooze && <button ref={snoozeButton} type="button" aria-label={`Snooze ${todo.title}`} aria-haspopup="menu" aria-expanded={menu === 'snooze'} onPointerDown={event => event.stopPropagation()} onClick={() => openMenu('snooze', snoozeButton.current)}><Hi icon={ClockIcon} size={17} /></button>}
           {todo.status !== 'done' && onDueDate && overdue && <button ref={dueButton} type="button" className="todo-card-overdue" aria-label={`Reschedule ${todo.title}`} title="Overdue — move the due date" aria-haspopup="menu" aria-expanded={menu === 'due'} onPointerDown={event => event.stopPropagation()} onClick={() => openMenu('due', dueButton.current)}><Hi icon={CalendarDaysIcon} size={17} /></button>}
           <button ref={actionsButton} type="button" aria-label={`More actions for ${todo.title}`} aria-haspopup="menu" aria-expanded={menu === 'actions'} onPointerDown={event => event.stopPropagation()} onClick={() => openMenu('actions', actionsButton.current)}><Hi icon={EllipsisHorizontalIcon} size={19} /></button>

@@ -2,11 +2,13 @@
 // The page uses the chat's visual language rather than the dashboard's cards, so
 // these tokens are kept here instead of in theme.ts.
 import React, { useEffect, useRef } from 'react'
-import { Animated, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native'
+import { Animated, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native'
 import { alpha, colors, textAlpha } from '../../theme'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { IconAlertTriangle, IconChevronRight } from '../../lib/components/overview/icons'
+import type { ChatContext } from '../../lib/chat/about/context'
+import { chatAboutMenu } from '../../ui/chatAbout'
 
 export const ov = {
   text: textAlpha(94),
@@ -37,8 +39,10 @@ export function TI({ icon: Icon, size = 18, stroke = 1.75, color = ov.text }: { 
   return <Icon size={size} strokeWidth={stroke} color={color} />
 }
 
-export function Section({ title, meta, onOpen, openLabel = 'Open', style, children }: {
+export function Section({ title, meta, onOpen, openLabel = 'Open', style, about, children }: {
   title: string
+  /** "Chat about this" on a long press: what the card shows. */
+  about?: () => ChatContext | null
   meta?: React.ReactNode
   onOpen?: () => void
   openLabel?: string
@@ -46,7 +50,8 @@ export function Section({ title, meta, onOpen, openLabel = 'Open', style, childr
   children: React.ReactNode
 }) {
   return (
-    <View style={[s.card, style]}>
+    // Not `accessible`: the card's own controls stay separate for VoiceOver.
+    <Pressable style={[s.card, style]} onLongPress={about && (() => chatAboutMenu(about))} delayLongPress={400} disabled={!about} accessible={false}>
       <View style={s.cardHead}>
         <T size={15} weight={600} color={colors.text}>{title}</T>
         {meta != null && meta !== '' && (
@@ -62,7 +67,7 @@ export function Section({ title, meta, onOpen, openLabel = 'Open', style, childr
         )}
       </View>
       {children}
-    </View>
+    </Pressable>
   )
 }
 

@@ -9,6 +9,8 @@ import { relTime } from '../usageMeta'
 import { readDevCache, writeDevCache } from '../devCache'
 import { pushToast } from '../toast'
 import { Hi, ArrowPathIcon, ClipboardDocumentIcon, WarnIcon } from '../icons'
+import ChatAbout from '../chat/about/ChatAbout'
+import { devRepoContext } from '../chat/about/context'
 
 // The Dev tab: CI on each repo's default branch, its open PRs and whether the AI
 // reviewers ran, its self-hosted runners, and a switch that pauses AI review
@@ -246,6 +248,7 @@ function RepoCard({ repo: r, onToggleReview, onUnwatch, onAuth }: {
               ><span /></button>
             </label>
           )}
+          <ChatAbout of={() => devRepoContext(r)} host=".dev-card" />
           <button type="button" className="btn compact" onClick={onUnwatch}>Unwatch</button>
         </span>
       </div>

@@ -20,6 +20,8 @@ import { useVentureTags } from '../../lib/todos/ventureTags'
 import { priorityLabel, priorityMarks, todoSource, type Todo, type TodoStatus } from '../../lib/todos/types'
 import { SOURCE_LABEL, STATUS_LABEL, dateLabel, dueDateChoices, dueTone, snoozeTimes } from './format'
 import { PickWhenSheet, STATUS_COLOR, tone } from './ui'
+import { todoContext } from '../../lib/chat/about/context'
+import { CHAT_ABOUT_ACTION, chatAbout } from '../../ui/chatAbout'
 import { openUrl } from '../../lib/siblingApps'
 
 export interface TodoCardProps {
@@ -115,6 +117,7 @@ export default function TodoCard({
       id: 'more', title: '', displayInline: true, subactions: [
         ...(onNotDoing && !notDoing ? [{ id: 'notdoing', title: 'Not doing this', image: 'nosign' }] : []),
         { id: 'edit', title: 'Edit task', image: 'square.and.pencil' },
+        CHAT_ABOUT_ACTION,
         { id: 'delete', title: 'Move task to recycle bin', image: 'trash', attributes: { destructive: true } },
       ],
     },
@@ -135,6 +138,7 @@ export default function TodoCard({
     if (id === 'down') return onReorder?.(todo, 1)
     if (id === 'notdoing') return onNotDoing?.(todo)
     if (id === 'edit') return onOpen?.(todo)
+    if (id === CHAT_ABOUT_ACTION.id) return chatAbout(() => todoContext(todo))
     if (id === 'delete') return onDelete?.(todo)
   }
 

@@ -1,0 +1,28 @@
+/* "Chat about this" (ChatAbout.tsx): a button that shows while the card is
+   hovered, and the menu right-click or a long press opens. */
+.chat-about-btn {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 26px; height: 26px; border-radius: 7px; cursor: pointer;
+  color: var(--muted); opacity: 0; transition: opacity .12s ease, background .12s ease;
+}
+.chat-about-host:hover .chat-about-btn, .chat-about-btn:focus-visible { opacity: 1; }
+.chat-about-btn:hover { color: var(--text); background: var(--bg-3); }
+/* A touch screen has no hover: a long press opens the menu instead. */
+@media (hover: none) {
+  .chat-about-btn { display: none; }
+  .chat-about-host { -webkit-touch-callout: none; }
+  /* A link inside a card keeps iOS's own long-press menu. */
+  .chat-about-host a { -webkit-touch-callout: default; }
+}
+
+.chat-about-menu {
+  position: fixed; z-index: 1000; min-width: 190px; padding: 4px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+}
+.chat-about-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
+  border: 0; border-radius: 7px; background: none; color: var(--text);
+  font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+}
+.chat-about-menu button:hover, .chat-about-menu button:focus-visible { background: var(--bg-3); outline: none; }

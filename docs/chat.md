@@ -700,6 +700,52 @@ well without context that clearly lives in one. The tool descriptions say the sa
 
 List, read and projects are read-only and local (`ANN.readLocal`), so ChatGPT and Claude on `/mcp` get them too. Create is a local write; it exists so a totem that finds new work (a ticket, an email) can open a chat for it where the owner will look.
 
+## Chat about this
+
+Any card can start a chat that already knows what the card shows. On the dashboard a
+card shows a small chat button while the pointer is over it, and right-click opens a menu
+(Chat about this, Copy as text). Shift+right-click, a link, a field or selected text keep
+the browser's own menu. On a phone a long press opens the same menu when the finger
+lifts; the lift's touchend is cancelled so it is not also a tap on the card, and only the
+click that follows within 400 ms is swallowed. In the iPhone app a long press opens an
+action sheet (Overview cards, habit and Fleet cards, a machine's header); tasks and goals
+have the item in their own menus instead.
+
+The context is a short Markdown attachment, not a message: the card's facts as text,
+then where it lives (page, route, the dashboard, app and bridge files that draw it). It
+goes up as a text upload, waits in `chat/pendingContext.ts` as Search's "Add to chat"
+does, and lands in a new chat's composer as a chip on Home. Nothing is sent until the
+owner sends it.
+
+- `web/src/chat/about/context.ts`: one serializer per card (`scheduleContext`,
+  `tasksContext`, `goalContext`, `todoContext`, `habitContext`, `systemContext`,
+  `fleetDeviceContext`, `devRepoContext`, …). `contextMarkdown` clips every line to 300
+  characters and the route to 200, stops at 40 lines or 3,000 characters, and runs the
+  result through `redact()` (GitHub, OpenAI/Anthropic and Google tokens, bearer headers,
+  `key=`/`token=`-style pairs), so a key pasted into a task note never reaches the prompt
+  or the saved upload.
+- `web/src/chat/about/places.ts`: each place's route and files. `places.test.ts` fails
+  when a listed file is gone, when a route does not survive `parseLocation`/`buildPath`,
+  and when the app's copies of `places.ts` and `context.ts` (`mobile/src/lib/chat/about/`)
+  differ from the web's.
+- `web/src/chat/about/ChatAbout.tsx`: dropped inside a card, it adopts the card (its
+  parent, or `host`) and adds the button and both menus; a nested card answers first.
+  `of` receives the card's element. App installs the router and the sign-out
+  (`installChatAbout`); without them `startChatAbout` throws before uploading anything.
+- A card gets it with one line: `<ChatAbout of={() => goalContext(goal)} host=".goal-card" />`.
+  A new card adds a serializer, a place, and that line.
+
+**Settings.** Offered on General, Chat, AI, Integrations, Tasks, Providers, Shortcuts,
+Notifications and Voice (`SETTINGS_ABOUT`). Logs, Connections, Skills and Jobs are left
+out: they show tool output, server addresses, sign-in links and prompts. A pane is read
+by allowlist (`settingsOutline.ts`): headings, each `.setting-row` label, and the state of
+a switch, checkbox or select. Text fields, textareas, `<pre>` and `<code>` are never read.
+The iPhone app's Settings panes have no entry point on purpose: they have no DOM to read
+by allowlist, and each would need its own serializer.
+
+No screenshot is attached: the dashboard has no DOM-to-image library, and the text is
+what the agent can act on.
+
 ## Testing
 
 ```bash

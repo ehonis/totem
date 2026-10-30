@@ -13,6 +13,8 @@ import {
 } from '../icons'
 import { useErrorToast, pushToast } from '../toast'
 import { OPEN_HABIT_CHECKIN } from './HabitCheckin'
+import ChatAbout from '../chat/about/ChatAbout'
+import { habitContext } from '../chat/about/context'
 import {
   MetricChart, MetricStatsStrip, metricSeries, metricStats, fmtMetric,
   type MetricConfig, type MetricPart,
@@ -1524,6 +1526,7 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
                     {h.cadence !== 'daily' && <QuotaDots habit={h} count={periodTotal(h, data!.entries, today)} />}
                     <span className="muted">{totalFor(h)} in the last year</span>
                   </span>
+                  <ChatAbout of={() => data && habitContext(h, data.entries, today, { streak, periodCount: periodTotal(h, data.entries, today) })} host=".habit-card" />
                   <button className="icon-btn" title="Edit habit" onClick={() => setModal({ type: 'edit', habit: h })}>
                     <Hi icon={PencilSquareIcon} size={16} />
                   </button>

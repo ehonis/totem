@@ -32,6 +32,8 @@ import { ov, TI, Section, Quiet, Failed, Loading, Bar, Subhead, More } from './p
 import { HabitRow } from './HabitRow'
 import { HabitMetricSection } from './MetricTile'
 import { openHabitDay, type DaySave } from './HabitDaySheet'
+import { goalsContext, habitMetricContext, habitsContext, scheduleContext, systemContext, tasksContext } from '../../lib/chat/about/context'
+import { chatAboutMenu } from '../../ui/chatAbout'
 
 type NavTarget = Parameters<typeof navigateTo>[0]
 type Tabler = React.ComponentType<any>
@@ -279,6 +281,13 @@ export default function OverviewScreen() {
   const tightest = (acct: any) => [...(acct.meters || [])].filter((m: any) => m.remainingPct != null)
     .sort((a: any, b: any) => a.remainingPct - b.remainingPct)[0]
   const lowAccounts = accounts.filter((a) => { const m = tightest(a); return m && m.remainingPct <= 15 })
+  // Holding any of the three system tiles: "Chat about this" for all three.
+  const aboutSystem = () => chatAboutMenu(() => systemContext({
+    quotas: accounts.map((a) => ({ name: a.displayName || a.label, label: tightest(a)?.label, remainingPct: tightest(a)?.remainingPct })),
+    jobsOn: jobsOn.length, jobsTotal: jobs.length,
+    failing: failing.map((j) => ({ name: j.name, error: j.lastRun?.error })),
+    nextJob, requestsToday: data.assistant?.today,
+  }))
   const inboxOpen: number = data.inbox?.open || 0
 
   const daily = useMemo(() => {
@@ -378,6 +387,7 @@ export default function OverviewScreen() {
           title="Schedule"
           meta={data.cal ? (todayEvents.length ? `${todayEvents.length} today` : '') : null}
           onOpen={openCalendar}
+          about={() => data.cal && scheduleContext({ allDay: allDayToday, timed: timedToday, tomorrow: showTomorrow ? tomorrowEvents : [] }, now)}
         >
           {errs.cal ? <Failed msg={errs.cal} />
             : !data.cal ? <Loading />
@@ -436,6 +446,7 @@ export default function OverviewScreen() {
           title="Tasks"
           meta={data.todos ? (overdue.length ? <T size={13} color={ov.overdue}>{overdue.length} overdue</T> : `${todos.length} open`) : null}
           onOpen={openTodos}
+          about={() => data.todos && tasksContext(taskShown, { open: todos.length, overdue: overdue.length })}
         >
           {errs.todos ? <Failed msg={errs.todos} />
             : !data.todos ? <Loading />
@@ -474,7 +485,7 @@ export default function OverviewScreen() {
             )}
         </Section>
 
-        <Section title="Goals" meta={data.week?.period?.label} onOpen={openGoals}>
+        <Section title="Goals" meta={data.week?.period?.label} onOpen={openGoals} about={() => goalGroups.length ? goalsContext(goalGroups) : null}>
           {errs.week ? <Failed msg={errs.week} />
             : !data.week ? <Loading />
             : !goalGroups.length ? (
@@ -515,6 +526,7 @@ export default function OverviewScreen() {
           title="Habits"
           meta={data.habits && habits.length ? `${habitsDoneToday} of ${habits.length} done` : null}
           onOpen={openHabits}
+          about={() => habits.length ? habitsContext(habits, entries, habitDay, (h) => periodTotal(h, entries, habitDay)) : null}
         >
           {errs.habits ? <Failed msg={errs.habits} />
             : !data.habits ? <Loading />
@@ -541,12 +553,12 @@ export default function OverviewScreen() {
         </Section>
 
         {pinned.map((h) => (
-          <Section key={h.id} title={h.metric.label} meta={h.name !== h.metric.label ? `from ${h.name}` : null} onOpen={openHabits}>
+          <Section key={h.id} title={h.metric.label} meta={h.name !== h.metric.label ? `from ${h.name}` : null} onOpen={openHabits} about={() => habitMetricContext(h, entries, habitDay)}>
             <HabitMetricSection habit={h} entries={entries} today={habitDay} days={30} />
           </Section>
         ))}
 
-        <Press onPress={() => navigateTo(USAGE_SECTION)} style={st.sys}>
+        <Press onPress={() => navigateTo(USAGE_SECTION)} onLongPress={aboutSystem} delayLongPress={400} style={st.sys}>
           <SysHead label="AI limits" />
           {!ai ? <Loading />
             : !ai.ok ? <T size={14} color={ov.faint}>{ai.error || 'Quota unavailable'}</T>
@@ -573,7 +585,7 @@ export default function OverviewScreen() {
             )}
         </Press>
 
-        <Press onPress={() => navigateTo(JOBS_SECTION)} style={st.sys}>
+        <Press onPress={() => navigateTo(JOBS_SECTION)} onLongPress={aboutSystem} delayLongPress={400} style={st.sys}>
           <SysHead label="Jobs" />
           {errs.jobs ? <T size={14} color={ov.faint}>{errs.jobs}</T>
             : !data.jobs ? <Loading />
@@ -589,7 +601,7 @@ export default function OverviewScreen() {
             )}
         </Press>
 
-        <Press onPress={() => navigateTo(USAGE_SECTION)} style={st.sys}>
+        <Press onPress={() => navigateTo(USAGE_SECTION)} onLongPress={aboutSystem} delayLongPress={400} style={st.sys}>
           <SysHead label="Activity" />
           {!data.assistant && !data.prod ? (loaded ? <T size={14} color={ov.faint}>Unavailable</T> : <Loading />)
             : (

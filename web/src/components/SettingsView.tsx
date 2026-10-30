@@ -15,6 +15,9 @@ import SkillsView from './SkillsView'
 import JobsView from './JobsView'
 import McpSettingsView from './McpSettingsView'
 import LogsView from './LogsView'
+import ChatAbout from '../chat/about/ChatAbout'
+import { SETTINGS_ABOUT, settingsContext } from '../chat/about/context'
+import { settingsOutline } from '../chat/about/settingsOutline'
 
 // Connections (MCP) moved to the Studio tab - Settings now covers app
 // preferences and AI providers only.
@@ -231,6 +234,8 @@ export default function SettingsView({ onAuthError, subTab, onSubTab, scrollTo }
           ))}
         </aside>
         <div className="settings-content">
+          {/* Right-click or long-press a pane to chat about its settings (not on Logs, Connections, Skills or Jobs). */}
+          {(SETTINGS_ABOUT as readonly string[]).includes(sub) && <ChatAbout key={sub} of={(pane) => settingsContext(sub, settingsOutline(pane))} button={false} />}
           {sub === 'general' && <GeneralPane onDisconnect={onAuthError} />}
           {sub === 'ai' && <AiSettings onAuthError={onAuthError} />}
           {sub === 'integrations' && <IntegrationsSettings onAuthError={onAuthError} />}

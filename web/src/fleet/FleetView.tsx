@@ -8,6 +8,8 @@ import { AuthError } from '../api'
 import { pushToast } from '../toast'
 import { Hi, ChevronLeftIcon, ClipboardDocumentIcon, WarnIcon } from '../icons'
 import './fleet.css'
+import ChatAbout from '../chat/about/ChatAbout'
+import { fleetDeviceContext } from '../chat/about/context'
 
 // The Fleet tab: the owner's machines as a health page — up or down, how long,
 // what they are doing, what they draw and what that costs. The machine Totem runs
@@ -148,6 +150,7 @@ function DeviceCard({ d, onOpen }: { d: FleetDevice; onOpen: () => void }) {
         <Dot level={d.health.level} />
         <span className="fl-name">{d.name}</span>
         <span className="muted fl-os">{d.os}</span>
+        <ChatAbout of={() => fleetDeviceContext(d)} host=".fl-card" />
       </div>
       <div className="fl-card-up">
         {d.online ? <>Up <b>{uptimeSince(d.bootedAt)}</b></> : <>Last seen <b>{d.lastSeen ? duration((Date.now() - d.lastSeen) / 1000) : '–'}</b> ago</>}
@@ -281,6 +284,7 @@ function DeviceView({ id, status, onBack, onAuthError, onChanged }: {
           {d && <><Dot level={d.health.level} /><h1>{d.name}</h1></>}
         </div>
         {d && <span className="muted fl-sub">{d.os} · {d.cpuModel} · {d.cores} cores</span>}
+        {d && <ChatAbout of={() => fleetDeviceContext(d)} host=".fl-detail" />}
       </div>
       {missing ? <div className="muted">No machine called {id}.</div> : !d ? <div className="spinner">Reading {id}…</div> : (
         <>

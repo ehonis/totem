@@ -94,8 +94,11 @@ export function IconBtn({ icon, onPress, size = 20, color = textAlpha(72), box =
 }
 
 /** .card */
-export function Card({ children, style, onPress }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; onPress?: () => void }) {
-  if (onPress) return <Press onPress={onPress} style={[s.card, style]}>{children}</Press>
+export function Card({ children, style, onPress, onLongPress }: { children: React.ReactNode; style?: StyleProp<ViewStyle>; onPress?: () => void; onLongPress?: () => void }) {
+  if (onPress) return <Press onPress={onPress} onLongPress={onLongPress} delayLongPress={400} style={[s.card, style]}>{children}</Press>
+  // A long press only: no pressed dimming, which would flash the card on every scroll.
+  // Not `accessible`, so VoiceOver still reaches the controls inside.
+  if (onLongPress) return <Pressable onLongPress={onLongPress} delayLongPress={400} accessible={false} style={[s.card, style]}>{children}</Pressable>
   return <View style={[s.card, style]}>{children}</View>
 }
 

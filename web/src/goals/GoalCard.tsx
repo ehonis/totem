@@ -5,6 +5,8 @@ import {
   PencilIcon, PencilSquareIcon, PlayIcon, PlusIcon, TrashIcon, TrophySolidIcon, XMarkIcon,
 } from '../icons'
 import GoalNumbers from './GoalNumbers'
+import ChatAbout from '../chat/about/ChatAbout'
+import { goalContext } from '../chat/about/context'
 import { GOAL_DONE_ICON, goalIconFor } from './goalIcon'
 import { formatAmount } from './types'
 import type { Goal, GoalMetric, GoalMetricChanges, GoalOptions, SubGoal } from './types'
@@ -555,6 +557,7 @@ export default function GoalCard({ goal, busy, options = null, onToggle, onToggl
         </div>
 
         <div className="goal-card-tools">
+          <ChatAbout of={() => goalContext(goal)} host=".goal-card" />
           {menuButton}
           <button
             className={`goal-check big${goal.complete ? ' won' : ''}`}
