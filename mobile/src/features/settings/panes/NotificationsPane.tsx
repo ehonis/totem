@@ -9,13 +9,13 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { Linking, View } from 'react-native'
 import * as Notifications from 'expo-notifications'
 import { api } from '../../../lib/api'
-import { getDevices, sendTestPush } from '../../../lib/push'
+import { getDedupe, getDevices, saveDedupe, sendTestPush, STORY_MATCH, type DedupeSettings, type DedupeState } from '../../../lib/push'
 import { Hi, BellAlertIcon, CheckCircleIcon, DevicePhoneMobileIcon, WarnIcon } from '../../../lib/icons'
 import { colors, alpha } from '../../../theme'
 import { T } from '../../../ui/Text'
 import { Btn } from '../../../ui/kit'
 import { registerForPush, type PushStatus } from '../../../shell/push'
-import { PaneHead, SectionTitle, SettingList, SettingRow } from '../ui'
+import { Note, PaneHead, SectionTitle, Select, SettingList, SettingRow } from '../ui'
 
 type Device = {
   id: string
@@ -202,6 +202,69 @@ export default function NotificationsPane() {
         onPress={async () => { setRefreshing(true); await refresh(); setRefreshing(false) }}
         style={{ alignSelf: 'flex-start', marginTop: 12 }}
       />
+
+      <Duplicates />
     </View>
+  )
+}
+
+// The web pane's Duplicates section (NotificationsSettings.tsx): the dedupe
+// gate's settings and what it held back.
+function Duplicates() {
+  const [state, setState] = useState<DedupeState | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getDedupe().then(setState).catch((e) => setError(e instanceof Error ? e.message : String(e)))
+  }, [])
+
+  const save = async (patch: Partial<DedupeSettings>) => {
+    setError(null)
+    try {
+      const { settings } = await saveDedupe(patch)
+      setState((s) => (s ? { ...s, settings } : s))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  if (!state) return <Note text={error || undefined} error />
+  const { settings } = state
+  const onOff = [{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]
+  const match = STORY_MATCH.map((m) => ({ value: String(m.value), label: m.label }))
+  if (!match.some((m) => m.value === String(settings.sameStoryScore))) {
+    match.push({ value: String(settings.sameStoryScore), label: `Custom (${settings.sameStoryScore})` })
+  }
+
+  return (
+    <>
+      <SectionTitle title="Duplicates" />
+      <SettingList>
+        <SettingRow
+          title="Hold back repeats"
+          desc="A quota stays spent until it resets, and a story several feeds report goes out once. Reminders, approvals and chat answers are never held back."
+        >
+          <Select value={settings.enabled ? 'on' : 'off'} options={onOff} onChange={(v) => void save({ enabled: v === 'on' })} />
+        </SettingRow>
+        <SettingRow title="Same story" desc="How alike two headlines must be. The same link, or the same model and version, always counts.">
+          <Select value={String(settings.sameStoryScore)} options={match} disabled={!settings.enabled} onChange={(v) => void save({ sameStoryScore: Number(v) })} />
+        </SettingRow>
+        <SettingRow title="Ask a model about close calls" desc="Only for headlines the overlap could not settle. If it fails, the notification goes out.">
+          <Select value={settings.modelCheck ? 'on' : 'off'} options={onOff} disabled={!settings.enabled} onChange={(v) => void save({ modelCheck: v === 'on' })} />
+        </SettingRow>
+        <SettingRow
+          title={`${state.suppressed} held back in the last ${state.days} days`}
+          desc={state.suppressed ? 'Each is counted on the notification it repeated.' : 'Nothing has been a repeat lately.'}
+        />
+        {state.items.slice(0, 10).map((item) => (
+          <SettingRow
+            key={item.id}
+            title={item.body || item.title}
+            desc={`${item.reason === 'same-story' ? `Same story as “${item.duplicateTitle}”` : 'Already sent'} · ${when(item.at)}`}
+          />
+        ))}
+      </SettingList>
+      <Note text={error || undefined} error />
+    </>
   )
 }

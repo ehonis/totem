@@ -646,17 +646,19 @@ export function createJobStore({
     // Hand it to the notifier, which owns the ledger the bell reads and the push
     // to the phone. Best effort in exactly the way the webhook below is: a job
     // that failed must not also fail to be recorded because the phone is gone.
+    let delivered = null
     if (deliver) {
       try {
-        await deliver(item)
+        delivered = await deliver(item)
       } catch (e) {
         log('notification delivery failed', e.message || e)
       }
     }
     // Optional off-box delivery. ntfy/Pushover-shaped: the body is the message and
     // the title rides in a header. Best effort — a dead webhook must never take
-    // down the run that raised it.
-    if (webhookUrl && fetchImpl) {
+    // down the run that raised it. Not for a repeat the notifier's dedupe gate
+    // held back: a second phone is still a phone.
+    if (webhookUrl && fetchImpl && !delivered?.suppressed) {
       try {
         await fetchImpl(webhookUrl, {
           method: 'POST',
@@ -668,7 +670,9 @@ export function createJobStore({
         log('notification webhook failed', e.message || e)
       }
     }
-    return item
+    // What the notifier did with it (`ok`, `suppressed`, `reason`), for a caller
+    // that has to know whether it reached anyone. Null without a notifier.
+    return { ...item, delivery: delivered || null }
   }
 
   async function notifications({ limit = 30 } = {}) {

@@ -12,8 +12,13 @@
 // subscription, the native iPhone app is an APNs device token (apns.mjs). Every
 // category, quiet hour and queue rule is upstream of this, so both get the same
 // notifications.
+//
+// And one gate, before either: every delivery asks notify/dedupe.mjs whether it
+// has already been said, by key or by story. Being the one place a push goes out
+// is what makes that a guarantee rather than a convention each caller keeps.
 import { sendPush, pushPayload } from './push.mjs'
 import { apnsDismissPayload, apnsPayload } from './apns.mjs'
+import { createDedupeGate } from './dedupe.mjs'
 
 export function createNotifier({
   store,
@@ -21,6 +26,9 @@ export function createNotifier({
   sendImpl = sendPush,
   // createApnsSender(...) when APNS_* is set; null keeps the native app off.
   apns = null,
+  // The dedupe gate (notify/dedupe.mjs). The bridge passes one backed by a file;
+  // without one, an in-memory gate still holds back repeats within a process.
+  gate = createDedupeGate(),
   log = () => {},
 }) {
   const webConfigured = () => Boolean(vapid?.publicKey && vapid?.privateKey && vapid?.subject)
@@ -38,18 +46,59 @@ export function createNotifier({
   // Send one message to every active device. Returns a per-device report rather
   // than a boolean, because "it went to the iPhone but the iPad is gone" is the
   // answer the Settings panel has to be able to show.
-  async function deliver({ title, body = '', url = null, category = 'reminder.adhoc', entryId = null, factKind = null, tag = null, endpoint = null, record = true, declarative = true }) {
+  async function deliver({
+    title, body = '', url = null, category = 'reminder.adhoc', entryId = null, factKind = null, tag = null, endpoint = null, record = true, declarative = true,
+    // What the gate identifies this by: an explicit key and how long it stays
+    // said, and for news the story itself ({ title, url }). See notify/dedupe.mjs.
+    dedupeKey = null, dedupeUntil = null, story = null,
+  }) {
+    // A test sent to one device is a test, not a notification: it is not recorded
+    // and not remembered as said.
+    let verdict = { action: 'send', ticket: null }
+    if (!endpoint) {
+      try {
+        verdict = await gate.admit({ category, title, body, url, entryId, dedupeKey, dedupeUntil, story })
+      } catch (e) {
+        // A broken dedupe log must not become silence. Send it, and say so.
+        log('dedupe gate failed, sending anyway', e?.message || e)
+      }
+    }
+    if (verdict.action === 'suppress') {
+      // Folded into the one he already has: the bell's copy counts it. One still
+      // going out has no bell copy yet; its confirm() hands this back to count.
+      if (verdict.match?.ledgerId) await countSimilar(verdict.match.ledgerId, [{ title, body, url }])
+      return { ok: false, suppressed: true, reason: verdict.reason, duplicateOf: verdict.match?.duplicateOf || null, retryable: false, delivered: 0, results: [] }
+    }
+    if (verdict.action === 'defer') {
+      // Waiting on the model check (dedupe.mjs). Only queued entries are deferred;
+      // the drain puts this one back until `until`.
+      return { ok: false, deferred: true, until: verdict.until, reason: 'dedupe-check', retryable: false, delivered: 0, results: [] }
+    }
+
+    // `reached`: whether the bell or a phone has it. Not reached releases the
+    // gate's reservation, so a retry, or tomorrow's plan, is not called a repeat
+    // of a notification that never arrived.
+    const remember = async (reached) => {
+      const item = record ? await store.record({ category, title, body, url, entryId, factKind, level: 'info' }) : null
+      try {
+        const { similar } = await gate.confirm(verdict.ticket, { ok: reached, ledgerId: item?.id || null })
+        if (similar?.length) await countSimilar(item.id, similar)
+      } catch (e) {
+        log('dedupe confirm failed', e?.message || e)
+      }
+    }
+
     if (!configured()) {
       // Still recorded. A push that could not be sent is not a notification that
       // did not happen — the bell is the complete record.
-      if (record) await store.record({ category, title, body, url, entryId, factKind, level: 'info' })
+      await remember(record)
       return { ok: false, reason: 'not-configured', results: [] }
     }
 
     const all = await store.listSubscriptions()
     const targets = all.filter((s) => s.state === 'active' && reachable(s) && (!endpoint || s.endpoint === endpoint))
     if (!targets.length) {
-      if (record) await store.record({ category, title, body, url, entryId, factKind, level: 'info' })
+      await remember(record)
       return { ok: false, reason: 'no-devices', results: [] }
     }
 
@@ -88,9 +137,8 @@ export function createNotifier({
       return { id: sub.id, label: sub.label, ...result }
     }))
 
-    if (record) await store.record({ category, title, body, url, entryId, factKind, level: 'info' })
-
     const delivered = results.filter((r) => r.ok).length
+    await remember(delivered > 0)
     return {
       ok: delivered > 0,
       reason: delivered ? null : (results.every((r) => r.gone) ? 'all-devices-gone' : 'send-failed'),
@@ -101,6 +149,14 @@ export function createNotifier({
       delivered,
       results,
       error: results.find((r) => !r.ok)?.error || null,
+    }
+  }
+
+  async function countSimilar(ledgerId, rows) {
+    if (!store.noteSimilar) return
+    for (const row of rows) {
+      await store.noteSimilar(ledgerId, { title: row.title, body: row.body, url: row.url })
+        .catch((e) => log('similar count failed', e?.message || e))
     }
   }
 
@@ -131,6 +187,9 @@ export function createNotifier({
   async function drain({ at = Date.now(), revalidate = null, limit = 10 } = {}) {
     const { claimed, expired } = await store.claimDue({ at, limit })
     const sent = []
+    // Pinned first: nothing a story or a quota is waiting on should come before
+    // a reminder or an approval code.
+    claimed.sort((a, b) => Number(gate.isPinned?.(b.category) || false) - Number(gate.isPinned?.(a.category) || false))
 
     for (const entry of claimed) {
       let title = entry.title
@@ -141,6 +200,14 @@ export function createNotifier({
       // than cancelled, so the queue keeps its history.
       if (isRetiredNudge(entry)) {
         await store.finish(entry.id, { outcome: 'stale' })
+        continue
+      }
+
+      // Something asked for this to wait (gate.addHold): back to pending, due
+      // again at `until`, with the attempt it was just charged handed back.
+      const hold = gate.shouldHold(entry, at)
+      if (hold) {
+        await store.finish(entry.id, { outcome: 'held', until: hold.until })
         continue
       }
 
@@ -191,7 +258,25 @@ export function createNotifier({
         entryId: entry.id,
         factKind: entry.factKind,
         tag: entry.dedupeKey,
+        dedupeKey: entry.dedupeKey,
+        dedupeUntil: entry.dedupeUntil,
+        story: entry.story,
       })
+
+      // Already said, by key or by story. Finished, not failed: there is nothing
+      // to retry, and the queue row says which notification it was folded into.
+      if (result.suppressed) {
+        await store.finish(entry.id, { outcome: 'suppressed', error: result.duplicateOf ? `same as ${result.duplicateOf}` : result.reason })
+        sent.push({ id: entry.id, ok: false, suppressed: true, title })
+        continue
+      }
+      // A model check is deciding whether this repeats an earlier story; it is
+      // asked again once that answer is in.
+      if (result.deferred) {
+        await store.finish(entry.id, { outcome: 'held', until: result.until })
+        sent.push({ id: entry.id, ok: false, held: true, title })
+        continue
+      }
 
       await store.finish(entry.id, {
         outcome: result.ok ? 'delivered' : 'failed',
@@ -220,7 +305,7 @@ export function createNotifier({
     return { sent, expired: expired.length, claimed: claimed.length }
   }
 
-  return { deliver, dismiss, drain, configured, nativeConfigured: () => Boolean(apns) }
+  return { deliver, dismiss, drain, configured, nativeConfigured: () => Boolean(apns), gate }
 }
 
 // Habit completion nudges ("streak ends tonight", "one more to finish", "short

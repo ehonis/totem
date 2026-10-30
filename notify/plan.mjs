@@ -107,6 +107,10 @@ export function planDay({
       weight: item.weight,
       pinned: item.pinned,
       subject: item.subject || null,
+      // A fact that knows its own identity better than "this subject, today"
+      // (notify/usage.mjs: this quota window) carries it through to the queue.
+      dedupeKey: item.dedupeKey || null,
+      dedupeUntil: Number.isFinite(item.dedupeUntil) ? item.dedupeUntil : null,
       expiresAt: Number.isFinite(item.expiresAt) ? item.expiresAt : null,
       // Re-checked seconds before sending, hours after planning. This is what
       // stops "you're one away from finishing" arriving after it was finished.

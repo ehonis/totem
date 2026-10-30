@@ -4,7 +4,7 @@
 // still be true at the time it is delivered. Everything else here is wording.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { usageFacts, paceRatio, resetPhrase } from './usage.mjs'
+import { usageFacts, paceRatio, resetPhrase, windowId } from './usage.mjs'
 
 const TZ = 'America/New_York'
 const NOW = Date.UTC(2026, 8, 17, 19, 0) // Thursday, 3 PM in New York
@@ -133,4 +133,67 @@ test('reset times read like a person said them', async () => {
   assert.equal(resetPhrase(NOW + 2 * DAY, NOW, TZ), 'resets Saturday at 3 PM')
   // A window that has already turned over has nothing to say about when it will.
   assert.equal(resetPhrase(NOW - HOUR, NOW, TZ), '')
+})
+
+// The shape of the duplicate that started this: one account, three meters, all
+// spent for eleven days until one monthly reset.
+const cursorSpent = (resetsAt) => account({
+  id: 'cursor:cursor-default',
+  backend: 'cursor',
+  displayName: 'Cursor',
+  meters: [
+    meter({ key: 'total', label: 'Included usage', usedPct: 100, windowMinutes: 30 * 24 * 60, resetsAt }),
+    meter({ key: 'auto', label: 'Auto models', usedPct: 100, windowMinutes: 30 * 24 * 60, resetsAt }),
+    meter({ key: 'api', label: 'Named API models', usedPct: 100, windowMinutes: 30 * 24 * 60, resetsAt }),
+  ],
+})
+
+test('every meter of one account spent until the same reset is one fact', async () => {
+  const all = facts(cursorSpent(NOW + 10 * DAY))
+  assert.equal(all.length, 1)
+  assert.equal(all[0].kind, 'usage.spent')
+  assert.match(all[0].body, /^Cursor: the included usage, auto models and named api models are used up, resets/)
+})
+
+test('a spent fact is keyed by its window, not by the day it was planned', async () => {
+  const resetsAt = NOW + 10 * DAY
+  const today = usageFacts({ accounts: [cursorSpent(resetsAt)], now: NOW, tz: TZ })[0]
+  // Read again three days later, and with the vendor reporting the reset a few
+  // seconds off: the same window, so the same key.
+  const later = usageFacts({ accounts: [cursorSpent(resetsAt + 7_000)], now: NOW + 3 * DAY, tz: TZ })[0]
+  assert.equal(today.dedupeKey, later.dedupeKey)
+  assert.equal(today.dedupeUntil, resetsAt)
+  // The next window is a different key.
+  const next = usageFacts({ accounts: [cursorSpent(resetsAt + 30 * DAY)], now: resetsAt + DAY, tz: TZ })[0]
+  assert.notEqual(next.dedupeKey, today.dedupeKey)
+})
+
+test('a running-low nudge is keyed per meter, ten-point step and window', async () => {
+  const [at86] = facts(account({ meters: [meter({ usedPct: 86 })] }))
+  assert.equal(at86.dedupeKey, `usage:claude:claude-default:weekly_all::low80:${windowId(NOW + 3 * DAY, NOW, TZ)}`)
+  assert.equal(at86.dedupeUntil, NOW + 3 * DAY)
+  // Still in the eighties: the same thing to say. Past ninety: a new one.
+  assert.equal(facts(account({ meters: [meter({ usedPct: 89 })] }))[0].dedupeKey, at86.dedupeKey)
+  assert.notEqual(facts(account({ meters: [meter({ usedPct: 91 })] }))[0].dedupeKey, at86.dedupeKey)
+})
+
+test('a meter with no reset time falls back to once a day', async () => {
+  assert.equal(windowId(null, NOW, TZ), '2026-09-17')
+})
+
+test('a reset reported a second either side of a whole hour, half past or midnight is one window', async () => {
+  const boundaries = [
+    Date.UTC(2026, 9, 30, 16, 0), // a whole hour, and a five-hour multiple since the epoch
+    Date.UTC(2026, 9, 3, 14, 30),
+    Date.UTC(2026, 10, 1, 0, 0), // UTC midnight
+    Date.UTC(2026, 10, 3, 10, 32), // a billing reset on its own minute
+  ]
+  for (const at of boundaries) {
+    const ids = [-5000, -1000, 0, 1000, 5000].map((d) => windowId(at + d, NOW, TZ))
+    assert.equal(new Set(ids).size, 1, `${new Date(at).toISOString()}: ${ids.join(' ')}`)
+  }
+  // Two consecutive windows of one meter never share an id, however short.
+  const at = Date.UTC(2026, 9, 30, 16, 0)
+  assert.notEqual(windowId(at, NOW, TZ), windowId(at + 5 * 3_600_000, NOW, TZ))
+  assert.notEqual(windowId(at, NOW, TZ), windowId(at + 7 * DAY, NOW, TZ))
 })

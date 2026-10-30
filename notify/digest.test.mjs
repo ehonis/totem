@@ -21,7 +21,7 @@ const fact = (over) => ({
   ...over,
 })
 
-async function harness({ facts = [], writeCopy = null, settings = () => ({}) } = {}) {
+async function harness({ facts = [], writeCopy = null, settings = () => ({}), sentKeys = null } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'totem-digest-'))
   const store = createNotifyStore({
     queueFile: join(dir, 'q.json'),
@@ -35,6 +35,7 @@ async function harness({ facts = [], writeCopy = null, settings = () => ({}) } =
     store,
     writeCopy,
     settings,
+    sentKeys,
     // Short, so the timeout path is a fast test rather than a 90 second one.
     budgetMs: 50,
   })
@@ -233,4 +234,32 @@ test('a fact already delivered today is not re-planned by the evening run', asyn
   const evening = await digest({ now: NOW, tz: TZ, source: 'evening-digest' })
   assert.equal(evening.status, 'skipped')
   assert.equal((await store.listQueue({ state: 'pending' })).length, 0)
+})
+
+test('a fact the dedupe gate already sent is not planned, so it costs no slot of the cap', async () => {
+  const asked = []
+  const { digest, store } = await harness({
+    facts: [
+      fact({ kind: 'usage.spent', category: 'usage.blocked', subject: 'cursor:spent', dedupeKey: 'usage:cursor:spent:2026-10-03T14', title: 'Quota spent' }),
+      fact({ kind: 'goal.near-complete', category: 'goal.nearcomplete', subject: 'g1', title: 'nearly there' }),
+    ],
+    sentKeys: async (at) => { asked.push(at); return new Set(['usage:cursor:spent:2026-10-03T14']) },
+  })
+  const result = await digest({ now: NOW, tz: TZ })
+  assert.equal(result.planned, 1)
+  assert.deepEqual((await store.listQueue()).map((e) => e.title), ['nearly there'])
+  // The fact's own key, not "this subject, today", is what is matched, and the
+  // log is read once per run rather than once per fact.
+  assert.deepEqual(asked, [NOW])
+})
+
+test('a fact with its own key is queued under it, with how long it stays said', async () => {
+  const until = NOW + 5 * 86_400_000
+  const { digest, store } = await harness({
+    facts: [fact({ kind: 'usage.spent', category: 'usage.blocked', subject: 'cursor:spent', dedupeKey: 'usage:cursor:spent:w1', dedupeUntil: until, title: 'Quota spent' })],
+  })
+  await digest({ now: NOW, tz: TZ })
+  const [entry] = await store.listQueue()
+  assert.equal(entry.dedupeKey, 'usage:cursor:spent:w1')
+  assert.equal(entry.dedupeUntil, until)
 })

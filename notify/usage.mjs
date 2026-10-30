@@ -17,12 +17,35 @@
 // Everything here also carries an identity, so a percentage that moves between the
 // plan and the push is re-worded at delivery rather than sent stale. See
 // notify/revalidate.mjs.
+//
+// AND A KEY PER WINDOW, NOT PER DAY. A monthly Cursor window spent on the 23rd
+// stays spent until the 3rd, and the digest's usual key ("this subject, today")
+// made that eleven days of the same push, three times a day: one per meter. So a
+// fact here names the reset window it is about (`dedupeKey`, kept until the
+// window resets, `dedupeUntil`), and every meter of one account that is spent
+// until the same reset is one fact. The dedupe gate (notify/dedupe.mjs) remembers
+// the key across restarts: once per threshold per window. "Running low" counts in
+// tens (80%, then 90%): a window that goes on emptying is a new thing to say,
+// once per step. Going fast and going unused are once per window.
 import { localParts } from '../jobs/schedule.mjs'
 import { dayKey, endOfDay } from './schedule.mjs'
 import { fitTitle, bodyOf } from './text.mjs'
 
 const MINUTE = 60_000
 const DAY_MINUTES = 24 * 60
+
+// Which window a reset time belongs to: the reset, to the nearest quarter hour.
+// A vendor reports the same reset a few seconds apart on two polls, and resets
+// land on whole hours (Claude), on midnight, or on a fixed minute of a billing
+// day (Cursor), so the rounding's split points (7½ minutes either side of a
+// quarter) fall where no vendor reports. Two consecutive resets of one meter are a
+// whole window apart, so they never share an id. A meter with no reset time falls
+// back to the day, which is the old behaviour.
+const QUARTER_HOUR = 15 * MINUTE
+export function windowId(resetsAt, now, tz) {
+  if (!Number.isFinite(resetsAt) || resetsAt <= 0) return dayKey(now, tz)
+  return new Date(Math.round(resetsAt / QUARTER_HOUR) * QUARTER_HOUR).toISOString().slice(0, 16)
+}
 
 export const USAGE_DEFAULTS = {
   // Past this, the rest of the window is worth planning around.
@@ -60,6 +83,8 @@ export function usageFacts({
     // something he cannot act on from a lock screen.
     if (account.status && account.status !== 'ok') continue
     const who = nameOf(account)
+    // Spent meters, by the window they refill with. See the header.
+    const spent = new Map()
 
     for (const meter of account.meters || []) {
       const used = Number(meter.usedPct)
@@ -79,24 +104,19 @@ export function usageFacts({
       const resets = Number(meter.resetsAt) || null
       const resetsIn = resets ? resets - now : null
       const when = resetPhrase(resets, now, tz)
+      const window = windowId(resets, now, tz)
+      // Said once until the window resets, not once a day.
+      const keyed = (kind) => ({
+        dedupeKey: `usage:${subject}:${kind}:${window}`,
+        dedupeUntil: resets || endOfDay(now, tz),
+      })
 
       // 1. Spent. True until the window resets, whatever the window's length, so
-      //    this is the only thing a five-hour window may say.
+      //    this is the only thing a five-hour window may say. Gathered per window
+      //    and raised once per account below.
       if (used >= cfg.spentPct) {
-        out.push({
-          kind: 'usage.spent',
-          category: 'usage.blocked',
-          salience: 80,
-          slot: 'midday',
-          subject,
-          title: fitTitle('Quota spent', `${who} ${label}`),
-          body: bodyOf(`${who}: the ${label.toLowerCase()} is used up${when ? `, ${when}` : ''}.`),
-          url: base.url,
-          // The moment it resets this stops being true, and a "you're out" that
-          // arrives after the refill is the exact failure this file avoids.
-          expiresAt: resets || endOfDay(now, tz),
-          revalidate: { collector: 'usage', identity: base.identityFor('spent'), factKey: `${base.identityFor('spent')}:${Math.round(used)}` },
-        })
+        if (!spent.has(window)) spent.set(window, { resets, when, meters: [] })
+        spent.get(window).meters.push({ key: meter.key, label, used })
         continue
       }
 
@@ -115,6 +135,8 @@ export function usageFacts({
           url: base.url,
           expiresAt: resets || endOfDay(now, tz),
           revalidate: { collector: 'usage', identity: base.identityFor('low'), factKey: `${base.identityFor('low')}:${Math.round(used)}` },
+          // Once per ten points: 80% and 90% are two things to say.
+          ...keyed(`low${Math.floor(used / 10) * 10}`),
         })
         continue
       }
@@ -143,6 +165,7 @@ export function usageFacts({
           url: base.url,
           expiresAt: endOfDay(now, tz),
           revalidate: { collector: 'usage', identity: base.identityFor('burning'), factKey: `${base.identityFor('burning')}:${Math.round(used)}` },
+          ...keyed('burning'),
         })
         continue
       }
@@ -167,12 +190,49 @@ export function usageFacts({
           url: base.url,
           expiresAt: resets,
           revalidate: { collector: 'usage', identity: base.identityFor('idle'), factKey: `${base.identityFor('idle')}:${Math.round(used)}` },
+          ...keyed('idle'),
         })
       }
+    }
+
+    for (const [window, { resets, when, meters }] of spent) {
+      out.push(spentFact({ account, who, window, resets, when, meters, now, tz }))
     }
   }
 
   return out
+}
+
+// One account, one window, every meter of it that is used up: "Cursor: the
+// included usage, auto models and named api models are used up, resets
+// Tuesday." Identified by the account and the window, not the meter, so a
+// fourth meter running out in the same window is not news either.
+function spentFact({ account, who, window, resets, when, meters, now, tz }) {
+  const identity = `usage:${account.id}:spent:${window}`
+  const labels = meters.map((m) => m.label.toLowerCase())
+  const named = labels.length === 1
+    ? `the ${labels[0]} is`
+    : `the ${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]} are`
+  return {
+    kind: 'usage.spent',
+    category: 'usage.blocked',
+    salience: 80,
+    slot: 'midday',
+    subject: `${account.id}:spent`,
+    title: fitTitle('Quota spent', meters.length === 1 ? `${who} ${meters[0].label}` : who),
+    body: bodyOf(`${who}: ${named} used up${when ? `, ${when}` : ''}.`),
+    url: '/settings/providers#usage',
+    // The moment it resets this stops being true, and a "you're out" that
+    // arrives after the refill is the exact failure this file avoids.
+    expiresAt: resets || endOfDay(now, tz),
+    revalidate: {
+      collector: 'usage',
+      identity,
+      factKey: `${identity}:${meters.map((m) => `${m.key}=${Math.round(m.used)}`).join(',')}`,
+    },
+    dedupeKey: identity,
+    dedupeUntil: resets || endOfDay(now, tz),
+  }
 }
 
 // How far ahead of an even burn this window is. 1.0 means the quota is being

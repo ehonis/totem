@@ -133,6 +133,11 @@ export default function NotificationCenter({ open, onClose, onNavigate }: {
                 {when(item.ts)}
                 {item.openedAt ? ' · opened' : ''}
                 {item.state === 'failed' ? ' · not delivered' : ''}
+                {item.similar ? (
+                  <span title={(item.similarItems || []).map((r) => r.body || r.title).join('\n')}>
+                    {` · ${item.similar} similar held back`}
+                  </span>
+                ) : null}
               </span>
 
               {rating === item.id && (

@@ -537,6 +537,9 @@ export function factsFor(source, payload, seen = {}, { now = Date.now(), maxAgeD
       url: item.url,
       expiresAt: now + 2 * DAY,
       revalidate: null,
+      // What the dedupe gate compares with the stories already sent: another
+      // source's copy of the same launch is folded into the first (notify/dedupe.mjs).
+      story: { title: item.title, url: item.url || null },
     })
   }
 

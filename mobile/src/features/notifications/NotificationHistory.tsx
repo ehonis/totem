@@ -137,6 +137,7 @@ export default function NotificationHistory() {
                 {when(item.ts)}
                 {item.openedAt ? ' · opened' : ''}
                 {item.state === 'failed' ? ' · not delivered' : ''}
+                {item.similar ? ` · ${item.similar} similar held back` : ''}
               </T>
 
               {rating === item.id ? (

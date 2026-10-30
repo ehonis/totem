@@ -16,6 +16,7 @@
 import { generateVapidKeys } from './push.mjs'
 import { deriveWeights } from './weights.mjs'
 import { CATEGORIES } from './categories.mjs'
+import { DEDUPE_DEFAULTS } from './dedupe.mjs'
 
 const JSON_TYPE = { 'content-type': 'application/json; charset=utf-8' }
 const MAX_BODY = 64 * 1024
@@ -67,7 +68,7 @@ function safeHost(endpoint) {
   try { return new URL(endpoint).host } catch { return null }
 }
 
-export function createPushHttpHandler({ store, notifier, vapidPublicKey = null, categories = CATEGORIES }) {
+export function createPushHttpHandler({ store, notifier, vapidPublicKey = null, categories = CATEGORIES, gate = notifier?.gate || null }) {
   if (!store) throw new TypeError('createPushHttpHandler requires store')
   if (!notifier) throw new TypeError('createPushHttpHandler requires notifier')
 
@@ -294,6 +295,34 @@ export function createPushHttpHandler({ store, notifier, vapidPublicKey = null, 
           reasons: Array.isArray(body.reasons) ? body.reasons : [],
         })
         send(res, 200, { ok: true, at: row.ts })
+        return true
+      }
+
+      // The dedupe gate's settings and what it has held back (notify/dedupe.mjs):
+      // Settings → Notifications › Duplicates.
+      if (req.method === 'GET' && path === '/api/push/dedupe') {
+        if (!gate) { send(res, 404, { error: 'no dedupe gate' }); return true }
+        const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 7, 1), 30)
+        const since = (gate.now?.() ?? Date.now()) - days * 86_400_000
+        const [settings, suppressed] = await Promise.all([
+          gate.settings(),
+          gate.suppressed({ since, limit: Math.min(Number(url.searchParams.get('limit')) || 20, 100) }),
+        ])
+        send(res, 200, {
+          settings,
+          defaults: DEDUPE_DEFAULTS,
+          days,
+          suppressed: suppressed.count,
+          items: suppressed.items,
+          categories: Object.fromEntries(Object.entries(categories).map(([k, v]) => [k, v.label])),
+        })
+        return true
+      }
+
+      if (req.method === 'POST' && path === '/api/push/dedupe') {
+        if (!gate) { send(res, 404, { error: 'no dedupe gate' }); return true }
+        const body = await readJson(req)
+        send(res, 200, { settings: await gate.saveSettings(body.settings || body) })
         return true
       }
 

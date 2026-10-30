@@ -17,6 +17,7 @@ import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { deliveryState, dedupeKey as buildDedupeKey, DEFAULT_CATCH_UP_MINUTES } from './schedule.mjs'
 import { categoryDef, CATEGORIES } from './categories.mjs'
+import { storyOf } from './dedupe.mjs'
 
 const MAX_LEDGER = 200
 // A delivered entry is kept in the queue long enough to attribute feedback and a
@@ -101,6 +102,11 @@ export function createNotifyStore({
         body: String(input.body || '').slice(0, 600),
         url: input.url || null,
         dedupeKey: key,
+        // How long the key stays said once sent, when the fact knows (a quota
+        // window says until it resets), and the story a news item tells. Both are
+        // read by the dedupe gate at delivery (notify/dedupe.mjs).
+        dedupeUntil: Number.isFinite(input.dedupeUntil) ? input.dedupeUntil : null,
+        story: storyOf(input),
         // Kept, not just used to build the dedupe key: the revalidator reads it at
         // delivery to find the goal or habit this entry is about. Without it, a
         // resolver looking up `undefined` finds nothing and reports the thing
@@ -141,6 +147,8 @@ export function createNotifyStore({
           revalidate: entry.revalidate,
           resolvedTitle: entry.resolvedTitle,
           expiresAt: entry.expiresAt,
+          dedupeUntil: entry.dedupeUntil,
+          story: entry.story,
         })
         await writeQueue(entries)
         return { entry: clash, deduped: true }
@@ -173,10 +181,11 @@ export function createNotifyStore({
         const def = categoryDef(e.category, categories)
         // Only a fact that names its subject has an identity worth deduping on.
         // "a habit is slipping" is a class of thing; "the journal habit, today"
-        // is a thing.
-        const dedupeKey = e.subject
+        // is a thing. A fact may name its own key when the day is the wrong unit:
+        // a quota window that is spent for eleven days is one fact, not eleven.
+        const dedupeKey = e.dedupeKey || (e.subject
           ? buildDedupeKey({ category: e.category, factKind: e.factKind, subject: e.subject, date: plan.planDate })
-          : null
+          : null)
         // Belt and braces: an entry already delivered today must not be said again
         // because a later plan rediscovered the same fact.
         if (dedupeKey && seen.has(dedupeKey)) continue
@@ -191,6 +200,8 @@ export function createNotifyStore({
           body: e.body || '',
           url: e.url || null,
           dedupeKey,
+          dedupeUntil: Number.isFinite(e.dedupeUntil) ? e.dedupeUntil : null,
+          story: storyOf(e),
           subject: e.subject || null,
           source: plan.source,
           planId: plan.planId,
@@ -257,9 +268,10 @@ export function createNotifyStore({
     })
   }
 
-  // The other half of claimDue. `outcome` is 'delivered' | 'failed' | 'stale' —
-  // stale being a revalidation miss, which is a success of the design, not a fault.
-  async function finish(id, { outcome, error = null, title = null, body = null, url = null, retryable = true } = {}) {
+  // The other half of claimDue. `outcome` is 'delivered' | 'failed' | 'stale' |
+  // 'suppressed' | 'held' — stale being a revalidation miss and suppressed a
+  // repeat the dedupe gate caught, both successes of the design, not faults.
+  async function finish(id, { outcome, error = null, title = null, body = null, url = null, retryable = true, until = null } = {}) {
     return withLock(async () => {
       const entries = await readQueue()
       const entry = entries.find((e) => e.id === id)
@@ -276,6 +288,14 @@ export function createNotifyStore({
         if (url) entry.url = url
       } else if (outcome === 'stale') {
         entry.state = 'stale'
+      } else if (outcome === 'suppressed') {
+        entry.state = 'suppressed'
+        entry.lastError = error ? String(error).slice(0, 300) : null
+      } else if (outcome === 'held') {
+        // Waiting is not an attempt: the claim's charge is handed back.
+        entry.state = 'pending'
+        entry.attempts = Math.max(0, entry.attempts - 1)
+        if (Number.isFinite(until)) entry.deliverAt = until
       } else {
         entry.lastError = error ? String(error).slice(0, 300) : 'failed'
         // Returned to pending to be retried; abandoned once it has had its three,
@@ -430,19 +450,45 @@ export function createNotifyStore({
       factKind,
       read: false,
     }
-    await withLock(async () => {
+    return withLock(async () => {
       const parsed = await readJson(ledgerFile, null)
       const items = Array.isArray(parsed?.items) ? parsed.items : []
+      // A queued entry retried after a failed send is one notification, so one
+      // row: the retry rewrites the row its first attempt left.
+      const earlier = entryId ? items.find((i) => i.entryId === entryId) : null
+      if (earlier) {
+        Object.assign(earlier, { ts: item.ts, title: item.title, body: item.body, url: item.url })
+        await writeJson(ledgerFile, { items })
+        return earlier
+      }
       items.unshift(item)
       await writeJson(ledgerFile, { items: items.slice(0, MAX_LEDGER) })
-    }).catch((e) => log('ledger write failed', e.message || e))
-    return item
+      return item
+    }).catch((e) => { log('ledger write failed', e.message || e); return item })
   }
 
   async function ledger({ limit = 50 } = {}) {
     const parsed = await readJson(ledgerFile, null)
     const items = Array.isArray(parsed?.items) ? parsed.items : []
     return { items: items.slice(0, limit), unread: items.filter((i) => !i.read).length }
+  }
+
+  // A repeat the dedupe gate held back, counted on the notification it repeated:
+  // the bell shows "+N similar" and what they were, rather than N more rows.
+  async function noteSimilar(ledgerId, { title = '', body = '', url = null } = {}) {
+    return withLock(async () => {
+      const parsed = await readJson(ledgerFile, null)
+      const items = Array.isArray(parsed?.items) ? parsed.items : []
+      const item = items.find((i) => i.id === ledgerId)
+      if (!item) return null
+      item.similar = (item.similar || 0) + 1
+      item.similarItems = [
+        { ts: now(), title: String(title).slice(0, 160), body: String(body).slice(0, 200), url },
+        ...(item.similarItems || []),
+      ].slice(0, 5)
+      await writeJson(ledgerFile, { items })
+      return item
+    })
   }
 
   async function markRead(ids = null) {
@@ -522,7 +568,7 @@ export function createNotifyStore({
     queueFile, subscriptionsFile, ledgerFile, feedbackFile,
     enqueue, applyPlan, claimDue, finish, listQueue, cancel, prune,
     listSubscriptions, saveSubscription, expireSubscription, markDelivered, removeSubscription,
-    record, ledger, markRead,
+    record, ledger, markRead, noteSimilar,
     recordFeedback, markOpened, markIgnoredCounted, readFeedback,
   }
 }

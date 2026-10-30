@@ -18,7 +18,14 @@ import { dayKey, normalizePlanSettings, dedupeKey as buildDedupeKey } from './sc
 // agent CLI cold-starting a model does not answer in eight seconds.
 const AI_BUDGET_MS = Number(process.env.DIGEST_AI_BUDGET_MS) || 90_000
 
-export function createDigest({ collect, store, writeCopy = null, settings = () => ({}), log = () => {}, budgetMs = AI_BUDGET_MS, categories = undefined }) {
+export function createDigest({
+  collect, store, writeCopy = null, settings = () => ({}), log = () => {}, budgetMs = AI_BUDGET_MS, categories = undefined,
+  // The dedupe gate's memory (gate.sentKeys): the keys already said in an
+  // earlier day's plan, inside their windows, read once per run. The gate would
+  // hold those facts back at delivery anyway; skipping them here keeps them from
+  // spending a slot of today's cap first.
+  sentKeys = null,
+}) {
   // `writeCopy(facts)` returns [{title, body}] in the same order, or throws.
   // Injected rather than imported so the skill/provider plumbing stays in the
   // bridge and this file stays testable without an AI.
@@ -45,11 +52,16 @@ export function createDigest({ collect, store, writeCopy = null, settings = () =
     // things he has already been told, which then get dropped at enqueue — a
     // wasted budget and an empty-looking evening.
     const saidKeys = new Set(alreadySaid.map((e) => e.dedupeKey).filter(Boolean))
+    const keyOf = (f) => f.dedupeKey || (f.subject
+      ? buildDedupeKey({ category: f.category, factKind: f.kind, subject: f.subject, date: today })
+      : null)
+    if (sentKeys) {
+      const said = await Promise.resolve().then(() => sentKeys(now)).catch((e) => { log('digest: dedupe log unreadable', e?.message || e); return [] })
+      for (const key of said) saidKeys.add(key)
+    }
     const unsaid = facts.filter((f) => {
-      if (!f.subject) return true
-      return !saidKeys.has(buildDedupeKey({
-        category: f.category, factKind: f.kind, subject: f.subject, date: today,
-      }))
+      const key = keyOf(f)
+      return !key || !saidKeys.has(key)
     })
 
     const plan = planDay({
