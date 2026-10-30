@@ -30,6 +30,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { isEntry } from './scripts/is-entry.mjs'
+import { killTree } from './scripts/kill-tree.mjs'
 
 import { createActionLog } from './logs/store.mjs'
 import { createTodoCommands } from './todos/commands.mjs'
@@ -62,6 +63,50 @@ const PROTOCOL_VERSION = '2025-06-18'
 const GATEWAY_INFO = { name: 'totem-gateway', version: '1.11.0' }
 export const NS = '__' // namespace separator: <serverId>__<toolName>
 
+// How long a downstream gets to come up. Only the handshake and the tool listing
+// are timed. A tool call never is: ask_questions waits on the owner for hours,
+// and totems and long manifest tools are slow by design (AGENTS.md, "A question
+// can wait for hours"). Without these, one server that never answers kept the
+// gateway from serving anything, built-ins included. Env overrides are for tests.
+const envMs = (name, fallback) => {
+  const n = Number(process.env[name])
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+export const DEFAULT_TIMEOUTS = Object.freeze({
+  handshakeMs: envMs('MCP_GATEWAY_HANDSHAKE_MS', 30_000), // initialize + notifications/initialized; npx cold starts are slow
+  pageMs: envMs('MCP_GATEWAY_PAGE_MS', 15_000), // each tools/list page
+  serverMs: envMs('MCP_GATEWAY_SERVER_MS', 45_000), // all of the above, per server
+  maxPages: 50, // a server whose cursor never ends stops here
+})
+
+const seconds = (ms) => (ms < 1000 ? `${ms}ms` : `${Math.round(ms / 1000)}s`)
+
+function timeoutError(phase, message) {
+  const e = new Error(message)
+  e.timedOut = true
+  e.phase = phase
+  return e
+}
+
+const noAnswer = (phase, ms) => timeoutError(phase, `no answer to ${phase} after ${seconds(ms)}`)
+
+// Every page of tools/list, up to maxPages, stopping early on a cursor seen before.
+// A server that pages forever otherwise loops here, growing memory, for good.
+async function listPages(fetchPage, maxPages) {
+  const tools = new Map()
+  const seen = new Set()
+  let cursor
+  for (let page = 0; page < maxPages; page++) {
+    const res = await fetchPage(cursor)
+    for (const t of res?.tools || []) if (t?.name && !tools.has(t.name)) tools.set(t.name, t)
+    cursor = res?.nextCursor
+    if (!cursor) return { tools: [...tools.values()] }
+    if (seen.has(cursor)) return { tools: [...tools.values()], warning: `tools/list repeated a cursor; kept ${tools.size} tools` }
+    seen.add(cursor)
+  }
+  return { tools: [...tools.values()], warning: `tools/list still paging after ${maxPages} pages; kept ${tools.size} tools` }
+}
+
 // stderr only — stdout is the JSON-RPC channel and must stay clean.
 const logErr = (...a) => process.stderr.write(`${new Date().toISOString()} [gateway] ${a.join(' ')}\n`)
 
@@ -82,16 +127,43 @@ async function saveToken(id, token) {
   await rename(tmp, path)
 }
 
+// A refresh token is spent the moment the authorization server reads it, and the
+// one it hands back is the only one that works afterwards. So a refresh, once
+// sent, is never aborted by its caller's deadline or by close(): it runs to the
+// end on its own timeout and saves what it got, and a caller that stops waiting
+// only stops waiting (unlessAborted). The gateway waits for these before exiting.
+const REFRESH_TIMEOUT_MS = 60_000
+const refreshes = new Set()
+
+function refreshToken(id, token) {
+  const run = exchangeRefreshToken(id, token)
+  refreshes.add(run)
+  run.then(() => refreshes.delete(run), () => refreshes.delete(run))
+  return run
+}
+
+export const settleRefreshes = () => Promise.allSettled([...refreshes])
+
+// The caller's view of `promise`: rejects when `signal` aborts, leaving it running.
+function unlessAborted(promise, signal) {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason)
+    if (signal.aborted) return onAbort()
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
 // Exchange the refresh token for a fresh access token and persist it, so the next
 // gateway spawn (and every provider behind it) inherits the renewed credential.
-async function refreshToken(id, token) {
+async function exchangeRefreshToken(id, token) {
   if (!token?.refreshToken || !token?.tokenEndpoint) throw new Error('no refresh token')
   const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: token.refreshToken, client_id: token.clientId })
   if (token.scope) body.set('scope', token.scope)
   if (token.resource) body.set('resource', token.resource)
   const headers = { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }
   if (token.clientSecret) headers.authorization = `Basic ${Buffer.from(`${token.clientId}:${token.clientSecret}`).toString('base64')}`
-  const r = await fetch(token.tokenEndpoint, { method: 'POST', headers, body: body.toString() })
+  const r = await fetch(token.tokenEndpoint, { method: 'POST', headers, body: body.toString(), signal: AbortSignal.timeout(REFRESH_TIMEOUT_MS) })
   if (!r.ok) throw new Error(`token refresh failed (HTTP ${r.status})`)
   const j = await r.json()
   if (!j.access_token) throw new Error('refresh returned no access_token')
@@ -105,10 +177,10 @@ async function refreshToken(id, token) {
   return next
 }
 
-async function ensureFreshToken(id, token, force = false) {
+async function ensureFreshToken(id, token) {
   if (!token) return token
   const expiringSoon = token.expiresAt && token.expiresAt < Date.now() + 60_000
-  if ((force || expiringSoon) && token.refreshToken) {
+  if (expiringSoon && token.refreshToken) {
     try { return await refreshToken(id, token) } catch (e) { logErr(`token refresh for "${id}" failed:`, e.message || e); return token }
   }
   return token
@@ -122,9 +194,11 @@ async function ensureFreshToken(id, token, force = false) {
 // JSON-RPC over a child process's stdio (the common, headless-friendly case:
 // npx @cocal/google-calendar-mcp and similar local connectors).
 class StdioClient {
-  constructor(id, spec) {
+  constructor(id, spec, timeouts = DEFAULT_TIMEOUTS) {
     this.id = id
     this.spec = spec
+    this.timeouts = timeouts
+    this.phase = null
     this.child = null
     this.nextId = 1
     this.pending = new Map()
@@ -163,12 +237,21 @@ class StdioClient {
     this.child.stdin.write(`${JSON.stringify(obj)}\n`)
   }
 
-  request(method, params) {
+  // `timeoutMs` is for the handshake and listing only; tools/call passes none.
+  request(method, params, timeoutMs = 0) {
     const id = this.nextId++
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      let timer = null
+      const settle = (fn) => (value) => { clearTimeout(timer); fn(value) }
+      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject) })
+      if (timeoutMs) {
+        timer = setTimeout(() => {
+          this.pending.delete(id)
+          reject(noAnswer(method, timeoutMs))
+        }, timeoutMs)
+      }
       try { this.write({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }) }
-      catch (e) { this.pending.delete(id); reject(e) }
+      catch (e) { this.pending.delete(id); clearTimeout(timer); reject(e) }
     })
   }
 
@@ -196,23 +279,23 @@ class StdioClient {
     }
   }
 
+  // notifications/initialized is a write to a pipe with no answer, so only
+  // initialize needs a timer here.
   async handshake() {
+    this.phase = 'initialize'
     await this.request('initialize', {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
       clientInfo: GATEWAY_INFO,
-    })
+    }, this.timeouts.handshakeMs)
+    this.phase = 'notifications/initialized'
     this.notify('notifications/initialized')
   }
 
   async listTools() {
-    const tools = []
-    let cursor
-    do {
-      const res = await this.request('tools/list', cursor ? { cursor } : undefined)
-      for (const t of res?.tools || []) tools.push(t)
-      cursor = res?.nextCursor
-    } while (cursor)
+    this.phase = 'tools/list'
+    const { tools, warning } = await listPages((cursor) => this.request('tools/list', cursor ? { cursor } : undefined, this.timeouts.pageMs), this.timeouts.maxPages)
+    this.warning = warning
     return tools
   }
 
@@ -220,9 +303,11 @@ class StdioClient {
     return this.request('tools/call', { name, arguments: args || {} })
   }
 
-  close() {
-    this.closed = true
-    try { this.child?.kill() } catch {}
+  // The whole tree, not just the child: an npx launcher's server is a grandchild.
+  // A server that timed out gets SIGKILL, since one that ignored us may ignore SIGTERM too.
+  close(signal = 'SIGTERM') {
+    this.fail(new Error(`${this.id} closed`))
+    if (this.child && this.child.exitCode == null && this.child.signalCode == null) killTree(this.child, signal)
   }
 }
 
@@ -232,13 +317,17 @@ class StdioClient {
 // initialize POST with 401 — we surface that as a clear needs-auth error rather
 // than hanging; automated OAuth is a planned follow-up.
 class HttpClient {
-  constructor(id, spec) {
+  constructor(id, spec, timeouts = DEFAULT_TIMEOUTS) {
     this.id = id
     this.spec = spec
+    this.timeouts = timeouts
+    this.phase = null
     this.nextId = 1
     this.sessionId = null
     this.token = null
     this.closed = false
+    // Aborts every request still in flight when the client is closed.
+    this.aborter = new AbortController()
   }
 
   headers() {
@@ -258,10 +347,24 @@ class HttpClient {
   // A single 401 → refresh → retry: a stored token may have lapsed since the last
   // gateway run. If refresh fails (or there's nothing to refresh with), surface
   // needsAuth so the dashboard prompts a fresh sign-in.
-  async _rpc(method, params, { notification = false } = {}, allowRefresh = true) {
+  // `timeoutMs` (handshake and listing only; tools/call passes none) covers the
+  // fetch and the body read: an SSE response can send headers and then stall.
+  async _rpc(method, params, { notification = false, timeoutMs = 0 } = {}, allowRefresh = true) {
+    const timeout = timeoutMs ? AbortSignal.timeout(timeoutMs) : null
+    const signal = timeout ? AbortSignal.any([this.aborter.signal, timeout]) : this.aborter.signal
+    try {
+      return await this._send(method, params, { notification, timeoutMs, signal }, allowRefresh)
+    } catch (e) {
+      if (timeout?.aborted && !this.aborter.signal.aborted) throw noAnswer(method, timeoutMs)
+      if (this.aborter.signal.aborted) throw new Error(`${this.id} closed`)
+      throw e
+    }
+  }
+
+  async _send(method, params, { notification, timeoutMs, signal }, allowRefresh) {
     const body = { jsonrpc: '2.0', method, ...(params ? { params } : {}) }
     if (!notification) body.id = this.nextId++
-    const res = await fetch(this.spec.url, { method: 'POST', headers: this.headers(), body: JSON.stringify(body) })
+    const res = await fetch(this.spec.url, { method: 'POST', headers: this.headers(), body: JSON.stringify(body), signal })
     const sid = res.headers.get('mcp-session-id')
     if (sid) this.sessionId = sid
     if (res.status === 401 || res.status === 403) {
@@ -271,13 +374,13 @@ class HttpClient {
           // GitHub OAuth Apps issue no refresh token), reload from disk — the
           // bridge may have written a freshly re-authenticated token (e.g. with
           // wider scopes) since this gateway process started.
-          if (this.token?.refreshToken) this.token = await refreshToken(this.id, this.token)
+          if (this.token?.refreshToken) this.token = await unlessAborted(refreshToken(this.id, this.token), signal)
           else {
             const reloaded = await loadToken(this.id)
             if (reloaded?.accessToken && reloaded.accessToken !== this.token?.accessToken) this.token = reloaded
             else throw new Error('no fresher token')
           }
-          return await this._rpc(method, params, { notification }, false)
+          return await this._rpc(method, params, { notification, timeoutMs }, false)
         } catch {}
       }
       const e = new Error('needs authentication')
@@ -314,19 +417,17 @@ class HttpClient {
   }
 
   async start() {
-    this.token = await ensureFreshToken(this.id, await loadToken(this.id))
-    await this.rpc('initialize', { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: GATEWAY_INFO })
-    await this.rpc('notifications/initialized', undefined, { notification: true })
+    this.phase = 'initialize'
+    this.token = await unlessAborted(ensureFreshToken(this.id, await loadToken(this.id)), this.aborter.signal)
+    await this.rpc('initialize', { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: GATEWAY_INFO }, { timeoutMs: this.timeouts.handshakeMs })
+    this.phase = 'notifications/initialized'
+    await this.rpc('notifications/initialized', undefined, { notification: true, timeoutMs: this.timeouts.handshakeMs })
   }
 
   async listTools() {
-    const tools = []
-    let cursor
-    do {
-      const res = await this.rpc('tools/list', cursor ? { cursor } : undefined)
-      for (const t of res?.tools || []) tools.push(t)
-      cursor = res?.nextCursor
-    } while (cursor)
+    this.phase = 'tools/list'
+    const { tools, warning } = await listPages((cursor) => this.rpc('tools/list', cursor ? { cursor } : undefined, { timeoutMs: this.timeouts.pageMs }), this.timeouts.maxPages)
+    this.warning = warning
     return tools
   }
 
@@ -334,7 +435,10 @@ class HttpClient {
     return this.rpc('tools/call', { name, arguments: args || {} })
   }
 
-  close() { this.closed = true }
+  close() {
+    this.closed = true
+    this.aborter.abort()
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -489,8 +593,8 @@ function bridgeCredentials() {
 
 // An HttpClient that sees only part of the bridge's tool list, under short names.
 class TotemSliceClient extends HttpClient {
-  constructor(id, spec, { filter, strip }) {
-    super(id, spec)
+  constructor(id, spec, { filter, strip }, timeouts) {
+    super(id, spec, timeouts)
     this.filter = filter
     this.strip = strip
   }
@@ -507,11 +611,11 @@ class TotemSliceClient extends HttpClient {
   }
 }
 
-function makeClient(id, spec) {
+function makeClient(id, spec, timeouts) {
   if (spec.client) return spec.client
-  if (spec.builtin) return new TotemSliceClient(id, spec, BUILTIN_SERVERS[id])
-  if (spec.transport === 'http' || spec.url) return new HttpClient(id, spec)
-  return new StdioClient(id, spec)
+  if (spec.builtin) return new TotemSliceClient(id, spec, BUILTIN_SERVERS[id], timeouts)
+  if (spec.transport === 'http' || spec.url) return new HttpClient(id, spec, timeouts)
+  return new StdioClient(id, spec, timeouts)
 }
 
 // ---------------------------------------------------------------------------
@@ -523,7 +627,8 @@ export class Gateway {
   // `builtins: false` is what the bridge passes when it runs this class
   // in-process for its own /mcp pass-through — a builtin there would be the
   // bridge dialling itself.
-  constructor(manifest, { builtins = true, taskClient, goalClient, listClient } = {}) {
+  // `timeouts` overrides DEFAULT_TIMEOUTS (tests use milliseconds).
+  constructor(manifest, { builtins = true, taskClient, goalClient, listClient, timeouts } = {}) {
     if (manifest?.servers && Object.hasOwn(manifest.servers, 'tasks')) {
       throw new Error('MCP manifest server id "tasks" is reserved for Totem local tasks')
     }
@@ -538,8 +643,11 @@ export class Gateway {
     this.taskClient = taskClient
     this.goalClient = goalClient
     this.listClient = listClient
+    this.timeouts = { ...DEFAULT_TIMEOUTS, ...timeouts }
     this.clients = new Map()        // id -> client
-    this.health = new Map()         // id -> { ok, transport, toolCount, error, tools }
+    this.connecting = new Set()     // clients still starting, so a shutdown can close them too
+    this.ready = null               // the one connectAll() run
+    this.health = new Map()         // id -> { ok, transport, toolCount, error, tools, timedOut, phase }
     this.toolIndex = new Map()      // namespacedName -> { clientId, name }
     this.tools = []                 // aggregated tool descriptors (runtime-facing)
   }
@@ -603,14 +711,30 @@ export class Gateway {
 
   // Connect to every downstream in parallel and pull its tool list. One bad
   // server never sinks the others — it just lands in `health` with an error
-  // and contributes no tools.
-  async connectAll() {
+  // and contributes no tools. A server that does not answer is cut off at its
+  // budget (timeouts.serverMs) and closed, so this always settles. Runs once.
+  connectAll() {
+    this.ready ||= this.connectServers()
+    return this.ready
+  }
+
+  async connectServers() {
+    const { serverMs } = this.timeouts
     await Promise.all(this.allServers().map(async ([id, spec]) => {
       const transport = spec.transport === 'in-process' ? 'in-process' : spec.transport === 'http' || spec.url ? 'http' : 'stdio'
-      const client = makeClient(id, spec)
+      const client = makeClient(id, spec, this.timeouts)
+      this.connecting.add(client)
+      let budget
       try {
-        await client.start()
-        const tools = await client.listTools()
+        const tools = await Promise.race([
+          (async () => { await client.start(); return await client.listTools() })(),
+          new Promise((_, reject) => {
+            budget = setTimeout(() => {
+              const phase = client.phase || 'initialize'
+              reject(timeoutError(phase, `no tool list after ${seconds(serverMs)} (still at ${phase})`))
+            }, serverMs)
+          }),
+        ])
         this.clients.set(id, client)
         for (const tool of tools) {
           const ns = `${id}${NS}${tool.name}`
@@ -621,11 +745,24 @@ export class Gateway {
             description: `[${id}] ${tool.description || ''}`.trim(),
           })
         }
-        this.health.set(id, { ok: true, transport, toolCount: tools.length, tools: tools.map((t) => t.name), ...(spec.builtin ? { builtin: true } : {}) })
+        this.health.set(id, {
+          ok: true, transport, toolCount: tools.length, tools: tools.map((t) => t.name),
+          ...(client.warning ? { warning: client.warning } : {}),
+          ...(spec.builtin ? { builtin: true } : {}),
+        })
+        if (client.warning) logErr(`downstream "${id}":`, client.warning)
       } catch (e) {
-        client.close?.()
-        this.health.set(id, { ok: false, transport, toolCount: 0, needsAuth: Boolean(e.needsAuth), error: e.message || String(e), ...(spec.builtin ? { builtin: true } : {}) })
+        client.close?.(e.timedOut ? 'SIGKILL' : undefined)
+        this.health.set(id, {
+          ok: false, transport, toolCount: 0, needsAuth: Boolean(e.needsAuth),
+          ...(e.timedOut ? { timedOut: true, phase: e.phase } : {}),
+          error: e.message || String(e),
+          ...(spec.builtin ? { builtin: true } : {}),
+        })
         logErr(`downstream "${id}" failed:`, e.message || e)
+      } finally {
+        clearTimeout(budget)
+        this.connecting.delete(client)
       }
     }))
   }
@@ -648,12 +785,17 @@ export class Gateway {
     return await client.callTool(target.name, args)
   }
 
+  // A client still connecting has answered nothing, so it gets no grace either.
   closeAll() {
     for (const c of this.clients.values()) c.close?.()
+    for (const c of this.connecting) c.close?.('SIGKILL')
   }
 
   // --- runtime-facing MCP server (stdio) ---
 
+  // Answers initialize and ping at once; tools/list and tools/call wait for
+  // connectAll(), which the budget bounds. So the runtime's own handshake never
+  // waits on a downstream, and every runtime still sees one complete tool list.
   serve() {
     const out = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`)
     const reply = (id, result) => out({ jsonrpc: '2.0', id, result })
@@ -700,8 +842,10 @@ export class Gateway {
         } else if (method === 'ping') {
           reply(id, {})
         } else if (method === 'tools/list') {
+          await this.connectAll()
           reply(id, { tools: this.tools })
         } else if (method === 'tools/call') {
+          await this.connectAll()
           try {
             const result = await this.callTool(params?.name, params?.arguments)
             reply(id, result)
@@ -717,7 +861,6 @@ export class Gateway {
         fail(id, -32603, e.message || String(e))
       }
     })
-    logErr(`serving ${this.tools.length} tools from ${this.clients.size}/${this.allServers().length} servers`)
   }
 }
 
@@ -732,19 +875,25 @@ async function main() {
   const statusMode = process.argv.includes('--status')
   const manifest = await loadManifest()
   const gateway = new Gateway(manifest)
-  await gateway.connectAll()
+  // Before connecting: a runtime that gives up on us mid-connect must still take
+  // every downstream child down with it.
+  // A token refresh still in flight finishes and saves first (see refreshToken).
+  const shutdown = () => { gateway.closeAll(); settleRefreshes().then(() => process.exit(0)) }
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
 
   if (statusMode) {
+    await gateway.connectAll()
     process.stdout.write(`${JSON.stringify(gateway.statusReport(), null, 2)}\n`)
     gateway.closeAll()
+    await settleRefreshes()
     process.exit(0)
   }
 
   gateway.serve()
-  const shutdown = () => { gateway.closeAll(); process.exit(0) }
-  process.on('SIGINT', shutdown)
-  process.on('SIGTERM', shutdown)
   process.stdin.on('close', shutdown)
+  await gateway.connectAll()
+  logErr(`serving ${gateway.tools.length} tools from ${gateway.clients.size}/${gateway.allServers().length} servers`)
 }
 
 // Only serve when run as a script. bridge.mjs imports Gateway to expose the same

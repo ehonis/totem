@@ -88,7 +88,11 @@ function seed(db) {
   `)
 }
 
-const snapshot = (db) => Object.fromEntries(ALL_TABLES.map((t) => [t, db.prepare(`SELECT * FROM ${t} ORDER BY 1, 2`).all()]))
+// Migration 009 adds `rolled_from` after this one runs, so a snapshot leaves it out.
+const snapshot = (db) => Object.fromEntries(ALL_TABLES.map((t) => [
+  t,
+  db.prepare(`SELECT * FROM ${t} ORDER BY 1, 2`).all().map(({ rolled_from, ...row }) => row),
+]))
 const counts = (db) => Object.fromEntries(ALL_TABLES.map((t) => [t, db.prepare(`SELECT count(*) AS n FROM ${t}`).get().n]))
 
 test('008 preserves every row, id, tag and foreign key, and backs the file up first', () => {
@@ -110,7 +114,7 @@ test('008 preserves every row, id, tag and foreign key, and backs the file up fi
     assert.deepEqual(migrated.prepare('PRAGMA foreign_key_check').all(), [])
     assert.equal(migrated.prepare('PRAGMA foreign_keys').get().foreign_keys, 1)
     assert.deepEqual(
-      migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'todos' AND sql IS NOT NULL ORDER BY name").all(),
+      migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'todos' AND sql IS NOT NULL AND name <> 'todos_rolled_from_unique' ORDER BY name").all(),
       beforeIndexes,
     )
     assert.deepEqual(migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all(), beforeTriggers)

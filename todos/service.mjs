@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { DEFAULT_TIME_ZONE, todayKey } from '../goals/periods.mjs';
 import { withTodoTransaction } from './db.mjs';
 import { TodoDomainError } from './errors.mjs';
 import { nextOccurrence } from './recurrence.mjs';
@@ -305,6 +306,8 @@ export function createTodoService({
   now = () => new Date().toISOString(),
   makeId = randomUUID,
   actionLog,
+  // The owner's time zone: "today" for a repeating task's next date is a local day.
+  tz = DEFAULT_TIME_ZONE,
 } = {}) {
   if (!db) throw new Error('createTodoService requires db');
   if (typeof now !== 'function') throw new Error('createTodoService requires now to be a function');
@@ -579,13 +582,15 @@ export function createTodoService({
     return value;
   }
 
-  function insertTodo(input, timestamps) {
-    db.prepare(`
+  /** Returns whether a row was written; a roll that already happened writes none. */
+  function insertTodo(input, timestamps, { rolledFrom = null } = {}) {
+    return db.prepare(`
       INSERT INTO todos (
         id, title, description, area, venture_tag, status, priority, due_date,
         recurrence, snoozed_until, position, created_at, updated_at, completed_at,
-        archived_at, deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        archived_at, deleted_at, rolled_from
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (rolled_from) WHERE rolled_from IS NOT NULL DO NOTHING
     `).run(
       timestamps.id,
       input.title,
@@ -603,7 +608,8 @@ export function createTodoService({
       timestamps.completedAt,
       timestamps.archivedAt,
       timestamps.deletedAt,
-    );
+      rolledFrom,
+    ).changes > 0;
   }
 
   function create(input = {}, context) {
@@ -816,15 +822,22 @@ export function createTodoService({
       todo.externalLinks.length > 0
     ) return;
 
+    // The next date is the first one after today, so a task finished late does not
+    // come back already overdue. A task rolls once: `rolled_from` is unique, so
+    // completing it again after a reopen finds its next occurrence already there.
     const nextId = requiredString(makeId(), 'id');
-    insertTodo({
+    const inserted = insertTodo({
       title: todo.title,
       description: todo.description,
       area: todo.area,
       ventureTag: todo.ventureTag,
       status: 'todo',
       priority: todo.priority,
-      dueDate: nextOccurrence({ dueDate: todo.dueDate, recurrence: todo.recurrence }),
+      dueDate: nextOccurrence({
+        dueDate: todo.dueDate,
+        recurrence: todo.recurrence,
+        after: todayKey(Date.parse(at), tz),
+      }),
       recurrence: todo.recurrence,
       snoozedUntil: null,
       position: todo.position,
@@ -835,7 +848,8 @@ export function createTodoService({
       completedAt: null,
       archivedAt: null,
       deletedAt: null,
-    });
+    }, { rolledFrom: todo.id });
+    if (!inserted) return;
     db.prepare(`
       INSERT INTO todo_tags (todo_id, tag_id, created_at)
       SELECT ?, tag_id, ? FROM todo_tags WHERE todo_id = ?

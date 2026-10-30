@@ -394,7 +394,11 @@ asked about. An unknown tool name comes back with that server's real tool list a
 guess self-corrects in one round trip.
 
 The pool is cached for 10 minutes and swapped-then-closed on refresh, so a concurrent call never
-lands on a gateway whose child processes have just been killed. Gated on `mcpMode === 'gateway'`;
+lands on a gateway whose child processes have just been killed. A downstream that does not finish
+its handshake and tool listing in time (30 s for `initialize`, 15 s per `tools/list` page, 45 s per
+server, at most 50 pages) is closed and listed as `timedOut` with the `phase` it stuck at, so one
+hung server cannot hold the pool, or `node mcp-gateway.mjs --status`, open. Tool calls have no
+timeout: some (questions for the owner, totems) are meant to take a long time. Gated on `mcpMode === 'gateway'`;
 with MCP off, both tools say so instead of failing obscurely.
 
 ### 6.6 Acting on the inbox, and the audit trail — **BUILT**

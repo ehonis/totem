@@ -11330,6 +11330,7 @@ function connectionsSummary(gateway) {
       transport: h.transport || null,
       toolCount: h.toolCount || 0,
       ...(h.needsAuth ? { needsAuth: true } : {}),
+      ...(h.timedOut ? { timedOut: true, phase: h.phase } : {}),
       ...(h.error ? { error: h.error } : {}),
       tools: h.tools || [],
     }
@@ -11770,7 +11771,13 @@ const MCP_TOOLS = [
       const id = String(args.server)
       const health = gateway.health.get(id)
       if (!health) throw new Error(`unknown connection "${id}" — call this tool with no arguments for the list`)
-      if (!health.ok) return { server: id, ok: false, error: health.error || 'not connected', needsAuth: Boolean(health.needsAuth), tools: [] }
+      if (!health.ok) {
+        return {
+          server: id, ok: false, error: health.error || 'not connected', needsAuth: Boolean(health.needsAuth),
+          ...(health.timedOut ? { timedOut: true, phase: health.phase } : {}),
+          tools: [],
+        }
+      }
       const prefix = `${id}${MCP_NS}`
       const tools = gateway.tools
         .filter((t) => t.name.startsWith(prefix))
@@ -13589,7 +13596,7 @@ const MCP_TOOL_META = {
   totem_list_connections: {
     title: 'List connected apps', annotations: ANN.readRemote,
     outputSchema: out({
-      servers: S_LIST('Per server: server, ok, transport, toolCount, tools[] (names only), needsAuth, error.'),
+      servers: S_LIST('Per server: server, ok, transport, toolCount, tools[] (names only), needsAuth, timedOut and phase (a server that did not answer initialize or tools/list in time), error.'),
       serverCount: S_NUM, totalTools: S_NUM,
       detail: { ...S_STR, description: 'How to get schemas for one server.' },
       server: { ...S_STR, description: 'Set when a single server was requested.' },
@@ -15679,7 +15686,7 @@ const actionLog = createActionLog({ file: ACTION_LOG_FILE, log })
 // GitHub and Action Items implementations are installed by their feature slices;
 // private/local tasks are fully available immediately.
 const todoDatabase = openTodoDatabase({ file: TODO_DATABASE_FILE })
-const todoService = createTodoService({ db: todoDatabase, actionLog })
+const todoService = createTodoService({ db: todoDatabase, actionLog, tz: MORNING_BRIEFING_TZ })
 const githubTodoClient = GITHUB_APP_CONFIGURED
   ? createGitHubAppClient({
     appId: GITHUB_APP_ID,

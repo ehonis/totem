@@ -11,6 +11,7 @@ import * as goalAbandonedMigration from './migrations/005-goal-abandoned.mjs';
 import * as listsMigration from './migrations/006-lists.mjs';
 import * as goalWeekMondayMigration from './migrations/007-goal-week-monday.mjs';
 import * as freeVentureTagsMigration from './migrations/008-free-venture-tags.mjs';
+import * as rolledFromMigration from './migrations/009-rolled-from.mjs';
 
 const FORMAT_VERSION = 3;
 const SQLITE_BUSY = 5;
@@ -93,6 +94,7 @@ const DELETE_ORDER = [
 const MIGRATIONS = [
   initialMigration, exhaustedOutboxMigration, goalsMigration, outcomeMigration,
   goalAbandonedMigration, listsMigration, goalWeekMondayMigration, freeVentureTagsMigration,
+  rolledFromMigration,
 ];
 
 function enableWal(db) {
