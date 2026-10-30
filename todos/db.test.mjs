@@ -209,6 +209,7 @@ function expectedCompleteSnapshot() {
     archived_at: null,
     deleted_at: null,
     outcome: null,
+    rolled_from: null,
   });
   return {
     formatVersion: 3,
@@ -259,6 +260,7 @@ function expectedCompleteSnapshot() {
       { version: 6, applied_at: FIXTURE_AT },
       { version: 7, applied_at: FIXTURE_AT },
       { version: 8, applied_at: FIXTURE_AT },
+      { version: 9, applied_at: FIXTURE_AT },
     ],
     sync_outbox: [
       {
@@ -378,7 +380,7 @@ test('migrates an empty database once and enables WAL and foreign keys', () => {
   assert.deepEqual(
     db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()
       .map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9],
   );
   assert.deepEqual(
     db.prepare(`
@@ -392,7 +394,7 @@ test('migrates an empty database once and enables WAL and foreign keys', () => {
   closeTodoDatabase(db);
 
   const reopened = openTodoDatabase({ file: dbFile });
-  assert.equal(reopened.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 8);
+  assert.equal(reopened.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 9);
   closeTodoDatabase(reopened);
 });
 
@@ -406,7 +408,7 @@ test('concurrent openers serialize migration checks and apply each version once'
   assert.deepEqual(
     db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()
       .map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9],
   );
   closeTodoDatabase(db);
 });

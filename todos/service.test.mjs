@@ -20,7 +20,7 @@ afterEach(() => {
   }
 });
 
-function fixture() {
+function fixture({ now = NOW, tz } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'totem-todo-service-'));
   tempDirectories.push(directory);
   const file = join(directory, 'todos.db');
@@ -31,9 +31,10 @@ function fixture() {
   let id = 0;
   const service = createTodoService({
     db,
-    now: () => NOW,
+    now: () => now,
     makeId: () => `generated-${++id}`,
     actionLog: { record: entry => entries.push(entry) },
+    ...(tz ? { tz } : {}),
   });
   return { db, entries, file, service };
 }
@@ -587,6 +588,131 @@ test('a locally completed task with any external link does not recur locally', (
 
   assert.equal(service.get(task.id).status, 'done');
   assert.equal(service.list({ status: 'todo' }).length, 0);
+});
+
+function seriesRows(db, title) {
+  return db.prepare('SELECT id, status, due_date, rolled_from, deleted_at FROM todos WHERE title = ? ORDER BY created_at, id')
+    .all(title).map(row => ({ ...row }));
+}
+
+test('completing, reopening and completing again rolls the next occurrence once', () => {
+  const { db, service } = fixture();
+  const task = service.create({
+    title: 'Water the plants', area: 'Personal', dueDate: '2026-09-11', recurrence: 'weekly', tags: ['Home'],
+  });
+
+  service.complete(task.id);
+  service.move(task.id, 'todo');
+  service.complete(task.id);
+
+  // Reopening kept the rolled row; the second completion found it already there.
+  const rows = seriesRows(db, 'Water the plants');
+  assert.deepEqual(rows.map(({ id, ...row }) => row), [
+    { status: 'done', due_date: '2026-09-11', rolled_from: null, deleted_at: null },
+    { status: 'todo', due_date: '2026-09-18', rolled_from: task.id, deleted_at: null },
+  ]);
+  assert.deepEqual(service.get(rows[1].id).tags.map(tag => tag.name), ['Home']);
+});
+
+test('bulk complete and a pass through doing roll once too', () => {
+  const { db, service } = fixture();
+  const viaBulk = service.create({ title: 'Bulk series', area: 'Personal', dueDate: '2026-09-11', recurrence: 'daily' });
+  service.bulk({ ids: [viaBulk.id], operation: 'complete' });
+  service.bulk({ ids: [viaBulk.id], operation: 'move', value: 'todo' });
+  service.bulk({ ids: [viaBulk.id], operation: 'complete' });
+  assert.deepEqual(seriesRows(db, 'Bulk series').map(row => row.due_date), ['2026-09-11', '2026-09-12']);
+
+  const viaDoing = service.create({ title: 'Doing series', area: 'Personal', dueDate: '2026-09-11', recurrence: 'daily' });
+  service.move(viaDoing.id, 'done');
+  service.move(viaDoing.id, 'doing');
+  service.move(viaDoing.id, 'done');
+  assert.deepEqual(seriesRows(db, 'Doing series').map(row => row.due_date), ['2026-09-11', '2026-09-12']);
+});
+
+test('abandoning, reopening and completing rolls exactly once', () => {
+  const { db, service } = fixture();
+  const fresh = service.create({ title: 'Fresh series', area: 'Personal', dueDate: '2026-09-11', recurrence: 'weekly' });
+  service.abandon(fresh.id);
+  service.move(fresh.id, 'todo');
+  service.complete(fresh.id);
+  assert.equal(seriesRows(db, 'Fresh series').filter(row => row.rolled_from === fresh.id).length, 1);
+
+  // Completed once already, then abandoned and brought back: still one next row.
+  const rolled = service.create({ title: 'Rolled series', area: 'Personal', dueDate: '2026-09-11', recurrence: 'weekly' });
+  service.complete(rolled.id);
+  service.move(rolled.id, 'todo');
+  service.abandon(rolled.id);
+  service.move(rolled.id, 'todo');
+  service.complete(rolled.id);
+  assert.equal(seriesRows(db, 'Rolled series').length, 2);
+});
+
+test('a next occurrence in the recycle bin still blocks a re-roll', () => {
+  const { db, service } = fixture();
+  const task = service.create({ title: 'Take the bins out', area: 'Personal', dueDate: '2026-09-11', recurrence: 'weekly' });
+  service.complete(task.id);
+  const [next] = service.list({ status: 'todo' });
+  service.softDelete(next.id);
+  service.move(task.id, 'todo');
+  service.complete(task.id);
+
+  assert.deepEqual(service.list({ status: 'todo' }), []);
+  assert.equal(seriesRows(db, 'Take the bins out').length, 2);
+
+  // Purging the source releases the link instead of failing the purge.
+  db.exec(`UPDATE todos SET deleted_at = '${NOW}' WHERE id = '${task.id}'`);
+  db.exec(`DELETE FROM todos WHERE id = '${task.id}'`);
+  assert.equal(db.prepare('SELECT rolled_from FROM todos WHERE id = ?').get(next.id).rolled_from, null);
+});
+
+test('an overdue repeating task comes back due after today, not the day after its old date', () => {
+  const { service } = fixture();
+  const task = service.create({ title: 'Stretch', area: 'Personal', dueDate: '2026-09-01', recurrence: 'daily' });
+  service.complete(task.id);
+  assert.deepEqual(service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-09-12']);
+});
+
+test('a repeating task completed early still steps once from its due date', () => {
+  const { service } = fixture();
+  const task = service.create({ title: 'Pay rent', area: 'Personal', dueDate: '2026-09-30', recurrence: 'monthly' });
+  service.complete(task.id);
+  assert.deepEqual(service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-10-30']);
+});
+
+test('"today" for the next date is the owner\'s local day, not the UTC date', () => {
+  // 02:00 UTC on the 12th is still the evening of the 11th in New York.
+  const late = '2026-09-12T02:00:00.000Z';
+  const eastern = fixture({ now: late, tz: 'America/New_York' });
+  const task = eastern.service.create({ title: 'Journal', area: 'Personal', dueDate: '2026-09-05', recurrence: 'daily' });
+  eastern.service.complete(task.id);
+  assert.deepEqual(eastern.service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-09-12']);
+
+  const utc = fixture({ now: late, tz: 'UTC' });
+  const other = utc.service.create({ title: 'Journal', area: 'Personal', dueDate: '2026-09-05', recurrence: 'daily' });
+  utc.service.complete(other.id);
+  assert.deepEqual(utc.service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-09-13']);
+});
+
+test('a monthly series on the 31st catches up months later without drifting', () => {
+  const { service } = fixture();
+  const task = service.create({ title: 'Month-end close', area: 'Personal', dueDate: '2026-01-31', recurrence: 'monthly' });
+  service.complete(task.id);
+  assert.deepEqual(service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-09-30']);
+  const lateMarch = fixture({ now: '2026-03-01T12:00:00.000Z' });
+  const march = lateMarch.service.create({ title: 'Month-end close', area: 'Personal', dueDate: '2026-01-31', recurrence: 'monthly' });
+  lateMarch.service.complete(march.id);
+  assert.deepEqual(lateMarch.service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-03-31']);
+});
+
+test('weekdays and interval series catch up on their own rules', () => {
+  // NOW is Friday 2026-09-11.
+  const { service } = fixture();
+  const weekdays = service.create({ title: 'Inbox zero', area: 'Personal', dueDate: '2026-09-01', recurrence: 'weekdays' });
+  const interval = service.create({ title: 'Change filter', area: 'Personal', dueDate: '2026-08-01', recurrence: 'interval:10' });
+  service.complete(weekdays.id);
+  service.complete(interval.id);
+  const due = Object.fromEntries(service.list({ status: 'todo' }).map(item => [item.title, item.dueDate]));
+  assert.deepEqual(due, { 'Inbox zero': '2026-09-14', 'Change filter': '2026-09-20' });
 });
 
 test('rejects unsupported recurrence rules and recurrence without a due date', () => {
