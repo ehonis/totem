@@ -10,12 +10,15 @@
  * The second job is the test button, which goes through exactly the same
  * notifier the scheduled digests use — so a test that arrives on the phone
  * proves the real path, not a parallel one built for demos.
+ *
+ * The third is Duplicates: the dedupe gate's settings, and what it held back.
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { Hi, BellAlertIcon, WarnIcon, ArrowPathIcon, CheckCircleIcon, DevicePhoneMobileIcon } from '../icons'
 import {
   readPushState, subscribeToPush, unsubscribeFromPush, sendTestPush, getDevices,
-  type PushState,
+  getDedupe, saveDedupe, STORY_MATCH,
+  type PushState, type DedupeState, type DedupeSettings,
 } from '../push'
 
 type Device = {
@@ -227,6 +230,8 @@ export default function NotificationsSettings() {
         ))}
       </div>
 
+      <DuplicatesSection />
+
       <div className="settings-section-title"><span /><strong>Getting it on your phone</strong></div>
       <div className="setting-list">
         <div className="setting-row">
@@ -256,4 +261,116 @@ function describeFailure(test: TestResult): string {
     return 'Every registered device was rejected by the push service — they have been marked expired below.'
   }
   return 'The push service refused it.'
+}
+
+// One push per usage state and one per story: the gate every notification passes
+// (notify/dedupe.mjs). A repeat is folded into the notification it repeats, which
+// the bell marks "N similar held back"; this lists them with the reason.
+function DuplicatesSection() {
+  const [state, setState] = useState<DedupeState | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try { setState(await getDedupe()) } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }, [])
+  useEffect(() => { void load() }, [load])
+
+  const save = async (patch: Partial<DedupeSettings>) => {
+    setError(null)
+    try {
+      const { settings } = await saveDedupe(patch)
+      setState((s) => (s ? { ...s, settings } : s))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  if (!state) return error ? <div className="shortcut-warn error"><WarnIcon /><span>{error}</span></div> : null
+  const { settings } = state
+  const match = STORY_MATCH.some((m) => m.value === settings.sameStoryScore)
+    ? STORY_MATCH
+    : [...STORY_MATCH, { value: settings.sameStoryScore, label: `Custom (${settings.sameStoryScore})` }]
+
+  return (
+    <>
+      <div className="settings-section-title"><span /><strong>Duplicates</strong></div>
+      <div className="setting-list">
+        <div className="setting-row">
+          <div className="setting-copy">
+            <strong>Hold back repeats</strong>
+            <span>
+              Something already said is not said again: a quota stays spent until it resets, and a story
+              several feeds report goes out once. Reminders, approvals and chat answers are never held back.
+            </span>
+          </div>
+          <div className="setting-control">
+            <select className="model-select" value={settings.enabled ? 'on' : 'off'} onChange={(e) => void save({ enabled: e.target.value === 'on' })}>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-copy">
+            <strong>Same story</strong>
+            <span>How alike two headlines must be. The same link always counts; so does the same model name and version.</span>
+          </div>
+          <div className="setting-control">
+            <select className="model-select" disabled={!settings.enabled} value={String(settings.sameStoryScore)} onChange={(e) => void save({ sameStoryScore: Number(e.target.value) })}>
+              {match.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-copy">
+            <strong>Compare stories over</strong>
+            <span>How far back a new headline is checked against what was sent.</span>
+          </div>
+          <div className="setting-control">
+            <select className="model-select" disabled={!settings.enabled} value={String(settings.storyWindowHours)} onChange={(e) => void save({ storyWindowHours: Number(e.target.value) })}>
+              {[...new Set([12, 24, 48, 72, 168, settings.storyWindowHours])].sort((a, b) => a - b).map((h) => (
+                <option key={h} value={h}>{h < 48 ? `${h} hours` : `${h / 24} days`}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-copy">
+            <strong>Ask a model about close calls</strong>
+            <span>
+              Only for a pair of headlines the word and name overlap could not settle, on your default AI
+              account. If it fails or is slow, the notification goes out.
+            </span>
+          </div>
+          <div className="setting-control">
+            <select className="model-select" disabled={!settings.enabled} value={settings.modelCheck ? 'on' : 'off'} onChange={(e) => void save({ modelCheck: e.target.value === 'on' })}>
+              <option value="off">Off</option>
+              <option value="on">On</option>
+            </select>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-copy">
+            <strong>{state.suppressed} held back in the last {state.days} days</strong>
+            <span>{state.suppressed ? 'Each one is counted on the notification it repeated, in the bell.' : 'Nothing has been a repeat lately.'}</span>
+          </div>
+          <div className="setting-control">
+            <button className="btn" onClick={() => void load()}><Hi icon={ArrowPathIcon} size={15} /> Refresh</button>
+          </div>
+        </div>
+        {state.items.slice(0, 10).map((item) => (
+          <div className="setting-row" key={item.id}>
+            <div className="setting-copy">
+              <strong>{item.body || item.title}</strong>
+              <span>
+                {item.reason === 'same-story' ? `Same story as “${item.duplicateTitle}”` : 'Already sent'}
+                {` · ${item.why} · ${when(item.at)}`}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+      {error && <div className="shortcut-warn error"><WarnIcon /><span>{error}</span></div>}
+    </>
+  )
 }

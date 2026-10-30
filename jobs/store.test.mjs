@@ -343,6 +343,20 @@ test('the notification webhook is best effort and never breaks a run', async () 
   assert.equal((await store.notifications()).unread, 1, 'stored even though delivery failed')
 })
 
+test('a notification the dedupe gate held back does not go out over the webhook either', async () => {
+  const calls = []
+  const store = await freshStore({
+    webhookUrl: 'https://ntfy.example/totem',
+    fetchImpl: async (url, init) => { calls.push({ url, init }); return { ok: true } },
+    deliver: async () => ({ ok: false, suppressed: true, reason: 'same-key' }),
+  })
+  const item = await store.notify({ level: 'error', title: 'Job failed', body: 'boom' })
+  assert.equal(calls.length, 0)
+  assert.equal((await store.notifications()).unread, 1, 'still in the job log')
+  // The caller can tell: dev/alerts.mjs counts an alert delivered only if it was.
+  assert.equal(item.delivery.suppressed, true)
+})
+
 test('a job added to the code catalog later appears without wiping the store', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'totem-jobs-'))
   const paths = {

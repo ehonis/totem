@@ -80,6 +80,7 @@ subscription that gets one), so Home Screen web app notifications are not taken 
 | RFC 8291 encryption + RFC 8292 VAPID, no dependencies | `notify/push.mjs` |
 | APNs for the native app (ES256 token, HTTP/2), no dependencies | `notify/apns.mjs` |
 | The single place a push goes out | `notify/notifier.mjs` |
+| The dedupe gate every push passes: same key, same story | `notify/dedupe.mjs` |
 | The receipt + answer summary for a phone request | `notify/shortcut.mjs` |
 | `/api/push*` routes | `notify/http.mjs` |
 | Service worker | `web/public/sw.js` (served at `/sw.js`) |
@@ -91,6 +92,101 @@ subscription that gets one), so Home Screen web app notifications are not taken 
 | Devices | `data/push-subscriptions.json` (gitignored — **secret**) |
 | The bell's record | `data/notification-ledger.json` (gitignored) |
 | Feedback | `data/notification-feedback.jsonl` (gitignored, append-only) |
+| What went out (for dedupe) and what was held back | `data/notification-dedupe.json` (gitignored) |
+| Dedupe settings | `data/notification-dedupe-settings.json` (gitignored; Settings → Notifications › Duplicates) |
+
+## One push per state, one per story — the dedupe gate
+
+`notify/dedupe.mjs`. `notifier.deliver` asks it first, so every path passes it:
+the queue drain (digests, feed scan, quota nudges, Timex), a direct push (chat,
+Shortcut, jobs, alerts, Fleet, journal) and APNs and Web Push alike. The jobs
+store's off-box webhook is skipped for anything it held back, and
+`jobStore.notify` returns what the notifier did (`delivery`), which is how
+`dev/alerts.mjs` knows whether an alert was really delivered.
+
+Two checks:
+
+- **Same key.** A notification that names what it is about carries a
+  `dedupeKey`; once sent, the key is remembered until `dedupeUntil` (a quota
+  fact: the window's reset), or for `keyWindowHours` (a week) when it names no
+  window. A notification with no key is keyed by its words only in a category
+  that opts in with `textDedupe` (today only `job.failed`, inside its
+  `dedupeWindowMinutes`): elsewhere the same words can be new news — a machine
+  "stopped reporting" again after it was "back".
+- **Same story**, in `storyCategories` (`news.model`, `news.big`, `news.creator`,
+  `news.timex`, most urgent first; not releases, which share a releases page and
+  differ only by version). Only a notification that names its story
+  (`story: { title, url }`, set by the feed and the Timex watch) takes part. It is
+  compared with the stories sent in `storyWindowHours` (48):
+  - the same canonical link (tracking parameters, `www.`, `/amp`, fragments and
+    trailing slashes stripped; a front page or releases page is no link) is the
+    same story;
+  - otherwise the headlines are taken apart (`readHeadline`): the lead model name
+    and version (`GPT-6.1`, `Claude Opus 5.5`, `Gemini 4 Carbon`), the kind of
+    event (launch, outage, delay, withdrawn, security including jailbreaks, legal)
+    and the remaining stemmed words. Two stories when: the lead names or versions
+    differ; the later headline adds a kind of event the earlier lacks (other than
+    a launch: "GPT-6.1 release delayed" follows "GPT-6.1 released" but is news of
+    its own) or the kinds differ outright; one sentence has a detail swapped ("in
+    Europe" / "in Japan"); or they share only the name, maker and event while each
+    adds details of its own ("to Plus users" / "to Enterprise customers"). Only the
+    later story is ever held back, which is why the event check is one-sided.
+    Otherwise a shared lead name scores 0.4 plus 0.6 × the share of the shorter
+    headline's other words found in the longer; without one, the Jaccard overlap
+    of the words. One story at `sameStoryScore` (0.6) with at least
+    `minWordOverlap` (0.3) of the words shared; a name alone reaches only the
+    borderline band (from `borderlineScore`, 0.4) and is sent;
+  - a headline match only lets a story stand in for one in its own category or a
+    less urgent one (the AI feed's copy covers the front page's, not the reverse).
+
+  **Ask a model about close calls** (off by default) sends a borderline pair to
+  the default account, but only on Claude or Codex (the backends that honour
+  `readOnly`), never falling back to another, with the headlines fenced as data.
+  It runs in the background: the queued entry is held a minute at a time and
+  decides on a later drain, so the job tick never waits; a direct push does not
+  ask. At most two checks wait at once. An error, a timeout (two minutes) or any
+  answer but SAME or DIFFERENT sends.
+
+What goes out is **reserved** when it is admitted and **committed** once the
+notifier knows it reached the bell or a phone. A push that reached no device is
+released, so a retry, or tomorrow's plan, is not called a repeat of something
+that never arrived; a reservation a crash left unconfirmed lapses after five
+minutes. The log keeps at most 2,000 sent records, oldest dropped first. A
+queued entry retried after a failed send keeps one row in the bell.
+
+A repeat is not pushed and not added to the bell: it is counted on the
+notification it repeated (`similar`, the bell's "N similar held back"; a repeat
+that arrives while the first is still going out is counted once it lands) and
+logged with its reason and score. A queued one finishes as `suppressed`. Settings
+→ Notifications › Duplicates shows the count for the last week and the latest
+ones; `GET /api/push/dedupe` returns them with the settings, `POST` changes the
+settings. Pinned categories (reminders, approvals, chat answers, birthdays) are
+never held back. With the gate off, `sentKeys` is empty and the digest plans
+everything.
+
+`gate.addHold(fn)` is for keeping a *queued* notification waiting (away days):
+`fn(entry)` returns nothing, `true` (try again in 15 minutes) or `{ until }`, and
+the entry goes back to pending at `until` without spending an attempt. Pinned
+categories are never held. Direct pushes do not consult holds.
+
+Where the duplicates came from, before the gate:
+
+- **Cursor usage, three times a day for eleven days.** The digest keyed a fact by
+  "this subject, today", so a monthly window spent on the 23rd was new every
+  morning, and each of the account's three meters was its own fact. A quota fact
+  now names its window (`usage:<account>:spent:<window>`: the reset rounded to
+  the nearest quarter hour, so a reset reported a few seconds either side of a
+  whole hour or midnight is still one window),
+  all of one account's meters spent until the same reset are one fact, and the
+  gate keeps the key until the reset. "Running low" is said once per ten points
+  (80%, then 90%); "going fast" and "going unused" once per window.
+- **One Hacker News story, twice.** The AI source (150 points) and the front-page
+  source (800) both watermark per source and key by the HN id, and the queue only
+  collapsed a *pending* copy. A story that crossed the second floor hours or days
+  later went out again. The gate remembers the key for a week.
+- **One launch under two headlines.** A model release posted twice to HN (the
+  announcement, then a benchmark post) has two ids and two links. The same-story
+  check folds it.
 
 ## The test button is the real path
 
@@ -368,6 +464,11 @@ source with the key in `.env` rather than scraped.
   If you add a collector, give every fact both keys.
 - **`sw.js` must stay in `web/public/`** so Vite copies it to the origin root
   unhashed. A bundled service worker cannot claim the scope it needs.
+- **A fact that stays true for days needs its own `dedupeKey`.** The derived key
+  ends in the plan date, so without one the same fact is new every morning. Give
+  it the window it is about and a `dedupeUntil`, as `notify/usage.mjs` does.
+- **Never send a push around `notifier.deliver`.** It is where the dedupe gate
+  runs; a second path is a second place repeats get through.
 
 ## Scheduled notifications
 

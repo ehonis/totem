@@ -172,6 +172,8 @@ export async function scanTimexCollabs({
       deliverAt: now,
       subject: item.id,
       dedupeKey: `timex-collab:${item.id}`,
+      // Several outlets report one drop; the dedupe gate folds the repeats.
+      story: { title: item.title, url: item.url || null },
     })
   }
 

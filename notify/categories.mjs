@@ -217,6 +217,11 @@ export const CATEGORIES = {
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 60,
+    // The one category whose repeats are recognised by their words alone: a job
+    // that fails twice in the hour with the same message has said nothing new.
+    // Opt-in, because elsewhere the same words can be new news ("stopped
+    // reporting" again after "back"). See notify/dedupe.mjs.
+    textDedupe: true,
     slot: null,
   },
   // Production alerts from outside (POST /api/alerts/:source) and the Dev tab's

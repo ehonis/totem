@@ -54,6 +54,13 @@ test('only unseen items become facts', () => {
   assert.deepEqual(next.facts.map((f) => f.subject), ['hn:2'])
 })
 
+test('a story carries its own headline and link for the dedupe gate; the overflow line does not', () => {
+  const base = factsFor(hnSource, { items: [hit(0)] }, {}, { now: NOW })
+  const burst = factsFor(hnSource, { items: [hit(1), hit(2), hit(3), hit(0)] }, base.seen, { now: NOW })
+  assert.deepEqual(burst.facts[0].story, { title: 'Story 1', url: 'https://x/1' })
+  assert.equal(burst.facts.at(-1).story, undefined)
+})
+
 test('a burst produces one notification about the rest, not one each', () => {
   const base = factsFor(hnSource, { items: [hit(0)] }, {}, { now: NOW })
   const burst = factsFor(hnSource, { items: [hit(1), hit(2), hit(3), hit(4), hit(5), hit(0)] }, base.seen, { now: NOW })

@@ -73,8 +73,14 @@ export function createAlertStore({ file, notify, now = () => Date.now(), log = (
         try {
           // The push opens the Dev tab, not the sender's link: the notification
           // centre routes a url inside the dashboard. The link is on the alert there.
-          await notify({ level: 'warn', title: alert.title, body: alert.body, category: 'alert.external', url: '/dev' })
-          alert.delivered = true
+          const sent = await notify({ level: 'warn', title: alert.title, body: alert.body, category: 'alert.external', url: '/dev' })
+          // Delivered means it reached a phone or the bell, as the notifier saw it.
+          // A notify that reports nothing back (no notifier behind it) is taken at
+          // its word, as before.
+          const delivery = sent?.delivery
+          alert.delivered = delivery
+            ? Boolean(delivery.ok) || delivery.reason === 'not-configured' || delivery.reason === 'no-devices'
+            : true
         } catch (e) {
           log('alert delivery failed', e?.message || e)
         }

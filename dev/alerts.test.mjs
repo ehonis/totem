@@ -34,6 +34,29 @@ test('the same source and key within an hour is recorded but not pushed again', 
   assert.deepEqual(list.map((a) => a.delivered), [true, true, false, true])
 })
 
+test('an alert counts as delivered only when the notifier says it reached someone', async () => {
+  const clock = { t: Date.parse('2026-10-09T10:00:00Z') }
+  const dir = mkdtempSync(join(tmpdir(), 'totem-dev-alerts-'))
+  dirs.push(dir)
+  // What jobStore.notify hands back: the item, and what the notifier did with it.
+  const outcomes = [
+    { ok: false, suppressed: true, reason: 'same-key' },
+    { ok: false, reason: 'send-failed' },
+    { ok: true },
+  ]
+  const alerts = createAlertStore({
+    file: join(dir, 'dev-alerts.json'),
+    notify: async (n) => ({ ...n, delivery: outcomes.shift() }),
+    now: () => clock.t,
+  })
+  assert.equal((await alerts.record({ source: 'ci', title: 'CI failed', key: 'main' })).notified, false)
+  // Not delivered, so not "recent": the next one inside the hour is tried again.
+  clock.t += 10 * 60_000
+  assert.equal((await alerts.record({ source: 'ci', title: 'CI failed', key: 'main' })).notified, false)
+  clock.t += 10 * 60_000
+  assert.equal((await alerts.record({ source: 'ci', title: 'CI failed', key: 'main' })).notified, true)
+})
+
 test('the store keeps the last 200 alerts', async () => {
   const clock = { t: 0 }
   const { alerts } = store(clock)
