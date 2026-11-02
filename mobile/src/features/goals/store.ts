@@ -6,7 +6,7 @@
 // on screen, so the calendar lives only in goals/periods.mjs.
 import { useSyncExternalStore } from 'react'
 import {
-  AuthError, addGoalMetric, clearSecret, deleteGoalMetric, getAppConfig, getGoalOptions, getGoals,
+  AuthError, addGoalMetric, clearSecret, deleteGoalMetric, getAppConfig, getGoalOptions, getGoals, isAccountChanged, peekGoals,
   syncStrava, updateGoalMetric, type AppConfig,
 } from '../../lib/api'
 import type { Goal, GoalMetricChanges, GoalOptions, GoalPeriod, GoalPeriodShortcut, GoalPeriodType } from '../../lib/goals/types'
@@ -64,13 +64,15 @@ export async function load(): Promise<void> {
   if (state.tab === 'overview') { set({ loading: false }); return }
   const query = state.anchor ?? state.tab
   const mine = ++seq
-  set({ loading: true, error: '' })
+  // An empty tab the cache holds draws at once while the bridge is asked.
+  const cached = state.goals.length ? undefined : peekGoals(query)
+  set({ ...(cached ? { goals: cached.goals, window: cached.period } : {}), loading: true, error: '' })
   try {
     const [list, opts] = await Promise.all([getGoals(query), state.options ? Promise.resolve(state.options) : getGoalOptions()])
     if (mine !== seq) return // a newer tab or arrow press won
     set({ goals: list.goals, window: list.period, options: opts, loading: false })
   } catch (cause) {
-    if (mine === seq) set({ error: message(cause, 'Goals could not load.'), loading: false })
+    if (mine === seq) set({ ...(isAccountChanged(cause) ? {} : { error: message(cause, 'Goals could not load.') }), loading: false })
   }
 }
 

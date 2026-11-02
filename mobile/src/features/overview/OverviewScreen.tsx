@@ -14,6 +14,7 @@ import { success, tap } from '../../ui/haptics'
 import {
   getTodos, getCalendar, getHabits, getJobs, getAssistantUsage, getProductivity, getInboxCount, getGoals,
   closeTodo, moveBoardTodo, logHabit, AuthError,
+  peekTodos, peekCalendar, peekHabits, peekProductivity, peekInboxCount, peekGoals, isAccountChanged,
 } from '../../lib/api'
 import { clearSecretStored } from '../../lib/connection'
 import { useAiUsageLive } from '../../lib/useAiUsageLive'
@@ -85,9 +86,20 @@ const STALE_MS = 30_000
 
 const onAuthError = () => { void clearSecretStored() }
 
+// The sections the GET cache holds, as load() asks for them, so the screen opens
+// on what the last visit saw while load() asks the bridge.
+function cachedSections() {
+  const d: any = {
+    todos: peekTodos(), habits: peekHabits(40), cal: peekCalendar(3), inbox: peekInboxCount(),
+    week: peekGoals('this_week'), month: peekGoals('this_month'), prod: peekProductivity(),
+  }
+  for (const k of Object.keys(d)) if (d[k] === undefined) delete d[k]
+  return d
+}
+
 export default function OverviewScreen() {
   const ownerName = useOwnerName()
-  const [data, setData] = useState<any>({})
+  const [data, setData] = useState<any>(cachedSections)
   const [errs, setErrs] = useState<Record<string, string>>({})
   const [loaded, setLoaded] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -110,6 +122,8 @@ export default function OverviewScreen() {
     const run = async (key: string, fn: () => Promise<any>): Promise<[string, any, string | null]> => {
       try { return [key, await fn(), null] } catch (e: any) {
         if (e instanceof AuthError) { onAuthError(); return [key, null, 'auth'] }
+        // Signed out or switched bridge mid-load: keep what the section shows, say nothing.
+        if (isAccountChanged(e)) return [key, dataRef.current[key] ?? null, null]
         return [key, null, e?.message || String(e)]
       }
     }

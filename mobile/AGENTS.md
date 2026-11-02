@@ -22,6 +22,23 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   anything else loads, so the ported code's caches and outbox persist unchanged.
 - `src/lib/connection.ts` holds the bridge base URL and the secret. The secret lives in the keychain
   (expo-secure-store), never in localStorage. Every request goes through `bridgeFetch`/`bridgeUrl`.
+- Every GET in `api.ts` goes through the on-disk cache (`src/lib/httpCache.ts`, its own SQLite file via
+  `httpCacheStorage.ts`, memory only in the web preview). An answer is kept only when the bridge tagged it
+  with an ETag (`http/etag.mjs`'s allow list), keyed by bridge URL, a hash of the secret, and path; 200
+  entries at most, the least recently used evicted first. Each GET sends `If-None-Match`. A 304 answers the
+  stored body (its new savedAt reaches the disk at most every ten minutes). So does anything that is not the
+  bridge's answer: a network failure, no answer within 8 s, a 502/503/504, a Cloudflare Access response, or a
+  200 that is not JSON (a captive Wi-Fi page). Every caller gets its own parsed copy. Screens draw the stored
+  body first through the `peek*` twins beside the getters (`peekTodos`, `peekHabits`, …; Overview and the
+  todos, habits, lists and goals stores), then revalidate. While any screen shows a stored answer, the top bar
+  (`Screen.tsx`) says "Offline · updated 5m ago"; the web has no such line. It goes once a call that began
+  after the failure gets the bridge's own answer (a fresh GET of that path, or any write answered with JSON;
+  not a captive or Access page). A 304 that lands after a newer answer leaves the newer one in place. Signing out or switching
+  bridge or secret empties the cache (`subscribeConnection` in `api.ts`): disk writes run in one queue, so the
+  clear lands after any write already under way, and a GET still out then rejects with `AccountChangedError`
+  (named `AbortError`) rather than answering for the old account; screens and stores drop it silently
+  (`isAccountChanged` in `api.ts`). Its tests run under the bridge's `npm test`
+  (`src/lib/httpCache.test.mjs`): keep `httpCache.ts` free of React Native imports.
 - `src/theme.ts` holds the web's CSS variables (`--bg` → `colors.bg`). `src/ui/` holds the building blocks:
   `T` (text), and `kit.tsx` with Btn, IconBtn, Card, Chip, Segmented, Input, Toggle and Empty. `menu.ts` has native
   menus/confirms, `haptics.ts` has haptics, `Markdown.tsx` renders markdown, and `ToastHost` reads the same toast store.

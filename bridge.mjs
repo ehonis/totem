@@ -128,6 +128,7 @@ import { stagingDir as cameraStagingDir } from './camera/paths.mjs'
 import { createOwnerAuth } from './auth/owner.mjs'
 import { createAuthHttpHandler } from './auth/http.mjs'
 import { guardRequest, upgradeOriginAllowed } from './auth/guard.mjs'
+import { etagResponse } from './http/etag.mjs'
 import { createAiSettings, createEnvBackedSettings, authFailureMessage } from './ai/settings.mjs'
 import { isExistingInstall } from './ai/install.mjs'
 import {
@@ -1694,7 +1695,9 @@ async function buildHabitsPayload({ days = 371 } = {}) {
   const apps = habitAppUrls()
   // A linked habit carries its app's address, so any view can link to it.
   const shown = habits.map((h) => (h.linkedApp ? { ...h, appUrl: apps[h.linkedApp] || null } : h))
-  return { source: HABITS_FILE, today, habits: shown, entries: visibleEntries, palette: HABIT_COLORS, apps, checkin, generatedAt: new Date().toISOString() }
+  // No clock and no file path in it: the same habits answer the same body, so
+  // the app's GET cache gets a 304 (http/etag.mjs).
+  return { today, habits: shown, entries: visibleEntries, palette: HABIT_COLORS, apps, checkin }
 }
 
 async function doCreateHabitRecord(body = {}) {
@@ -14491,6 +14494,8 @@ const server = http.createServer(async (req, res) => {
     if (!authorized(req)) return send(res, 401, { error: 'unauthorized' })
     if (refusedAsCrossSite(req, res)) return
     const path = req.url.split('?')[0]
+    // Allow-listed read routes get a weak ETag and answer If-None-Match with a 304.
+    etagResponse(req, res, path)
     try {
       if (todoHttpHandler && await todoHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (goalHttpHandler && await goalHttpHandler(req, res, new URL(req.url, 'http://x'))) return

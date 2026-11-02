@@ -1,7 +1,7 @@
 // Lists and the open todos they can link to, shared by the Lists page and the
 // pushed list screen (web/src/components/ListsView.tsx kept both in one view).
 import { useSyncExternalStore } from 'react'
-import { getLists, getTodoBoard } from '../../lib/api'
+import { getLists, getTodoBoard, isAccountChanged, peekLists, peekTodoBoard } from '../../lib/api'
 import type { TotemList } from '../../lib/lists/types'
 import type { Todo } from '../../lib/todos/types'
 
@@ -31,13 +31,16 @@ export function useLists(): ListsState {
 let inflight: Promise<void> | null = null
 export function loadLists(): Promise<void> {
   if (inflight) return inflight
-  setLists({ loading: true, error: '' })
+  // The first load draws the cached lists at once while the bridge is asked.
+  const payload = state.loaded ? undefined : peekLists()
+  const board = state.loaded ? undefined : peekTodoBoard({})
+  setLists({ ...(payload && board ? { lists: payload.lists, todos: board.todos, loaded: true } : {}), loading: true, error: '' })
   inflight = (async () => {
     try {
       const [payload, board] = await Promise.all([getLists(), getTodoBoard({})])
       setLists({ lists: payload.lists, todos: board.todos, loaded: true })
     } catch (cause) {
-      setLists({ error: cause instanceof Error ? cause.message : 'Lists could not load.' })
+      if (!isAccountChanged(cause)) setLists({ error: cause instanceof Error ? cause.message : 'Lists could not load.' })
     } finally {
       setLists({ loading: false })
       inflight = null

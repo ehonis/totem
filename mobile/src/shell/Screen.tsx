@@ -1,7 +1,7 @@
 // Every screen but the chat: ChatGPT's top bar (☰, the screen's name, new chat),
 // the content, and in the bottom-right corner the voice + new-chat pair
 // (shell.css .sh-mbar / .sh-fab). Mirrors Shell.tsx's MobileBar and NewChatFab.
-import React, { useEffect } from 'react'
+import React, { useEffect, useState, useSyncExternalStore } from 'react'
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useIsFocused, useNavigation } from 'expo-router'
@@ -14,15 +14,43 @@ import { newChat, openDrawer, startVoice } from './nav'
 import { PageGlow, type GlowPage } from '../ui/PageGlow'
 import { impact } from '../ui/haptics'
 import { setToastFloor } from '../ui/toastFloor'
+import { getCacheStatus, subscribeCacheStatus } from '../lib/api'
+import { ago } from '../lib/chat/settle'
 
 export function MobileBar({ title, right }: { title: string; right?: React.ReactNode }) {
   const navigation = useNavigation()
   return (
     <View style={st.bar}>
       <IconBtn icon={IconMenu} size={22} label="Menu" onPress={() => openDrawer(navigation)} />
-      <T size={17} weight={600} align="center" numberOfLines={1} style={{ flex: 1 }}>{title}</T>
+      <View style={{ flex: 1, alignItems: 'center' }}>
+        <T size={17} weight={600} align="center" numberOfLines={1}>{title}</T>
+        <OfflineHint />
+      </View>
       {right ?? <IconBtn icon={IconEdit} size={21} label="New chat" onPress={newChat} />}
     </View>
+  )
+}
+
+/**
+ * Under the title while the bridge is out of reach: the screen is showing the
+ * GET cache (lib/httpCache.ts), and this says how old it is. The web has no
+ * such line; a browser tab has no data to show offline.
+ */
+function OfflineHint() {
+  const { offline, updatedAt } = useSyncExternalStore(subscribeCacheStatus, getCacheStatus)
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    if (!offline) return
+    setNow(Date.now())
+    const t = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(t)
+  }, [offline])
+  if (!offline) return null
+  const age = updatedAt ? ago(updatedAt, now) : null
+  return (
+    <T size={11} muted numberOfLines={1} accessibilityLiveRegion="polite">
+      {age ? `Offline · updated ${age === 'now' ? 'just now' : `${age} ago`}` : 'Offline'}
+    </T>
   )
 }
 
