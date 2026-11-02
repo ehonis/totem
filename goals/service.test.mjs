@@ -582,3 +582,26 @@ test('a step number that feeds the goal is counted once, in the number it feeds'
   assert.equal(after.progress.percent, 25);
   h.close();
 });
+
+test('sourced goals name the connector each open goal reads, a step\'s metrics included', async () => {
+  const h = harness();
+  await h.service.createGoal(weekGoal({
+    title: 'Ride',
+    metrics: [{ label: 'bike miles', targetValue: 40, sourceKind: 'strava_distance' }],
+  }));
+  await h.service.createGoal(weekGoal({
+    title: 'Train',
+    subGoals: [{ title: 'Long ride', metrics: [{ label: 'odometer', targetValue: 500, sourceKind: 'strava_gear_odometer', sourceConfig: { gearId: 'b1' } }] }],
+  }));
+  await h.service.createGoal(weekGoal({ title: 'Read', metrics: [{ label: 'pages', targetValue: 100 }] }));
+  const { goal: done } = await h.service.createGoal(weekGoal({
+    title: 'Done ride',
+    metrics: [{ label: 'miles', targetValue: 10, sourceKind: 'strava_distance' }],
+  }));
+  await h.service.setGoalCompletion(done.id, true);
+
+  const sourced = h.service.sourcedGoals();
+  assert.deepEqual(sourced.map((g) => [g.title, g.sources]), [['Ride', ['strava']], ['Train', ['strava']]]);
+  assert.equal(sourced[0].periodType, 'week');
+  h.close();
+});

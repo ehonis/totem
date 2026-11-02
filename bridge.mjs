@@ -41,6 +41,10 @@ import { lbToKg } from './strava/shape.mjs'
 import { createApple } from './apple/index.mjs'
 import { createScreen } from './screen/index.mjs'
 import { createGmail } from './gmail/index.mjs'
+import { openSourceRuns } from './sources/store.mjs'
+import { createSourceHttpHandler } from './sources/http.mjs'
+import { failingFacts, failingNotice } from './sources/notice.mjs'
+import { recordGatewayStatus } from './sources/gateway.mjs'
 import { createDrive } from './drive/index.mjs'
 import { attachScreenRelay } from './screen/relay.mjs'
 import { createCredentialSealer, REMEMBER_MINUTES } from './screen/credentials.mjs'
@@ -107,6 +111,7 @@ import { usageFacts } from './notify/usage.mjs'
 import { decideUpdate, readInstalledVersion, proposalFor } from './notify/updates.mjs'
 import { parsePeople, birthdayFacts, metricFacts, goalFacts, taskFacts } from './notify/signals.mjs'
 import { createGoalMcpTools, GOAL_MCP_TOOL_DEFINITIONS } from './goals/mcp.mjs'
+import { GOAL_SOURCE_IDS } from './goals/sources.mjs'
 import { createListMcpTools, LIST_MCP_TOOL_DEFINITIONS } from './lists/mcp.mjs'
 import { todoCommandFromInboxProposal } from './todos/proposals.mjs'
 import { createGitHubClient } from './todos/connectors/github-client.mjs'
@@ -1907,6 +1912,27 @@ async function doLogHabitRecord({ id, date, count, delta, note, value, parts, st
 }
 
 // ---------------------------------------------------------------------------
+// Source health: one run log every connector writes to (sources/), read by
+// Settings → Connections and the goals a failing source feeds. Built before the
+// connectors so each can take it; a file that cannot be opened turns source health
+// off rather than stopping the bridge. The owner is told once per outage through
+// the notification queue (sources/notice.mjs). notifyStore and goalService are
+// defined further down: a notice raised before they exist throws, is not marked
+// sent, and is tried again on the next failure. See docs/source-health.md.
+// ---------------------------------------------------------------------------
+const sourceRuns = openSourceRuns({
+  file: process.env.SOURCE_RUNS_DB || join(HERE, 'data', 'source-runs.db'),
+  log,
+  onFailing: async (health) => {
+    let feeds = []
+    try {
+      feeds = goalService.sourcedGoals().filter((g) => g.sources.includes(health.source)).map((g) => g.title)
+    } catch {}
+    await notifyStore.enqueue(failingNotice(health, { feeds }))
+  },
+})
+
+// ---------------------------------------------------------------------------
 // WHOOP sleep sync — fills the sleep habit's metric without anyone typing it.
 // The owner's WHOOP grant is Bushido's (since 2026-10-14): WHOOP rotates the
 // refresh token on every refresh, so exactly one process may hold it, and the
@@ -1919,6 +1945,7 @@ const whoop = createRemoteWhoopClient({
   url: () => process.env.BUSHIDO_API_URL || BUSHIDO_URL,
   token: () => process.env.BUSHIDO_API_TOKEN,
   publicUrl: BUSHIDO_URL,
+  runs: sourceRuns,
 })
 const WHOOP_SLEEP_HABIT_ID = process.env.WHOOP_SLEEP_HABIT_ID || 'wear-garmin-to-sleep'
 // WHOOP timestamps a sleep with the moment it started, so the local date of
@@ -2067,6 +2094,7 @@ const strava = createRemoteStravaClient({
   url: () => process.env.BUSHIDO_API_URL || BUSHIDO_URL,
   token: () => process.env.BUSHIDO_API_TOKEN,
   publicUrl: BUSHIDO_URL,
+  runs: sourceRuns,
 })
 const STRAVA_CLI = join(HERE, 'strava', 'cli.mjs')
 
@@ -2155,6 +2183,7 @@ const gmail = createGmail({
   loadClient: () => JSON.parse(readFileSync(GCAL_OAUTH_PATH, 'utf8')),
   redirectUri: () => `http://localhost:${BRIDGE_PORT}/gmail-oauth/callback`,
   cacheDir: join(HERE, 'data', 'gmail-cache'),
+  runs: sourceRuns,
   // One Google sign-in connects an account's mail and its calendar.
   extraScopes: [GCAL_SCOPE],
   onConnected: (grant) => addCalendarFromGmail(grant),
@@ -2212,6 +2241,7 @@ const drive = createDrive({
   loadClient: () => JSON.parse(readFileSync(GCAL_OAUTH_PATH, 'utf8')),
   redirectUri: () => `http://localhost:${BRIDGE_PORT}/drive-oauth/callback`,
   cacheDir: join(HERE, 'data', 'drive-cache'),
+  runs: sourceRuns,
 })
 
 const DRIVE_RULES =
@@ -4597,7 +4627,7 @@ async function fetchCalendarFor(account, timeMin, timeMax) {
   const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${params}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
-  if (!r.ok) throw new Error(`calendar "${account}" HTTP ${r.status}`)
+  if (!r.ok) throw Object.assign(new Error(`calendar "${account}" HTTP ${r.status}`), { status: r.status })
   const data = await r.json()
   return (data.items || []).map((e) => ({
     id: `${account}:${e.id}`,
@@ -4728,7 +4758,7 @@ async function fetchCalendar({ days = 7, start, end } = {}) {
   const timeMin = (start ? new Date(start) : now).toISOString()
   const timeMax = (end ? new Date(end) : new Date(now.getTime() + days * 86_400_000)).toISOString()
   const accounts = gcalAccountLabels()
-  const settled = await Promise.allSettled(accounts.map((a) => fetchCalendarFor(a, timeMin, timeMax)))
+  const settled = await Promise.allSettled(accounts.map((a) => sourceRuns.track(`calendar:${a}`, () => fetchCalendarFor(a, timeMin, timeMax))))
   const events = []
   const errors = []
   settled.forEach((res, i) => {
@@ -7092,8 +7122,10 @@ async function runGatewayStatus({ force = false } = {}) {
     ? { ok: true, ...report }
     : { ok: false, error: truncate(res.stderr || res.err?.message || 'gateway status failed', 300), servers: [], totalTools: 0 }
   gatewayStatusCache = { ts: Date.now(), data }
+  recordGatewayStatus(sourceRuns, data)
   return data
 }
+
 
 // --- Gateway OAuth: authenticate a remote server ONCE, at the gateway ----------
 //
@@ -14309,6 +14341,7 @@ let listHttpHandler = null
 let devHttpHandler = null
 let alertIngestHandler = null
 let fleetHttpHandler = null
+let sourceHttpHandler = null
 let fleetReportHandler = null
 let journalHttpHandler = null
 let journalService = null
@@ -14464,6 +14497,7 @@ const server = http.createServer(async (req, res) => {
       if (listHttpHandler && await listHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (devHttpHandler && await devHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (fleetHttpHandler && await fleetHttpHandler(req, res, new URL(req.url, 'http://x'))) return
+      if (sourceHttpHandler && await sourceHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (journalHttpHandler && await journalHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (pushHttpHandler && await pushHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       // Terminal panel availability. The UI asks before showing its toggle, so a
@@ -15705,6 +15739,7 @@ const githubTodoConnector = createGitHubConnector({
   client: githubTodoClient,
   workerId: `bridge-${process.pid}`,
   actionLog,
+  runs: sourceRuns,
 })
 const unavailableTodoConnector = (name) => ({
   async create() { throw new Error(`${name} todo connector is not configured`) },
@@ -15728,6 +15763,7 @@ const sheetTodoConnector = TASK_SHEET_CONFIGURED
       client: createGoogleSheetsClient({ credentialsFile: GOOGLE_SHEETS_CREDENTIALS_FILE }),
       workerId: `bridge-${process.pid}`,
       actionLog,
+      runs: sourceRuns,
     })
   : {
       ...unavailableTodoConnector('Action Items'),
@@ -15762,6 +15798,7 @@ const goalService = createGoalService({
   timeZone: MORNING_BRIEFING_TZ,
 })
 goalHttpHandler = createGoalHttpHandler({ service: goalService })
+sourceHttpHandler = createSourceHttpHandler({ runs: sourceRuns, goals: () => goalService.sourcedGoals(), metricSources: GOAL_SOURCE_IDS })
 goalMcpTools = createGoalMcpTools({ service: goalService })
 
 const listService = createListService({ db: todoDatabase, actionLog })
@@ -16210,7 +16247,16 @@ const runNotificationDigest = createDigest({
   log,
 })
 
-const revalidateNotifications = createRevalidator({ collect: collectNotifyFacts, log })
+// A source-failing notice (sources/notice.mjs) stays deliverable only while its
+// source is still failing: one fact per failing source, added here and not in
+// collectNotifyFacts, which the digest also plans from.
+const revalidateNotifications = createRevalidator({
+  collect: async (opts) => {
+    const snapshot = await collectNotifyFacts(opts)
+    return { ...snapshot, facts: [...snapshot.facts, ...failingFacts(sourceRuns.health())] }
+  },
+  log,
+})
 
 // The outside world. Kept out of collectNotifyFacts on purpose: that runs on
 // every drain tick for revalidation, and putting network calls in it would mean
@@ -16449,6 +16495,13 @@ async function runFeedScan({ now = Date.now() } = {}) {
   // release; the other order loses it silently, and a silently lost release is
   // the failure this whole feature exists to prevent.
   await writeFile(FEED_STATE_FILE, JSON.stringify(next, null, 2))
+
+  // scanFeeds stamps each source it read with lastOk or lastErrorAt = now.
+  for (const feed of DEFAULT_SOURCES) {
+    const seen = next[feed.id]
+    if (seen?.lastOk === now) sourceRuns.record({ source: `feed:${feed.id}`, ok: true })
+    else if (seen?.lastErrorAt === now) sourceRuns.record({ source: `feed:${feed.id}`, ok: false, error: seen.lastError })
+  }
 
   const failed = Object.entries(next).filter(([, v]) => v.lastError).map(([k]) => k)
   return {

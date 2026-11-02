@@ -18,6 +18,8 @@
 // loopback address when its public one is behind an auth proxy) and
 // BUSHIDO_API_TOKEN (Bushido's own BUSHIDO_API_TOKEN).
 
+import { isSourceFault, noteGrantStatus, tracker } from '../sources/track.mjs'
+
 export class WhoopError extends Error {
   constructor(message, { status = null, needsReauth = false, missingScope = null, rateLimited = false } = {}) {
     super(message)
@@ -29,11 +31,22 @@ export class WhoopError extends Error {
   }
 }
 
-export function createRemoteWhoopClient({ url, token, publicUrl = null, fetchImpl = globalThis.fetch, timeoutMs = 60000 } = {}) {
+// The nights come back as a list; a run counts them.
+const countRows = (result) => (Array.isArray(result) ? result.length : null)
+
+// A grant Bushido says needs reconnecting, or a rate limit, is the source failing
+// whatever status carried it; a request Bushido turned down is not.
+const isFault = (e) => Boolean(e?.needsReauth || e?.rateLimited) || isSourceFault(e)
+
+export function createRemoteWhoopClient({ url, token, publicUrl = null, fetchImpl = globalThis.fetch, timeoutMs = 60000, runs = null } = {}) {
   const read = (v) => (typeof v === 'function' ? v() : v)
   const base = () => String(read(url) || '').trim().replace(/\/+$/, '')
   const secret = () => String(read(token) || '').trim()
   const configured = () => Boolean(base() && secret())
+  // Every call that reaches WHOOP through Bushido is one run in the source-run log
+  // (sources/), once configured: an unset BUSHIDO_URL is not the source failing.
+  // `status` is noted separately (noteGrantStatus).
+  const track = tracker(runs)
   // Where the owner goes to connect: the address he opens, not the loopback one.
   const link = () => String(read(publicUrl) || base() || '').replace(/\/+$/, '') || null
 
@@ -41,6 +54,11 @@ export function createRemoteWhoopClient({ url, token, publicUrl = null, fetchImp
     if (!configured()) {
       throw new WhoopError('WHOOP is read from Bushido: set BUSHIDO_URL (or BUSHIDO_API_URL) and BUSHIDO_API_TOKEN', { needsReauth: true })
     }
+    if (method === 'status') return request(method, args)
+    return track('whoop', () => request(method, args), { rows: countRows, isFault })
+  }
+
+  async function request(method, args) {
     let res
     try {
       res = await fetchImpl(`${base()}/api/whoop/owner`, {
@@ -71,8 +89,10 @@ export function createRemoteWhoopClient({ url, token, publicUrl = null, fetchImp
     }
     try {
       const s = await call('status')
+      noteGrantStatus(runs, 'whoop', { status: s })
       return { ...s, source: 'bushido', bushidoUrl: link(), detail: s?.state === 'ready' ? 'Connected in Bushido.' : `${s?.detail || ''} ${where}`.trim() }
     } catch (e) {
+      noteGrantStatus(runs, 'whoop', { error: e })
       return { configured: true, connected: false, needsReauth: false, state: 'unreachable', source: 'bushido', bushidoUrl: link(), detail: e.message }
     }
   }
