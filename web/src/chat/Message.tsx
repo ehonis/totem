@@ -4,12 +4,13 @@ import { createPortal } from 'react-dom'
 import Markdown from '../components/Markdown'
 import TotemProposal from './TotemProposal'
 import { QuestionsRecord } from './QuestionsPanel'
+import ApprovalRow from './ApprovalRow'
 import { isAskTool } from './questions'
 import WorkLog from './WorkLog'
 import { foldWork } from './workFold'
 import { AgentGroup } from './AgentsPanel'
 import TurnStats from './TurnStats'
-import type { Attachment, ChatMessage, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart } from './types'
+import type { ApprovalPart, Attachment, ChatMessage, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart } from './types'
 import { TI, ProviderLogo, formatBytes, formatDuration } from './ui'
 import { IconAlertCircle,
   IconCopy, IconCheck, IconRefresh, IconVolume, IconPencil, IconFileText, IconFileTypePdf, IconClipboardText,
@@ -194,7 +195,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
 
 // --- assistant -------------------------------------------------------------------
 
-type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'agents'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'steer'; part: SteerPart; key: string } | { kind: 'totem'; answer: TotemAnswer; key: string } | { kind: 'questions'; part: QuestionsPart; key: string }
+type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'agents'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'steer'; part: SteerPart; key: string } | { kind: 'totem'; answer: TotemAnswer; key: string } | { kind: 'questions'; part: QuestionsPart; key: string } | { kind: 'approval'; part: ApprovalPart; key: string }
 
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
@@ -212,6 +213,8 @@ function blocks(parts: Part[]): Block[] {
     // The questions themselves stand for the call that asked them.
     else if (p.type === 'tool' && isAskTool(p.tool)) continue
     else if (p.type === 'questions') out.push({ kind: 'questions', part: p, key: `q${i}` })
+    // A tool call waiting on (or decided by) the owner stands on its own, never folded.
+    else if (p.type === 'approval') out.push({ kind: 'approval', part: p, key: `ap${i}` })
     // A call that started another agent stands on its own, never folded into the
     // steps; agents started back to back share one group.
     else if (p.type === 'tool' && p.agent) {
@@ -316,7 +319,8 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
   const thinking = live && !list.length
   // Mid-reply silence — between tools, or the model thinking before its next
   // sentence — gets the working line too, so a live reply never looks stalled.
-  const asking = !!m.parts?.some((p) => p.type === 'questions' && p.status === 'pending')
+  const asking = !!m.parts?.some((p) => (p.type === 'questions' || p.type === 'approval') && p.status === 'pending')
+  const approving = !!m.parts?.some((p) => p.type === 'approval' && p.status === 'pending')
   const toolRunning = !asking && !!m.parts?.some((p) => p.type === 'tool' && p.status === 'running')
   const quiet = useQuiet(live, `${m.content.length}:${m.parts?.length || 0}`)
   // Replies from the retired Auto/Instant/Thinking presets say which lane answered: "Thought for 14s" reads the
@@ -337,6 +341,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
           if (b.kind === 'steer') return <SteerNote key={b.key} part={b.part} />
           if (b.kind === 'totem') return <TotemSays key={b.key} answer={b.answer} live={live} />
           if (b.kind === 'questions') return <QuestionsRecord key={b.key} part={b.part} />
+          if (b.kind === 'approval') return <ApprovalRow key={b.key} part={b.part} messageId={m.id} live={live} />
           if (b.kind === 'file') return <FileCard key={b.key} file={b.part} onOpen={() => openArtifact(b.part)} />
           if (b.kind === 'image') {
             const src = b.part.url || `/api/chat/uploads/${b.part.uploadId}`
@@ -352,7 +357,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
           return <Markdown key={b.key} text={b.text} />
         })}
         {thinking && <WorkingLine text={activity ? activity.split('\n')[0].replace(/^(Working|Running|Done):\s*/, '') : m.route === 'thinking' ? 'Thinking longer for a better answer' : 'Thinking'} />}
-        {live && asking && <WorkingLine text="Waiting for your answers" />}
+        {live && asking && !approving && <WorkingLine text="Waiting for your answers" />}
         {live && !asking && !thinking && quiet && !toolRunning && <WorkingLine text={activity && !/^Done:/.test(activity) ? activity.split('\n')[0].replace(/^(Working|Running):\s*/, '') : 'Working'} />}
         {m.status === 'error' && (
           <div className="vc-error">

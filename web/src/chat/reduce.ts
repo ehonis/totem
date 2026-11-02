@@ -95,6 +95,16 @@ export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): Chat
       else parts.push({ type: 'questions', ...q })
       return next
     }
+    case 'approval': {
+      // A tool call waiting on the owner's approval: added where it was asked,
+      // updated in place with the decision.
+      const a = event.approval || {}
+      if (!a.id) return msg
+      const at = parts.findIndex((p) => p.type === 'approval' && p.id === a.id)
+      if (at >= 0) parts[at] = { ...parts[at], ...a }
+      else parts.push({ type: 'approval', ...a })
+      return next
+    }
     case 'steer': {
       // The owner's words mid-reply, kept where they landed among the steps.
       const st = event.steer || {}

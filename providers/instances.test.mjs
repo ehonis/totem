@@ -251,7 +251,7 @@ test('Claude deny rules cover the session key, stored keys, .env and secrets as 
   const bridge = readFileSync(new URL('../bridge.mjs', import.meta.url), 'utf8')
   const start = bridge.indexOf('function spawnClaudeStream(')
   // The secret rules go on every run, beside the connector tools the owner switched off.
-  assert.match(bridge.slice(start, start + 1400), /args\.push\('--disallowedTools', \.\.\.\(readOnly \? CLAUDE_WRITE_TOOLS : \[\]\), \.\.\.claudeSecretDenyRules\(HERE\), \.\.\.toolRules\.deny\)/)
+  assert.match(bridge.slice(start, start + 1700), /args\.push\('--disallowedTools', \.\.\.\(readOnly \? CLAUDE_WRITE_TOOLS : \[\]\), \.\.\.claudeSecretDenyRules\(HERE\), \.\.\.toolRules\.deny\)/)
 })
 
 test('a Codex account gets the stored OpenAI key as CODEX_API_KEY too', async () => {

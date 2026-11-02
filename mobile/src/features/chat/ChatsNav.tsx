@@ -13,6 +13,7 @@ import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture
 import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated'
 import { useChat, openProject, createProject, foldersOf, threadTitle } from '../../lib/chat/store'
 import { pendingQuestions } from '../../lib/chat/questions'
+import { pendingApproval } from '../../lib/chat/approvals'
 import {
   shelve, shelfOf, wokeAt, countdown, ago, settledAt, isSnoozed, snoozePresets, type Shelf,
 } from '../../lib/chat/settle'
@@ -77,6 +78,7 @@ function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: { t: Cha
   const waiting = (t.needsReply && !live) || woke
   // Questions from the agent outrank everything else on the row, as in T3.
   const asking = !!pendingQuestions(t)
+  const approving = !asking && !!pendingApproval(t)
   const parked = shelf !== 'active' && !active
   const menu = threadMenu(t, shelf, live)
   const swipe = useRef<SwipeableMethods>(null)
@@ -102,6 +104,7 @@ function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: { t: Cha
           {title}
         </T>
         {asking ? <View style={st.woke} accessibilityLabel="Totem asked you questions"><T size={11} weight={600} color={colors.accent}>Awaiting input</T></View>
+          : approving ? <View style={st.woke} accessibilityLabel="A tool call is waiting for your approval"><T size={11} weight={600} color={colors.accent}>Awaiting approval</T></View>
           : live ? <LiveDot />
           : woke ? <View style={st.woke}><T size={11} weight={600} color={colors.accent}>Woke</T></View>
             : t.needsReply ? <View style={st.dot} accessibilityLabel="Waiting on you" /> : null}

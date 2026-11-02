@@ -1,7 +1,7 @@
 // Chat's bridge calls. Streaming endpoints are read as Server-Sent Events over
 // fetch (EventSource cannot send the bearer header).
 import { authHeaders, AuthError, api } from '../api'
-import type { Attachment, ChatCapabilities, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
+import type { ApprovalDecision, Attachment, ChatCapabilities, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
 
 export interface SendArgs {
   threadId: string
@@ -82,6 +82,10 @@ export const stopChat = (threadId: string) =>
 /** Send a message to a chat that is still answering: it steers that run. `attachments`: upload ids. */
 export const steerChat = (threadId: string, text: string, attachments?: string[]) =>
   api<{ ok: boolean; steer: { id: string; via: 'live' | 'restart' } }>('/api/chat/steer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, text, ...(attachments?.length ? { attachments } : {}) }) })
+
+/** The owner's decision on a tool call waiting for approval (chat/approvals.mjs). */
+export const decideApproval = (threadId: string, messageId: string, partId: string, decision: ApprovalDecision, feedback?: string) =>
+  api<{ status: string; live: boolean }>('/api/chat/approvals', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, messageId, partId, decision, ...(feedback ? { feedback } : {}) }) })
 
 export type QueueAction =
   | { action: 'add'; text: string; attachments: string[]; provider?: string; model?: string; effort?: string; modelSettings?: Partial<ModelSettings> }

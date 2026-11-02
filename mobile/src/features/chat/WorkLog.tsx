@@ -19,7 +19,7 @@ import Markdown from '../../ui/Markdown'
 import { summarizeWork, workElapsed, workSources, type WorkItem, type WorkSource } from './workFold'
 
 /** A connector's own logo, or its glyph when it has none or the image fails. */
-function Logo({ logo, server, kind = 'mcp', detail, size, color = vc.soft }: { logo?: string; server?: string; kind?: string; detail?: string; size: number; color?: string }) {
+export function Logo({ logo, server, kind = 'mcp', detail, size, color = vc.soft }: { logo?: string; server?: string; kind?: string; detail?: string; size: number; color?: string }) {
   const [broken, setBroken] = useState(false)
   if (logo && !broken) return <Image source={{ uri: logo }} style={{ width: size, height: size, borderRadius: 3 }} contentFit="contain" onError={() => setBroken(true)} />
   return <TI icon={toolIcon(kind, server, detail)} size={size} color={color} />

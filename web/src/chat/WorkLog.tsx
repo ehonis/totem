@@ -13,7 +13,7 @@ import Spark from './Spark'
 // said along the way, and each call as a card with what went in and came back.
 
 /** A connector's own logo, or its glyph when it has none or the image fails. */
-function Logo({ logo, server, kind = 'mcp', detail, size }: { logo?: string; server?: string; kind?: string; detail?: string; size: number }) {
+export function Logo({ logo, server, kind = 'mcp', detail, size }: { logo?: string; server?: string; kind?: string; detail?: string; size: number }) {
   const [broken, setBroken] = useState(false)
   if (logo && !broken) return <img className="vc-tool-logo" src={logo} alt="" width={size} height={size} referrerPolicy="no-referrer" loading="lazy" onError={() => setBroken(true)} />
   return <TI icon={toolIcon(kind, server, detail)} size={size} />

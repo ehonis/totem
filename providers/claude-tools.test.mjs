@@ -97,7 +97,7 @@ test('access modes: Full access by default, and what each means per CLI', () => 
   assert.equal(normalizeAccess('bogus'), 'full')
   assert.equal(claudePermissionMode('full'), 'bypassPermissions')
   assert.equal(claudePermissionMode('edits'), 'acceptEdits')
-  assert.equal(claudePermissionMode('supervised'), null)
+  assert.equal(claudePermissionMode('supervised'), 'default')
   assert.equal(codexSandbox('supervised'), 'read-only')
   assert.equal(codexSandbox('full'), 'danger-full-access')
   assert.equal(codexSandbox('edits'), null)

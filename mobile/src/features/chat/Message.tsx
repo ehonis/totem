@@ -23,7 +23,7 @@ import { useSmoothText } from '../../lib/chat/smooth'
 import { useTextTicks } from '../../lib/chat/ticks'
 import { POWER_NAMES } from '../../lib/chat/models'
 import { splitMentions } from '../../lib/chat/mentions'
-import type { Attachment, ChatMessage, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart } from '../../lib/chat/types'
+import type { Attachment, ChatMessage, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart, ApprovalPart } from '../../lib/chat/types'
 import { getChatCommands, subscribeChatCommands } from '../../lib/studio'
 import WorkLog from './WorkLog'
 import { foldWork } from './workFold'
@@ -31,6 +31,7 @@ import { AgentGroup } from './AgentsPanel'
 import TurnStats, { TurnChip } from './TurnStats'
 import TotemProposal from './TotemProposal'
 import { QuestionsRecord } from './QuestionsPanel'
+import ApprovalRow from './ApprovalRow'
 import { isAskTool } from '../../lib/chat/questions'
 import Spark, { WorkingLine } from './Spark'
 import { foldTotemCalls, type TotemAnswer } from '../../lib/chat/totemReply'
@@ -286,6 +287,7 @@ type Block =
   | { kind: 'steer'; part: SteerPart; key: string }
   | { kind: 'totem'; answer: TotemAnswer; key: string }
   | { kind: 'questions'; part: QuestionsPart; key: string }
+  | { kind: 'approval'; part: ApprovalPart; key: string }
 
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
@@ -309,6 +311,8 @@ function blocks(parts: Part[]): Block[] {
     // The questions themselves stand for the call that asked them.
     else if (p.type === 'tool' && isAskTool(p.tool)) continue
     else if (p.type === 'questions') out.push({ kind: 'questions', part: p, key: `q${i}` })
+    // A tool call waiting on (or decided by) the owner stands on its own, never folded.
+    else if (p.type === 'approval') out.push({ kind: 'approval', part: p, key: `ap${i}` })
     // A call that started another agent stands on its own, never folded into the steps.
     else if (p.type === 'tool' && p.agent) {
       const last = out[out.length - 1]
@@ -449,7 +453,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
   const thinking = live && !list.length
   // Mid-reply silence (between tools, or thinking before the next sentence) gets
   // the working line too, so a live reply never looks stalled.
-  const asking = !!m.parts?.some((p) => p.type === 'questions' && p.status === 'pending')
+  const asking = !!m.parts?.some((p) => (p.type === 'questions' || p.type === 'approval') && p.status === 'pending')
+  const approving = !!m.parts?.some((p) => p.type === 'approval' && p.status === 'pending')
   const toolRunning = !asking && !!m.parts?.some((p) => p.type === 'tool' && p.status === 'running')
   const quiet = useQuiet(live, `${m.content.length}:${m.parts?.length || 0}`)
   const secs = m.durationMs && m.durationMs > 2000 ? formatDuration(m.durationMs) : null
@@ -474,6 +479,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
         if (b.kind === 'steer') return <SteerNote key={b.key} part={b.part} />
         if (b.kind === 'totem') return <TotemSays key={b.key} answer={b.answer} live={live} />
         if (b.kind === 'questions') return <QuestionsRecord key={b.key} part={b.part} />
+        if (b.kind === 'approval') return <ApprovalRow key={b.key} part={b.part} messageId={m.id} live={live} />
         if (b.kind === 'file') return <FileCard key={b.key} file={b.part} />
         if (b.kind === 'image') return <Shot key={b.key} part={b.part} onOpen={() => setLightbox(imageSource(b.part.url, b.part.uploadId))} />
         // A run of calls is always inside a work block (workFold.ts).
@@ -482,7 +488,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
         return <Markdown key={b.key} text={b.text} size={16} />
       })}
       {thinking ? <WorkingLine text={activity ? activity.split('\n')[0].replace(/^(Working|Running|Done):\s*/, '') : m.route === 'thinking' ? 'Thinking longer for a better answer' : 'Thinking'} /> : null}
-      {live && asking ? <WorkingLine text="Waiting for your answers" /> : null}
+      {live && asking && !approving ? <WorkingLine text="Waiting for your answers" /> : null}
       {live && !asking && !thinking && quiet && !toolRunning ? <WorkingLine text={activity && !/^Done:/.test(activity) ? activity.split('\n')[0].replace(/^(Working|Running):\s*/, '') : 'Working'} /> : null}
       {m.status === 'error' ? (
         <View style={st.error}>
