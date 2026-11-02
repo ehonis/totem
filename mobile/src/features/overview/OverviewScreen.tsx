@@ -24,7 +24,7 @@ import { pushError, pushToast } from '../../lib/toast'
 import { DRIVER_LOGOS } from '../../lib/providers'
 import {
   IconArrowUp, IconChevronRight, IconRefresh, IconCalendarEvent, IconChecklist, IconFlame, IconTarget,
-  IconListCheck, IconMicrophone2, IconHistory, IconWand, IconSettings, IconInbox,
+  IconListCheck, IconBulb, IconMicrophone2, IconHistory, IconWand, IconSettings, IconInbox,
   IconAlertTriangle, IconMapPin, IconPlus, IconCheck, IconBolt, IconServer2,
 } from '../../lib/components/overview/icons'
 import IconSearch from '@tabler/icons-react-native/dist/esm/icons/IconSearch.mjs'
@@ -57,6 +57,7 @@ const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'habits', label: 'Habits', icon: IconFlame, to: { tab: 'productivity', app: 'habits' } },
   { id: 'goals', label: 'Goals', icon: IconTarget, to: { tab: 'productivity', app: 'goals' } },
   { id: 'lists', label: 'Lists', icon: IconListCheck, to: { tab: 'productivity', app: 'lists' } },
+  { id: 'recs', label: 'Recs', icon: IconBulb, to: { tab: 'productivity', app: 'recs' } },
   { id: 'journal', label: 'Journal', icon: IconMicrophone2, to: { tab: 'productivity', app: 'journal' } },
   { id: 'inbox', label: 'Inbox', icon: IconInbox, to: 'inbox' },
   { id: 'search', label: 'Search', icon: IconSearch, to: 'search' },

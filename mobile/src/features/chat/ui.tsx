@@ -7,7 +7,7 @@ import { DRIVER_LOGOS } from '../../lib/providers'
 import { textAlpha } from '../../theme'
 import { T } from '../../ui/Text'
 import {
-  IconBrandGithub, IconBrandStrava, IconCalendarEvent, IconChecklist, IconDeviceDesktop, IconFileText, IconListCheck,
+  IconBrandGithub, IconBrandStrava, IconCalendarEvent, IconChecklist, IconDeviceDesktop, IconFileText, IconListCheck, IconBulb,
   IconMicrophone, IconTarget, IconTerminal2, IconTool, IconWorld, IconBrain, IconMail, IconBrandGoogleDrive, IconNotebook, IconPhoto,
   IconSearch, IconPencil, IconDatabase, IconRobot, IconBrandOffice, IconBrandNotion, IconBrandSlack, IconBrandFigma,
 } from './icons'
@@ -53,6 +53,7 @@ const APPS: Record<string, { icon: IconType; label: string }> = {
   browser: { icon: IconWorld, label: 'Browser' },
   goals: { icon: IconTarget, label: 'Goals' },
   lists: { icon: IconListCheck, label: 'Lists' },
+  recs: { icon: IconBulb, label: 'Recommendations' },
   'google-calendar': { icon: IconCalendarEvent, label: 'Calendar' },
   calendar: { icon: IconCalendarEvent, label: 'Calendar' },
   strava: { icon: IconBrandStrava, label: 'Strava' },

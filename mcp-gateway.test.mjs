@@ -67,7 +67,7 @@ function fakeBuiltin(name) {
     close() {},
   }
 }
-const builtins = () => ({ taskClient: fakeBuiltin('get_tasks'), goalClient: fakeBuiltin('get_goals'), listClient: fakeBuiltin('get_lists') })
+const builtins = () => ({ taskClient: fakeBuiltin('get_tasks'), goalClient: fakeBuiltin('get_goals'), listClient: fakeBuiltin('get_lists'), recClient: fakeBuiltin('list') })
 
 test('a hung stdio server times out at initialize, is killed with its children, and built-ins still list', { timeout: 10_000 }, async (t) => {
   const { pidFile } = tempDir(t)

@@ -10,6 +10,7 @@ import type {
 } from './goals/types'
 import type { AgentProvider, JournalEntry, JournalPayload, JournalSettings } from './journal/types'
 import type { TotemList } from './lists/types'
+import type { Rec, RecDecision, RecLedger, RecOutcome } from './recs/types'
 import nacl from 'tweetnacl'
 import { bridgeFetch, bridgeUrl, clearSecretStored, getConnection, getStoredSecret, subscribeConnection, withAccess } from './connection'
 import { isAccessResponse } from './cfAccess'
@@ -614,6 +615,17 @@ export const linkGoal = (goalId: string, link: { kind: 'todo' | 'url'; todoId?: 
   sendJSON(`/api/goals/${encodeURIComponent(goalId)}/links`, 'POST', link) as Promise<{ goal: Goal }>
 export const unlinkGoal = (id: string) =>
   sendJSON('/api/goals/links', 'DELETE', { id }) as Promise<{ goal: Goal }>
+
+// ---- Recommendations (recs/http.mjs) ----------------------------------------
+// Deciding is the owner's alone and only happens here: no agent tool can.
+// Open recs always come whole; decided history pages with `before`.
+export const getRecLedger = (before?: string | null) =>
+  getJSON<RecLedger>(`/api/recs/ledger${before ? `?before=${encodeURIComponent(before)}` : ''}`)
+// A deferral names days from today; the bridge counts them in its own time zone.
+export const decideRec = (id: string, input: { decision: RecDecision; note?: string; deferDays?: number }) =>
+  sendJSON(`/api/recs/${encodeURIComponent(id)}/decision`, 'POST', input) as Promise<{ rec: Rec }>
+export const setRecOutcome = (id: string, input: { outcome: RecOutcome; note?: string }) =>
+  sendJSON(`/api/recs/${encodeURIComponent(id)}/outcome`, 'POST', input) as Promise<{ rec: Rec }>
 
 // ---- Lists (lists/http.mjs) ------------------------------------------------
 export const getLists = () => getJSON<{ lists: TotemList[] }>('/api/lists')

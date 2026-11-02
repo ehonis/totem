@@ -114,6 +114,9 @@ import { parsePeople, birthdayFacts, metricFacts, goalFacts, taskFacts } from '.
 import { createGoalMcpTools, GOAL_MCP_TOOL_DEFINITIONS } from './goals/mcp.mjs'
 import { GOAL_SOURCE_IDS } from './goals/sources.mjs'
 import { createListMcpTools, LIST_MCP_TOOL_DEFINITIONS } from './lists/mcp.mjs'
+import { createRecHttpHandler } from './recs/http.mjs'
+import { createRecMcpTools, REC_MCP_TOOL_DEFINITIONS, recPromptRule } from './recs/mcp.mjs'
+import { createRecService, resurfaceDeferredRecs } from './recs/service.mjs'
 import { todoCommandFromInboxProposal } from './todos/proposals.mjs'
 import { createGitHubClient } from './todos/connectors/github-client.mjs'
 import { createGitHubAppClient } from './todos/connectors/github-app-client.mjs'
@@ -11074,6 +11077,8 @@ function mcpInstructions() {
     'tasks, but that link is relational only: checking an item never completes a task, and completing a',
     'task never checks an item.',
     '',
+    `RECOMMENDATIONS. ${recPromptRule('totem_recs_')}`,
+    '',
     'FITNESS. His training data is here too. WHOOP feeds the sleep habit (totem_get_habits: sleep',
     'performance, stages, recovery). Strava is the totem_strava_* tools: activities with distance, speed',
     'or pace, elevation, heart rate and power; each bike\'s odometer; Strava\'s own four-week, year-to-date',
@@ -11520,10 +11525,20 @@ const listMcpTool = (name) => {
   }
 }
 
+let recMcpTools = null
+const recMcpTool = ({ name, description, inputSchema }) => ({
+  name, description, inputSchema,
+  handler: async (args, session) => {
+    if (!recMcpTools) throw new Error('local recommendation MCP tools are not initialized')
+    return await recMcpTools[name](args, session)
+  },
+})
+
 const MCP_TOOLS = [
   todoMcpTool('totem_get_tasks'),
   ...GOAL_MCP_TOOL_DEFINITIONS.map((definition) => goalMcpTool(definition.name)),
   ...LIST_MCP_TOOL_DEFINITIONS.map((definition) => listMcpTool(definition.name)),
+  ...REC_MCP_TOOL_DEFINITIONS.map(recMcpTool),
   {
     name: 'totem_get_calendar',
     description:
@@ -13295,6 +13310,7 @@ const listMcpMeta = Object.fromEntries(LIST_MCP_TOOL_DEFINITIONS.map((definition
   definition.name,
   { title: definition.title, annotations: definition.annotations, outputSchema: definition.outputSchema },
 ]))
+const recMcpMeta = Object.fromEntries(REC_MCP_TOOL_DEFINITIONS.map(({ name, title, annotations, outputSchema }) => [name, { title, annotations, outputSchema }]))
 
 // Apple tools (registered only when APPLE_ENABLED is on; see APPLE_MCP_TOOLS).
 const APPLE_MCP_META = {
@@ -13538,6 +13554,7 @@ const MCP_TOOL_META = {
   totem_get_tasks: todoMcpMeta('totem_get_tasks'),
   ...goalMcpMeta,
   ...listMcpMeta,
+  ...recMcpMeta,
   totem_get_calendar: {
     title: 'Read calendar', annotations: ANN.readRemote,
     outputSchema: out({
@@ -14443,6 +14460,8 @@ if (TERMINAL_ENABLED && nodePty) {
 let todoHttpHandler = null
 let goalHttpHandler = null
 let listHttpHandler = null
+let recHttpHandler = null
+let recService = null
 let devHttpHandler = null
 let alertIngestHandler = null
 let fleetHttpHandler = null
@@ -14602,6 +14621,7 @@ const server = http.createServer(async (req, res) => {
       if (todoHttpHandler && await todoHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (goalHttpHandler && await goalHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (listHttpHandler && await listHttpHandler(req, res, new URL(req.url, 'http://x'))) return
+      if (recHttpHandler && await recHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (devHttpHandler && await devHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (fleetHttpHandler && await fleetHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (sourceHttpHandler && await sourceHttpHandler(req, res, new URL(req.url, 'http://x'))) return
@@ -15911,6 +15931,10 @@ goalMcpTools = createGoalMcpTools({ service: goalService })
 const listService = createListService({ db: todoDatabase, actionLog })
 listHttpHandler = createListHttpHandler({ service: listService })
 listMcpTools = createListMcpTools({ service: listService })
+
+recService = createRecService({ db: todoDatabase, actionLog, timeZone: MORNING_BRIEFING_TZ })
+recHttpHandler = createRecHttpHandler({ service: recService, authMethod: (req) => ownerAuth.authenticate(req).via })
+recMcpTools = createRecMcpTools({ service: recService })
 
 
 
@@ -17518,6 +17542,8 @@ async function jobTick() {
     // same tick, same reason: one clock, and an ingest is an agent run that should
     // never be started by a second scheduler racing this one.
     if (journalService) await journalService.tick().catch((e) => log('journal tick error', e?.message || e))
+    // Deferred recommendations come back on their review day, on this same tick.
+    if (recService) await resurfaceDeferredRecs({ service: recService, notify: (n) => jobStore.notify(n), log }).catch((e) => log('recs tick error', e?.message || e))
   } catch (e) {
     log('job tick error', e?.message || e)
   } finally {
