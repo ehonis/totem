@@ -30,6 +30,7 @@ turn starts, then takes the bridge's copy: `start` carries the real message ids,
 | `GET /api/chat/runs/:threadId/stream?since=N` | | SSE: every event after `seq` N, then live ones. |
 | `POST /api/chat/stop` | `{threadId}` | `{ok}`. The only way to end a run early. |
 | `POST /api/chat/questions` | `{threadId, messageId, partId, action: 'answer'\|'dismiss', answers?: {questionId: string[]}, attachments?: {questionId: uploadId[]}}` | `{status, live, message, attachments}`. The owner's answers to the agent's questions (see Questions). `live: false` means the run that asked had ended; `message` is the answers as text and `attachments` the upload ids sent with them, for the client to send as the next message. 409 if already answered. |
+| `POST /api/chat/approvals` | `{threadId, messageId, partId, decision: 'accept'\|'acceptForSession'\|'decline'\|'cancel', feedback?}` | `{status, live: true}`. The owner's decision on a tool call waiting for approval (see Approvals). `feedback` goes with a decline. 409 once the run that asked has ended or the request was already answered. |
 | `POST /api/chat/steer` | `{threadId, text, attachments?: [uploadId]}` | `{ok, steer: {id, text, via: 'live'\|'restart', attachments?}}`. A message (words, files or both) for the running reply (see Steering). 409 if nothing is running, the run is wrapping up, or it is a skill command. |
 | `POST /api/chat/queue` | `{threadId, action, …}`: `add` `{text, attachments, provider?, model?, effort?, modelSettings?}`, `edit` `{id, text, attachments}`, `remove` `{id}`, `move` `{id, beforeId\|null}`, `steer` `{id}`, `resume` | `{queue, queueHeld}` as they now stand (`steer` adds `steer`). The thread's queue (see Queue). 404 when the message is no longer queued; 409 for `steer` with nothing running. |
 | `POST /api/chat/uploads?name=&mime=[&kind=text]` | raw bytes, ≤ `CHAT_MAX_UPLOAD_MB` | `{id, name, mime, size, kind, url, preview?}` |
@@ -57,6 +58,7 @@ Every event has a `seq`. Viewers replay with `since`.
 | `image` | `uploadId`, `url` | A screenshot from a tool result. |
 | `steer` | `steer: {id, text, via, createdAt, attachments?}` | The owner wrote mid-reply. Becomes a `steer` part where it landed. |
 | `questions` | `questions: {id, questions?, status, answers?, askedAt?, answeredAt?}` | The agent asked the owner questions (a `questions` part, added where asked), or they were answered or dismissed (the same part, updated by id). |
+| `approval` | `approval: {id, tool, title, detail, app?, logo?, reason?, path?, input?, toolUseId?, subagent?, once?, status, decision?, feedback?, askedAt?, decidedAt?}` | Claude asked to run a tool call (an `approval` part, added where asked), or the owner decided, or it expired (the same part, updated by id). |
 | `activity` | `text` | The current step, one line. Not persisted. |
 | `browser` | `tabId`, `url`, `title`, `image` (JPEG data URL), `at` | What the chat's browser shows after a page change. Not persisted; `GET /api/chat/browser?threadId=` returns the latest. |
 | `title` | `title`, `icon?` | The AI title (and icon) for a new chat. |
@@ -250,6 +252,38 @@ a CLI giving up on the call), the questions stay pending on the reply; answering
 them then sends the answers as the next message (T3's "message mode"), which
 resumes the session. A double submit is refused with 409.
 
+## Approvals
+
+T3 Code's pending approvals, for Claude Code (`chat/approvals.mjs`,
+`web/src/chat/ApprovalRow.tsx`, `web/src/chat/approvals.ts`). A Claude chat run
+starts `claude -p` with `--permission-prompt-tool stdio`: a tool call its
+permission mode would ask about arrives on stdout as a `can_use_tool` control
+request instead of being refused, and the answer goes back on stdin as a
+`control_response` (the same protocol the Agent SDK's `canUseTool` uses). Even
+Full access forwards the asks bypass will not skip: ask rules, connector tools
+that require a person, safety checks.
+
+The request becomes an `approval` part in the reply, where it was asked: what the
+agent wants to run (the tool card's own title and detail), Claude's reason, and
+"Waiting for approval · Decline · Approve · More". More holds "Always allow in
+this chat" (left out when Claude marks the request `suppress_always_allow_rule`)
+and "Cancel turn". While one waits, the run's clock is held, the chat row says
+"Awaiting approval", and a push goes out if nobody is viewing. A message sent from
+the composer declines it, and its words reach the agent as the reason (T3's "send
+feedback to decline"); files with it go on as a steer.
+
+| Decision | Claude gets |
+|---|---|
+| Approve | `allow` with the input unchanged |
+| Always allow in this chat | `allow` plus Claude's suggested rules as session updates (never `setMode`: the mode is the composer's). The rules (`Bash(npm test:*)`, or the tool by name) are saved on the thread as `allowedTools` and passed as `--allowedTools` on every later run in that chat. |
+| Decline | `deny`, with the owner's words as the message |
+| Cancel turn | `deny` with `interrupt`, which ends the turn |
+
+A request lives only as long as the process that asked. When the run ends (Stop,
+a bridge restart) or Claude withdraws it (`control_cancel_request`, after a steer
+cut the turn short), the part is `expired` and has no buttons. Voice turns, phone
+requests and jobs never get approvals: they keep refusing as before.
+
 ## Choosing a model
 
 The composer's model picker (`web/src/chat/ModelPicker.tsx`) is the only way a chat picks its
@@ -300,13 +334,14 @@ run already gets the hour). New messages no longer store `mode`; old ones keep t
 The Permissions row in the composer's effort menu (the muted half of the model chip,
 `chat/ComposerTraits.tsx`, stored as
 `modelSettings.access` on the thread or project) sets what the agent may do without
-asking. Unset means **Full access**. Every CLI runs in print mode and cannot stop to
-ask, so "ask" means "refuse". Only chats pass an access mode; jobs and phone
-requests keep each CLI's defaults.
+asking. Unset means **Full access**. A Claude chat stops to ask the owner (see
+Approvals); every other CLI runs in print mode and cannot, so for them "ask" means
+"refuse". Only chats pass an access mode; jobs and phone requests keep each CLI's
+defaults.
 
 | Access | Claude Code | Codex | Cursor |
 |---|---|---|---|
-| Supervised | default mode (writes only to the paths the prompt names) | `--sandbox read-only` | no `--force` |
+| Supervised | `--permission-mode default`, named outright so the account's own `defaultMode` cannot turn it into Auto (writes outside the paths the prompt names ask first) | `--sandbox read-only` | no `--force` |
 | Auto-accept edits | `--permission-mode acceptEdits` | `AGENT_SANDBOX` | `--force` |
 | Auto | `--permission-mode auto` (falls back to default where the account lacks it) | `AGENT_SANDBOX` | `--force` |
 | Full access | `--permission-mode bypassPermissions` | `--sandbox danger-full-access` | `--force` |

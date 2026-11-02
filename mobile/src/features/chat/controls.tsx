@@ -57,12 +57,13 @@ export function ThinkingControl({ stops, value, onChange, label = 'Thinking effo
 }
 
 export type { Access }
-// What the agent may do in this chat without asking. The bridge runs every CLI in
-// print mode, which cannot stop to ask, so "asks" means the action is refused.
+// What the agent may do in this chat without asking. Claude asks the owner in the
+// chat (lib/chat/approvals.ts); every other CLI runs in print mode and cannot stop
+// to ask, so there the action is refused.
 export const ACCESS_MODES: { id: Access; label: string; hint: string; icon: any; sf: string }[] = [
-  { id: 'supervised', label: 'Supervised', hint: 'Read and use connectors. Commands and file changes are refused.', icon: IconLock, sf: 'lock' },
-  { id: 'edits', label: 'Auto-accept edits', hint: 'File edits go through; commands are refused.', icon: IconPencilCheck, sf: 'pencil' },
-  { id: 'auto', label: 'Auto', hint: 'Providers that can judge routine actions approve them; anything else is refused.', icon: IconSparkles, sf: 'sparkles' },
+  { id: 'supervised', label: 'Supervised', hint: 'Read and use connectors. Commands and file changes ask you first (Claude) or are refused.', icon: IconLock, sf: 'lock' },
+  { id: 'edits', label: 'Auto-accept edits', hint: 'File edits go through; commands ask you first (Claude) or are refused.', icon: IconPencilCheck, sf: 'pencil' },
+  { id: 'auto', label: 'Auto', hint: 'Providers that can judge routine actions approve them; anything else asks you (Claude) or is refused.', icon: IconSparkles, sf: 'sparkles' },
   { id: 'full', label: 'Full access', hint: 'Commands and edits without prompts.', icon: IconLockOpen, sf: 'lock.open' },
 ]
 

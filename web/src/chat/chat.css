@@ -1586,3 +1586,33 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-handoff-who { display: inline-flex; align-items: center; gap: 5px; color: var(--vc-soft); }
 .vc-handoff-who .vc-logo { margin-left: 2px; }
 .vc-handoff.pending { margin: 0 auto 6px; max-width: 760px; padding: 0 4px; }
+
+/* A tool call waiting on the owner's approval (ApprovalRow.tsx, T3 Code's pending approval row). */
+.vc-approval { margin: 8px 0; max-width: 620px; font-size: 13.5px; }
+.vc-approval.pending { padding: 10px 12px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--vc-line)); background: color-mix(in srgb, var(--amber) 6%, transparent); }
+.vc-approval-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.vc-approval-icon { display: inline-flex; flex: none; color: var(--vc-soft); }
+.vc-approval.pending .vc-approval-icon { color: var(--amber); }
+.vc-approval-title { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.vc-approval-app { color: var(--vc-soft); }
+.vc-approval-detail { display: block; margin: 8px 0 0 23px; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; color: var(--text); padding: 6px 8px; border-radius: 8px; background: #00000040; }
+.vc-approval-reason { margin: 6px 0 0 23px; color: var(--vc-soft); font-size: 12.5px; overflow-wrap: anywhere; }
+.vc-approval-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 8px 0 0 23px; font-size: 12.5px; }
+.vc-approval-waiting { display: inline-flex; align-items: center; gap: 4px; color: var(--amber); }
+.vc-approval-dot { color: var(--vc-faint); }
+.vc-approval-btn { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--vc-line); background: transparent; color: var(--vc-text); font: inherit; cursor: pointer; }
+.vc-approval-btn:hover:not(:disabled) { background: var(--vc-raise); }
+.vc-approval-btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); font-weight: 500; }
+.vc-approval-btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 85%, transparent); }
+.vc-approval-btn:disabled { opacity: .5; cursor: default; }
+.vc-approval-more { position: relative; }
+.vc-approval-menu { bottom: calc(100% + 6px); left: 0; min-width: 220px; }
+.vc-approval-gone { color: var(--vc-soft); }
+.vc-approval.settled { display: flex; align-items: center; gap: 8px; color: var(--vc-soft); min-width: 0; }
+.vc-approval-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 0 1 auto; overflow: hidden; white-space: nowrap; }
+.vc-approval-line .vc-approval-title { color: var(--vc-soft); }
+.vc-approval-line code { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.vc-approval-outcome { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-approval.settled.approved .vc-approval-icon { color: var(--green); }
+.vc-approval.settled.declined .vc-approval-icon, .vc-approval.settled.cancelled .vc-approval-icon { color: var(--red); }
+@media (max-width: 640px) { .vc-approval-detail, .vc-approval-reason, .vc-approval-actions { margin-left: 0; } }

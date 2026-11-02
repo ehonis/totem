@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import { useChat, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread, markRead, markUnread, setProjectContext, settleThread, unsettleThread, snoozeThread, wakeThread } from './store'
 import { pendingQuestions } from './questions'
+import { pendingApproval } from './approvals'
 import type { ChatThread, Project } from './types'
 import { TI, useDismiss } from './ui'
 import { IconDots, IconPinned, IconPencil, IconTrash, IconSearch, IconX, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconHome, IconChevronLeft, IconMail, IconMailOpened, IconClock, IconAlarmOff, IconArrowBackUp, IconChevronUp, IconChevronDown, IconPlus } from './icons'
@@ -136,12 +137,14 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
       : null
   // Questions from the agent outrank everything else on the row, as in T3.
   const asking = !!pendingQuestions(t)
+  const approving = !asking && !!pendingApproval(t)
   return (
     <div ref={rowRef} className={`vc-thread shelf-${shelf} ${active ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''} ${(t.needsReply && !live) || woke ? 'waiting' : ''}`} {...dragThreadProps(t.id)}>
       <button type="button" className="vc-thread-main" onClick={() => onOpen(t.id)} title={title}>
         <ThreadIcon t={t} size={16} busy={retitling} />
         <span className={`vc-thread-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{title}</span>
         {asking ? <span className="vc-asking" title="Totem asked you questions">Awaiting input</span>
+          : approving ? <span className="vc-asking" title="A tool call is waiting for your approval">Awaiting approval</span>
           : live ? <span className="vc-live-dot" aria-label="Answering" />
           : woke ? <span className="vc-woke" title={`Woke ${wakeDescription(wokeAt(t, now), now)}`}>Woke</span>
           : t.needsReply && <span className="vc-reply-dot" aria-label="Waiting on you" title="Waiting on you" />}

@@ -105,3 +105,6 @@ export { default as IconPlayerPlayFilled } from '@tabler/icons-react/dist/esm/ic
 export { default as IconGripVertical } from '@tabler/icons-react/dist/esm/icons/IconGripVertical.mjs'
 export { default as IconListNumbers } from '@tabler/icons-react/dist/esm/icons/IconListNumbers.mjs'
 export { default as IconArrowForwardUp } from '@tabler/icons-react/dist/esm/icons/IconArrowForwardUp.mjs'
+export { default as IconShield } from '@tabler/icons-react/dist/esm/icons/IconShield.mjs'
+export { default as IconShieldCheck } from '@tabler/icons-react/dist/esm/icons/IconShieldCheck.mjs'
+export { default as IconShieldX } from '@tabler/icons-react/dist/esm/icons/IconShieldX.mjs'

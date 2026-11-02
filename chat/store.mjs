@@ -17,6 +17,7 @@ import { normalizeAgent } from './subagents.mjs'
 import { normalizeMembers } from '../totems/core.mjs'
 import { logoUrl } from './tools.mjs'
 import { QUEUE_LIMIT } from './queue.mjs'
+import { APPROVAL_DECISIONS, APPROVAL_STATUSES } from './approvals.mjs'
 
 export const validThreadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
 
@@ -93,6 +94,19 @@ export function normalizePart(p, i = 0) {
       if (Object.keys(attachments).length) out.attachments = attachments
     }
     if (num(p.answeredAt)) out.answeredAt = num(p.answeredAt)
+    return out
+  }
+  // A tool call waiting on the owner's approval, and what he decided (chat/approvals.mjs).
+  if (p.type === 'approval') {
+    const id = str(p.id, 64)
+    if (!id) return null
+    const out = { type: 'approval', id, tool: str(p.tool, 200) || 'tool', title: str(p.title, 200) || 'Tool call', detail: str(p.detail, 600), status: APPROVAL_STATUSES.includes(p.status) ? p.status : 'expired', askedAt: num(p.askedAt) }
+    for (const [key, max] of [['app', 80], ['reason', 1000], ['path', 600], ['input', 4000], ['toolUseId', 160], ['feedback', 8000]]) if (typeof p[key] === 'string' && p[key]) out[key] = str(p[key], max)
+    if (logoUrl(p.logo)) out.logo = p.logo
+    if (APPROVAL_DECISIONS.includes(p.decision)) out.decision = p.decision
+    if (p.subagent === true) out.subagent = true
+    if (p.once === true) out.once = true
+    if (num(p.decidedAt)) out.decidedAt = num(p.decidedAt)
     return out
   }
   // Something the owner sent while the reply was running (chat/steer.mjs).
@@ -217,6 +231,13 @@ function normalizeSessions(raw) {
     out[provider] = { id: s.id, through: Math.max(0, Math.floor(Number(s.through) || 0)) }
   }
   return Object.keys(out).length ? out : null
+}
+
+// Claude permission rules the owner allowed for the rest of a chat ("Always
+// allow", chat/approvals.mjs). Written only by the bridge, never by a client PUT.
+function normalizeAllowedTools(raw) {
+  if (!Array.isArray(raw)) return []
+  return [...new Set(raw.filter((r) => typeof r === 'string' && /^[A-Za-z0-9_.:-]{1,200}(\(.{1,500}\))?$/s.test(r.trim())).map((r) => r.trim()))].slice(-200)
 }
 
 const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'members', 'projectContextOff', 'needsReply', 'keepUnread', 'settledOverride', 'settledAt', 'unsettledAt', 'snoozedUntil', 'snoozedAt', 'sourceKey']
@@ -362,6 +383,8 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
       thread.queue = queue
       if (raw.queueHeld === true) thread.queueHeld = true
     }
+    const allowed = normalizeAllowedTools(raw?.allowedTools)
+    if (allowed.length) thread.allowedTools = allowed
     return thread
   }
 
@@ -427,6 +450,9 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
       if (queue.length) thread.queue = queue
       else delete thread.queue
       if (!queue.length || thread.queueHeld !== true) delete thread.queueHeld
+      const allowed = normalizeAllowedTools(thread.allowedTools)
+      if (allowed.length) thread.allowedTools = allowed
+      else delete thread.allowedTools
       await rawWrite(thread)
       return out === undefined ? thread : out
     })

@@ -7,7 +7,7 @@ import {
   useChat, initChat, send, stop, steer, queueMessage, updateQueue, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
   openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead, setMembers,
-  loadFiles, openArtifact, fileArtifact, takePendingFile,
+  loadFiles, openArtifact, fileArtifact, takePendingFile, respondToApproval,
 } from '../chat/store'
 import { TotemIcon, TotemRunButton, useTotemDirectory } from '../totems/shared'
 import { GroupPicker } from './TotemsView'
@@ -21,6 +21,7 @@ import { pushToast } from '../toast'
 import { UserMessage, AssistantMessage } from '../chat/Message'
 import { useQuestionFlow } from '../chat/QuestionsPanel'
 import { pendingQuestions } from '../chat/questions'
+import { DECLINE_PLACEHOLDER, pendingApproval } from '../chat/approvals'
 import ModelPicker from '../chat/ModelPicker'
 import HandoffMark from '../chat/HandoffMark'
 import { providerSwitches } from '../chat/handoff'
@@ -386,8 +387,17 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     if (!stash.text.trim() && !stash.attachments.length) pushToast('Queued message is no longer queued. Your unsaved edit was kept in the composer.', 'info')
     else { putBack(stash); pushToast('Queued message is no longer queued. Your unsaved edit was discarded.', 'info') }
   }, [editGone])
-  const onQueue = (p: FollowUpPayload) => (activeId ? queueMessage(activeId, p.text, p.attachments) : false)
-  const onSteerNow = (p: FollowUpPayload) => (activeId ? steer(activeId, p.text, p.attachments.map((a) => a.id)) : false)
+  // A tool call waiting on his approval (chat/approvals.ts): as in T3 Code, a
+  // message declines it and its words tell the agent why. Files go on as a steer.
+  const waitingApproval = active ? pendingApproval(active) : null
+  const declineWith = async (p: FollowUpPayload) => {
+    if (!activeId || !waitingApproval) return false
+    const ok = await respondToApproval(activeId, waitingApproval.message.id, waitingApproval.part.id, 'decline', p.text.trim() || undefined)
+    if (ok && p.attachments.length) await steer(activeId, '', p.attachments.map((a) => a.id))
+    return ok
+  }
+  const onQueue = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : activeId ? queueMessage(activeId, p.text, p.attachments) : false)
+  const onSteerNow = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : activeId ? steer(activeId, p.text, p.attachments.map((a) => a.id)) : false)
   const saveQueueEdit = async (p: FollowUpPayload) => {
     if (!queueEdit) return false
     const ok = await updateQueue(queueEdit.threadId, { action: 'edit', id: queueEdit.id, text: p.text, attachments: p.attachments.map((a) => a.id) })
@@ -487,7 +497,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       onVoice={() => setVoice(true)}
       busy={busy}
       autoFocus={visible}
-      placeholder={temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
+      placeholder={waitingApproval ? DECLINE_PLACEHOLDER : temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
       allowCommands={!temporary}
       maxUploadBytes={caps?.maxUploadBytes}
       onAuthError={onAuthError}

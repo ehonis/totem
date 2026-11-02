@@ -10,6 +10,7 @@ import { TI } from './ui'
 import { IconPlayerStopFilled, IconClock, IconCheck, IconMailOpened, IconChevronDown, IconHome } from './icons'
 import type { ChatThread, Project } from './types'
 import { pendingQuestions } from './questions'
+import { pendingApproval } from './approvals'
 
 // The running-chats panel, bottom-right on every screen. It lists the chats that
 // are answering and the finished ones he hasn't read yet (`needsReply`), that he
@@ -70,8 +71,11 @@ function Row({ t, run, now, onOpen, onSnooze }: {
   const title = threadTitle(t)
   const failed = !run && failedReply(t)
   const asking = pendingQuestions(t)
+  const approving = !asking && pendingApproval(t)
   const status = asking
     ? <span className="vc-asking">{asking.part.questions.length === 1 ? 'A question for you' : `${asking.part.questions.length} questions for you`}</span>
+    : approving
+    ? <span className="vc-asking">Waiting for your approval</span>
     : run
     ? <><span className="vc-live-dot" aria-hidden /><span>{elapsed(now - run.startedAt)} · {run.activity || 'Working'}</span></>
     : failed

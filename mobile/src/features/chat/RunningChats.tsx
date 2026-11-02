@@ -17,6 +17,7 @@ import { useOnScreen, getOnScreen } from '../../lib/chat/onScreen'
 import { isSnoozed, ago, snoozePresets } from '../../lib/chat/settle'
 import type { ChatThread, Project } from '../../lib/chat/types'
 import { pendingQuestions } from '../../lib/chat/questions'
+import { pendingApproval } from '../../lib/chat/approvals'
 import { pushToast } from '../../lib/toast'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
@@ -69,7 +70,9 @@ function Row({ t, run, now, onOpen }: { t: ChatThread; run?: RunState; now: numb
   const failed = !run && failedReply(t)
   const when = ago(t.updatedAt, now)
   const asking = pendingQuestions(t)
+  const approving = !asking && pendingApproval(t)
   const status = asking ? (asking.part.questions.length === 1 ? 'A question for you' : `${asking.part.questions.length} questions for you`)
+    : approving ? 'Waiting for your approval'
     : run ? `${elapsed(now - run.startedAt)} · ${run.activity?.split('\n')[0] || 'Working'}`
     : failed ? `Failed ${when !== 'now' ? `${when} ago` : 'just now'}`
       : when !== 'now' ? `Done ${when} ago` : 'Done just now'

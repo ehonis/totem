@@ -12,12 +12,12 @@ import { getThreads, putThread, deleteThread as apiDeleteThread, getChatModels, 
 import { pushError, pushToast } from '../toast'
 import { applyEvent } from './reduce'
 import {
-  sendChat, attachRun, stopChat, steerChat, changeQueue, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
+  sendChat, attachRun, stopChat, steerChat, decideApproval, changeQueue, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
   deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
 } from './api'
 import type { QueueAction } from './api'
 import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
-import type { Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
+import type { ApprovalDecision, Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
 import { activeAt, wokeAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
 
 const CACHE_KEY = 'chat_threads_v2'
@@ -756,6 +756,7 @@ function handleEvent(threadId: string, e: StreamEvent) {
       break
     case 'steer':
     case 'questions':
+    case 'approval':
     case 'delta':
     case 'tool':
     case 'agent':
@@ -977,6 +978,20 @@ export async function steer(threadId: string, text: string, attachments?: string
     return true
   } catch (e: any) {
     if (!fail(e)) pushError(e?.status === 409 ? 'That reply had already finished. Your message is still in the box.' : `Couldn't send that: ${e.message}`)
+    return false
+  }
+}
+
+/**
+ * Decide on a tool call waiting for approval (chat/approvals.mjs). The new status
+ * arrives through the run's own stream. False when the request had already ended.
+ */
+export async function respondToApproval(threadId: string, messageId: string, partId: string, decision: ApprovalDecision, feedback?: string): Promise<boolean> {
+  try {
+    await decideApproval(threadId, messageId, partId, decision, feedback)
+    return true
+  } catch (e: any) {
+    if (!fail(e)) pushError(e?.status === 409 ? (e.message || 'That request has ended.') : `Couldn't send that: ${e.message}`)
     return false
   }
 }

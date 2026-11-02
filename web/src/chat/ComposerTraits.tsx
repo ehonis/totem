@@ -18,13 +18,14 @@ const HINTS: Record<string, string> = {
 }
 export const hintFor = (effort: string) => HINTS[effort] || ''
 
-// The bridge runs every CLI in print mode, which cannot stop to ask, so "asks"
-// here means the action is refused (providers/claude-tools.mjs › ACCESS_MODES).
-// Connector tools are governed separately, by Settings → Connections.
+// Claude asks the owner in the chat (chat/approvals.ts); every other CLI runs in
+// print mode and cannot stop to ask, so there the action is refused
+// (providers/claude-tools.mjs › ACCESS_MODES). Connector tools are governed
+// separately, by Settings → Connections.
 export const ACCESS_MODES: { id: Access; label: string; hint: string; icon: any }[] = [
-  { id: 'supervised', label: 'Supervised', hint: 'Read and use connectors. Commands and file changes are refused.', icon: IconLock },
-  { id: 'edits', label: 'Auto-accept edits', hint: 'File edits go through; commands are refused.', icon: IconPencilCheck },
-  { id: 'auto', label: 'Auto', hint: 'Providers that can judge routine actions approve them; anything else is refused.', icon: IconSparkles },
+  { id: 'supervised', label: 'Supervised', hint: 'Read and use connectors. Commands and file changes ask you first (Claude) or are refused.', icon: IconLock },
+  { id: 'edits', label: 'Auto-accept edits', hint: 'File edits go through; commands ask you first (Claude) or are refused.', icon: IconPencilCheck },
+  { id: 'auto', label: 'Auto', hint: 'Providers that can judge routine actions approve them; anything else asks you (Claude) or is refused.', icon: IconSparkles },
   { id: 'full', label: 'Full access', hint: 'Commands and edits without prompts.', icon: IconLockOpen },
 ]
 

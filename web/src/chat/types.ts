@@ -125,7 +125,34 @@ export interface QuestionsPart {
   askedAt?: number
   answeredAt?: number
 }
-export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | SteerPart | QuestionsPart
+/**
+ * A tool call Claude Code's permission mode asked about (chat/approvals.mjs on
+ * the bridge). `pending` until the owner decides; `expired` when the run that
+ * asked ended first.
+ */
+export type ApprovalDecision = 'accept' | 'acceptForSession' | 'decline' | 'cancel'
+export interface ApprovalPart {
+  type: 'approval'
+  id: string
+  tool: string
+  title: string
+  detail: string
+  app?: string
+  logo?: string
+  reason?: string
+  path?: string
+  input?: string
+  toolUseId?: string
+  subagent?: boolean
+  /** Claude asked that no standing grant be made: no "Always allow". */
+  once?: boolean
+  status: 'pending' | 'approved' | 'declined' | 'cancelled' | 'expired'
+  decision?: ApprovalDecision
+  feedback?: string
+  askedAt?: number
+  decidedAt?: number
+}
+export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | SteerPart | QuestionsPart | ApprovalPart
 
 export interface ChatMessage {
   id: string
@@ -323,6 +350,7 @@ export type StreamEvent =
   | { type: 'file'; file: FilePart; seq: number }
   | { type: 'steer'; steer: Omit<SteerPart, 'type'>; seq: number }
   | { type: 'questions'; questions: Partial<QuestionsPart> & { id: string }; seq: number }
+  | { type: 'approval'; approval: Partial<ApprovalPart> & { id: string }; seq: number }
   | { type: 'activity'; text: string; seq: number }
   | { type: 'title'; title: string; icon?: string; seq: number }
   | { type: 'done'; message: ChatMessage; seq: number }

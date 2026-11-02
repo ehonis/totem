@@ -254,6 +254,16 @@ export function applyEvent(msg, event, now = Date.now()) {
       else msg.parts.push({ type: 'questions', ...q })
       break
     }
+    case 'approval': {
+      // A tool call waiting on the owner (chat/approvals.mjs): added where it was
+      // asked, then updated in place with his decision.
+      const a = event.approval || {}
+      if (!a.id) break
+      const existing = msg.parts.find((p) => p.type === 'approval' && p.id === a.id)
+      if (existing) Object.assign(existing, a)
+      else msg.parts.push({ type: 'approval', ...a })
+      break
+    }
     case 'steer': {
       // The owner's words mid-reply, kept where they landed among the steps.
       const st = event.steer || {}
@@ -279,6 +289,8 @@ export function finalizeMessage(msg, { status, error, finalText, startedAt, now 
   if (settled && !streamed) applyEvent(msg, { type: 'delta', text: settled }, now)
   for (const p of msg.parts) {
     if (p.type === 'tool' && p.status === 'running') { p.status = status === 'error' ? 'error' : 'done'; p.endedAt = now }
+    // The process that asked is gone, so nothing can answer it now.
+    if (p.type === 'approval' && p.status === 'pending') { p.status = 'expired'; p.decidedAt = now }
     if (p.type === 'tool' && p.agent?.status === 'running') {
       p.agent = { ...p.agent, status: status === 'error' ? 'error' : status === 'stopped' ? 'stopped' : 'done', endedAt: now }
       for (const st of p.agent.steps || []) if (st.status === 'running') st.status = 'done'

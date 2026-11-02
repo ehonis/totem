@@ -78,6 +78,7 @@ import { createChatRuns } from './chat/runs.mjs'
 import { QUEUE_LIMIT, moveQueued, queueAfterRun } from './chat/queue.mjs'
 import { AGENT_SPAWN, killTree, trackAgent } from './scripts/kill-tree.mjs'
 import { createSteering, progressNote, steerPrompt, steerText } from './chat/steer.mjs'
+import { approvalPart, permissionResult, normalizeDecision, statusForDecision, sessionRules, mergeAllowedTools, createApprovalWaits } from './chat/approvals.mjs'
 import { ASK_TOOL, ASK_TOOL_DESCRIPTOR, QUESTION_RULES, DISMISSED_FOR_AGENT, QUESTIONS_LATER_FOR_AGENT, normalizeQuestions, normalizeAnswers, attachedIds, answersForAgent, answersMessage, createQuestionWaits, createHolds, holdableTimeout } from './chat/questions.mjs'
 import { usageTally, addUsage, replyStats } from './chat/stats.mjs'
 import { planHistory, renderTranscript, attachmentBlock, projectBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer, failureText } from './chat/turn.mjs'
@@ -3111,7 +3112,12 @@ async function readSteerImages(files) {
 // short ends with an `aborted_*` result that is not the end of the run.
 // `--replay-user-messages` echoes each message once Claude has taken it in, so
 // stdin is closed only after the last result with nothing still unread.
-async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, onAgent, signal, model, effort, readOnly, access = null, instance, resume, images = [], browser = null, allowWrite = [], steering = null, timeoutMs = TIMEOUT } = {}) {
+// Approvals (chat/approvals.mjs): with `approve` (a steered chat run only, since
+// it needs stdin open), `--permission-prompt-tool stdio` turns each permission ask
+// into a `can_use_tool` control request on stdout. `approve(request, signal)`
+// resolves the permission result, which goes back on stdin; `allowRules` are the
+// chat's saved "Always allow" rules.
+async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, onAgent, signal, model, effort, readOnly, access = null, instance, resume, images = [], browser = null, allowWrite = [], allowRules: savedRules = [], approve = null, steering = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('claude')
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
   const m = currentClaudeModel(bareModelId(model) || CLAUDE_MODEL)
@@ -3136,8 +3142,10 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
   // (a chat's documents folder, a project's memory file) is allowed by path here
   // or it is refused, and so is every connector the owner left on. Deny rules
   // above still win over these.
-  const allowRules = readOnly ? [] : [...claudeWriteRules(allowWrite), ...toolRules.allow]
+  const allowRules = readOnly ? [] : [...claudeWriteRules(allowWrite), ...toolRules.allow, ...savedRules]
   if (allowRules.length) args.push('--allowedTools', ...allowRules)
+  const asks = !!(approve && steering && !readOnly)
+  if (asks) args.push('--permission-prompt-tool', 'stdio')
   args.push(...splitLaunchArgs(account.config.launchArgs))
   const browserCli = browserArgs('claude', browser)
   args.push(...browserCli.args)
@@ -3167,6 +3175,27 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
   let lastEvent = 0
   let detach = () => {}
   const finishInput = () => { detach(); if (child && !child.stdin.writableEnded) child.stdin.end() }
+  // Permission asks waiting on the owner, by request id, so the CLI can cancel one.
+  const asking = new Map()
+  const answerControl = (requestId, body) => {
+    if (!child || child.stdin.writableEnded || child.exitCode != null) return
+    child.stdin.write(`${JSON.stringify({ type: 'control_response', response: { request_id: requestId, ...body } })}\n`)
+  }
+  const onControl = (event) => {
+    const requestId = event.request_id
+    const req = event.request || {}
+    if (!asks || req.subtype !== 'can_use_tool') {
+      answerControl(requestId, { subtype: 'error', error: `unsupported control request: ${req.subtype || 'unknown'}` })
+      return
+    }
+    const cancel = new AbortController()
+    asking.set(requestId, cancel)
+    Promise.resolve()
+      .then(() => approve(req, AbortSignal.any([cancel.signal, ...(signal ? [signal] : [])])))
+      .then((response) => answerControl(requestId, { subtype: 'success', response }))
+      .catch((e) => answerControl(requestId, { subtype: 'error', error: String(e?.message || e) }))
+      .finally(() => asking.delete(requestId))
+  }
   return spawnJsonStream(account.cli, args, {
     input, label, signal, timeoutMs, holds: browser?.holds, env: { ...instanceEnvironment(account), ...browserCli.env },
     keepStdin: !!steering,
@@ -3184,6 +3213,8 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
     },
     onEvent: (event) => {
       lastEvent += 1
+      if (event.type === 'control_request') { onControl(event); return }
+      if (event.type === 'control_cancel_request') { asking.get(event.request_id)?.abort(); return }
       if (event.session_id && event.session_id !== sessionId) {
         sessionId = event.session_id
         emitSafe(onSession, sessionId, 'session')
@@ -8186,6 +8217,9 @@ const handoffWaits = createQuestionWaits()
 
 // Questions waiting on a live tool call, by part id (chat/questions.mjs).
 const questionWaits = createQuestionWaits()
+// Claude's permission asks waiting on the owner, by part id (chat/approvals.mjs).
+const approvalWaits = createApprovalWaits()
+const approvalsHandled = new Set()
 // How long a Codex run waits for answers before ending its reply (see askOwner).
 const CODEX_LIVE_QUESTION_MS = Number(process.env.CODEX_LIVE_QUESTION_MS) || 90_000
 // Questions already answered or dismissed, so a double tap cannot answer twice
@@ -9343,6 +9377,47 @@ async function startChatTurn(body) {
         const page = await browserManager.status(threadId).catch(() => ({}))
         return { content: [{ type: 'text', text: handoffDone(handoff.reason, page) }] }
       }
+      // A tool call Claude's permission mode asks about (chat/approvals.mjs): the
+      // request joins the reply, the run's clock stops, and the call waits for the
+      // owner's decision. `gone` is the CLI withdrawing the ask (a steer cut the
+      // turn short) or the run ending; nothing is left to answer then.
+      const askApproval = async (request, gone) => {
+        const part = approvalPart(request, { id: randomUUID().slice(0, 12), describe: chatToolFromClaude })
+        // Waiting before anyone can see it, so the quickest tap still finds it.
+        const release = browserAccess?.holds?.hold() || (() => {})
+        const decided = approvalWaits.wait(part.id, threadId, gone)
+        forward({ type: 'approval', approval: part })
+        if (pending) { clearTimeout(pending); pending = null }
+        await save()
+        log(`web chat [${provider}] asked to approve ${part.tool}`)
+        if (!someoneViewing(threadId)) {
+          const latest = await threadStore.get(threadId).catch(() => null)
+          notifier.deliver({
+            title: `Approve ${part.title}? ${latest?.title || 'your chat'}`,
+            body: truncate(part.detail || part.reason || part.tool, 160),
+            category: 'chat.question',
+            url: webThreadUrl(threadId),
+            tag: `chat:${threadId}`,
+          }).catch((e) => log('chat approval push failed', e?.message || e))
+        }
+        let r
+        try {
+          r = await decided
+        } finally {
+          release()
+        }
+        if (r.gone) {
+          forward({ type: 'approval', approval: { id: part.id, status: signal.aborted ? 'cancelled' : 'expired', decidedAt: Date.now() } })
+          return permissionResult(request, { decision: 'cancel' })
+        }
+        if (r.decision === 'acceptForSession' && !part.once) {
+          const rules = sessionRules(request.tool_name, request.permission_suggestions)
+          await threadStore.update(threadId, (t) => { t.allowedTools = mergeAllowedTools(t.allowedTools, rules) })
+            .catch((e) => log('chat: saving allowed tools failed', e?.message || e))
+        }
+        forward({ type: 'approval', approval: { id: part.id, status: statusForDecision(r.decision), decision: r.decision, ...(r.feedback ? { feedback: r.feedback } : {}), decidedAt: Date.now() } })
+        return permissionResult(request, r)
+      }
       try {
         // A skill command ($morning, /journal, …) runs the skill rather than chatting.
         const matchedSkill = !body.regenerate && !files.length ? await lookupSkillCommand(text.toLowerCase(), text) : null
@@ -9428,6 +9503,9 @@ async function startChatTurn(body) {
               // Where the prompt tells it to write: this chat's documents, the owner's memory
               // (CHAT_MEMORY_RULES), and its project's memory.
               allowWrite: [join(CHAT_OUTPUTS_DIR, threadId), MEMORY_ROOT, shareWithProject && projectStore.memoryPath(projectId), totemJob && totemMemoryPath(totemId)].filter(Boolean),
+              // Permission asks come to the owner (chat/approvals.mjs); never on a voice turn.
+              approve: voice ? null : askApproval,
+              allowRules: (await threadStore.get(threadId).catch(() => null))?.allowedTools || [],
               timeoutMs,
               onText: (delta) => { firstTokenAt ||= Date.now(); forward({ type: 'delta', text: delta }, { live: streamLive }) },
               onActivity: (a) => push({ type: 'activity', text: a }),
@@ -9915,6 +9993,30 @@ async function handleChatApi(req, res, path) {
     // The files go with that message as its attachments.
     const sent = Object.values(files).flat().map((f) => f.id)
     return send(res, 200, { status, live: false, message: clean ? answersMessage(part.questions, clean, files) : null, attachments: sent })
+  }
+
+  // The owner's decision on a tool call waiting for approval (chat/approvals.mjs).
+  // Only the run that asked can take it; once it has ended, the request is gone.
+  if (req.method === 'POST' && path === '/api/chat/approvals') {
+    const body = await readJsonBody(req)
+    const { threadId, messageId, partId } = body
+    if (!validThreadId(threadId) || typeof partId !== 'string') return send(res, 400, { error: 'missing threadId or partId' })
+    let decision
+    try { decision = normalizeDecision(body) } catch (e) { return send(res, e.status || 400, { error: e.message }) }
+    if (approvalsHandled.has(partId)) return send(res, 409, { error: 'That request was already answered.' })
+    if (approvalWaits.decide(partId, decision)) {
+      approvalsHandled.add(partId)
+      return send(res, 200, { status: statusForDecision(decision.decision), live: true })
+    }
+    // Nothing waits. A live run already marked its own part; a part left pending
+    // on disk by a run that is gone (a bridge restart) is marked expired here.
+    if (chatRuns.active(threadId)?.assistantMessageId !== messageId) {
+      await threadStore.update(threadId, (t) => {
+        const p = t.messages.find((m) => m.id === messageId)?.parts?.find((x) => x.type === 'approval' && x.id === partId)
+        if (p?.status === 'pending') Object.assign(p, { status: 'expired', decidedAt: Date.now() })
+      }).catch(() => {})
+    }
+    return send(res, 409, { error: 'That request has ended: the reply that asked is no longer running.' })
   }
 
   if (req.method === 'POST' && path === '/api/chat/icons/backfill') return send(res, 200, await backfillChatIcons())

@@ -188,8 +188,9 @@ export async function readToolState(file) {
 }
 
 // ---------------------------------------------------------------------------
-// Access modes for a chat, the same four T3 Code offers. A print-mode run
-// cannot stop to ask, so "ask" in these descriptions means "refuse".
+// Access modes for a chat, the same four T3 Code offers. A Claude chat run asks
+// the owner (chat/approvals.mjs); every other CLI runs in print mode and cannot
+// stop to ask, so for them "ask" means "refuse".
 // ---------------------------------------------------------------------------
 
 export const ACCESS_MODES = ['supervised', 'edits', 'auto', 'full']
@@ -199,9 +200,13 @@ export function normalizeAccess(value) {
   return ACCESS_MODES.includes(value) ? value : DEFAULT_ACCESS
 }
 
-/** Claude Code's --permission-mode for an access mode; null keeps Claude's default. */
+/**
+ * Claude Code's --permission-mode for an access mode. Supervised names `default`
+ * outright: left unset, the account's own settings.json `defaultMode` (often
+ * "auto") would quietly decide instead.
+ */
 export function claudePermissionMode(access) {
-  return { supervised: null, edits: 'acceptEdits', auto: 'auto', full: 'bypassPermissions' }[access] ?? null
+  return { supervised: 'default', edits: 'acceptEdits', auto: 'auto', full: 'bypassPermissions' }[access] ?? null
 }
 
 /** Codex's sandbox for an access mode; null keeps AGENT_SANDBOX. */
