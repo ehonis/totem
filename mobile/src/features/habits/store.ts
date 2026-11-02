@@ -3,7 +3,7 @@
 // their own routes, so the payload lives in a tiny external store instead. Every
 // bridge mutation answers with the whole payload, so a write is "send, swap in".
 import { useSyncExternalStore } from 'react'
-import { AuthError, clearSecret, getHabits } from '../../lib/api'
+import { AuthError, clearSecret, getHabits, isAccountChanged, peekHabits } from '../../lib/api'
 import { pushToast } from '../../lib/toast'
 import type { HabitsPayload } from './logic'
 import { rememberSiblingApps } from '../../lib/siblingApps'
@@ -29,9 +29,12 @@ export function failed(e: unknown): string {
 }
 
 export async function loadHabits(): Promise<void> {
+  // The first load draws the cached payload at once while the bridge is asked.
+  const cached = data ? undefined : peekHabits()
+  if (cached) setHabits(cached)
   loading = true
   emit()
-  try { setHabits(await getHabits()) } catch (e) { pushToast(failed(e)) } finally { loading = false; emit() }
+  try { setHabits(await getHabits()) } catch (e) { if (!isAccountChanged(e)) pushToast(failed(e)) } finally { loading = false; emit() }
 }
 
 /** Run a mutation that answers with the full payload. Throws the message on failure. */

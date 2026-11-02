@@ -125,7 +125,7 @@ export async function bridgeFetch(path: string, init: RequestInit = {}): Promise
   return r
 }
 
-function subscribe(fn: () => void) { subs.add(fn); return () => { subs.delete(fn) } }
+export function subscribeConnection(fn: () => void) { subs.add(fn); return () => { subs.delete(fn) } }
 export function useConnection(): Connection {
-  return useSyncExternalStore(subscribe, getConnection, getConnection)
+  return useSyncExternalStore(subscribeConnection, getConnection, getConnection)
 }

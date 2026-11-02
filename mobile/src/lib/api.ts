@@ -10,7 +10,11 @@ import type {
 } from './goals/types'
 import type { AgentProvider, JournalEntry, JournalPayload, JournalSettings } from './journal/types'
 import type { TotemList } from './lists/types'
-import { bridgeFetch, bridgeUrl, clearSecretStored, getStoredSecret, withAccess } from './connection'
+import nacl from 'tweetnacl'
+import { bridgeFetch, bridgeUrl, clearSecretStored, getConnection, getStoredSecret, subscribeConnection, withAccess } from './connection'
+import { isAccessResponse } from './cfAccess'
+import { AccountChangedError, createHttpCache } from './httpCache'
+import { cacheStorage } from './httpCacheStorage'
 
 // The app keeps the secret in the keychain (connection.ts); these keep the web's names.
 export const getSecret = () => getStoredSecret()
@@ -48,7 +52,14 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (typeof init.body === 'string' && !Object.keys(extra).some((k) => k.toLowerCase() === 'content-type')) {
     extra['content-type'] = 'application/json'
   }
+  const mark = httpCache.begin()
   const response = await bridgeFetch(path, { ...init, headers: authHeaders(extra) })
+  // A write the bridge took means it is reachable: no longer "Offline".
+  httpCache.reached(mark, response)
+  return readResponse<T>(response)
+}
+
+async function readResponse<T>(response: Response): Promise<T> {
   const body = await response.json().catch(() => ({}))
   if (response.status === 401) throw new AuthError()
   if (!response.ok) {
@@ -63,13 +74,45 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T
 }
 
-async function getJSON<T = any>(url: string): Promise<T> { return api<T>(url) }
+// Every GET goes through the on-disk cache (httpCache.ts): the bridge is asked
+// with If-None-Match, and the stored body answers a 304 or a bridge out of reach.
+// The cache belongs to one bridge and secret; signing out or switching either
+// empties it.
+const httpCache = createHttpCache(cacheStorage, { blocked: isAccessResponse })
+const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+const accountOf = ({ baseUrl, secret }: { baseUrl: string; secret: string }) =>
+  baseUrl && secret ? `${baseUrl}#${hex(nacl.hash(new TextEncoder().encode(secret)).subarray(0, 6))}` : ''
+let cacheAccount = accountOf(getConnection())
+httpCache.setAccount(cacheAccount)
+subscribeConnection(() => {
+  const next = accountOf(getConnection())
+  if (next === cacheAccount) return
+  // Loading the stored connection at launch is not a change of account.
+  if (cacheAccount) void httpCache.clear()
+  cacheAccount = next
+  httpCache.setAccount(next)
+})
+
+async function getJSON<T = any>(url: string): Promise<T> {
+  return httpCache.get<T>(url, (headers, signal) => bridgeFetch(url, { headers: authHeaders(headers), signal }), readResponse)
+}
+
+/** What the last GET of `url` answered, from the cache, without asking the bridge. */
+export const peekJSON = <T = any>(url: string): T | undefined => httpCache.peek<T>(url)
+/** Whether the bridge was out of reach and screens show stored data (the offline hint). */
+export const getCacheStatus = httpCache.getStatus
+export const subscribeCacheStatus = httpCache.subscribe
+/** A GET dropped because the owner signed out or switched bridge: nothing to show or say. */
+export const isAccountChanged = (e: unknown) => e instanceof AccountChangedError
 
 export const getTodos = () => getJSON('/api/todos')
+// peek*: the getter's last answer from the GET cache, for a screen's first frame.
+export const peekTodos = () => peekJSON('/api/todos')
 // Whether the bridge has the terminal panel switched on (TERMINAL_ENABLED). The
 // app asks before showing the toggle, so a bridge without it simply has no button.
 export const getTerminalStatus = () => getJSON('/api/terminal/status')
 export const getCalendar = (days = 7) => getJSON(`/api/calendar?days=${days}`)
+export const peekCalendar = (days = 7) => peekJSON(`/api/calendar?days=${days}`)
 export const getCalendarRange = (start: string, end: string) =>
   getJSON(`/api/calendar?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`)
 export async function updateCalendarEvent(event: any) {
@@ -192,6 +235,7 @@ export const getAssistantUsage = () => getJSON('/api/assistant-usage')
 // Productivity activity: every todo/habit/calendar object created or completed
 // through Totem — the real "how much am I using this" signal, beyond AI requests.
 export const getProductivity = () => getJSON('/api/productivity')
+export const peekProductivity = () => peekJSON('/api/productivity')
 export const getChatModels = (provider?: string) =>
   getJSON(provider ? `/api/chat-models?provider=${encodeURIComponent(provider)}` : '/api/chat-models')
 export const getNote = (path: string) => getJSON(`/api/brain/note?path=${encodeURIComponent(path)}`)
@@ -202,6 +246,7 @@ export const getInbox = () => getJSON('/api/inbox') // { items: [...] }
 // builds a preview per item (reads staged files, checks provider health) and this
 // runs on a poll. -> { open: number, byKind: Record<string, number> }
 export const getInboxCount = () => getJSON('/api/inbox/count')
+export const peekInboxCount = () => peekJSON('/api/inbox/count')
 // action is 'accept' (creates the task/event) or 'deny' (skips it).
 export const resolveInboxItem = (id: string, action: string) => sendJSON('/api/inbox/resolve', 'POST', { id, action })
 
@@ -319,6 +364,7 @@ async function sendJSON(url: string, method: string, body: any) {
 // returns the same full payload as getHabits — { habits, entries, today,
 // palette } — so callers just replace their state with the response.
 export const getHabits = (days = 371) => getJSON(`/api/habits?days=${days}`)
+export const peekHabits = (days = 371) => peekJSON(`/api/habits?days=${days}`)
 export const createHabit = (fields: any) => sendJSON('/api/habits', 'POST', fields)
 // Persist the desktop check-in order. ids must contain every active habit once.
 export const reorderHabits = (ids: string[]) => sendJSON('/api/habits/reorder', 'POST', { ids })
@@ -393,6 +439,8 @@ function todoQueryString(query: TodoQuery = {}) {
 
 export const getTodoBoard = (query: TodoQuery = {}) =>
   getJSON<{ todos: Todo[] }>(`/api/todos/board${todoQueryString(query)}`)
+export const peekTodoBoard = (query: TodoQuery = {}) =>
+  peekJSON<{ todos: Todo[] }>(`/api/todos/board${todoQueryString(query)}`)
 export const getTodo = (id: string) =>
   getJSON<{ todo: Todo }>(`/api/todos/${encodeURIComponent(id)}`)
 export const createBoardTodo = (fields: TodoPatch & { title: string; syncTarget?: 'local' | 'github' | 'sheet'; repo?: string }) =>
@@ -423,6 +471,7 @@ export const detachTodoExternalLink = (id: string, connector: 'github' | 'sheet'
 export const shareBoardTodo = (id: string, target: 'github' | 'sheet', options: Record<string, unknown> = {}) =>
   sendJSON(`/api/todos/${encodeURIComponent(id)}/share`, 'POST', { target, ...options }) as Promise<{ todo: Todo }>
 export const getTodoPreferences = () => getJSON<{ preferences: TodoPreferences }>('/api/todos/preferences')
+export const peekTodoPreferences = () => peekJSON<{ preferences: TodoPreferences }>('/api/todos/preferences')
 export const updateTodoPreferences = (patch: Partial<TodoPreferences>) =>
   sendJSON('/api/todos/preferences', 'PATCH', patch) as Promise<{ preferences: TodoPreferences }>
 export const purgeDeletedTodos = (olderThan: string) => sendJSON('/api/todos/purge', 'POST', { olderThan }) as Promise<{ purged: number; backup: string }>
@@ -520,12 +569,12 @@ export function chatStream({ text, history = [], model = null, provider = null }
 // what the metrics underneath it actually say.
 // The resolved window comes back beside the goals, so an empty week still has a name
 // and a pair of dates to step from.
-export const getGoals = (period?: GoalPeriodQuery) =>
-  getJSON<{ goals: Goal[]; period: GoalPeriod | null }>(
-    !period ? '/api/goals'
-      : typeof period === 'string' ? `/api/goals?period=${period}`
-        : `/api/goals?type=${period.type}&start=${period.start}`,
-  )
+const goalsUrl = (period?: GoalPeriodQuery) =>
+  !period ? '/api/goals'
+    : typeof period === 'string' ? `/api/goals?period=${period}`
+      : `/api/goals?type=${period.type}&start=${period.start}`
+export const getGoals = (period?: GoalPeriodQuery) => getJSON<{ goals: Goal[]; period: GoalPeriod | null }>(goalsUrl(period))
+export const peekGoals = (period?: GoalPeriodQuery) => peekJSON<{ goals: Goal[]; period: GoalPeriod | null }>(goalsUrl(period))
 export const getGoal = (id: string) => getJSON<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}`)
 export const getGoalOptions = () => getJSON<GoalOptions>('/api/goals/options')
 export const getGoalReview = (period: GoalPeriodShortcut = 'this_week') =>
@@ -568,6 +617,7 @@ export const unlinkGoal = (id: string) =>
 
 // ---- Lists (lists/http.mjs) ------------------------------------------------
 export const getLists = () => getJSON<{ lists: TotemList[] }>('/api/lists')
+export const peekLists = () => peekJSON<{ lists: TotemList[] }>('/api/lists')
 export const getList = (id: string) => getJSON<{ list: TotemList }>(`/api/lists/${encodeURIComponent(id)}`)
 export const createList = (input: { title: string; items?: Array<string | { text: string; checked?: boolean }>; todoIds?: string[] }) =>
   sendJSON('/api/lists', 'POST', input) as Promise<{ list: TotemList }>

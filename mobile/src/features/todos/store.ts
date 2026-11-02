@@ -3,7 +3,7 @@
 // TodosView's state; on a phone the detail and composer are their own routes,
 // so the state moves into a small external store they all read.
 import { useSyncExternalStore } from 'react'
-import { deleteBoardTodo, getTodoBoard, getTodoPreferences, updateBoardTodo } from '../../lib/api'
+import { deleteBoardTodo, getTodoBoard, getTodoPreferences, isAccountChanged, peekTodoBoard, peekTodoPreferences, updateBoardTodo } from '../../lib/api'
 import type { Todo, TodoPreferences } from '../../lib/todos/types'
 
 export interface BoardState {
@@ -45,10 +45,23 @@ export function useBoard(): BoardState {
 
 export const getBoard = () => state
 
+/** The board as the GET cache last saw it (loadBoard's five reads), if it holds all of it. */
+function cachedBoard(): Partial<BoardState> | null {
+  const active = peekTodoBoard({ snoozed: false }), sleeping = peekTodoBoard({ snoozed: true })
+  const recycle = peekTodoBoard({ deleted: true }), archived = peekTodoBoard({ archived: true })
+  const prefs = peekTodoPreferences()
+  if (!active || !sleeping || !recycle || !archived || !prefs) return null
+  return {
+    todos: active.todos, snoozed: sleeping.todos, deleted: recycle.todos,
+    archiveCount: archived.todos.length, preferences: prefs.preferences, loaded: true,
+  }
+}
+
 let inflight: Promise<void> | null = null
 export function loadBoard(): Promise<void> {
   if (inflight) return inflight
-  set({ loading: true, error: '' })
+  const cached = state.loaded ? null : cachedBoard()
+  set({ ...cached, loading: true, error: '' })
   inflight = (async () => {
     try {
       const [active, sleeping, recycle, archived, prefs] = await Promise.all([
@@ -62,7 +75,7 @@ export function loadBoard(): Promise<void> {
         preferences: prefs.preferences, loaded: true,
       }))
     } catch (cause) {
-      set({ error: cause instanceof Error ? cause.message : 'Tasks could not load.' })
+      if (!isAccountChanged(cause)) set({ error: cause instanceof Error ? cause.message : 'Tasks could not load.' })
     } finally {
       set({ loading: false })
       inflight = null
