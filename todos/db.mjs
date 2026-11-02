@@ -12,8 +12,13 @@ import * as listsMigration from './migrations/006-lists.mjs';
 import * as goalWeekMondayMigration from './migrations/007-goal-week-monday.mjs';
 import * as freeVentureTagsMigration from './migrations/008-free-venture-tags.mjs';
 import * as rolledFromMigration from './migrations/009-rolled-from.mjs';
+import * as recsMigration from './migrations/010-recs.mjs';
 
-const FORMAT_VERSION = 3;
+const FORMAT_VERSION = 4;
+// Older formats a restore still accepts. A table added since (`since` on TABLES)
+// did not exist when such an export was taken, so it restores empty: nothing is
+// missing from it, which is why an older format is accepted rather than refused.
+const OLDEST_RESTORABLE_FORMAT = 3;
 const SQLITE_BUSY = 5;
 const SQLITE_LOCKED = 6;
 const WAL_RETRY_INTERVAL_MS = 10;
@@ -35,6 +40,7 @@ const TABLES = [
   { name: 'list_items', orderBy: 'list_id, position, id' },
   { name: 'list_todos', orderBy: 'list_id, todo_id' },
   { name: 'lists', orderBy: 'position, id' },
+  { name: 'recs', orderBy: 'created_at, id', since: 4 },
   { name: 'schema_migrations', orderBy: 'version' },
   { name: 'sync_outbox', orderBy: 'id' },
   { name: 'tags', orderBy: 'id' },
@@ -56,9 +62,6 @@ const RESTORE_ORDER = [
   'goals',
   'goal_metrics',
   'goal_links',
-  'lists',
-  'list_items',
-  'list_todos',
   'tags',
   'todo_tags',
   'todo_notes',
@@ -68,6 +71,7 @@ const RESTORE_ORDER = [
   'connector_state',
   'todo_preferences',
   'todo_import_keys',
+  'recs',
 ];
 
 // Deleting todos first lets their cascades remove append-only notes while the
@@ -78,6 +82,9 @@ const DELETE_ORDER = [
   'goals',
   'goal_metrics',
   'goal_links',
+  'lists',
+  'list_items',
+  'list_todos',
   'todos',
   'tags',
   'todo_tags',
@@ -88,13 +95,14 @@ const DELETE_ORDER = [
   'connector_state',
   'todo_preferences',
   'todo_import_keys',
+  'recs',
   'schema_migrations',
 ];
 
 const MIGRATIONS = [
   initialMigration, exhaustedOutboxMigration, goalsMigration, outcomeMigration,
   goalAbandonedMigration, listsMigration, goalWeekMondayMigration, freeVentureTagsMigration,
-  rolledFromMigration,
+  rolledFromMigration, recsMigration,
 ];
 
 function enableWal(db) {
@@ -229,10 +237,15 @@ export function exportTodoDatabase({ db, destination }) {
 
 function readAndValidateExport(source) {
   const exported = JSON.parse(readFileSync(source, 'utf8'));
-  if (!exported || exported.formatVersion !== FORMAT_VERSION) {
-    throw new Error(`Todo export must use formatVersion ${FORMAT_VERSION}`);
+  const format = exported?.formatVersion;
+  if (!Number.isInteger(format) || format < OLDEST_RESTORABLE_FORMAT || format > FORMAT_VERSION) {
+    throw new Error(`Todo export must use formatVersion ${OLDEST_RESTORABLE_FORMAT} to ${FORMAT_VERSION}`);
   }
-  for (const { name } of TABLES) {
+  for (const { name, since } of TABLES) {
+    // An older export's schema_migrations stop before the migration that added the
+    // table, so the restored file records it as unapplied until the next open, which
+    // re-runs it harmlessly (CREATE ... IF NOT EXISTS).
+    if (since > format && exported[name] === undefined) exported[name] = [];
     if (!Array.isArray(exported[name])) {
       throw new Error(`Todo export table ${name} must be an array`);
     }

@@ -300,6 +300,15 @@ export const CATEGORIES = {
     dedupeWindowMinutes: 0,
     slot: null,
   },
+  // A recommendation the owner deferred, back on its review day (recs/service.mjs).
+  // It waits in the ledger either way, so it can wait for the morning.
+  'rec.review': {
+    label: 'Recommendations to decide again',
+    quietHours: 'defer',
+    defaultEnabled: true,
+    dedupeWindowMinutes: 0,
+    slot: null,
+  },
 }
 
 export const CATEGORY_NAMES = Object.keys(CATEGORIES)

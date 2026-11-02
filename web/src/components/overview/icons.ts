@@ -10,6 +10,7 @@ export { default as IconChecklist } from '@tabler/icons-react/dist/esm/icons/Ico
 export { default as IconFlame } from '@tabler/icons-react/dist/esm/icons/IconFlame.mjs'
 export { default as IconTarget } from '@tabler/icons-react/dist/esm/icons/IconTarget.mjs'
 export { default as IconListCheck } from '@tabler/icons-react/dist/esm/icons/IconListCheck.mjs'
+export { default as IconBulb } from '@tabler/icons-react/dist/esm/icons/IconBulb.mjs'
 export { default as IconMicrophone2 } from '@tabler/icons-react/dist/esm/icons/IconMicrophone2.mjs'
 export { default as IconBrandGithub } from '@tabler/icons-react/dist/esm/icons/IconBrandGithub.mjs'
 export { default as IconBrain } from '@tabler/icons-react/dist/esm/icons/IconBrain.mjs'

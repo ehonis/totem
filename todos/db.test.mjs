@@ -23,6 +23,7 @@ const TABLES = [
   'list_items',
   'list_todos',
   'lists',
+  'recs',
   'schema_migrations',
   'sync_outbox',
   'tags',
@@ -41,6 +42,7 @@ const TABLE_ORDERS = {
   list_items: 'list_id, position, id',
   list_todos: 'list_id, todo_id',
   lists: 'position, id',
+  recs: 'created_at, id',
   // Both goal tables self-reference, so the export order has to put a row after the row
   // it points at — see the note on TABLES in db.mjs.
   goal_metrics: 'rolls_up_to_metric_id IS NOT NULL, position, id',
@@ -212,7 +214,7 @@ function expectedCompleteSnapshot() {
     rolled_from: null,
   });
   return {
-    formatVersion: 3,
+    formatVersion: 4,
     connector_state: [
       {
         connector: 'github', cursor: 'cursor-a', watermark: FIXTURE_AT,
@@ -251,6 +253,7 @@ function expectedCompleteSnapshot() {
     list_items: [],
     list_todos: [],
     lists: [],
+    recs: [],
     schema_migrations: [
       { version: 1, applied_at: FIXTURE_AT },
       { version: 2, applied_at: FIXTURE_AT },
@@ -261,6 +264,7 @@ function expectedCompleteSnapshot() {
       { version: 7, applied_at: FIXTURE_AT },
       { version: 8, applied_at: FIXTURE_AT },
       { version: 9, applied_at: FIXTURE_AT },
+      { version: 10, applied_at: FIXTURE_AT },
     ],
     sync_outbox: [
       {
@@ -380,7 +384,7 @@ test('migrates an empty database once and enables WAL and foreign keys', () => {
   assert.deepEqual(
     db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()
       .map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
   );
   assert.deepEqual(
     db.prepare(`
@@ -394,7 +398,7 @@ test('migrates an empty database once and enables WAL and foreign keys', () => {
   closeTodoDatabase(db);
 
   const reopened = openTodoDatabase({ file: dbFile });
-  assert.equal(reopened.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 9);
+  assert.equal(reopened.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 10);
   closeTodoDatabase(reopened);
 });
 
@@ -408,7 +412,7 @@ test('concurrent openers serialize migration checks and apply each version once'
   assert.deepEqual(
     db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()
       .map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
   );
   closeTodoDatabase(db);
 });
@@ -748,7 +752,7 @@ test('backs up, exports, and restores a consistent committed snapshot', async ()
 
   const exported = JSON.parse(readFileSync(exportFile, 'utf8'));
   assert.deepEqual(Object.keys(exported), ['formatVersion', ...TABLES]);
-  assert.equal(exported.formatVersion, 3);
+  assert.equal(exported.formatVersion, 4);
   assert.deepEqual(exported.todos.map(({ id }) => id), ['todo-a', 'todo-z']);
 
   restoreTodoDatabase({ source: exportFile, destination: restoredFile });
@@ -830,7 +834,7 @@ test('rejects an unsupported export before changing the destination', () => {
 
   assert.throws(
     () => restoreTodoDatabase({ source, destination }),
-    /formatVersion 3/i,
+    /formatVersion 3 to 4/i,
   );
 
   const unchanged = openTodoDatabase({ file: destination });

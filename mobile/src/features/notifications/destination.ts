@@ -8,7 +8,7 @@
 /** web/src/router.ts TAB_IDS. */
 const WEB_TABS = ['overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'fleet', 'inbox', 'logs', 'brain', 'settings']
 /** web/src/router.ts PRODUCTIVITY_APPS. */
-const PRODUCTIVITY = ['todos', 'calendar', 'habits', 'goals', 'lists', 'journal']
+const PRODUCTIVITY = ['todos', 'calendar', 'habits', 'goals', 'lists', 'recs', 'journal']
 /** web/src/router.ts SUB_TABS.settings; each is also a settings pane id in the app. */
 const SETTINGS_PANES = ['general', 'chat', 'ai', 'integrations', 'tasks', 'providers', 'shortcuts', 'notifications', 'voice', 'skills', 'jobs', 'connections', 'logs']
 /** Tabs the app doesn't have: they open on the web dashboard. */

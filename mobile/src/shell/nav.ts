@@ -18,7 +18,7 @@ export const TAB_ROUTES = {
 
 export type TabId = keyof typeof TAB_ROUTES
 
-export const PRODUCTIVITY_APPS = ['todos', 'habits', 'goals', 'lists', 'journal', 'calendar'] as const
+export const PRODUCTIVITY_APPS = ['todos', 'habits', 'goals', 'lists', 'recs', 'journal', 'calendar'] as const
 export type ProductivityApp = (typeof PRODUCTIVITY_APPS)[number]
 
 /**

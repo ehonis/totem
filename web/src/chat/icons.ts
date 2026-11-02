@@ -28,6 +28,7 @@ export { default as IconDeviceDesktop } from '@tabler/icons-react/dist/esm/icons
 export { default as IconChecklist } from '@tabler/icons-react/dist/esm/icons/IconChecklist.mjs'
 export { default as IconTarget } from '@tabler/icons-react/dist/esm/icons/IconTarget.mjs'
 export { default as IconListCheck } from '@tabler/icons-react/dist/esm/icons/IconListCheck.mjs'
+export { default as IconBulb } from '@tabler/icons-react/dist/esm/icons/IconBulb.mjs'
 export { default as IconCalendarEvent } from '@tabler/icons-react/dist/esm/icons/IconCalendarEvent.mjs'
 export { default as IconBrandStrava } from '@tabler/icons-react/dist/esm/icons/IconBrandStrava.mjs'
 export { default as IconBrandGithub } from '@tabler/icons-react/dist/esm/icons/IconBrandGithub.mjs'

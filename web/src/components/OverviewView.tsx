@@ -11,7 +11,7 @@ import type { NavTarget } from '../router'
 import { pushError } from '../toast'
 import {
   IconArrowUp, IconChevronRight, IconRefresh, IconCalendarEvent, IconChecklist, IconFlame, IconTarget,
-  IconListCheck, IconMicrophone2, IconBrandGithub, IconBrain, IconHistory, IconWand, IconSettings, IconInbox,
+  IconListCheck, IconBulb, IconMicrophone2, IconBrandGithub, IconBrain, IconHistory, IconWand, IconSettings, IconInbox,
   IconAlertTriangle, IconMapPin, IconPlus, IconMinus, IconMessageCircle, IconCheck, IconBolt,
 } from './overview/icons'
 import { clock, dueDiff, dueLabel, periodTotal, startOfDay, until } from './overview/time'
@@ -35,6 +35,7 @@ const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'habits', label: 'Habits', icon: IconFlame, to: { tab: 'productivity', app: 'habits' } },
   { id: 'goals', label: 'Goals', icon: IconTarget, to: { tab: 'productivity', app: 'goals' } },
   { id: 'lists', label: 'Lists', icon: IconListCheck, to: { tab: 'productivity', app: 'lists' } },
+  { id: 'recs', label: 'Recs', icon: IconBulb, to: { tab: 'productivity', app: 'recs' } },
   { id: 'journal', label: 'Journal', icon: IconMicrophone2, to: { tab: 'productivity', app: 'journal' } },
   { id: 'dev', label: 'Dev', icon: IconBrandGithub, to: 'dev' },
   { id: 'brain', label: 'Brain', icon: IconBrain, to: 'brain' },

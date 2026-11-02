@@ -21,14 +21,18 @@ import TodosView from './TodosView'
 import HabitsView from './HabitsView'
 import GoalsView from './GoalsView'
 import ListsView from './ListsView'
+import RecsView from './RecsView'
 import JournalView from './JournalView'
 import CalendarView from './CalendarView'
+// The web's Recs tab is a Tabler glyph, not brand art (ProductivityView.tsx); the same here.
+import IconBulb from '@tabler/icons-react-native/dist/esm/icons/IconBulb.mjs'
 
-const APPS = [
+const APPS: Array<{ id: string; label: string; icon?: number; glyph?: { Icon: React.ComponentType<any>; color: string }; View: React.ComponentType<{ active: boolean }> }> = [
   { id: 'todos', label: 'Todos', icon: require('../../../assets/images/connection-icons/totem-todos.png'), View: TodosView },
   { id: 'habits', label: 'Habits', icon: require('../../../assets/images/connection-icons/habits.png'), View: HabitsView },
   { id: 'goals', label: 'Goals', icon: require('../../../assets/images/connection-icons/goals.png'), View: GoalsView },
   { id: 'lists', label: 'Lists', icon: require('../../../assets/images/connection-icons/lists.png'), View: ListsView },
+  { id: 'recs', label: 'Recs', glyph: { Icon: IconBulb, color: colors.amber }, View: RecsView },
   { id: 'journal', label: 'Journal', icon: require('../../../assets/images/connection-icons/journal.png'), View: JournalView },
   { id: 'calendar', label: 'Calendar', icon: require('../../../assets/images/connection-icons/google-calendar.png'), View: CalendarView },
 ]
@@ -98,7 +102,9 @@ export default function ProductivityScreen() {
                 accessibilityLabel={a.label}
                 accessibilityState={{ selected: on }}
               >
-                <Image source={a.icon} style={{ width: 16, height: 16, borderRadius: 3 }} />
+                {a.glyph
+                  ? <a.glyph.Icon size={16} strokeWidth={1.75} color={a.glyph.color} />
+                  : <Image source={a.icon} style={{ width: 16, height: 16, borderRadius: 3 }} />}
                 <T size={14} weight={on ? 600 : 500} color={on ? colors.text : colors.muted}>{a.label}</T>
               </Press>
             )

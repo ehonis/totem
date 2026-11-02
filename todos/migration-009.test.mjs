@@ -82,7 +82,7 @@ test('009 adds rolled_from to a version 8 database and keeps every row', () => {
     for (const table of TABLES.filter((t) => t !== 'todos')) assert.deepEqual(after[table], before[table], table)
     assert.deepEqual(after.todos, before.todos.map((row) => ({ ...row, rolled_from: null })))
     assert.deepEqual(migrated.prepare('PRAGMA foreign_key_check').all(), [])
-    assert.equal(migrated.prepare('SELECT max(version) AS v FROM schema_migrations').get().v, 9)
+    assert.equal(migrated.prepare('SELECT count(*) AS n FROM schema_migrations WHERE version = 9').get().n, 1)
 
     // Existing duplicates are left as they are; the index only constrains new links.
     migrated.exec("UPDATE todos SET rolled_from = 't-done' WHERE id = 't-next-1'")

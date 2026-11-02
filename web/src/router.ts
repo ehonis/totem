@@ -14,7 +14,7 @@
 
 export interface Route {
   tab: string
-  /** Sub-app inside Productivity (todos | calendar | habits | goals | lists | journal). */
+  /** Sub-app inside Productivity (todos | calendar | habits | goals | lists | recs | journal). */
   app: string | null
   /** Sub-tab inside Settings / Studio. */
   sub: string | null
@@ -31,7 +31,7 @@ export const TAB_IDS = [
 
 // Todos/Calendar/Habits are apps *inside* Productivity, but their ids still turn
 // up on their own in old links, the `landingTab` pref, and Overview's View buttons.
-export const PRODUCTIVITY_APPS = ['todos', 'calendar', 'habits', 'goals', 'lists', 'journal']
+export const PRODUCTIVITY_APPS = ['todos', 'calendar', 'habits', 'goals', 'lists', 'recs', 'journal']
 export const DEFAULT_PRODUCTIVITY_APP = 'calendar'
 
 const SUB_TABS: Record<string, string[]> = {

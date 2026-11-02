@@ -4,6 +4,6 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['src/todos/test-setup.ts'],
-    include: ['src/{todos,goals,journal,chat,messages,totems,sources}/**/*.test.{ts,tsx}', 'src/*.test.ts'],
+    include: ['src/{todos,goals,journal,chat,messages,totems,sources,recs}/**/*.test.{ts,tsx}', 'src/*.test.ts'],
   },
 })
