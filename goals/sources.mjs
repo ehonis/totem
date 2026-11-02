@@ -72,6 +72,15 @@ const SPORT_PHRASES = {
   ski: 'snow days', water: 'paddles', sport: 'games', other: 'workouts',
 };
 
+/**
+ * Which connector each metric source reads, by its id in the source-run log
+ * (sources/). The health view groups sources under the goals they feed with this, and
+ * a goal whose source is failing says so; `manual` reads nothing and has no entry.
+ */
+export const GOAL_SOURCE_IDS = Object.freeze({ strava_distance: 'strava', strava_gear_odometer: 'strava' });
+
+export const sourceIdForMetric = (kind) => GOAL_SOURCE_IDS[kind] ?? null;
+
 export function isGoalMetricSource(value) {
   return typeof value === 'string' && GOAL_METRIC_SOURCES.includes(value);
 }

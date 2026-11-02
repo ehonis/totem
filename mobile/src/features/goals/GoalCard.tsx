@@ -25,6 +25,7 @@ import { NativeMenu } from './NativeMenu'
 import { openUrl } from '../../lib/siblingApps'
 import { goalContext } from '../../lib/chat/about/context'
 import { CHAT_ABOUT_ACTION, chatAbout } from '../../ui/chatAbout'
+import MetricSourceWarning from './MetricSourceWarning'
 
 /** One hue per horizon (.period-week …), shared with the tabs and the overview. */
 export const PERIOD_COLOR: Record<GoalPeriodType, string> = {
@@ -148,7 +149,10 @@ function MetricRow({ metric, onLog, busy, percentAtEnd, done }: {
           </T>
         )}
         {sourced ? (
-          <T size={11} muted style={{ flexShrink: 1 }}>{metric.sourceLabel}{synced ? ` · synced ${synced}` : ''}</T>
+          <View style={{ flexShrink: 1, gap: 2 }}>
+            <T size={11} muted>{metric.sourceLabel}{synced ? ` · synced ${synced}` : ''}</T>
+            <MetricSourceWarning sourceKind={metric.sourceKind} />
+          </View>
         ) : (
           <View style={s.log}>
             <Btn compact title="+1" disabled={busy} onPress={() => onLog({ delta: 1 })} />

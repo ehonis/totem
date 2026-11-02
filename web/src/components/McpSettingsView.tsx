@@ -9,6 +9,7 @@ import {
 } from '../api'
 import { Hi, ArrowPathIcon, CheckCircleIcon, ExclamationTriangleIcon, TrashIcon, WrenchScrewdriverIcon, ChevronDownIcon, BoltIcon } from '../icons'
 import DataConnectionsPanel from './DataConnectionsPanel'
+import SourceHealthPanel from '../sources/SourceHealthPanel'
 import ClaudeToolsPanel from './ClaudeToolsPanel'
 import { WhoopConnectionPanel } from './WhoopConnection'
 import { useErrorToast } from '../toast'
@@ -1137,6 +1138,8 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
               onCreds={startAuth}
               onCancel={() => setAuthSession(null)}
             />
+
+            <SourceHealthPanel onAuthError={onAuthError} />
 
             <WhoopConnectionPanel onAuthError={onAuthError} />
 

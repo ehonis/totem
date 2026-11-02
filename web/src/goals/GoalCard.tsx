@@ -7,6 +7,7 @@ import {
 import GoalNumbers from './GoalNumbers'
 import ChatAbout from '../chat/about/ChatAbout'
 import { goalContext } from '../chat/about/context'
+import MetricSourceWarning from '../sources/MetricSourceWarning'
 import { GOAL_DONE_ICON, goalIconFor } from './goalIcon'
 import { formatAmount } from './types'
 import type { Goal, GoalMetric, GoalMetricChanges, GoalOptions, SubGoal } from './types'
@@ -158,6 +159,7 @@ function MetricRow({ metric, onLog, busy, percentAtEnd }: {
               {/* Says which sports a family covers and how stale the reading is — the
                   two things a goal that "isn't counting my workout" turns on. */}
               {metric.available && freshness(metric.readAt) && <> · synced {freshness(metric.readAt)}</>}
+              <MetricSourceWarning sourceKind={metric.sourceKind} />
             </span>
           )
           : (

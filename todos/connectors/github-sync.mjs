@@ -1,6 +1,7 @@
 import { TodoDomainError } from '../errors.mjs';
 import { withTodoTransaction } from '../db.mjs';
 import { randomUUID } from 'node:crypto';
+import { remoteClient, remoteFault, tracker } from '../../sources/track.mjs';
 import { autoTrackQueries, normalizeRepo, parseIssueIdentifier, selectIssues } from './github-policy.mjs';
 
 const CONNECTOR = 'github';
@@ -34,7 +35,12 @@ function context(reason) {
   return { actor: 'job', reason };
 }
 
-export function createGitHubConnector({ db, service, client, now = () => new Date().toISOString(), workerId, actionLog } = {}) {
+export function createGitHubConnector({ db, service, client: githubClient, now = () => new Date().toISOString(), workerId, actionLog, runs = null } = {}) {
+  // Each reconcile's pull is one run of `github-tasks` in the source-run log (sources/).
+  // Only an error from GitHub itself counts against the source (remoteClient tags
+  // them); a local failure is the sync's, shown by getHealth, and records no run.
+  const client = remoteClient(githubClient);
+  const track = tracker(runs);
   if (!db || !service || !client || !workerId || !actionLog?.record) {
     throw new TypeError('createGitHubConnector requires db, service, client, workerId, and actionLog');
   }
@@ -409,19 +415,22 @@ export function createGitHubConnector({ db, service, client, now = () => new Dat
     let pulled = 0;
     let pullError = null;
     try {
-      const assignedRepos = settings.trackAssigned ? await client.listAssignedRepos() : [];
-      // A client that knows its own login (the GitHub App) names it; one that acts as
-      // the user (the CLI) leaves it undefined and the policy falls back to @me.
-      const assignee = typeof client.login === 'function' ? await client.login() : undefined;
-      const queries = autoTrackQueries({ ...settings, assignedRepos, assignee });
-      const candidates = selectIssues((await Promise.all(queries.map(query => client.searchIssues(query)))).flat());
-      for (const candidate of candidates) {
-        const existed = Boolean(linkedTaskForIssue(candidate.id));
-        attach(candidate);
-        if (!existed) pulled += 1;
-      }
-      const links = db.prepare(`SELECT todo_id FROM external_links WHERE connector = 'github' ORDER BY id`).all();
-      for (const row of links) await refreshTask(row.todo_id);
+      await track('github-tasks', async () => {
+        const assignedRepos = settings.trackAssigned ? await client.listAssignedRepos() : [];
+        // A client that knows its own login (the GitHub App) names it; one that acts as
+        // the user (the CLI) leaves it undefined and the policy falls back to @me.
+        const assignee = typeof client.login === 'function' ? await client.login() : undefined;
+        const queries = autoTrackQueries({ ...settings, assignedRepos, assignee });
+        const candidates = selectIssues((await Promise.all(queries.map(query => client.searchIssues(query)))).flat());
+        for (const candidate of candidates) {
+          const existed = Boolean(linkedTaskForIssue(candidate.id));
+          attach(candidate);
+          if (!existed) pulled += 1;
+        }
+        const links = db.prepare(`SELECT todo_id FROM external_links WHERE connector = 'github' ORDER BY id`).all();
+        for (const row of links) await refreshTask(row.todo_id);
+        return candidates;
+      }, { isFault: remoteFault });
       recordHealthSuccess();
     } catch (error) {
       pullError = error;

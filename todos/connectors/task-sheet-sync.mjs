@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { TodoDomainError } from '../errors.mjs';
+import { remoteClient, remoteFault, tracker } from '../../sources/track.mjs';
 import { withTodoTransaction } from '../db.mjs';
 import {
   ACTION_ITEMS,
@@ -107,18 +108,25 @@ export function unconfiguredTaskSheetHealth(db, missing = []) {
 export function createTaskSheetConnector({
   db,
   service,
-  client,
+  client: sheetsClient,
   now = () => new Date().toISOString(),
   workerId,
   actionLog,
   makeId = randomUUID,
   spreadsheetId = ACTION_ITEMS.spreadsheetId,
+  runs = null,
 } = {}) {
-  if (!db || !service || !client || !workerId || !actionLog?.record) {
+  if (!db || !service || !sheetsClient || !workerId || !actionLog?.record) {
     throw new TypeError('createTaskSheetConnector requires db, service, client, workerId, and actionLog');
   }
   if (!spreadsheetId) throw new Error('Task sheet connector needs a spreadsheet id (TASK_SHEET_ID)');
   if (spreadsheetId !== ACTION_ITEMS.spreadsheetId) throw new Error('Task sheet connector refuses a spreadsheet other than the configured one');
+  // Each reconcile's pull is one run of `sheet-tasks` in the source-run log (sources/).
+  // Only an error from the Sheets API itself counts against the source
+  // (remoteClient tags them); a local failure is the sync's, shown by getHealth, and
+  // records no run.
+  const client = remoteClient(sheetsClient);
+  const track = tracker(runs);
 
   function record(action, target, summary, detail, status = 'ok', error = null) {
     actionLog.record({ action, actor: 'job', target, status, summary, why: summary, detail, error });
@@ -310,36 +318,39 @@ export function createTaskSheetConnector({
     let refreshedCount = 0;
     let pullError = null;
     try {
-      const { schema, rows } = await inspect();
-      for (const candidate of rows) {
-        if (!candidate.totemId && eligibleActionItem(candidate)) {
-          const claimed = await claimBlankRow(candidate, schema);
-          if (claimed) { attachOrImport(claimed); imported += 1; }
+      await track('sheet-tasks', async () => {
+        const { schema, rows } = await inspect();
+        for (const candidate of rows) {
+          if (!candidate.totemId && eligibleActionItem(candidate)) {
+            const claimed = await claimBlankRow(candidate, schema);
+            if (claimed) { attachOrImport(claimed); imported += 1; }
+          }
         }
-      }
-      const refreshed = await inspect();
-      const byId = new Map(refreshed.rows.filter(row => row.totemId).map(row => [row.totemId, row]));
-      for (const row of refreshed.rows) {
-        if (row.totemId && !linkedById(row.totemId) && eligibleActionItem(row)) {
-          attachOrImport(row); imported += 1;
+        const refreshed = await inspect();
+        const byId = new Map(refreshed.rows.filter(row => row.totemId).map(row => [row.totemId, row]));
+        for (const row of refreshed.rows) {
+          if (row.totemId && !linkedById(row.totemId) && eligibleActionItem(row)) {
+            attachOrImport(row); imported += 1;
+          }
         }
-      }
-      const links = db.prepare("SELECT todo_id, external_id FROM external_links WHERE connector = 'sheet' ORDER BY id").all();
-      refreshedCount = links.length;
-      for (const link of links) {
-        const row = byId.get(link.external_id);
-        if (!row) {
-          const task = service.get(link.todo_id);
-          service.applyExternalObservation({
-            taskId: task.id, connector: 'sheet', completed: task.status === 'done',
-            sourceStatus: task.externalLinks.find(item => item.connector === 'sheet').sourceStatus,
-            observedAt: now(), missing: true, missingAt: now(),
-          }, { actor: 'job', reason: 'Action Items stable ID is missing' });
-          record('sheet.row.missing', task.id, 'Action Items row is missing', { totemId: link.external_id }, 'error');
-          continue;
+        const links = db.prepare("SELECT todo_id, external_id FROM external_links WHERE connector = 'sheet' ORDER BY id").all();
+        refreshedCount = links.length;
+        for (const link of links) {
+          const row = byId.get(link.external_id);
+          if (!row) {
+            const task = service.get(link.todo_id);
+            service.applyExternalObservation({
+              taskId: task.id, connector: 'sheet', completed: task.status === 'done',
+              sourceStatus: task.externalLinks.find(item => item.connector === 'sheet').sourceStatus,
+              observedAt: now(), missing: true, missingAt: now(),
+            }, { actor: 'job', reason: 'Action Items stable ID is missing' });
+            record('sheet.row.missing', task.id, 'Action Items row is missing', { totemId: link.external_id }, 'error');
+            continue;
+          }
+          await reconcileLinked(link.todo_id, row, refreshed.schema);
         }
-        await reconcileLinked(link.todo_id, row, refreshed.schema);
-      }
+        return refreshed.rows;
+      }, { isFault: remoteFault });
     } catch (error) {
       pullError = error;
       healthError(error);

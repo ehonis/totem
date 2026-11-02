@@ -12,6 +12,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { accountOperations } from '../sources/track.mjs'
 import { createGoogleAccounts, GoogleError, splitRef, mapLimit } from '../google/accounts.mjs'
 
 export const DriveError = GoogleError
@@ -65,7 +66,7 @@ function grid(values) {
   return rows.map((row) => (Array.isArray(row) ? row : [row]).map((c) => (c == null ? '' : c)))
 }
 
-export function createDrive({ tokensFile, loadClient, redirectUri, cacheDir = null, fetchImpl = fetch, now = Date.now } = {}) {
+export function createDrive({ tokensFile, loadClient, redirectUri, cacheDir = null, fetchImpl = fetch, now = Date.now, runs = null } = {}) {
   const accounts = createGoogleAccounts({
     name: 'Google Drive', scope: DRIVE_SCOPE, tokensFile, loadClient, redirectUri, fetchImpl, now,
     describe: async (label) => {
@@ -75,8 +76,15 @@ export function createDrive({ tokensFile, loadClient, redirectUri, cacheDir = nu
   })
   const { configured, accountLabels, requireAccount, listAccounts, startAuth, completeAuth, removeAccount, renameAccount } = accounts
 
+  // Each operation on an account is one run of `drive:<account>` in the source-run
+  // log (sources/track.mjs). A call made inside an operation (readFile's metadata,
+  // export and download, a trash's fan-out) joins it, so one read is one run. Every
+  // caller passes a label requireAccount resolved.
+  const op = accountOperations(runs, 'drive')
+  const api = (account, ...rest) => op(account, () => request(account, ...rest))
+
   // `raw` returns the Response (downloads); otherwise the parsed JSON.
-  async function api(account, url, { method = 'GET', query = null, body = undefined, headers = {}, raw = false } = {}) {
+  async function request(account, url, { method = 'GET', query = null, body = undefined, headers = {}, raw = false } = {}) {
     const token = await accounts.accessToken(account)
     const u = new URL(url)
     for (const [k, v] of Object.entries(query || {})) {
@@ -213,8 +221,12 @@ export function createDrive({ tokensFile, loadClient, redirectUri, cacheDir = nu
   // What a file says, in the form that suits it: a Doc as Markdown, a Sheet as its
   // tabs plus the first one's cells, a folder as its contents, text as text, and
   // anything else (PDF, .xlsx, images) saved to a file on this machine.
-  async function readFile({ id, account = null, maxChars = 30_000, maxRows = 200 } = {}) {
+  async function readFile({ id, account = null, ...rest } = {}) {
     const { a, id: raw } = resolve(id, account)
+    return op(a, () => readResolved(a, raw, rest))
+  }
+
+  async function readResolved(a, raw, { maxChars = 30_000, maxRows = 200 } = {}) {
     const cap = Math.max(500, Math.min(300_000, Number(maxChars) || 30_000))
     const meta = await getMeta(a, raw)
     const file = summarize(a, meta)
@@ -336,11 +348,16 @@ export function createDrive({ tokensFile, loadClient, redirectUri, cacheDir = nu
     const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean)
     if (!list.length) throw new DriveError('ids is required')
     if (list.length > 100) throw new DriveError('at most 100 files per call')
-    const done = await mapLimit(list, 6, async (one) => {
-      const { a, id } = resolve(one, account)
-      const f = await api(a, `${DRIVE}/files/${encodeURIComponent(id)}`, { method: 'PATCH', query: { fields: FILE_FIELDS, supportsAllDrives: 'true' }, body: { trashed: !untrash } })
-      return summarize(a, f)
-    })
+    // One operation per account, so a fan-out that hits a rate limit is one failed run.
+    const resolved = list.map((one) => resolve(one, account))
+    const done = []
+    for (const a of new Set(resolved.map((r) => r.a))) {
+      const mine = resolved.filter((r) => r.a === a)
+      done.push(...await op(a, () => mapLimit(mine, 6, async ({ id }) => {
+        const f = await api(a, `${DRIVE}/files/${encodeURIComponent(id)}`, { method: 'PATCH', query: { fields: FILE_FIELDS, supportsAllDrives: 'true' }, body: { trashed: !untrash } })
+        return summarize(a, f)
+      })))
+    }
     return { ok: true, changed: done.length, trashed: !untrash, files: done }
   }
 

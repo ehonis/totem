@@ -14,6 +14,7 @@ import IntegrationsPane from './panes/IntegrationsPane'
 import TasksPane from './panes/TasksPane'
 import VoicePane from './panes/VoicePane'
 import NotificationsPane from './panes/NotificationsPane'
+import ConnectionsPane from './panes/ConnectionsPane'
 import NotificationHistory from '../notifications/NotificationHistory'
 
 export interface Pane {
@@ -42,7 +43,8 @@ export const PANES: Pane[] = [
   // The AI workshop, formerly Studio and Logs in the web's side nav.
   { id: 'skills', label: 'Skills', icon: SparklesIcon, group: 1, web: '/settings/skills' },
   { id: 'jobs', label: 'Jobs', icon: BoltIcon, group: 1, web: '/settings/jobs' },
-  { id: 'connections', label: 'Connections', icon: CircleStackIcon, group: 1, web: '/settings/connections' },
+  // Source health; managing connections stays on the web, linked from the pane.
+  { id: 'connections', label: 'Connections', icon: CircleStackIcon, group: 1, component: ConnectionsPane },
   { id: 'logs', label: 'Logs', icon: ShieldCheckIcon, group: 1, web: '/settings/logs' },
 ]
 

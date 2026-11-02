@@ -31,7 +31,7 @@ import {
   periodState, resolvePeriod, todayKey,
 } from './periods.mjs';
 import { goalProgress, percent, subGoalProgress } from './progress.mjs';
-import { createGoalMetricSources, describeSource, isGoalMetricSource, normalizeSourceConfig } from './sources.mjs';
+import { createGoalMetricSources, describeSource, isGoalMetricSource, normalizeSourceConfig, sourceIdForMetric } from './sources.mjs';
 import { normalizeUnit } from './units.mjs';
 
 const GOAL_LINK_KINDS = ['todo', 'url'];
@@ -314,6 +314,38 @@ export function createGoalService({
     const dtos = [];
     for (const row of rows) dtos.push(await goalDto(row));
     return state ? dtos.filter((goal) => goal.periodState === state) : dtos;
+  }
+
+  /**
+   * Open goals in a window that covers today whose metrics (their own or a step's)
+   * read a connector, with the source-run ids those metrics read (GOAL_SOURCE_IDS).
+   * What the source-health view groups under; no metric is resolved, so it costs
+   * one query and no connector call.
+   */
+  function sourcedGoals() {
+    const day = today();
+    const rows = db.prepare(`
+      SELECT g.id, g.title, g.period_type, g.period_start, g.period_end, m.source_kind
+      FROM goal_metrics m
+      JOIN goals s ON s.id = m.goal_id AND s.deleted_at IS NULL
+      JOIN goals g ON g.id = COALESCE(s.parent_id, s.id)
+      WHERE m.source_kind != 'manual'
+        AND g.deleted_at IS NULL AND g.completed_at IS NULL AND g.abandoned_at IS NULL
+        AND g.period_start <= ? AND g.period_end >= ?
+      ORDER BY g.period_start, g.position, g.id
+    `).all(day, day);
+    const byId = new Map();
+    for (const row of rows) {
+      const source = sourceIdForMetric(row.source_kind);
+      if (!source) continue;
+      const goal = byId.get(row.id) ?? {
+        id: row.id, title: row.title, periodType: row.period_type,
+        periodStart: row.period_start, periodEnd: row.period_end, sources: [],
+      };
+      if (!goal.sources.includes(source)) goal.sources.push(source);
+      byId.set(row.id, goal);
+    }
+    return [...byId.values()];
   }
 
   async function getGoal(id) {
@@ -910,7 +942,7 @@ export function createGoalService({
   }
 
   return {
-    listGoals, getGoal, findGoals, review, windowOf,
+    listGoals, getGoal, findGoals, review, windowOf, sourcedGoals,
     createGoal, createGoals, updateGoal, setGoalCompletion, postponeGoal, deleteGoal,
     addSubGoal, addMetric, updateMetric, deleteMetric, addLink, deleteLink,
   };

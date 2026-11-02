@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path'
 import {
   buildMessage, toBase64Url, headerMap, readPayload, parseAddressList, validEmail, replySubject,
 } from './mime.mjs'
+import { accountOperations } from '../sources/track.mjs'
 import { createGoogleAccounts, GoogleError, splitRef, mapLimit, LABEL_RE } from '../google/accounts.mjs'
 
 export { splitRef, LABEL_RE }
@@ -27,7 +28,7 @@ const API = 'https://gmail.googleapis.com/gmail/v1/users/me'
 // connects both); `onConnected` gets the grant to hand them on, and `grantInUse`
 // says whether a refresh token is still used elsewhere, in which case removing the
 // Gmail account must not revoke it at Google.
-export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = null, fetchImpl = fetch, now = Date.now, extraScopes = [], onConnected = null, grantInUse = () => false } = {}) {
+export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = null, fetchImpl = fetch, now = Date.now, extraScopes = [], onConnected = null, grantInUse = () => false, runs = null } = {}) {
   const labelCache = new Map()  // account -> { at, labels }
 
   const accounts = createGoogleAccounts({
@@ -44,7 +45,14 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
   })
   const { configured, readTokens, accountLabels, requireAccount, listAccounts, startAuth, completeAuth, removeAccount, renameAccount } = accounts
 
-  async function api(account, path, { method = 'GET', query = null, body = undefined } = {}) {
+  // Each operation on an account is one run of `gmail:<account>` in the source-run
+  // log (sources/track.mjs). A call made inside an operation (a search's message
+  // reads, a trash's fan-out) joins it, so one search is one run however many
+  // requests it takes. Every caller passes a label requireAccount resolved.
+  const op = accountOperations(runs, 'gmail')
+  const api = (account, ...rest) => op(account, () => request(account, ...rest))
+
+  async function request(account, path, { method = 'GET', query = null, body = undefined } = {}) {
     const token = await accounts.accessToken(account)
     const url = new URL(`${API}${path}`)
     for (const [k, v] of Object.entries(query || {})) {
@@ -95,7 +103,9 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
     }
   }
 
-  async function searchOne(account, { query, max, pageToken, includeSpamTrash }) {
+  const searchOne = (account, args) => op(account, () => searchAccount(account, args))
+
+  async function searchAccount(account, { query, max, pageToken, includeSpamTrash }) {
     const list = await api(account, '/messages', { query: { q: query || undefined, maxResults: max, pageToken, includeSpamTrash: includeSpamTrash ? 'true' : undefined } })
     const ids = (list.messages || []).map((m) => m.id)
     const messages = await mapLimit(ids, 8, (id) => api(account, `/messages/${id}`, {
@@ -151,13 +161,14 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
     const { account: acct, id: raw } = splitRef(id, account, accountLabels())
     const a = requireAccount(acct)
     const cap = Math.max(500, Math.min(200_000, Number(maxChars) || 12_000))
-    let thread
-    try { thread = await api(a, `/threads/${encodeURIComponent(raw)}`, { query: { format: 'full' } }) }
-    catch (e) {
-      if (e.status !== 404 && e.status !== 400) throw e
-      const m = await api(a, `/messages/${encodeURIComponent(raw)}`, { query: { format: 'minimal' } })
-      thread = await api(a, `/threads/${m.threadId}`, { query: { format: 'full' } })
-    }
+    const thread = await op(a, async () => {
+      try { return await api(a, `/threads/${encodeURIComponent(raw)}`, { query: { format: 'full' } }) }
+      catch (e) {
+        if (e.status !== 404 && e.status !== 400) throw e
+        const m = await api(a, `/messages/${encodeURIComponent(raw)}`, { query: { format: 'minimal' } })
+        return api(a, `/threads/${m.threadId}`, { query: { format: 'full' } })
+      }
+    })
     const messages = (thread.messages || []).map((m) => fullMessage(a, m, cap))
     return { threadId: ref(a, thread.id), account: a, subject: messages[0]?.subject || '', count: messages.length, messages }
   }
@@ -243,9 +254,11 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
     const groups = byAccount(ids, account)
     let changed = 0
     for (const [a, list] of groups) {
-      const addLabelIds = await labelIds(a, add, { create: createLabels })
-      const removeLabelIds = await labelIds(a, remove)
-      await api(a, '/messages/batchModify', { method: 'POST', body: { ids: list, addLabelIds, removeLabelIds } })
+      await op(a, async () => {
+        const addLabelIds = await labelIds(a, add, { create: createLabels })
+        const removeLabelIds = await labelIds(a, remove)
+        await api(a, '/messages/batchModify', { method: 'POST', body: { ids: list, addLabelIds, removeLabelIds } })
+      })
       changed += list.length
     }
     return { ok: true, changed, add, remove }
@@ -256,7 +269,7 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
     const groups = byAccount(ids, account)
     let changed = 0
     for (const [a, list] of groups) {
-      await mapLimit(list, 8, (id) => api(a, `/messages/${encodeURIComponent(id)}/${untrash ? 'untrash' : 'trash'}`, { method: 'POST' }))
+      await op(a, () => mapLimit(list, 8, (id) => api(a, `/messages/${encodeURIComponent(id)}/${untrash ? 'untrash' : 'trash'}`, { method: 'POST' })))
       changed += list.length
     }
     return { ok: true, changed, trashed: !untrash }
@@ -356,8 +369,10 @@ export function createGmail({ tokensFile, loadClient, redirectUri, cacheDir = nu
     const limit = Math.max(1, Math.min(50, Number(max) || 20))
     const drafts = []
     for (const a of accounts) {
-      const list = (await api(a, '/drafts', { query: { maxResults: limit } })).drafts || []
-      const full = await mapLimit(list, 8, (d) => api(a, `/drafts/${d.id}`, { query: { format: 'metadata' } }))
+      const full = await op(a, async () => {
+        const list = (await api(a, '/drafts', { query: { maxResults: limit } })).drafts || []
+        return mapLimit(list, 8, (d) => api(a, `/drafts/${d.id}`, { query: { format: 'metadata' } }))
+      })
       for (const d of full) drafts.push({ draftId: ref(a, d.id), ...summarize(a, d.message || {}) })
     }
     return { drafts }
