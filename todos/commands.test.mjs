@@ -32,94 +32,92 @@ function fixture() {
     rmSync(directory, { recursive: true, force: true });
   });
   const calls = [];
-  const github = {
-    async create(input, context) {
-      calls.push(['github.create', input, context]);
-      return service.create(input, context);
-    },
-    async rename(id, title, context) {
-      calls.push(['github.rename', id, title, context]);
-      return service.update(id, { title }, context);
-    },
-    async refreshTask(id) { calls.push(['github.refresh', id]); return service.get(id); },
-    async link(input, context) { calls.push(['github.link', input, context]); return input; },
-  };
-  const sheet = {
-    async create(input, context) {
-      calls.push(['sheet.create', input, context]);
-      return service.create(input, context);
-    },
-    async updateLinked(id, patch, context) {
-      calls.push(['sheet.update', id, patch, context]);
-      return service.update(id, patch, context);
-    },
-    async appendNote(id, body, context) {
-      calls.push(['sheet.note', id, body, context]);
-      return service.addNote(id, body, context);
-    },
-    async bulk(input) { calls.push(['sheet.bulk', input]); return service.bulk(input); },
-    async refreshTask(id) { calls.push(['sheet.refresh', id]); return service.get(id); },
-    async share(id, context) { calls.push(['sheet.share', id, context]); return service.get(id); },
-  };
   const maintenance = {
     async purgeDeleted(input) { calls.push(['maintenance.purge', input]); return { purged: 2, backup: '/tmp/backup.db' }; },
   };
-  return { service, calls, commands: createTodoCommands({ service, github, sheet, maintenance }) };
+  return { service, calls, commands: createTodoCommands({ service, maintenance }) };
 }
 
-test('creates locally unless an explicit connector target is selected', async () => {
+test('creates locally, and refuses every syncTarget but local before anything is written', async () => {
   const { commands, calls, service } = fixture();
   const local = await commands.create({ title: 'Private', area: 'Personal' });
   assert.equal(local.title, 'Private');
+  assert.equal((await commands.create({ title: 'Also local', area: 'Personal', syncTarget: 'local' })).title, 'Also local');
+  for (const [syncTarget, code] of [
+    ['github', 'GITHUB_SHARING_REMOVED'], ['GitHub', 'GITHUB_SHARING_REMOVED'],
+    ['sheet', 'SHEET_SHARING_REMOVED'], [' Sheet ', 'SHEET_SHARING_REMOVED'],
+    ['bogus', 'INVALID_SYNC_TARGET'], [42, 'INVALID_SYNC_TARGET'],
+  ]) {
+    await assert.rejects(
+      commands.create({ title: 'Shared', area: 'Ventures', ventureTag: 'Initech', syncTarget, repo: 'acme/acme' }),
+      error => error.code === code && error.status === 400,
+      String(syncTarget),
+    );
+  }
+  assert.equal(service.list().length, 2, 'no refused create left a task');
   assert.deepEqual(calls, []);
-
-  await commands.create({ title: 'Shared', area: 'Ventures', ventureTag: 'Initech', syncTarget: 'sheet' });
-  assert.equal(calls[0][0], 'sheet.create');
-  assert.equal(service.list().length, 2);
 });
 
-test('prevalidates a compound GitHub patch and commits a successful rename exactly once', async () => {
+test('share is refused for every target, with the reason a retired one had, and nothing changes', async () => {
+  const { commands, calls, service } = fixture();
+  const task = service.create({ title: 'Local', area: 'Personal' });
+  for (const [target, code] of [['github', 'GITHUB_SHARING_REMOVED'], ['sheet', 'SHEET_SHARING_REMOVED'], ['local', 'INVALID_SYNC_TARGET'], ['bogus', 'INVALID_SYNC_TARGET']]) {
+    await assert.rejects(commands.share(task.id, target, {}, { repo: 'acme/acme' }), error => error.code === code, target);
+  }
+  assert.deepEqual(service.get(task.id).externalLinks, []);
+  assert.equal(service.get(task.id).updatedAt, task.updatedAt);
+  assert.deepEqual(calls, []);
+});
+
+test('an update naming a syncTarget is refused as such, before the patch is validated or written', async () => {
+  const { commands, service } = fixture();
+  const task = service.create({ title: 'Keep', area: 'Personal' });
+  for (const [syncTarget, code] of [['GitHub', 'GITHUB_SHARING_REMOVED'], ['sheet', 'SHEET_SHARING_REMOVED'], ['bogus', 'INVALID_SYNC_TARGET']]) {
+    await assert.rejects(commands.update(task.id, { title: 'Changed', syncTarget }), error => error.code === code, syncTarget);
+  }
+  assert.equal(service.get(task.id).title, 'Keep');
+  assert.equal(service.get(task.id).updatedAt, task.updatedAt);
+  assert.equal((await commands.update(task.id, { title: 'Changed', syncTarget: 'local' })).title, 'Changed');
+});
+
+test('a task with a GitHub issue link is edited, refreshed and completed locally', async () => {
   const { commands, calls, service } = fixture();
   const task = service.create({ title: 'Old', area: 'Personal' });
-  service.attachExternalLink(task.id, { connector: 'github', externalId: '42' });
+  service.setIssueLink(task.id, 'https://github.com/acme/acme/issues/42');
 
-  await assert.rejects(
-    commands.update(task.id, { title: 'Must not escape', nope: true }),
-    error => error.code === 'UNKNOWN_PATCH_FIELD',
-  );
-  assert.equal(calls.length, 0);
-  assert.equal(service.get(task.id).title, 'Old');
-
-  const updated = await commands.update(task.id, { title: 'New' });
-  assert.equal(updated.title, 'New');
-  assert.deepEqual(calls.map(call => call.slice(0, 3)), [['github.rename', task.id, 'New']]);
+  assert.equal((await commands.update(task.id, { title: 'New' })).title, 'New');
+  assert.equal((await commands.refresh(task.id)).id, task.id);
+  assert.equal((await commands.close(task.id)).status, 'done');
+  assert.equal((await commands.move(task.id, 'todo')).status, 'todo');
+  assert.deepEqual(calls, [], 'no connector is involved');
 });
 
-test('routes Sheet shared fields, notes, and bulk changes through the connector', async () => {
+test('a task left linked by the retired sheet sync is a local task: edits, notes, bulk, completion and unlinking stay here', async () => {
   const { commands, calls, service } = fixture();
   const task = service.create({ title: 'Sheet task', area: 'Ventures', ventureTag: 'Acme' });
   service.attachExternalLink(task.id, { connector: 'sheet', externalId: 'row-5' });
 
-  await commands.update(task.id, { priority: 4 });
+  assert.equal((await commands.update(task.id, { priority: 4 })).priority, 4);
   await commands.addNote(task.id, 'Meeting note');
   await commands.bulk({ ids: [task.id], operation: 'priority', value: 3 });
-  assert.deepEqual(calls.map(call => call[0]), ['sheet.update', 'sheet.note', 'sheet.bulk']);
-
-  await commands.update(task.id, { snoozedUntil: '2026-09-12T12:00:00.000Z' });
-  assert.equal(calls.length, 3);
+  assert.equal((await commands.refresh(task.id)).id, task.id);
+  assert.equal((await commands.close(task.id)).status, 'done');
+  assert.equal((await commands.detachExternalLink(task.id, 'sheet')).externalLinks.length, 0);
+  assert.deepEqual(calls, []);
+  const after = service.get(task.id);
+  assert.equal(after.priority, 3);
+  assert.equal(after.notes.length, 1);
 });
 
-test('source-owned completion stays atomic and purge only uses maintenance', async () => {
+test('nothing owns completion, so a bulk complete with linked tasks completes them all; purge only uses maintenance', async () => {
   const { commands, calls, service } = fixture();
   const local = service.create({ title: 'Local', area: 'Personal' });
   const linked = service.create({ title: 'Linked', area: 'Personal' });
+  service.setIssueLink(linked.id, 'https://github.com/acme/acme/issues/6');
   service.attachExternalLink(linked.id, { connector: 'sheet', externalId: 'row-6' });
 
-  await assert.rejects(
-    commands.bulk({ ids: [local.id, linked.id], operation: 'complete' }),
-    error => error.code === 'SOURCE_OWNS_COMPLETION',
-  );
-  assert.equal(service.get(local.id).status, 'todo');
+  const done = await commands.bulk({ ids: [local.id, linked.id], operation: 'complete' });
+  assert.deepEqual(done.map(todo => todo.status), ['done', 'done']);
 
   assert.deepEqual(await commands.purge({ olderThan: '2026-09-01T00:00:00.000Z' }), {
     purged: 2,

@@ -1,6 +1,9 @@
 // Productivity → Journal, ported from web/src/components/JournalView.tsx.
 //
-// A red button, and the entries under it, grouped by day. Each entry is
+// The top bar names the page, so it opens on the red button: recording is the
+// thing to do here. Under it, one quiet line for the transcription engine and
+// settings, then the entries grouped by day under headers that stay put while
+// you scroll. Each entry is
 // transcribed on the bridge, and after the grace period the digest folds it into
 // the brain; the card carries the countdown and "Don't ingest".
 //
@@ -8,15 +11,15 @@
 // RecorderPanel, uploaded as the same request. Settings and the transcript editor
 // are sheets (src/app/journal/*). Polling only runs while this page is on screen.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AppState, FlatList, RefreshControl, StyleSheet, View } from 'react-native'
+import { AppState, RefreshControl, SectionList, StyleSheet, View } from 'react-native'
 import { router } from 'expo-router'
 import { colors, alpha } from '../../theme'
 import { T } from '../../ui/Text'
-import { Empty, IconBtn } from '../../ui/kit'
+import { Empty, IconBtn, Spinner } from '../../ui/kit'
 import { confirm } from '../../ui/menu'
 import { success } from '../../ui/haptics'
 import { FAB_CLEARANCE } from '../../shell/Screen'
-import { ArrowPathIcon, ClockIcon, Cog6ToothIcon, ExclamationTriangleIcon, Hi, MicrophoneIcon } from '../../lib/icons'
+import { ClockIcon, Cog6ToothIcon, ExclamationTriangleIcon, Hi, MicrophoneIcon } from '../../lib/icons'
 import {
   AuthError, createJournalText, deleteJournalAudio, deleteJournalEntry, getJournal, ingestJournalNow,
   keepJournalAudio, retryJournalTranscription, skipJournalIngest, updateJournalEntry,
@@ -24,7 +27,6 @@ import {
 import { clearSecretStored } from '../../lib/connection'
 import { pushError, pushSuccess } from '../../lib/toast'
 import { cardState, groupByDay, pollIntervalMs } from '../../lib/journal/format'
-import type { DayGroup } from '../../lib/journal/format'
 import type { JournalEngine, JournalEntry, JournalSettings } from '../../lib/journal/types'
 import RecorderPanel from '../journal/RecorderPanel'
 import EntryCard from '../journal/EntryCard'
@@ -158,103 +160,107 @@ export default function JournalView({ active }: { active: boolean }) {
   const waiting = entries.filter((e) => cardState(e, now) === 'waiting').length
 
   const header = (
-    <View style={{ gap: 14, marginBottom: 14 }}>
-      {/* .view-head, built here rather than with ViewHead so the engine pill is
-          the thing that gives way at 390pt ("transcription not installed" is long),
-          not the title. */}
-      <View style={st.head}>
-        <T size={22} weight={700} numberOfLines={1}>
-          Journal
-          {entries.length ? <T size={22} weight={600} color={colors.muted}>{` · ${entries.length}`}</T> : null}
-        </T>
-        <View style={st.headRight}>
-          {engine ? <EnginePill engine={engine} /> : null}
-          <IconBtn icon={ArrowPathIcon} size={15} box={32} bordered label="Refresh" onPress={() => { setRefreshing(true); void load() }} />
-          <IconBtn icon={Cog6ToothIcon} size={15} box={32} bordered label="Journal settings" onPress={() => router.push('/journal/settings')} />
-        </View>
-      </View>
+    <View style={{ gap: 12, marginBottom: 8 }}>
       <RecorderPanel engineReady={engine ? engine.ready : true} delayMinutes={delay} onSave={save} onSaveText={saveText} />
+      <View style={st.status}>
+        {engine ? <EnginePill engine={engine} /> : null}
+        <T size={13} muted style={{ flexShrink: 1 }} numberOfLines={1}>
+          {entries.length ? `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}` : ''}
+        </T>
+        <View style={{ flex: 1 }} />
+        <IconBtn icon={Cog6ToothIcon} size={18} box={44} label="Journal settings" onPress={() => router.push('/journal/settings')} />
+      </View>
       {waiting > 0 && (
         <View style={st.lede}>
-          <Hi icon={ClockIcon} size={13} color={colors.muted} style={{ marginTop: 2 }} />
-          <T size={12.5} muted lineHeight={18} style={{ flex: 1 }}>
-            {waiting === 1 ? 'One entry is' : `${waiting} entries are`} waiting to be digested. Tap <T size={12.5} weight={600}>Don’t ingest</T> on a card to keep it out of the brain.
+          <Hi icon={ClockIcon} size={14} color={colors.amber} style={{ marginTop: 2 }} />
+          <T size={13} muted lineHeight={19} style={{ flex: 1 }}>
+            {waiting === 1 ? 'One entry is' : `${waiting} entries are`} waiting to be digested. Tap <T size={13} weight={600}>Don’t ingest</T> on a card to keep it out of the brain.
           </T>
         </View>
       )}
     </View>
   )
 
-  const renderDay = ({ item: g }: { item: DayGroup }) => (
-    <View style={st.day}>
-      <T size={12} weight={700}>{g.label} <T size={12} muted>· {g.date}</T></T>
-      <View style={{ gap: 10 }}>
-        {g.entries.map((e) => (
-          <EntryCard
-            key={e.id} entry={e} now={now} busy={busyId !== null}
-            onSkip={() => act(e, () => skipJournalIngest(e.id), 'Kept out of the brain.')}
-            onIngest={() => act(e, () => ingestJournalNow(e.id))}
-            onRetry={() => act(e, () => retryJournalTranscription(e.id))}
-            onRename={(title) => act(e, () => updateJournalEntry(e.id, { title }))}
-            onKeepAudio={(keep) => act(e, () => keepJournalAudio(e.id, keep), keep ? 'Recording kept indefinitely.' : 'Recording back on the clock.')}
-            onDeleteAudio={async () => {
-              const ok = await confirm('Delete the recording?', { message: 'The transcript stays — only the audio goes, and it cannot be recovered.' })
-              if (ok) void act(e, () => deleteJournalAudio(e.id), 'Recording deleted. The transcript is untouched.')
-            }}
-            onDelete={async () => {
-              const ok = await confirm('Delete this entry?', { message: 'The transcript goes with it; anything already digested into the brain stays.' })
-              if (ok) void act(e, async () => { await deleteJournalEntry(e.id); setEntries((l) => l.filter((x) => x.id !== e.id)); return { entry: undefined } })
-            }}
-          />
-        ))}
-      </View>
+  const sections = groups.map((g) => ({ key: g.date, label: g.label, date: g.date, data: g.entries }))
+
+  const renderEntry = ({ item: e }: { item: JournalEntry }) => (
+    <View style={{ marginBottom: 10 }}>
+      <EntryCard
+        entry={e} now={now} busy={busyId !== null}
+        onSkip={() => act(e, () => skipJournalIngest(e.id), 'Kept out of the brain.')}
+        onIngest={() => act(e, () => ingestJournalNow(e.id))}
+        onRetry={() => act(e, () => retryJournalTranscription(e.id))}
+        onRename={(title) => act(e, () => updateJournalEntry(e.id, { title }))}
+        onKeepAudio={(keep) => act(e, () => keepJournalAudio(e.id, keep), keep ? 'Recording kept indefinitely.' : 'Recording back on the clock.')}
+        onDeleteAudio={async () => {
+          const ok = await confirm('Delete the recording?', { message: 'The transcript stays — only the audio goes, and it cannot be recovered.' })
+          if (ok) void act(e, () => deleteJournalAudio(e.id), 'Recording deleted. The transcript is untouched.')
+        }}
+        onDelete={async () => {
+          const ok = await confirm('Delete this entry?', { message: 'The transcript goes with it; anything already digested into the brain stays.' })
+          if (ok) void act(e, async () => { await deleteJournalEntry(e.id); setEntries((l) => l.filter((x) => x.id !== e.id)); return { entry: undefined } })
+        }}
+      />
     </View>
   )
 
   return (
-    <FlatList
-      data={loading ? [] : groups}
-      keyExtractor={(g) => g.date}
-      renderItem={renderDay}
+    <SectionList
+      sections={loading ? [] : sections}
+      keyExtractor={(e) => e.id}
+      renderItem={renderEntry}
+      renderSectionHeader={({ section }) => (
+        <View style={st.day} accessibilityRole="header">
+          <T size={15} weight={600}>{section.label}</T>
+          {section.label === 'Today' || section.label === 'Yesterday' ? <T size={13} muted>{relativeDaySub(section.date)}</T> : null}
+        </View>
+      )}
+      stickySectionHeadersEnabled
       ListHeaderComponent={header}
       ListEmptyComponent={loading ? (
-        <T muted align="center" style={{ paddingVertical: 30 }}>Loading…</T>
+        <Spinner label="Loading entries…" />
       ) : (
         <Empty icon={MicrophoneIcon} style={{ paddingVertical: 30 }}>
-          <T muted align="center" style={{ maxWidth: 300 }}>No entries yet. Hit the red button and talk about your day — yesterday counts.</T>
+          <T muted align="center" lineHeight={20} style={{ maxWidth: 300 }}>No entries yet. Hit the red button and talk about your day. Yesterday counts.</T>
         </Empty>
       )}
-      contentContainerStyle={{ padding: 16, paddingBottom: FAB_CLEARANCE }}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: FAB_CLEARANCE }}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="interactive"
       automaticallyAdjustKeyboardInsets
-      initialNumToRender={4}
+      initialNumToRender={6}
       windowSize={7}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void load() }} tintColor={colors.muted} />}
     />
   )
 }
 
+/** Under "Today" or "Yesterday": which day that is. Other days already name it. */
+function relativeDaySub(isoDate: string) {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
+}
+
 function EnginePill({ engine }: { engine: JournalEngine }) {
   if (engine.ready) {
     return (
       <View style={[st.pill, { borderColor: alpha('#4ec9a0', 0.27) }]} accessibilityLabel={`whisper.cpp ${engine.model}, ${engine.threads} threads, on the bridge`}>
-        <T size={11} color="#4ec9a0" lineHeight={16} numberOfLines={1}>whisper {engine.model}</T>
+        <T size={12} color="#4ec9a0" lineHeight={16} numberOfLines={1}>whisper {engine.model}</T>
       </View>
     )
   }
   return (
     <View style={[st.pill, { borderColor: alpha(colors.red, 0.27), flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
       <Hi icon={ExclamationTriangleIcon} size={12} color={colors.red} />
-      <T size={11} color={colors.red} lineHeight={16} numberOfLines={1}>transcription not installed</T>
+      <T size={12} color={colors.red} lineHeight={16} numberOfLines={1}>transcription not installed</T>
     </View>
   )
 }
 
 const st = StyleSheet.create({
-  head: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headRight: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 },
-  lede: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: -4 },
-  day: { gap: 8, marginBottom: 14 },
-  pill: { backgroundColor: colors.bg3, borderWidth: 1, borderRadius: 999, paddingVertical: 1, paddingHorizontal: 8, flexShrink: 1 },
+  status: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, marginTop: -4 },
+  lede: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: 10, backgroundColor: alpha(colors.amber, 0.07) },
+  // Full width, so cards scrolling under it never show at its sides.
+  day: { flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingTop: 12, paddingBottom: 8, marginHorizontal: -16, paddingHorizontal: 16, backgroundColor: colors.bg },
+  pill: { backgroundColor: colors.bg3, borderWidth: 1, borderRadius: 999, paddingVertical: 2, paddingHorizontal: 9, flexShrink: 1 },
 })

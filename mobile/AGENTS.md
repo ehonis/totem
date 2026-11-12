@@ -39,25 +39,77 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   (named `AbortError`) rather than answering for the old account; screens and stores drop it silently
   (`isAccountChanged` in `api.ts`). Its tests run under the bridge's `npm test`
   (`src/lib/httpCache.test.mjs`): keep `httpCache.ts` free of React Native imports.
+- The approval code (`src/lib/approvalCode.ts`, ported from `web/src/approvalCode.ts`) is kept in the
+  keychain beside the secret and sent by `api()` as `x-totem-approval-code`, on the approval routes
+  only. The app signs in with the bridge secret, and the bridge refuses that alone on every approval
+  route, so **approving anything from the phone needs the code**, even on an install that still
+  approves from the web's signed-in session. Settings → Security sets one (with the password) or takes
+  one set elsewhere; the Inbox shows a banner when this phone cannot approve. It is stored with the base
+  URL it was entered for and dropped when the app connects to another server; signing out forgets it.
+  An accept sends back the inbox item's `digest`, so a proposal that changed since it was listed is refused.
+  The approval card in a chat (`features/chat/InboxCardRow.tsx`, the web's twin; `docs/chat.md` → Approval
+  cards) accepts the same way, through the same `resolveInboxItem`, with the owner's optional note.
 - `src/theme.ts` holds the web's CSS variables (`--bg` → `colors.bg`). `src/ui/` holds the building blocks:
   `T` (text), and `kit.tsx` with Btn, IconBtn, Card, Chip, Segmented, Input, Toggle and Empty. `menu.ts` has native
-  menus/confirms, `haptics.ts` has haptics, `Markdown.tsx` renders markdown, and `ToastHost` reads the same toast store.
-- `src/shell/` is the frame: `AppDrawer` (the sidebar: tabs + chats), `Screen` (top bar + voice/new-chat
-  buttons), `nav.ts` (`navigateTo` takes the web's tab/app ids, `openChat`, `newChat`, `startVoice`),
-  `quickActions.ts` (home-screen long-press).
+  menus/confirms, `haptics.ts` has haptics, `Markdown.tsx` renders markdown, and `ToastHost` reads the same toast store
+  but draws errors only (a deliberate difference from the web: success and info toasts, Undo included, are dropped as
+  they arrive, a success keeping its haptic; anything that needs the owner to act, like Access asking to sign in
+  again, is pushed as an error). The inline Undo line (`features/todos/detail/bits.tsx` `UndoLine`) closes
+  after 8 s, except while a screen reader runs: then VoiceOver is moved onto it, it stays two minutes unless
+  replaced or dismissed with the escape gesture, and the magic tap runs its Undo.
+- `src/shell/` is the frame: `AppDrawer` (the sidebar: Search, which opens the Search page, by the wordmark; Overview, the Productivity tools as a
+  4 + 3 grid the heading's chevron folds away, remembered per device, then the chats, all in one scroll; a pinned foot
+  with the list's Snoozed and Settled buttons, which open `features/chat/ShelfSheet.tsx`, and New chat and Settings on the right), `Screen` (top bar with the AI usage pill on the right, where the web phone bar has new chat; plus the voice/new-chat buttons), `nav.ts` (`navigateTo` takes the
+  web's tab/app ids, `openChat`, `newChat`, `startVoice`), `routes.ts` (where each id lands, pure and
+  tested by `routes.test.mjs`), `ToolIcon` (each tool's mark), `quickActions.ts` (home-screen long-press).
 - `src/app/` holds routes only. `(app)/` is the drawer with one screen per web tab. Pushed screens and sheets
   are files directly under `src/app/` and set their own presentation with `<Stack.Screen options>`.
-- `src/features/<area>/` holds the screens. Productivity is a pager of apps (`features/productivity`), each
-  `{ active }`.
+- `src/features/<area>/` holds the screens. **Each Productivity tool is its own drawer page** at the web's
+  path (`(app)/productivity/todos.tsx` is `/productivity/todos`, and so on for calendar, habits, goals,
+  lists, recs, journal): `ToolPage` in `features/productivity/ProductivityScreen.tsx` gives it a `Screen`
+  titled with the tool's name (`TOOL_LABELS`: Tasks, not Todos; the ids stay the web's) and its own glow,
+  and mounts the tool's `features/productivity/<Tool>View.tsx` with `active` = the page is focused
+  (`useIsFocused`, so it is false under a pushed sheet too, and a tool that reloads on becoming active
+  revalidates when its sheet closes; the old pager kept it true). They are drawer screens, not a stack over
+  the hub, because a drawer keeps a visited page mounted: switching back is instant and keeps scroll, drafts
+  and a recording in progress, and the left-edge swipe always opens the drawer. A mounted page's glow
+  holds still while it is out of view. `/productivity` itself is the hub, one tile per tool with a number
+  (`glance.ts`, Overview's rules) read from the tool's own store once its page has loaded, else from the
+  GET cache, and never from a bridge call of its own; a cached answer from an earlier day or week shows no
+  number. It forwards the old pager's `/productivity?app=<id>` to that page.
+  `navigateTo('todos')`, `{ tab: 'productivity', app }`, notification links (`destination.ts`) and the
+  landing-tab preference all go through `routes.ts`.
+
+- **Settings** (`src/features/settings/`) is the web's sections in its groups and order (`lib/components/settings/sections.ts`
+  and `searchIndex.ts` are byte-for-byte copies of the web's), drawn as iOS grouped lists from `features/settings/ui.tsx`
+  (`Section`, `Row`, `Switch`, `Picker`, `Field`, `Notice`): a row keeps the web's id, so a search hit or a
+  `/settings/<pane>#<row>` link (`paneRoutes.ts`, which also sends retired panes where they went: AI → Providers,
+  Integrations → General, Jobs → Totems) scrolls to it. Keyboard is left out (leader keys need a physical keyboard), and
+  so are Voice's Reading aloud (the app has no read-aloud) and Appearance's Compact density (no screen has a denser
+  layout); `search.ts` lists them. Notification history follows Notifications. Detail screens are routed from
+  `app/settings/*` and live under `features/settings/` (an account, a skill, a connection, Edit tracking, the log sheet).
+  A screen with unsaved edits asks before Back or the edge swipe drops them (`useDiscardGuard`). Appearance › Background is
+  read once at launch by `theme.ts` (StyleSheets are built at import), so a new palette restarts the app (the native splash keeps Original's colour until a new build); the app starts on
+  Original where the web starts on True black, so an update repaints no phone. `paneRoutes.test.mjs` checks that every
+  search id the app keeps is drawn by its pane, and that the ported files still match the web's.
 
 ## Rules
 
 - **The web is the spec.** Same sections, copy, order, colours and states as the web's phone layout
   (`@media (max-width: 720px)`). A difference must be deliberate and native (a sheet, a swipe, a system
   menu), not drift.
+- **Except Productivity, where the phone leads its own UX** (epic #176). The tools there (Tasks, Calendar,
+  Habits, Goals, Lists, Recs, Journal) are designed for the phone first: own pages, layouts and gestures
+  that need not match the web. What stays shared is the logic ported into `src/lib/**` (`todos/board.ts`, `todos/format.ts` and `todos/parse.ts`,
+  byte-for-byte copies of the web's, which `features/todos/` re-exports; `todos/state.ts`,
+  `todos/types.ts`, goals, journal, the habit check-in…): new helpers may sit beside it, but an existing
+  helper keeps returning what the web's does. The bridge contract does not move either: the same `api.ts`
+  calls with the same payloads, and nothing that deletes, completes or snoozes loses its undo or its way
+  back (recycle bin, snoozed, archive).
 - **Never hand-draw an icon.** Heroicons via `src/lib/icons.tsx` (the web's names), Tabler via deep
   per-icon imports (`@tabler/icons-react-native/dist/esm/icons/IconX.mjs`, default export). Brand art is
-  rendered to PNG from the web's SVGs (`assets/images/`).
+  rendered to PNG from the web's SVGs by `scripts/build-logo-assets.mjs` (the app icon, splash and
+  `assets/images/`); never edit those PNGs by hand.
 - **Keep the bridge contract aligned with `bridge.mjs`.** The app has no API of its own.
 - Scrolling screens pad their foot by `FAB_CLEARANCE` so the floating buttons never cover the last row.
 
@@ -66,6 +118,7 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
 ```sh
 cd mobile && npm install                      # its own install; app.local.json first (README)
 npx tsc --noEmit                                   # typecheck
+node --test src/shell/*.test.mjs src/features/*/*.test.mjs src/features/*/*/*.test.mjs  # pure logic outside src/lib (also in the root npm test)
 npx expo export --platform ios --output-dir /tmp/x # proves the JS bundles
 npm run start:tailscale                            # Metro on the Tailscale IP, for the dev client
 ```
@@ -88,6 +141,12 @@ npm run start:tailscale                            # Metro on the Tailscale IP, 
 - The entry is `index.ts`, not `expo-router/entry`: a silent push launches the bundle headless,
   so the notification background task (`src/shell/pushDismiss.ts`) must be defined before the
   router loads. Keep that import first.
+- A locked phone is not a signed-out app. A silent push can start the app in the background
+  while the phone is locked, when the keychain refuses every read. A refused read taken as
+  "no secret" once showed Connect, and the app stayed there until it was swiped away.
+  `loadConnection` reads through `readWhenUnlocked` (`src/lib/readWhenUnlocked.ts`), which waits
+  for the app to be opened and reads again. Only after reads keep failing with the app open
+  (three tries) does it log, count the refused items as absent and show Connect; never sooner.
 - `react-native-nitro-markdown`, `react-native-pager-view` and `@react-native-menu/menu` are native-only.
   They need a dev build; Expo Go cannot run this app.
 - Building and submitting non-interactively needs the App Store Connect API key in the environment

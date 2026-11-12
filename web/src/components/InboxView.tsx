@@ -1,25 +1,34 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { getInbox, resolveInboxItem, AuthError } from '../api'
+import { getInbox, resolveInboxItem, releaseInboxItem, getApprovalCodeStatus, AuthError, ApiError } from '../api'
+import { approvalBanner, useHasApprovalCode, APPROVAL_REFUSALS, type ApprovalCodeStatus } from '../approvalCode'
 import { notifyInboxChanged } from '../useInboxCount'
-import { useErrorToast, pushError } from '../toast'
+import { useErrorToast, pushError, pushSuccess } from '../toast'
+import { copyText } from '../clipboard'
+import IconBrandLinkedin from '@tabler/icons-react/dist/esm/icons/IconBrandLinkedin.mjs'
 import Markdown from './Markdown'
 import {
   Hi, ArrowPathIcon, CheckCircleIcon, XMarkIcon, InboxStackIcon, CalendarDaysIcon,
   DocumentTextIcon, CircleStackIcon, ChevronRightIcon, WarnIcon, TrophyIcon,
-  CommandLineIcon, ChatBubbleOvalLeftIcon, EnvelopeIcon, PaperAirplaneIcon, PencilSquareIcon,
+  CommandLineIcon, ChatBubbleOvalLeftIcon, EnvelopeIcon, PaperAirplaneIcon, PencilSquareIcon, GlobeAltIcon,
+  ArrowTopRightOnSquareIcon, ClipboardDocumentIcon,
 } from '../icons'
+
+// Tabler's stroke is 2; Heroicons' outline is 1.5, so the two sit together at 1.5.
+const LinkedinIcon = (props: any) => <IconBrandLinkedin stroke={1.5} {...props} />
 
 // Per-kind glyph for the destination chip, so "where is this going" reads at a
 // glance. Unknown kinds (future sources) fall back to the generic inbox icon.
 // `agent` is a retired kind that now files a plain issue, same as `github`.
-const KIND_ICON = { todo: DocumentTextIcon, calendar: CalendarDaysIcon, agent: CircleStackIcon, github: CircleStackIcon, goal: TrophyIcon, command: CommandLineIcon, prompt: CommandLineIcon, imessage: ChatBubbleOvalLeftIcon, email: EnvelopeIcon }
+export const KIND_ICON: Record<string, any> = { todo: DocumentTextIcon, calendar: CalendarDaysIcon, agent: CircleStackIcon, github: CircleStackIcon, goal: TrophyIcon, command: CommandLineIcon, prompt: CommandLineIcon, imessage: ChatBubbleOvalLeftIcon, email: EnvelopeIcon, away: GlobeAltIcon, linkedin: LinkedinIcon }
 
 // Chips summarise the line; anything long or verbatim (the issue body, the gh
 // command, the raw inbox line) belongs in the details drop-down instead.
 // For a drafted message, `recipient` is the chip; `to` (a chat guid) and the text
 // file path are noise.
 // An email's file path is noise too; the email itself is shown in full below.
-const CHIP_SKIP = new Set(['when', 'src', 'prompt', 'prompt_ref', 'issue', 'source', 'goal', 'metric', 'to', 'message', 'email'])
+// `thread` and `run` name the chat that staged it, linked on the card instead.
+// A LinkedIn card's link and file are shown on the card itself.
+const CHIP_SKIP = new Set(['when', 'src', 'prompt', 'prompt_ref', 'issue', 'source', 'goal', 'metric', 'to', 'message', 'email', 'thread', 'run', 'card', 'target'])
 
 function metaEntries(item) {
   const out = []
@@ -59,10 +68,44 @@ function EmailPreview({ email }: { email: any }) {
   )
 }
 
+// Something to do on LinkedIn, which the owner does himself: what they wrote, the
+// draft (his to edit before copying; nothing here sends it), and the link. Totem
+// never acts on LinkedIn, so Open and Copy are the whole of the action; the card's
+// Mark done only records that he did it.
+export function LinkedinCard({ card }: { card: { action: string; url: string; author: string; excerpt?: string; draft?: string } }) {
+  const [draft, setDraft] = useState(card.draft || '')
+  useEffect(() => { setDraft(card.draft || '') }, [card.draft])
+  const copy = async () => {
+    if (await copyText(draft)) pushSuccess('Copied. Paste it on LinkedIn.')
+    else pushError('Could not copy; select the text and copy it yourself.')
+  }
+  const what = { like: 'Like this post', repost: 'Repost this', comment: 'Comment on this post', reply: 'Reply', connect: 'Send a connection request' }[card.action] || card.action
+  return (
+    <div className="inbox-email inbox-linkedin">
+      <div className="inbox-email-subject">{what}</div>
+      <div className="inbox-linkedin-author">{card.author}</div>
+      {card.excerpt && <div className="inbox-email-quote">{card.excerpt}</div>}
+      {card.action !== 'like' && (
+        <label className="inbox-linkedin-draft">
+          <span className="inbox-detail-label">{card.action === 'connect' ? 'Note (optional, 300 characters)' : card.action === 'repost' ? 'Your words (optional)' : 'Draft, yours to edit'}</span>
+          {/* Sized for a phone's width; a wider screen just has room to spare. */}
+          <textarea value={draft} rows={Math.min(8, Math.max(3, Math.ceil(draft.length / 40) + 1))} onChange={(e) => setDraft(e.target.value)} />
+        </label>
+      )}
+      <div className="inbox-linkedin-actions">
+        <a className="btn compact" href={card.url} target="_blank" rel="noopener noreferrer"><Hi icon={ArrowTopRightOnSquareIcon} size={14} /> Open on LinkedIn</a>
+        {card.action !== 'like' && draft.trim() && (
+          <button type="button" className="btn compact" onClick={() => void copy()}><Hi icon={ClipboardDocumentIcon} size={14} /> Copy {card.action === 'connect' ? 'note' : card.action === 'reply' ? 'reply' : 'text'}</button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // Everything the bridge says accepting will actually do: the payload fields, the
 // literal gh command for issues, and the finished issue body rendered as it will
 // appear on GitHub. Expanded on demand so the list stays scannable.
-function InboxDetails({ item }: { item: any }) {
+export function InboxDetails({ item }: { item: any }) {
   const p = item.preview || {}
   const isMessage = item.kind === 'imessage'
   const isIssue = Boolean(p.body) && !isMessage
@@ -71,6 +114,7 @@ function InboxDetails({ item }: { item: any }) {
       {p.summary && <div className="inbox-details-lede">{p.summary}</div>}
       {p.error && <div className="inbox-details-err inline-warn"><WarnIcon /> {p.error}</div>}
       {p.email && <EmailPreview email={p.email} />}
+      {p.linkedin && <LinkedinCard card={p.linkedin} />}
       {p.fields?.length > 0 && (
         <dl className="inbox-fields">
           {p.fields.map(([k, v]: [string, string]) => (
@@ -114,17 +158,24 @@ interface InboxCardProps {
   busy: boolean
   focused: boolean
   onResolve: (item: any, action: string) => void
+  /** For a held card: show it with the open ones after all. */
+  onRelease?: (item: any) => void
 }
 
-function InboxCard({ item, busy, focused, onResolve }: InboxCardProps) {
+function InboxCard({ item, busy, focused, onResolve, onRelease }: InboxCardProps) {
   const KindIcon = KIND_ICON[item.kind] || InboxStackIcon
   // A card arrived at from a notification opens with its details already showing:
   // the whole point of the deep link is to read what will run before saying yes.
   // An email opens showing itself: reading it is the decision.
   const isEmail = item.kind === 'email'
-  const [open, setOpen] = useState(focused || isEmail)
+  // A LinkedIn card opens showing its draft and link too: they are the action.
+  const isLinkedin = item.kind === 'linkedin'
+  const [open, setOpen] = useState(focused || isEmail || isLinkedin)
   const isPrompt = item.kind === 'prompt'
-  const detailLabel = item.kind === 'imessage' ? 'message' : isEmail ? 'email' : isPrompt ? 'prompt' : item.preview?.body ? 'proposed issue' : 'details'
+  // Refused (a hidden character) or unreadable as staged: the bridge refuses the
+  // accept, and never reads the file again to send it, so there is nothing to accept.
+  const blocked = Boolean(item.refused || item.preview?.error)
+  const detailLabel = item.kind === 'imessage' ? 'message' : isEmail ? 'email' : isPrompt ? 'prompt' : isLinkedin ? 'post and draft' : item.preview?.body ? 'proposed issue' : 'details'
   // A prompt is accepted by opening it as a new T3 Code thread. The tab opens in
   // the click itself, before the resolve call, or Safari blocks it as a popup.
   const t3Url: string | undefined = isPrompt ? item.preview?.openUrl : undefined
@@ -141,14 +192,21 @@ function InboxCard({ item, busy, focused, onResolve }: InboxCardProps) {
               <Hi icon={KindIcon} size={13} /> {item.destination}
             </span>
             <span className="inbox-source">{item.source}</span>
+            {item.chat && <a className="inbox-source" href={`/chat?thread=${encodeURIComponent(item.chat.threadId)}`} title="Open the chat that asked; it hears what you decide">from a chat</a>}
             <span className="inbox-id">{item.id}</span>
           </div>
           <div className="inbox-title">{item.title}</div>
+          {item.refused && <div className="inbox-details-err inline-warn"><WarnIcon /> Refused: {item.refused}</div>}
+          {item.held && (
+            <div className="inbox-meta-chip muted">
+              You denied the same proposal ({item.held.id}) on {new Date(item.held.deniedAt).toLocaleDateString()}, so it is not asking again.
+            </div>
+          )}
           <div className="inbox-meta">
             {metaEntries(item).map(([k, v]) => (
               <span key={k} className="inbox-meta-chip"><span className="inbox-meta-key">{k}</span> {v}</span>
             ))}
-            {!item.when && item.kind !== 'github' && item.kind !== 'agent' && !isEmail && (
+            {!item.when && item.kind !== 'github' && item.kind !== 'agent' && !isEmail && !isLinkedin && (
               <span className="inbox-meta-chip muted">no date</span>
             )}
           </div>
@@ -163,18 +221,23 @@ function InboxCard({ item, busy, focused, onResolve }: InboxCardProps) {
           </button>
         </div>
         <div className="inbox-actions">
+          {item.held && onRelease ? (
+            <button className="btn compact" disabled={busy} title="Decide it after all" onClick={() => onRelease(item)}>Show anyway</button>
+          ) : (
           <button
             className="inbox-btn accept"
-            disabled={busy || (isPrompt && !t3Url)}
+            disabled={busy || (isPrompt && !t3Url) || blocked}
             title={item.kind === 'imessage' ? `Send this message to ${item.meta?.recipient || 'them'}`
               : isEmail ? `Send this email to ${item.meta?.recipient || 'them'} now`
-                : isPrompt ? 'Open this prompt in a new T3 Code thread' : `Accept - add to ${item.destination}`}
-            aria-label={isEmail ? 'Send email' : isPrompt ? 'Open in T3 Code' : 'Accept'}
+                : isPrompt ? 'Open this prompt in a new T3 Code thread'
+                  : isLinkedin ? 'Mark done - you did it on LinkedIn' : `Accept - add to ${item.destination}`}
+            aria-label={isEmail ? 'Send email' : isPrompt ? 'Open in T3 Code' : isLinkedin ? 'Mark done' : 'Accept'}
             onClick={accept}
           >
             <Hi icon={isEmail ? PaperAirplaneIcon : CheckCircleIcon} size={20} />
           </button>
-          {isEmail && (
+          )}
+          {isEmail && !item.held && !blocked && (
             <button
               className="inbox-btn draft"
               disabled={busy}
@@ -213,9 +276,14 @@ export default function InboxView({ onAuthError, focusId = null }: InboxViewProp
   const [error, setError] = useState<any>(null)
   const [busyId, setBusyId] = useState<any>(null) // proposal being resolved
   const [notice, setNotice] = useState<any>(null) // success confirmation { text }
+  const [approval, setApproval] = useState<ApprovalCodeStatus | null>(null)
+  const hasCode = useHasApprovalCode()
 
   // Surface load failures as a bottom-left toast instead of an inline banner.
   useErrorToast(error)
+
+  const loadApproval = useCallback(() => { getApprovalCodeStatus().then(setApproval).catch(() => {}) }, [])
+  useEffect(() => { loadApproval() }, [loadApproval])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -252,29 +320,52 @@ export default function InboxView({ onAuthError, focusId = null }: InboxViewProp
     setBusyId(item.id)
     setNotice(null)
     try {
-      const res = await resolveInboxItem(item.id, action)
+      const res = await resolveInboxItem(item.id, action, item.digest)
       // Drop the resolved item out of the list; it won't come back from the API.
       setItems((prev) => prev.filter((it) => it.id !== item.id))
       notifyInboxChanged()
       setNotice({
         text: action === 'accept'
-          ? `${item.kind === 'email' ? 'Sent' : 'Accepted'} “${item.title}” - ${res.note || `added to ${item.destination}`}`
+          ? item.kind === 'linkedin' ? `Marked done: “${item.title}”`
+            : `${item.kind === 'email' ? 'Sent' : 'Accepted'} “${item.title}” - ${res.note || `added to ${item.destination}`}`
           : action === 'draft'
             ? `Saved “${item.title}” as a draft - ${res.note}`
             : `Skipped “${item.title}”`,
       })
     } catch (e) {
       if (e instanceof AuthError) return onAuthError()
+      // Refused by the approval gate: the banner says what this device is missing.
+      if (e instanceof ApiError && APPROVAL_REFUSALS.has(e.code)) loadApproval()
       pushError(`Couldn't ${action} “${item.title}”: ${e.message}`)
+      // It may have changed, been held, or been settled as uncertain: show it as it is now.
+      load()
+    } finally {
+      setBusyId(null)
+    }
+  }, [onAuthError, loadApproval, load])
+
+  const onRelease = useCallback(async (item) => {
+    setBusyId(item.id)
+    try {
+      await releaseInboxItem(item.id)
+      setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, held: null } : it)))
+      notifyInboxChanged()
+    } catch (e) {
+      if (e instanceof AuthError) return onAuthError()
+      pushError(`Couldn't show “${item.title}”: ${e.message}`)
     } finally {
       setBusyId(null)
     }
   }, [onAuthError])
 
+  const waiting = items.filter((it) => !it.held)
+  const held = items.filter((it) => it.held)
+  const banner = approvalBanner(approval, hasCode)
+
   return (
     <div className="view">
       <div className="view-head">
-        <h1>Inbox {items.length ? <span className="muted">· {items.length}</span> : null}</h1>
+        <h1>Inbox {waiting.length ? <span className="muted">· {waiting.length}</span> : null}</h1>
         <button className="btn compact" onClick={load} title="Refresh">
           <Hi icon={ArrowPathIcon} size={15} />
         </button>
@@ -286,6 +377,12 @@ export default function InboxView({ onAuthError, focusId = null }: InboxViewProp
         GitHub issue that gets created.
       </p>
 
+      {banner && (
+        <div className={`inbox-notice${banner.tone === 'warn' ? ' err' : ''}`}>
+          <WarnIcon /> {banner.text} <a className="link-btn" href="/settings/security#approval-code">Settings → Security → Approval code</a>
+        </div>
+      )}
+
       {notice && (
         <div className="inbox-notice ok">
           {notice.text}
@@ -295,7 +392,7 @@ export default function InboxView({ onAuthError, focusId = null }: InboxViewProp
 
       {loading ? (
         <div className="empty">Loading proposals…</div>
-      ) : items.length === 0 ? (
+      ) : waiting.length === 0 && held.length === 0 ? (
         <div className="empty">
           <Hi icon={InboxStackIcon} size={28} /><br />
           Inbox zero. Nothing waiting on your decision.
@@ -304,7 +401,7 @@ export default function InboxView({ onAuthError, focusId = null }: InboxViewProp
         <div className="inbox-list">
           {/* Disable every card's buttons while any resolve is in flight, so a
               second click can't race the first against the same inbox file. */}
-          {items.map((item) => (
+          {waiting.map((item) => (
             <InboxCard
               key={item.id}
               item={item}
@@ -313,6 +410,22 @@ export default function InboxView({ onAuthError, focusId = null }: InboxViewProp
               onResolve={onResolve}
             />
           ))}
+          {held.length > 0 && (
+            <>
+              <div className="inbox-detail-label">Held · {held.length}</div>
+              <p className="inbox-lede muted">Proposals you denied in the last week, made again. They stay here instead of asking you twice.</p>
+              {held.map((item) => (
+                <InboxCard
+                  key={item.id}
+                  item={item}
+                  busy={busyId !== null}
+                  focused={item.id === focusId}
+                  onResolve={onResolve}
+                  onRelease={onRelease}
+                />
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

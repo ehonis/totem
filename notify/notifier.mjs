@@ -207,7 +207,27 @@ export function createNotifier({
       // again at `until`, with the attempt it was just charged handed back.
       const hold = gate.shouldHold(entry, at)
       if (hold) {
-        await store.finish(entry.id, { outcome: 'held', until: hold.until })
+        // The first time it is held, ask the gate whether it is already a repeat:
+        // the earlier copy's window can run out while this one waits, and then it
+        // would go out again on release (an away week outlasts a 48-hour story).
+        if (!entry.heldBy) {
+          let verdict = null
+          try {
+            verdict = await gate.admit({
+              category: entry.category, title, body, url, entryId: entry.id,
+              dedupeKey: entry.dedupeKey, dedupeUntil: entry.dedupeUntil, story: entry.story,
+            }, { reserve: false })
+          } catch (e) {
+            log('dedupe gate failed on hold, holding anyway', e?.message || e)
+          }
+          if (verdict?.action === 'suppress') {
+            if (verdict.match?.ledgerId) await countSimilar(verdict.match.ledgerId, [{ title, body, url }])
+            await store.finish(entry.id, { outcome: 'suppressed', error: verdict.match?.duplicateOf ? `same as ${verdict.match.duplicateOf}` : verdict.reason })
+            sent.push({ id: entry.id, ok: false, suppressed: true, title })
+            continue
+          }
+        }
+        await store.finish(entry.id, { outcome: 'held', until: hold.until, heldBy: hold.tag || null })
         continue
       }
 

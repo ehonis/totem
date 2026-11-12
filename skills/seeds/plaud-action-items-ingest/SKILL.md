@@ -24,7 +24,7 @@ STEP 4 — deduplicate before staging. Read the full {{inboxFile}} first. Do not
 
 STEP 5 — stage proposals; do not act. Append one `- [ ]` line per new item under a dated section header in {{inboxFile}}:
 - [ ] P<N> | todo | <concise action item> | when: YYYY-MM-DD | src: <meeting title YYYY-MM-DD>
-Each line becomes a local Personal task when the owner accepts it. Do not add `project:`, `venture:` or `sync:` fields; those are only for installs that have configured venture tags or a shared action-items sheet, and they use a personalised version of this skill. Use an explicit YYYY-MM-DD date when the meeting set a deadline; otherwise write `when: none`. Do not create Totem tasks, sheet rows, GitHub issues, or Calendar events yourself.
+Each line becomes a local Personal task when the owner accepts it. Do not add `project:`, `venture:` or `sync:` fields; venture fields are only for installs that have configured venture tags, which use a personalised version of this skill. A shared action-items sheet is read-only in Totem: never mark a proposal `sync: sheet`. Use an explicit YYYY-MM-DD date when the meeting set a deadline; otherwise write `when: none`. Do not create Totem tasks, sheet rows, GitHub issues, or Calendar events yourself.
 
 STEP 6 — verify before finishing. Re-read {{inboxFile}} and confirm every new P-id has exactly one open checklist line in the format above, with a `when:` and a `src:` field. Fix omissions or duplicates before reporting success.
 

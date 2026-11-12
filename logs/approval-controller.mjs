@@ -16,6 +16,7 @@ export function createApprovalController({
   resolveInboxItem,
   actionLog,
   actorForSession = (session) => session?.client || 'unknown',
+  oneTimeCodes = async () => true,
 } = {}) {
   if (!approvals) throw new Error('createApprovalController needs approvals')
   if (typeof resolveInboxItem !== 'function') throw new Error('createApprovalController needs resolveInboxItem')
@@ -29,7 +30,9 @@ export function createApprovalController({
     })
     return {
       ...lease,
-      ...tellOwner('Approve this conversation in Totem → Logs, or read me the 6-digit code from the notification.'),
+      ...tellOwner(await oneTimeCodes()
+        ? 'Approve this conversation in Totem → Logs, or read me the 6-digit code from the notification.'
+        : 'Approve this conversation in Totem → Logs.'),
     }
   }
 

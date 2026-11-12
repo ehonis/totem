@@ -238,7 +238,12 @@ export function createNotifyStore({
       const claimed = []
       const expired = []
 
-      for (const entry of entries) {
+      // Entries that were never held first. An away backlog all comes due at the
+      // same 07:00, and walking it in file order kept a reminder due then behind
+      // hundreds of nudges, past the catch-up grace and into `missed`. Held ones
+      // never miss (below), so they can wait their turn.
+      const order = [...entries.filter((e) => !e.heldBy), ...entries.filter((e) => e.heldBy)]
+      for (const entry of order) {
         if (entry.state !== 'pending') continue
         if (claimed.length >= limit) break
 
@@ -251,7 +256,9 @@ export function createNotifyStore({
 
         const state = deliveryState(entry.deliverAt, at, graceMs)
         if (state === 'pending') continue
-        if (state === 'missed') {
+        // A held entry already waited on purpose; an outage at its release must not
+        // lose it. Its own `expiresAt`, checked above, still bounds it.
+        if (state === 'missed' && !entry.heldBy) {
           // The box was off. One late run, not a backlog burst.
           entry.state = 'missed'
           expired.push(entry)
@@ -259,7 +266,7 @@ export function createNotifyStore({
         }
         entry.state = 'sending'
         entry.attempts += 1
-        entry.late = at - entry.deliverAt > 5 * 60_000
+        entry.late = !entry.heldBy && at - entry.deliverAt > 5 * 60_000
         claimed.push(entry)
       }
 
@@ -271,7 +278,7 @@ export function createNotifyStore({
   // The other half of claimDue. `outcome` is 'delivered' | 'failed' | 'stale' |
   // 'suppressed' | 'held' — stale being a revalidation miss and suppressed a
   // repeat the dedupe gate caught, both successes of the design, not faults.
-  async function finish(id, { outcome, error = null, title = null, body = null, url = null, retryable = true, until = null } = {}) {
+  async function finish(id, { outcome, error = null, title = null, body = null, url = null, retryable = true, until = null, heldBy = null } = {}) {
     return withLock(async () => {
       const entries = await readQueue()
       const entry = entries.find((e) => e.id === id)
@@ -296,6 +303,7 @@ export function createNotifyStore({
         entry.state = 'pending'
         entry.attempts = Math.max(0, entry.attempts - 1)
         if (Number.isFinite(until)) entry.deliverAt = until
+        if (heldBy) entry.heldBy = heldBy
       } else {
         entry.lastError = error ? String(error).slice(0, 300) : 'failed'
         // Returned to pending to be retried; abandoned once it has had its three,

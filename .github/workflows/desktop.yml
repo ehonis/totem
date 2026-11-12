@@ -1,17 +1,25 @@
 name: Desktop
 
 # Builds the desktop app (desktop/) for macOS and Windows: on a PR that touches
-# it, by hand from the Actions tab, or on a `desktop-v*` tag, which also attaches
-# the installers to a draft release.
+# it, on every merge to main that touches it, and by hand from the Actions tab.
+#
+# Each build is version 0.2.<run number>, so every one is newer than the last.
+# With the updater key in the repo's secrets (TAURI_SIGNING_PRIVATE_KEY and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD) it also signs the update files the app
+# installs itself (desktop/src-tauri/src/update.rs). The owner's release
+# tooling publishes a main build's artifacts as a release, with the
+# `latest.json` the app checks (docs: desktop/README.md › Updates). A copy of
+# this repo without the key still builds, just without update files.
 on:
   workflow_dispatch:
   pull_request:
     paths: ['desktop/**', '.github/workflows/desktop.yml']
   push:
-    tags: ['desktop-v*']
+    branches: [main]
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -22,17 +30,25 @@ jobs:
           - os: macos-latest
             target: universal-apple-darwin
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
-            bundles: desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            bundles: |
+              desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+              desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
+              desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             rust-targets: x86_64-pc-windows-msvc
             bundles: |
-              desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-              desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+              desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+              desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: desktop
+        shell: bash
+    env:
+      VERSION: 0.2.${{ github.run_number }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,14 +63,21 @@ jobs:
         with:
           workspaces: desktop/src-tauri
       - run: npm ci
-      - run: npx tauri build --target ${{ matrix.target }}
+      - name: Build
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            config="{\"version\":\"$VERSION\"}"
+          else
+            echo "No updater key: building without update files."
+            config="{\"version\":\"$VERSION\",\"bundle\":{\"createUpdaterArtifacts\":false}}"
+          fi
+          npx tauri build --target ${{ matrix.target }} --config "$config"
+          echo "$VERSION" > src-tauri/target/version.txt
       - uses: actions/upload-artifact@v4
         with:
           name: totem-desktop-${{ runner.os }}
-          path: ${{ matrix.bundles }}
-          if-no-files-found: error
-      - if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          files: ${{ matrix.bundles }}
+          path: |
+            ${{ matrix.bundles }}
+            desktop/src-tauri/target/version.txt
+          # A build without the key has no .sig or .app.tar.gz files; the installers are what must be there.
+          if-no-files-found: warn

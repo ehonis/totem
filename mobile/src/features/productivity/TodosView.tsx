@@ -1,100 +1,182 @@
-// Productivity → Todos (web/src/components/TodosView.tsx + todos/TodoBoard.tsx at
-// phone width): the To Do / Doing / Done switch over one column of cards, the
-// lifecycle chips underneath, and the blue "+" beside the chat buttons. The task
-// detail, the composer and the lifecycle panels are sheets (src/app/todo/*).
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, FlatList, RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
+// Productivity → Tasks (web/src/components/TodosView.tsx + todos/TodoBoard.tsx), led
+// by the phone rather than copied from the web's phone width (#176): one list that
+// answers "what now?". A task is open or done. Open tasks and the shared task sheet's
+// rows sit in one set of groups (Overdue, Today, Upcoming, No date), in the shared
+// order (lib/todos/board.ts buildList: due day, priority, tasks before sheet rows,
+// then manual position), and Completed is one folded row (features/todos/list.ts). A
+// status line says what is left today, what is done today, and how many are snoozed.
+// Ticking, snoozing, "not doing" and deleting offer Undo in one inline line at the
+// foot of the page, never a toast: the phone shows error toasts only. The task
+// detail, a sheet row's read-only detail, the composer and the lifecycle panels are
+// sheets (src/app/todo/*); the top bar carries the title.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RefreshControl, StyleSheet, View } from 'react-native'
+import Animated, { LinearTransition, useReducedMotion } from 'react-native-reanimated'
 import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
-import { Btn, Press } from '../../ui/kit'
+import { Press } from '../../ui/kit'
 import { impact } from '../../ui/haptics'
-import { Hi, ArrowPathIcon, PlusIcon } from '../../lib/icons'
+import { Hi, PlusIcon } from '../../lib/icons'
 import { bulkBoardTodos } from '../../lib/api'
-import { filterTodos, sortTodos } from '../../lib/todos/state'
-import { todoSource, type Todo, type TodoQuery, type TodoSort, type TodoSource, type TodoStatus } from '../../lib/todos/types'
+import { filterTodos } from '../../lib/todos/state'
+import type { Todo } from '../../lib/todos/types'
 import { loadVentureTags } from '../../lib/todos/ventureTags'
+import { FAB_CLEARANCE } from '../../shell/Screen'
 import TodoCard from '../todos/TodoCard'
-import TodoToolbar from '../todos/TodoToolbar'
+import SheetCard from '../todos/SheetCard'
+import TodoToolbar, { type LifecyclePanel } from '../todos/TodoToolbar'
 import { boardActions } from '../todos/boardActions'
-import { STATUS_LABEL } from '../todos/format'
-import { clearCreated, getBoard, loadBoard, setTodos, useBoard } from '../todos/store'
+import { afterDone, byWake, doneToday, nextWake, wakeLabel } from '../todos/board'
+import {
+  isFiltering, issueKey, issueLinkOf, leftToday, listRows, nextDue, orderNeighbours, sheetName, sheetNote, sheetOnlyEmpty, taskQuery, visibleSheet,
+  type ListQuery, type Row,
+} from '../todos/list'
+import { quote, undoText, type UndoKind } from '../todos/undo'
+import { ArchiveLink, BoardSkeleton, ClearNote, EmptyBoard, LoadError, SectionHeader, SheetLine, ShowMore, StatusLine } from '../todos/BoardParts'
+import { UndoLine, type UndoState } from '../todos/detail/bits'
+import { clearCreated, getBoard, loadBoard, loadIssueStates, loadSheet, setTodos, useBoard } from '../todos/store'
 import { openTodo } from '../todos/nav'
+import { dateLabel } from '../todos/format'
 
 // The "+" sits one gap left of the new-chat button (right 16, 54 wide: shell/Screen.tsx).
 const NEW_TASK_SIZE = 44
 const NEW_TASK_RIGHT = 16 + 54 + 12
+// FAB_CLEARANCE clears the new-chat button; a card's "…" sits at the right edge, under the voice button stacked above it.
+const LIST_FOOT = FAB_CLEARANCE + 48
+// How long a just-added task wears its accent edge.
+const FRESH_MS = 1800
 
-const SOURCE_GROUP_LABEL: Record<TodoSource, string> = { local: 'Private', github: 'GitHub', sheet: 'Sheet' }
-const STATUSES: TodoStatus[] = ['todo', 'doing', 'done']
-
-type Row =
-  | { kind: 'card'; todo: Todo }
-  | { kind: 'group'; key: string; label: string }
-  | { kind: 'more'; count: number }
+// Whether Completed is open: this phone's choice, kept across launches.
+const VIEW_KEY = 'totem.todos.boardView'
+interface BoardView { completedOpen: boolean }
+function readView(): BoardView {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null') as Partial<BoardView> | null
+    return { completedOpen: saved?.completedOpen === true }
+  } catch { return { completedOpen: false } }
+}
+function writeView(view: BoardView) {
+  try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)) } catch { /* a convenience; the list works without it */ }
+}
 
 export default function TodosView({ active }: { active: boolean }) {
   const board = useBoard()
   const insets = useSafeAreaInsets()
-  const [query, setQuery] = useState<TodoQuery>({})
-  const [sort, setSort] = useState<TodoSort[]>(['manual'])
-  const [groupBySource, setGroupBySource] = useState(false)
+  const reduced = useReducedMotion()
+  const [query, setQuery] = useState<ListQuery>({})
+  const [view, setView] = useState<BoardView>(readView)
   const [bulkMode, setBulkMode] = useState(false)
   const [selection, setSelection] = useState(new Set<string>())
-  const [status, setStatus] = useState<TodoStatus>('todo')
   const [showAllDone, setShowAllDone] = useState(false)
   const [moveError, setMoveError] = useState('')
   const [pulling, setPulling] = useState(false)
+  const [undo, setUndo] = useState<UndoState | null>(null)
+  const clearUndo = useCallback(() => setUndo(null), [])
+  const [freshId, setFreshId] = useState<string | null>(null)
+  // The clock the sections are cut by; ticks each minute so "Today" turns over at midnight.
+  const [now, setNow] = useState(() => new Date())
   const actions = useMemo(() => boardActions(setMoveError), [])
   const wasActive = useRef(false)
-  const list = useRef<FlatList<Row>>(null)
+  const list = useRef<Animated.FlatList<Row>>(null)
+
+  useEffect(() => { writeView(view) }, [view])
 
   // Load the first time the page is shown, and again whenever it comes back into view.
   useEffect(() => {
-    if (active && !wasActive.current) { void loadBoard(); void loadVentureTags().catch(() => {}) }
+    if (active && !wasActive.current) {
+      void loadBoard(); void loadSheet(); void loadVentureTags().catch(() => {}); setNow(new Date())
+    }
     wasActive.current = active
   }, [active])
-
-  // Any other order is a view over the column, so the board keeps the order the
-  // toolbar asks for rather than regrouping by position.
-  const visible = useMemo(() => sortTodos(filterTodos(board.todos, query), sort), [board.todos, query, sort])
-  const groups = useMemo(() => {
-    const out = { todo: [] as Todo[], doing: [] as Todo[], done: [] as Todo[] }
-    for (const todo of visible) out[todo.status]?.push(todo)
-    return out
-  }, [visible])
-  const items = groups[status]
-
-  const rows = useMemo<Row[]>(() => {
-    const cards = (list: Todo[]): Row[] => {
-      const shown = status === 'done' && !showAllDone ? list.slice(0, 12) : list
-      const out: Row[] = shown.map((todo) => ({ kind: 'card', todo }))
-      if (status === 'done' && !showAllDone && list.length > 12) out.push({ kind: 'more', count: list.length - 12 })
-      return out
-    }
-    if (!groupBySource) return cards(items)
-    return (['local', 'github', 'sheet'] as TodoSource[]).flatMap((source): Row[] => {
-      const sourced = items.filter((todo) => todoSource(todo) === source)
-      return sourced.length ? [{ kind: 'group', key: source, label: SOURCE_GROUP_LABEL[source] }, ...cards(sourced)] : []
-    })
-  }, [items, status, showAllDone, groupBySource])
-
-  // A new task lands at the foot of To Do (manual order is oldest first), usually out
-  // of sight: show that column and scroll to it, so creating one visibly worked.
-  const createdId = board.createdId
-  useEffect(() => { if (createdId) setStatus('todo') }, [createdId])
   useEffect(() => {
-    if (!createdId || status !== 'todo') return
+    if (!active) return
+    const timer = setInterval(() => {
+      const at = new Date()
+      setNow(at)
+      // A snooze that ran out while the page was open: the bridge lists that task on the board again.
+      if (getBoard().snoozed.some((todo) => todo.snoozedUntil && new Date(todo.snoozedUntil) <= at)) void loadBoard()
+    }, 60_000)
+    return () => clearInterval(timer)
+  }, [active])
+
+  // Linked issues' live state, read only when some task links one, and again when the set changes.
+  const linked = useMemo(() => board.todos.map((todo) => issueLinkOf(todo)).filter(Boolean).map((link) => issueKey(link!)).sort().join(' '), [board.todos])
+  useEffect(() => { if (active && linked) void loadIssueStates() }, [active, linked])
+
+  const sheet = board.sheet
+  const sheetItems = useMemo(() => sheet?.items ?? [], [sheet])
+  const source = sheetName(sheet)
+  const filtering = isFiltering(query)
+  const visible = useMemo(() => {
+    const tasks = taskQuery(query)
+    return tasks ? filterTodos(board.todos, tasks, now) : []
+  }, [board.todos, query, now])
+  const visibleRows = useMemo(() => visibleSheet(sheetItems, query, now), [sheetItems, query, now])
+  const rows = useMemo(() => listRows(visible, visibleRows, {
+    now, completedOpen: view.completedOpen, showAllDone, archiveCount: board.archiveCount, filtered: filtering,
+  }), [visible, visibleRows, now, view.completedOpen, showAllDone, board.archiveCount, filtering])
+  const near = useMemo(() => orderNeighbours(rows), [rows])
+  const finishedToday = useMemo(() => doneToday(board.todos, now) + doneToday(board.archivedCompletions, now), [board.todos, board.archivedCompletions, now])
+  const left = useMemo(() => leftToday(board.todos, sheetItems, now), [board.todos, sheetItems, now])
+  const wakeAt = useMemo(() => nextWake(board.snoozed, now), [board.snoozed, now])
+  const wakeText = wakeAt ? wakeLabel(wakeAt, now) : null
+  const note = sheetNote(sheet, board.sheetError)
+
+  // A new task lands in its group, often out of sight: scroll to it and mark it for a
+  // moment, so creating one visibly worked.
+  const createdId = board.createdId
+  useEffect(() => {
+    if (!createdId) return
     const index = rows.findIndex((row) => row.kind === 'card' && row.todo.id === createdId)
-    if (index < 0) return
+    // Filtered out or snoozed: nothing to bring into view, and a later filter change should not scroll.
+    if (index < 0) { clearCreated(); return }
     const timer = setTimeout(() => {
-      if (index === rows.length - 1) list.current?.scrollToEnd({ animated: true })
-      else list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true })
+      setFreshId(createdId)
+      if (index === rows.length - 1) list.current?.scrollToEnd({ animated: !reduced })
+      else list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: !reduced })
       clearCreated()
     }, 350)
     return () => clearTimeout(timer)
-  }, [createdId, rows, status])
+  }, [createdId, rows, reduced])
+  useEffect(() => {
+    if (!freshId) return
+    const timer = setTimeout(() => setFreshId(null), FRESH_MS + 400)
+    return () => clearTimeout(timer)
+  }, [freshId])
+
+  /** Say what happened in the Undo line; its Undo runs `back`. A newer line replaces it. */
+  function offer(kind: UndoKind, todo: Todo, back: () => unknown, extra?: Parameters<typeof undoText>[2]) {
+    const line = undoText(kind, todo, extra)
+    setUndo({ id: Date.now(), text: line.text, action: line.undoable ? { label: 'Undo', run: () => { impact(); void back() } } : undefined })
+  }
+
+  // Finishing offers Undo, through the same move back, except for a repeating task
+  // that rolled its next occurrence (afterDone says why), which names the next due
+  // date instead and reopens from Completed as before. Reopening is one tap on the
+  // circle either way, so it has no Undo of its own.
+  async function move(todo: Todo, status: 'todo' | 'done') {
+    const before = getBoard().todos.find((item) => item.id === todo.id) ?? todo
+    // Already there (a swipe and a tick landing together): nothing to send, nothing to undo.
+    if ((before.status === 'done') === (status === 'done')) return
+    const ids = new Set(getBoard().todos.map((item) => item.id))
+    if (!(await actions.move(todo, status)) || status !== 'done') return
+    offer('done', todo, () => actions.putBack(before), { followUp: afterDone(before, ids, getBoard().todos) })
+  }
+  async function snooze(todo: Todo, until: string) {
+    if (!(await actions.snooze(todo, until))) return
+    offer('snooze', todo, () => actions.wake(todo), { until: wakeLabel(new Date(until), new Date()) })
+  }
+  async function notDoing(todo: Todo) {
+    const before = getBoard().todos.find((item) => item.id === todo.id) ?? todo
+    if (!(await actions.notDoing(todo))) return
+    offer('notDoing', todo, () => actions.putBack(before))
+  }
+  async function remove(todo: Todo) {
+    if (!(await actions.remove(todo))) return
+    offer('delete', todo, () => actions.restore(todo))
+  }
 
   async function bulk(operation: string, value?: unknown) {
     if (!selection.size) return
@@ -120,107 +202,137 @@ export default function TodosView({ active }: { active: boolean }) {
     return next
   })
 
+  const openPanel = (panel: LifecyclePanel) => router.push({ pathname: '/todo/lifecycle', params: { panel } })
+  const clearFilters = () => setQuery({})
+  const toggleCompleted = () => { setView((current) => ({ ...current, completedOpen: !current.completedOpen })); setShowAllDone(false) }
+  const refresh = async () => {
+    setPulling(true)
+    await Promise.all([loadBoard(), loadSheet({ refresh: true }), linked ? loadIssueStates() : null])
+    setNow(new Date()); setPulling(false)
+  }
+
   const fabBottom = Math.max(insets.bottom, 14) + 8 + 5
   const error = board.error
   const todos = board.todos
+  const snoozedNote = board.snoozed.length
+    ? `${board.snoozed.length.toLocaleString()} snoozed${wakeText ? `, the next back ${wakeText}` : ''}.`
+    : null
+  const upcoming = useMemo(() => {
+    const ahead = byWake(board.snoozed)[0]
+    if (!ahead) return null
+    return `Next back: ${quote(ahead.title)}${wakeText ? `, ${wakeText}` : ''}.`
+  }, [board.snoozed, wakeText])
 
-  let body: React.ReactNode
-  if (board.loading && !todos.length && !board.loaded) {
-    body = <View style={[st.column, st.skeleton]} accessibilityLabel="Loading tasks"><ActivityIndicator color={colors.muted} /></View>
-  } else if (error && !todos.length) {
-    body = (
-      <View style={st.boardError} accessibilityRole="alert">
-        <T weight={600} color="#ff9caf">Tasks could not load.</T>
-        <T muted size={13}>{error}</T>
-        <Btn title="Try again" compact onPress={() => void loadBoard()} style={{ alignSelf: 'flex-start' }} />
-      </View>
-    )
-  } else {
-    body = (
-      <>
-        <View style={st.status} accessibilityRole="tablist">
-          {STATUSES.map((value) => {
-            const on = status === value
-            return (
-              <Press key={value} haptic onPress={() => setStatus(value)} style={[st.statusBtn, on && { backgroundColor: colors.bg3 }]} accessibilityRole="tab" accessibilityState={{ selected: on }}>
-                <T size={14} color={on ? colors.text : colors.muted}>
-                  {STATUS_LABEL[value]}
-                  <T size={11} color={on ? colors.text : colors.muted}>{` ${groups[value].length}`}</T>
-                </T>
-              </Press>
-            )
-          })}
-        </View>
-        <View style={st.column}>
-          <FlatList
-            ref={list}
-            data={rows}
-            onScrollToIndexFailed={() => list.current?.scrollToEnd({ animated: true })}
-            keyExtractor={(row) => (row.kind === 'card' ? row.todo.id : row.kind === 'group' ? `g-${row.key}` : 'more')}
-            contentContainerStyle={st.list}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-            refreshControl={<RefreshControl refreshing={pulling} tintColor={colors.muted} onRefresh={async () => { setPulling(true); await loadBoard(); setPulling(false) }} />}
-            ItemSeparatorComponent={() => <View style={{ height: 7 }} />}
-            ListEmptyComponent={<T size={12} muted align="center" style={{ paddingVertical: 24 }}>No tasks here.</T>}
-            renderItem={({ item: row }) => {
-              if (row.kind === 'group') return <T size={11.5} weight={700} muted style={{ marginTop: 4 }}>{row.label}</T>
-              if (row.kind === 'more') {
-                return (
-                  <Press haptic onPress={() => setShowAllDone(true)} style={st.more}>
-                    <T size={13} muted>{`Show ${row.count.toLocaleString()} more`}</T>
-                  </Press>
-                )
-              }
-              return (
-                <TodoCard
-                  todo={row.todo}
-                  swipeable={!bulkMode}
-                  onOpen={(todo) => openTodo(todo)}
-                  onAddNote={(todo) => openTodo(todo, 'notes')}
-                  onMove={actions.move}
-                  onReorder={actions.reorder}
-                  onSnooze={actions.snooze}
-                  onDueDate={actions.reschedule}
-                  onNotDoing={actions.notDoing}
-                  onPriority={actions.setPriority}
-                  onDelete={actions.remove}
-                  selected={bulkMode ? selection.has(row.todo.id) : undefined}
-                  onSelect={bulkMode ? select : undefined}
-                />
-              )
-            }}
-          />
-        </View>
-      </>
+  // The first date ahead, for "nothing due today"; the tasks themselves are the cards under the line.
+  const nextUp = useMemo(() => {
+    const due = nextDue(rows)
+    return due ? `Next due ${dateLabel(due)}.` : null
+  }, [rows])
+
+  function renderRow({ item: row }: { item: Row }) {
+    if (row.kind === 'header') {
+      return <SectionHeader title={row.title} count={row.count} tone={row.tone} collapsible={row.collapsible} open={row.open} onToggle={toggleCompleted} />
+    }
+    if (row.kind === 'clear') return <ClearNote scope={row.scope} doneToday={finishedToday} next={row.scope === 'all' ? upcoming : nextUp} />
+    if (row.kind === 'more') return <ShowMore count={row.count} onPress={() => setShowAllDone(true)} />
+    if (row.kind === 'archive') return <ArchiveLink count={row.count} onPress={() => openPanel('archive')} />
+    if (row.kind === 'sheet') return <SheetCard item={row.item} source={source} now={now} dueSection={row.section} dim={bulkMode} />
+    const todo = row.todo
+    const pair = row.section !== 'done' ? near.get(todo.id) : undefined
+    const up = pair?.up ?? null
+    const down = pair?.down ?? null
+    const link = issueLinkOf(todo)
+    return (
+      <TodoCard
+        todo={todo}
+        now={() => now}
+        swipeable={!bulkMode}
+        onOpen={(item) => openTodo(item)}
+        onAddNote={(item) => openTodo(item, 'notes')}
+        onMove={(item, status) => move(item, status === 'done' ? 'done' : 'todo')}
+        onReorder={(item, direction) => void actions.reorder(item, direction, direction < 0 ? up : down)}
+        reorder={{ up: !!up, down: !!down, note: row.section === 'done' ? 'Completed reads newest first' : 'Due date and priority set this order' }}
+        onSnooze={snooze}
+        onDueDate={actions.reschedule}
+        onNotDoing={notDoing}
+        onPriority={actions.setPriority}
+        onDelete={remove}
+        dueSection={row.section === 'overdue' || row.section === 'today' ? row.section : undefined}
+        issue={link ? board.issueStates[issueKey(link)] ?? null : null}
+        fresh={freshId === todo.id}
+        selected={bulkMode ? selection.has(todo.id) : undefined}
+        onSelect={bulkMode ? select : undefined}
+      />
     )
   }
 
-  const snoozedCount = board.snoozed.length
+  let body: React.ReactNode
+  if (!board.loaded && !todos.length && !error) {
+    body = <BoardSkeleton />
+  } else if (error && !todos.length && !board.loaded) {
+    body = <LoadError message={error} onRetry={() => void loadBoard()} />
+  } else {
+    body = (
+      <Animated.FlatList
+        ref={list}
+        data={rows}
+        style={{ flex: 1 }}
+        itemLayoutAnimation={reduced ? undefined : LinearTransition.duration(220)}
+        onScrollToIndexFailed={() => list.current?.scrollToEnd({ animated: !reduced })}
+        keyExtractor={(row) => row.key}
+        extraData={{ selection, freshId, issues: board.issueStates, source }}
+        contentContainerStyle={[st.list, { paddingBottom: LIST_FOOT + insets.bottom }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        refreshControl={<RefreshControl refreshing={pulling} tintColor={colors.muted} onRefresh={() => void refresh()} />}
+        ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
+        ListHeaderComponent={(
+          <>
+            <StatusLine ready={board.loaded} leftToday={left} doneToday={finishedToday} snoozed={board.snoozed.length} nextWake={wakeText} onSnoozed={() => openPanel('snoozed')} />
+            {note?.tone === 'problem' ? <SheetLine tone="problem" text={note.text} onRetry={() => void loadSheet({ refresh: true })} /> : null}
+          </>
+        )}
+        ListFooterComponent={note?.tone === 'quiet' && rows.length ? <SheetLine tone="quiet" text={note.text} onRetry={() => void loadSheet({ refresh: true })} /> : null}
+        ListEmptyComponent={(
+          <EmptyBoard
+            kind={todos.length || sheetItems.length || filtering ? 'filtered' : 'nothing'}
+            snoozedNote={filtering ? null : snoozedNote}
+            onClear={clearFilters}
+            sheetOnly={query.scope === 'sheet' ? sheetOnlyEmpty(source, sheet?.configured ?? null, board.sheetError) : undefined}
+          />
+        )}
+        renderItem={renderRow}
+      />
+    )
+  }
+
   return (
     <View style={st.view}>
-      <View style={st.head}>
-        <T size={20} weight={700}>Todos</T>
-        <Press haptic onPress={() => void loadBoard()} style={st.refresh} accessibilityLabel="Refresh tasks">
-          {board.loading && board.loaded ? <ActivityIndicator size="small" color={colors.muted} /> : <Hi icon={ArrowPathIcon} size={15} color={colors.text} />}
-        </Press>
-      </View>
       <TodoToolbar
-        query={query} sort={sort} groupBySource={groupBySource} bulkMode={bulkMode} selectedCount={selection.size}
-        onQuery={setQuery} onSort={setSort} onGroupBySource={setGroupBySource}
+        query={query} sheet={{ name: source, configured: sheet ? sheet.configured : null }} bulkMode={bulkMode} selectedCount={selection.size}
+        lifecycle={{ snoozed: board.snoozed.length, nextWake: wakeText, deleted: board.deleted.length, archived: board.archiveCount }}
+        onQuery={setQuery}
         onBulkMode={(value) => { setBulkMode(value); if (!value) setSelection(new Set()) }}
         onBulk={(operation, value) => void bulk(operation, value)}
+        onLifecycle={openPanel}
       />
-      {moveError || (error && todos.length > 0) ? (
-        <View style={st.compactError} accessibilityRole="alert"><T size={12} color="#ff9caf">{moveError || error}</T></View>
+      {moveError ? (
+        <Press onPress={() => setMoveError('')} style={st.compactError} accessibilityRole="alert" accessibilityHint="Dismisses the message">
+          <T size={12.5} color="#ff9caf" style={{ flex: 1 }}>{moveError}</T>
+        </Press>
+      ) : error && (todos.length > 0 || board.loaded) ? (
+        <Press onPress={() => void loadBoard()} style={st.compactError} accessibilityRole="alert" accessibilityHint="Tries again">
+          <T size={12.5} color="#ff9caf" style={{ flex: 1 }}>{`Tasks could not refresh: ${error}`}</T>
+          <T size={12.5} weight={600} color="#ff9caf">Try again</T>
+        </Press>
       ) : null}
       {body}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={st.footer} contentContainerStyle={[st.footerRow, { paddingBottom: fabBottom + 4 }]}>
-        <FooterChip label={`${snoozedCount.toLocaleString()} snoozed task${snoozedCount === 1 ? '' : 's'}`} panel="snoozed" />
-        <FooterChip label={`Recycle bin · ${board.deleted.length.toLocaleString()}`} panel="deleted" />
-        {board.archiveCount > 0 ? <FooterChip label={`${board.archiveCount.toLocaleString()} archived`} panel="archive" /> : null}
-        <FooterChip label="Retention" panel="retention" />
-      </ScrollView>
+      {/* Undo, inline at the thumb, beside the floating buttons rather than under them. */}
+      {undo ? (
+        <View style={[st.undo, { bottom: fabBottom }]} pointerEvents="box-none">
+          <UndoLine undo={undo} onDone={clearUndo} />
+        </View>
+      ) : null}
       {/* New task sits beside the chat buttons, where a thumb already is (.todo-new-task). */}
       <Press
         accessibilityLabel="New task"
@@ -233,35 +345,14 @@ export default function TodosView({ active }: { active: boolean }) {
   )
 }
 
-function FooterChip({ label, panel }: { label: string; panel: 'snoozed' | 'deleted' | 'archive' | 'retention' }) {
-  return (
-    <Press haptic onPress={() => router.push({ pathname: '/todo/lifecycle', params: { panel } })} style={st.footerChip}>
-      <T size={12} muted>{label}</T>
-    </Press>
-  )
-}
-
 const st = StyleSheet.create({
-  view: { flex: 1, paddingTop: 12, paddingHorizontal: 12 },
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9 },
-  refresh: {
-    minHeight: 32, minWidth: 36, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: colors.line, borderRadius: 8, backgroundColor: colors.bg3,
+  view: { flex: 1, paddingTop: 8, paddingHorizontal: 12 },
+  compactError: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, marginBottom: 6, paddingVertical: 8, paddingHorizontal: 10, borderWidth: 1, borderColor: '#f0506e55', borderRadius: 10, backgroundColor: '#f0506e0f' },
+  list: { paddingTop: 2 },
+  undo: {
+    position: 'absolute', left: 12, right: NEW_TASK_RIGHT + NEW_TASK_SIZE + 8, zIndex: 45,
+    shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 14, shadowOffset: { width: 0, height: 8 },
   },
-  compactError: { marginBottom: 8, paddingVertical: 8, paddingHorizontal: 10, borderWidth: 1, borderColor: '#f0506e55', borderRadius: 8, backgroundColor: '#f0506e0f' },
-  boardError: { gap: 8, padding: 12, borderWidth: 1, borderColor: '#f0506e55', borderRadius: 8, backgroundColor: '#f0506e0f' },
-  status: { flexDirection: 'row', padding: 2, borderWidth: 1, borderColor: colors.line, borderRadius: 9, backgroundColor: colors.bg2, marginBottom: 10 },
-  statusBtn: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 7 },
-  column: { flex: 1, minHeight: 0, borderWidth: 1, borderColor: colors.line, borderRadius: 10, backgroundColor: 'rgba(22, 25, 34, 0.74)', overflow: 'hidden' },
-  skeleton: { alignItems: 'center', justifyContent: 'center' },
-  // The chat buttons float over the column's foot, so the last card can scroll clear of them.
-  list: { padding: 8, paddingBottom: 80 },
-  more: { minHeight: 38, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.line, borderRadius: 7 },
-  // The strip stops a clear gap short of the "+" and the new-chat button
-  // (.todo-board-footer padding-right), so a chip scrolls out of view rather than under them.
-  footer: { flexGrow: 0, marginTop: 7, marginLeft: -12, marginRight: NEW_TASK_RIGHT + NEW_TASK_SIZE + 14 - 12 },
-  footerRow: { gap: 6, paddingLeft: 12, paddingRight: 8 },
-  footerChip: { minHeight: 36, justifyContent: 'center', paddingHorizontal: 10, borderWidth: 1, borderColor: colors.line, borderRadius: 7, backgroundColor: colors.bg2 },
   newTask: {
     position: 'absolute', right: NEW_TASK_RIGHT, width: NEW_TASK_SIZE, height: NEW_TASK_SIZE, borderRadius: 12,
     alignItems: 'center', justifyContent: 'center', backgroundColor: colors.accent, zIndex: 44,

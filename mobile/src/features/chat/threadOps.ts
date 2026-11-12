@@ -4,11 +4,24 @@
 // a snooze runs out.
 import { useEffect, useState } from 'react'
 import { nextWake } from '../../lib/chat/settle'
-import type { ChatThread } from '../../lib/chat/types'
+import type { ChatThread, Project } from '../../lib/chat/types'
 
 export {
   settleThread, unsettleThread, snoozeThread, wakeThread, markRead, markUnread, setPinned, groupThreads,
 } from '../../lib/chat/store'
+
+/**
+ * The chats one drawer list holds, parked or not: Home's (in no project that still
+ * exists) or one project's or folder's; never a totem's; an empty chat (opened,
+ * never sent) only while it is open or answering. The drawer, its shelf counts and
+ * the shelf sheet all read this, so they always agree.
+ */
+export function listThreads(all: ChatThread[], projects: Project[], scope: string, activeId: string | null, runs: Record<string, unknown>) {
+  const known = new Set(projects.map((p) => p.id))
+  return all.filter((t) => !t.totemId
+    && (scope === 'home' ? !(t.projectId && known.has(t.projectId)) : t.projectId === scope)
+    && (t.messages.length > 0 || t.id === activeId || !!runs[t.id]))
+}
 
 /** The current time, ticking each minute and exactly when the next snooze runs out. */
 export function useNow(threads: ChatThread[]) {

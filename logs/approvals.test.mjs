@@ -204,3 +204,48 @@ test('the stored lease retains audit fields while public views keep the code pri
   assert.match(saved.code, /^\d{6}$/)
   assert.equal((await store.status({ approvalSessionId: lease.approvalSessionId })).code, undefined)
 })
+
+// With an approval code set (auth/approval-code.mjs), the one-time code proves
+// nothing: it travels in a notification, and the notification ledger is a file
+// agents can read. So it is not shown, not sent, and not accepted.
+test('one-time codes off: not in the notification, not in the list, not accepted', async () => {
+  const { store, notified } = await freshStore({ oneTimeCodes: async () => false })
+  const lease = await requestLease(store)
+  assert.equal(notified[0].code, null)
+  assert.equal((await store.list()).grants[0].code, null)
+
+  const { grants } = JSON.parse(await readFile(store.file, 'utf8'))
+  // Not even on disk; any code offered is refused for the same reason.
+  assert.equal(grants[0].code, null)
+  const code = '123456'
+  await assert.rejects(
+    () => store.authorize({ approvalSessionId: lease.approvalSessionId, code, requestedBy: 'chatgpt' }),
+    /one-time codes are off/,
+  )
+  await assert.rejects(() => store.approve({ code }), /one-time codes are off/)
+  await assert.rejects(() => store.deny({ code }), /one-time codes are off/)
+  assert.equal((await store.status({ approvalSessionId: lease.approvalSessionId })).status, 'pending')
+
+  // The owner's own approval, by id from Totem, still works.
+  assert.equal((await store.approve({ approvalSessionId: lease.approvalSessionId, code })).status, 'approved')
+
+  // On an install with no approval code yet, codes behave as before.
+  const legacy = await freshStore({ oneTimeCodes: async () => true })
+  const old = await requestLease(legacy.store)
+  assert.match(legacy.notified[0].code, /^\d{6}$/)
+  const authorized = await legacy.store.authorize({ approvalSessionId: old.approvalSessionId, code: legacy.notified[0].code, requestedBy: 'chatgpt' })
+  assert.equal(authorized.status, 'approved')
+})
+
+test('one-time codes off: approvals.json keeps no 6-digit code, new or old', async () => {
+  let codesOn = true
+  const { store } = await freshStore({ oneTimeCodes: async () => codesOn })
+  await requestLease(store, 'chatgpt')
+  assert.match(JSON.parse(await readFile(store.file, 'utf8')).grants[0].code, /^\d{6}$/)
+  // An approval code is set: the old lease's code is cleared on the next read, a new one gets none.
+  codesOn = false
+  await store.list()
+  await requestLease(store, 'claude')
+  const { grants } = JSON.parse(await readFile(store.file, 'utf8'))
+  assert.deepEqual(grants.map((g) => g.code), [null, null])
+})

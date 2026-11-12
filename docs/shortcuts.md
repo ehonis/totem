@@ -15,7 +15,7 @@ Nothing is held down. You type the keys one after another, and a grace period
 (1.2s by default) decides how long a half-typed sequence stays live — so
 <kbd>G</kbd> followed by <kbd>B</kbd> a minute later does nothing at all.
 
-Everything is rebindable in **Settings → Shortcuts**: the leader key, the grace
+Everything is rebindable in **Settings → Keyboard**: the leader key, the grace
 period, and the sequence behind each action.
 
 ## Why it looks like this

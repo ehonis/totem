@@ -34,26 +34,8 @@ function fixture() {
     makeId: () => `mcp-${++sequence}`,
     actionLog: { record(entry) { audit.push(entry); } },
   });
-  const calls = { github: [], sheet: [] };
-  const connector = name => ({
-    async create(input, context) {
-      calls[name].push({ method: 'create', input, context });
-      return service.create(input, context);
-    },
-    async rename(id, title, context) { return service.update(id, { title }, context); },
-    async updateLinked(id, patch, context) { return service.update(id, patch, context); },
-    async appendNote(id, body, context) { return service.addNote(id, body, context); },
-    async bulk(input) { return service.bulk(input); },
-    async refreshTask(id) { return service.get(id); },
-    async share(id, context, options) {
-      calls[name].push({ method: 'share', id, context, options });
-      return service.get(id);
-    },
-  });
   const commands = createTodoCommands({
     service,
-    github: connector('github'),
-    sheet: connector('sheet'),
     maintenance: { async purgeDeleted() { return { purged: 0 }; } },
   });
   const tools = createTodoMcpTools({ service, commands, fetchedAt: () => NOW });
@@ -61,17 +43,41 @@ function fixture() {
     closeTodoDatabase(db);
     rmSync(directory, { recursive: true, force: true });
   });
-  return { service, commands, tools, calls, audit };
+  return { service, commands, tools, audit };
 }
 
-test('MCP create stays private unless syncTarget is explicit', async () => {
-  const { tools, calls } = fixture();
+test('MCP create stays local; only local (or no) syncTarget is taken', async () => {
+  const { tools, service } = fixture();
   await tools.totem_create_task({ content: 'Initech pricing', area: 'Ventures', ventureTag: 'Initech' });
-  assert.equal(calls.sheet.length, 0);
-  await tools.totem_create_task({
-    content: 'Initech launch', area: 'Ventures', ventureTag: 'Initech', syncTarget: 'sheet',
-  });
-  assert.equal(calls.sheet.length, 1);
+  await tools.totem_create_task({ content: 'Initech local', syncTarget: 'local' });
+  assert.deepEqual(service.list().map(todo => todo.title).sort(), ['Initech local', 'Initech pricing']);
+  assert.ok(service.list().every(todo => todo.externalLinks.length === 0));
+});
+
+test('MCP refuses every syncTarget but local, on create and update, before anything changes', async () => {
+  const { tools, service } = fixture();
+  const created = await tools.totem_create_task({ title: 'Share later' });
+  const before = service.get(created.todo.id);
+  for (const [syncTarget, code] of [
+    ['github', 'GITHUB_SHARING_REMOVED'], ['GitHub', 'GITHUB_SHARING_REMOVED'],
+    ['sheet', 'SHEET_SHARING_REMOVED'], ['bogus', 'INVALID_SYNC_TARGET'],
+  ]) {
+    const refused = error => error.code === code && error.status === 400;
+    await assert.rejects(tools.totem_create_task({ content: 'Initech launch', area: 'Ventures', ventureTag: 'Initech', syncTarget }), refused, syncTarget);
+    // Fields, a completion and a refused share in one call: the refusal comes first,
+    // so nothing is renamed or completed behind the error.
+    for (const input of [
+      { syncTarget },
+      { title: 'Renamed', syncTarget },
+      { title: 'Renamed', complete: true, syncTarget },
+      { description: 'changed', status: 'done', priority: 4, syncTarget },
+      { notDoing: true, syncTarget },
+    ]) {
+      await assert.rejects(tools.totem_update_task({ id: created.todo.id, ...input }), refused, JSON.stringify(input));
+    }
+  }
+  assert.deepEqual(service.get(created.todo.id), before);
+  assert.deepEqual(service.list().map(todo => todo.title), ['Share later']);
 });
 
 test('projects are Personal, Ventures, and each configured venture tag', async () => {
@@ -137,13 +143,39 @@ test('MCP supports canonical aliases, field updates, combined completion, and ar
   assert.equal(service.get(created.todo.id).archivedAt, NOW);
 });
 
-test('canonical read filters and create status are honored', async () => {
+test('canonical read filters and create status are honored; doing reads and writes as todo', async () => {
   const { service, tools } = fixture();
   await tools.totem_create_task({ title: 'Personal todo', status: 'todo' });
-  await tools.totem_create_task({ title: 'Initech doing', status: 'doing', area: 'Ventures', ventureTag: 'Initech' });
+  const created = await tools.totem_create_task({ title: 'Initech doing', status: 'doing', area: 'Ventures', ventureTag: 'Initech' });
+  assert.equal(created.todo.status, 'todo');
   service.create({ title: 'Acme doing', status: 'doing', area: 'Ventures', ventureTag: 'Acme' });
-  const result = await tools.totem_get_tasks({ status: 'doing', area: 'Ventures', ventureTag: 'Initech', source: 'local' });
-  assert.deepEqual(result.todos.map(todo => todo.content), ['Initech doing']);
+  for (const status of ['doing', 'todo']) {
+    const result = await tools.totem_get_tasks({ status, area: 'Ventures', ventureTag: 'Initech', source: 'local' });
+    assert.deepEqual(result.todos.map(todo => todo.content), ['Initech doing'], status);
+  }
+  await assert.rejects(tools.totem_get_tasks({ status: 'started' }), error => error.code === 'INVALID_STATUS');
+  const all = await tools.totem_get_tasks({ includeCompleted: true });
+  assert.ok([...all.todos, ...all.completed].every(todo => todo.status !== 'doing'));
+});
+
+test('update with status doing reopens a done task as todo and leaves an open one alone', async () => {
+  const { audit, service, tools } = fixture();
+  const open = service.create({ title: 'Open', area: 'Personal' });
+  const before = audit.length;
+  const unchanged = await tools.totem_update_task({ id: open.id, status: 'doing' });
+  assert.equal(unchanged.todo.status, 'todo');
+  assert.equal(unchanged.updated, false);
+  assert.equal(audit.length, before, 'no move is written');
+  const done = service.create({ title: 'Done', area: 'Personal' });
+  service.complete(done.id);
+  assert.equal((await tools.totem_update_task({ id: done.id, status: 'doing' })).todo.status, 'todo');
+});
+
+test('the MCP schema offers no share target and no connector options', async () => {
+  const schema = TODO_MCP_TOOL_DEFINITIONS.find(tool => tool.name === 'totem_create_task').inputSchema.properties;
+  assert.deepEqual(schema.syncTarget.enum, ['local']);
+  assert.equal(Object.hasOwn(schema, 'github'), false);
+  assert.equal(Object.hasOwn(schema, 'sheet'), false);
 });
 
 test('alias conflicts and invalid sync targets fail before mutations', async () => {
@@ -214,20 +246,6 @@ test('MCP mutations keep the calling actor and emit one service-owned audit row'
   assert.equal(audit.length, 1);
   assert.equal(audit[0].action, 'todo.create');
   assert.equal(audit[0].actor, 'ChatGPT');
-});
-
-test('update shares an existing local task only with an explicit syncTarget', async () => {
-  const { calls, tools } = fixture();
-  const created = await tools.totem_create_task({ title: 'Share later' });
-  await tools.totem_update_task({ id: created.todo.id, description: 'Still private' });
-  assert.equal(calls.sheet.length, 0);
-  const shared = await tools.totem_update_task({
-    id: created.todo.id, syncTarget: 'sheet', sheet: { assignee: 'The owner' },
-  });
-  assert.equal(shared.updated, true);
-  assert.equal(calls.sheet.length, 1);
-  assert.equal(calls.sheet[0].method, 'share');
-  assert.deepEqual(calls.sheet[0].options, { assignee: 'The owner' });
 });
 
 test('outbound gateway exposes in-process local tasks and no Todoist task tools', async () => {

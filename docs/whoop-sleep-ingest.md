@@ -17,7 +17,7 @@ rule about which entries a sync may rewrite (`syncWhoopSleep` in `bridge.mjs`).
 
 ## Where to manage it
 
-- **Settings → Connections → Wearables & fitness**: WHOOP's state as Bushido reports
+- **Settings → Connections › Accounts**: WHOOP's state as Bushido reports
   it, the granted scopes, and a link to Bushido to connect or reconnect
   (`web/src/components/WhoopConnection.tsx`).
 - **Bushido** connects WHOOP (profile → Settings) and shows the nights, workouts and
@@ -94,7 +94,7 @@ Moving an existing install's grant from Totem to Bushido: stop Totem, move (do n
 copy) `secrets/whoop-oauth.json` to Bushido's data directory as `whoop-oauth.json` (0600), give
 Bushido the same client ID and secret, then start Totem with the settings in step 2.
 Remove `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` and `WHOOP_REDIRECT_URI` from Totem's
-`.env` and Settings → Integrations; nothing reads them now.
+`.env` and the old Settings → Integrations; nothing reads them now.
 
 ## How it runs
 

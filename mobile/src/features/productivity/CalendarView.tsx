@@ -1,22 +1,28 @@
 // Productivity → Calendar, ported from web/src/components/CalendarView.tsx.
 //
-// Same toolbar (Today ‹ › title), the same six views and the same range requests.
-// What the phone adds: swipe left/right to change period (SwipePeriods), pull to
-// refresh, and the event opens as a native sheet (src/app/calendar/event.tsx)
-// rather than a dialog. Ranges already fetched are kept, so swiping back is instant.
+// The same six views and the same range requests. What the phone does its own
+// way: one toolbar row (the period, ‹ ›, Today, and the view as a native menu
+// rather than a six-way strip), the agenda as the view it opens on until another
+// is picked (remembered on this phone), swipe left/right to change period
+// (SwipePeriods), pull to refresh, and the event opens as a native sheet
+// (src/app/calendar/event.tsx). Ranges already fetched are kept, so swiping back
+// is instant.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AppState, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, AppState, StyleSheet, View } from 'react-native'
+import { MenuView } from '@react-native-menu/menu'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
-import { Btn, Press } from '../../ui/kit'
+import { Btn, IconBtn } from '../../ui/kit'
 import { tap } from '../../ui/haptics'
-import { WarnIcon } from '../../lib/icons'
-import { AuthError, getCalendarRange } from '../../lib/api'
+import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, Hi, WarnIcon } from '../../lib/icons'
+import { AuthError, getAway, getCalendarRange } from '../../lib/api'
+import type { AwaySpan } from '../../lib/away'
 import { clearSecretStored } from '../../lib/connection'
 import { pushError } from '../../lib/toast'
 import {
   VIEWS, fetchRange, gridDaysFor, parseDate, rangeTitle, stepAnchor, type CalEvent, type CalViewId,
 } from '../calendar/dates'
+import { compactTitle, parseView } from '../calendar/time'
 import TimeGrid, { defaultScrollY } from '../calendar/TimeGrid'
 import MonthGrid from '../calendar/MonthGrid'
 import YearGrid from '../calendar/YearGrid'
@@ -28,13 +34,26 @@ interface RangeData { events: CalEvent[]; errors: string[] }
 
 const byStart = (a: CalEvent, b: CalEvent) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0)
 
+// The view last picked on this phone. Storage may be missing (a private web
+// preview); the calendar then just opens on the agenda.
+const VIEW_KEY = 'totem.calendar.view'
+function storedView(): CalViewId {
+  try { return parseView(localStorage.getItem(VIEW_KEY)) } catch { return parseView(null) }
+}
+function rememberView(view: CalViewId) {
+  try { localStorage.setItem(VIEW_KEY, view) } catch { /* not kept; nothing else depends on it */ }
+}
+
 export default function CalendarView({ active }: { active: boolean }) {
-  const [view, setView] = useState<CalViewId>('week')
+  const [view, setView] = useState<CalViewId>(storedView)
   const [anchor, setAnchor] = useState(() => new Date())
   const [dir, setDir] = useState(0)
   const [data, setData] = useState<RangeData>({ events: [], errors: [] })
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  // Trips and days off, past ones included (the views page back in time). Small, so
+  // fetched whole alongside each load rather than per range.
+  const [away, setAway] = useState<AwaySpan[]>([])
   const cache = useRef(new Map<string, RangeData>())
   // The time grid's vertical offset, carried across swipes; null = open at "now".
   const scrollY = useRef<number | null>(null)
@@ -51,6 +70,7 @@ export default function CalendarView({ active }: { active: boolean }) {
     else if (!cached) setData({ events: [], errors: [] })
     setLoading(true)
     if (manual) setRefreshing(true)
+    getAway({ all: true }).then((r) => setAway(r.spans || [])).catch((e) => { if (e instanceof AuthError) void clearSecretStored() })
     try {
       const { events, errors } = await getCalendarRange(rStart.toISOString(), rEnd.toISOString())
       const next = { events: events || [], errors: errors || [] }
@@ -92,6 +112,7 @@ export default function CalendarView({ active }: { active: boolean }) {
   const jump = (nextView: CalViewId, nextAnchor: Date) => {
     scrollY.current = null
     setDir(0)
+    if (nextView !== view) rememberView(nextView)
     setView(nextView)
     setAnchor(nextAnchor)
   }
@@ -101,28 +122,39 @@ export default function CalendarView({ active }: { active: boolean }) {
   const gridDays = useMemo(() => gridDaysFor(view, anchor), [view, anchor])
   const isGrid = view === 'day' || view === 'week' || view === 'workweek'
   const refresh = () => { void load(true) }
+  const agendaRange = useMemo<[Date, Date]>(() => [rStart, rEnd], [rStart, rEnd])
+  const viewLabel = VIEWS.find((v) => v.id === view)?.label ?? 'Agenda'
 
   return (
     <View style={st.view}>
       <View style={st.nav}>
-        <Btn title="Today" onPress={() => jump(view, new Date())} />
-        <Btn compact onPress={() => step(-1)} style={st.arrow}><T size={16} lineHeight={18} accessibilityLabel="Previous">‹</T></Btn>
-        <Btn compact onPress={() => step(1)} style={st.arrow}><T size={16} lineHeight={18} accessibilityLabel="Next">›</T></Btn>
-        <T size={18} weight={700} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} style={{ flexShrink: 1 }}>
-          {rangeTitle(view, anchor)}
+        <T
+          size={20}
+          weight={700}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+          style={{ flex: 1 }}
+          accessibilityRole="header"
+          accessibilityLabel={rangeTitle(view, anchor)}
+        >
+          {compactTitle(view, anchor)}
         </T>
-        {loading ? <T size={24} lineHeight={20} muted>·</T> : null}
-      </View>
-
-      <View style={st.switch}>
-        {VIEWS.map((v) => {
-          const on = view === v.id
-          return (
-            <Press key={v.id} haptic onPress={() => jump(v.id, anchor)} style={[st.seg, on && { backgroundColor: colors.bg3 }]}>
-              <T size={13} numberOfLines={1} color={on ? colors.text : colors.muted}>{v.label}</T>
-            </Press>
-          )
-        })}
+        {loading && !refreshing ? <ActivityIndicator size="small" color={colors.muted} /> : null}
+        <IconBtn icon={ChevronLeftIcon} size={18} box={40} label="Previous" onPress={() => step(-1)} />
+        <IconBtn icon={ChevronRightIcon} size={18} box={40} label="Next" onPress={() => step(1)} />
+        <Btn title="Today" onPress={() => jump(view, new Date())} style={st.today} />
+        <MenuView
+          title="View"
+          themeVariant="dark"
+          actions={VIEWS.map((v) => ({ id: v.id, title: v.label, state: v.id === view ? ('on' as const) : ('off' as const) }))}
+          onPressAction={({ nativeEvent }) => { tap(); jump(nativeEvent.event as CalViewId, anchor) }}
+        >
+          <View style={st.viewBtn} accessibilityRole="button" accessibilityLabel={`View: ${viewLabel}`}>
+            <T size={14} weight={500} numberOfLines={1}>{viewLabel}</T>
+            <Hi icon={ChevronDownIcon} size={13} color={colors.muted} />
+          </View>
+        </MenuView>
       </View>
 
       {data.errors.map((e) => (
@@ -133,6 +165,7 @@ export default function CalendarView({ active }: { active: boolean }) {
         {isGrid && (
           <TimeGrid
             days={gridDays}
+            away={away}
             events={data.events}
             initialY={scrollY.current ?? defaultScrollY(gridDays)}
             onScrollY={(y) => { scrollY.current = y }}
@@ -143,17 +176,20 @@ export default function CalendarView({ active }: { active: boolean }) {
           />
         )}
         {view === 'month' && (
-          <MonthGrid anchor={anchor} events={data.events} onPickDay={pickDay} onSelectEvent={openEvent} refreshing={refreshing} onRefresh={refresh} />
+          <MonthGrid anchor={anchor} away={away} events={data.events} onPickDay={pickDay} onSelectEvent={openEvent} refreshing={refreshing} onRefresh={refresh} />
         )}
         {view === 'year' && (
           <YearGrid anchor={anchor} events={data.events} onPickDay={pickDay} onPickMonth={pickMonth} refreshing={refreshing} onRefresh={refresh} />
         )}
         {view === 'agenda' && (
           <Agenda
+            range={agendaRange}
+            away={away}
             events={[...data.events].sort((a, b) => +parseDate(a.start) - +parseDate(b.start))}
             onSelectEvent={openEvent}
             refreshing={refreshing}
             onRefresh={refresh}
+            onMore={() => step(1)}
           />
         )}
       </SwipePeriods>
@@ -162,13 +198,12 @@ export default function CalendarView({ active }: { active: boolean }) {
 }
 
 const st = StyleSheet.create({
-  view: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
-  nav: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-  arrow: { minWidth: 32, paddingHorizontal: 10 },
-  switch: {
-    flexDirection: 'row', backgroundColor: colors.bg2, borderWidth: 1, borderColor: colors.line,
-    borderRadius: 9, padding: 2, marginBottom: 18,
+  view: { flex: 1, paddingHorizontal: 16, paddingTop: 8 },
+  nav: { flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 12, minHeight: 44 },
+  today: { minHeight: 44, paddingVertical: 6, paddingHorizontal: 12, marginLeft: 4 },
+  viewBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 44, paddingHorizontal: 11, marginLeft: 6,
+    borderRadius: 9, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.bg2,
   },
-  seg: { flexGrow: 1, alignItems: 'center', paddingVertical: 6, paddingHorizontal: 6, borderRadius: 7 },
-  warn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6, marginTop: -10 },
+  warn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
 })

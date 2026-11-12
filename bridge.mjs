@@ -19,18 +19,26 @@ import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { createInterface } from 'node:readline'
 import { Poller as AiUsagePoller } from './ai-usage/poller.mjs'
+import { createCliproxyClient } from './cliproxy/client.mjs'
+import { createCliproxySource } from './cliproxy/source.mjs'
+import { createCliproxyManager } from './cliproxy/manage.mjs'
+import { createCliproxyHttpHandler } from './cliproxy/http.mjs'
 import { createJobStore } from './jobs/store.mjs'
 import { syncHost, summarizeGitSync } from './jobs/git-sync.mjs'
+import { resolvePnpmAsync, NO_PNPM } from './scripts/pnpm.mjs'
 import { totemRunPrompt, parseRunReply, totemChatBlock, totemsRule, parseProposals, appendMemoryNote, builderPrompt, parseBuilderReply, costTier, askableTotem, normalizeMembers, totemsChatRule, totemAskPrompt } from './totems/core.mjs'
 import { createDraftStore, DRAFT_ID, isPending } from './totems/drafts.mjs'
 import { dueState } from './jobs/schedule.mjs'
 import { normalizeTrigger, isCompleteTrigger, checkWatch, describeChanges, describeSource, watchDue } from './jobs/triggers.mjs'
 import { createSkillStore } from './skills/store.mjs'
 import { createAgentSkillCatalog, defaultSkillRoots, findMentions, skillMentionBlock } from './skills/agent-skills.mjs'
-import { Gateway as McpGateway, loadManifest as loadMcpManifest, NS as MCP_NS } from './mcp-gateway.mjs'
+import { Gateway as McpGateway, loadManifest as loadMcpManifest, NS as MCP_NS, normalizeOAuthRegistration, serverRoute } from './mcp-gateway.mjs'
 import { createActionLog, normalizeActor, OWNER_ACTOR } from './logs/store.mjs'
 import { createApprovalStore } from './logs/approvals.mjs'
 import { createApprovalController, tellOwner } from './logs/approval-controller.mjs'
+import { hiddenControlReason, createDenialLedger } from './logs/approval-hardening.mjs'
+import { createInflightLedger, settleInboxLine, settleLeftovers, UNCERTAIN_LOST_NOTE } from './logs/approval-inflight.mjs'
+import { proposalShape, proposalDigest, heldMessage } from './logs/approval-proposals.mjs'
 import { createRunRegistry } from './logs/runs.mjs'
 import { createTerminalSessions, readEnvFileKeys } from './terminal/sessions.mjs'
 import { attachTerminalWebSocket } from './terminal/ws.mjs'
@@ -63,33 +71,41 @@ import { createAlertStore } from './dev/alerts.mjs'
 import { createDevService } from './dev/service.mjs'
 import { createDevHttpHandler } from './dev/http.mjs'
 import { createDevWatcher } from './dev/watcher.mjs'
-import { createAlertIngestHandler, isAlertIngestPath } from './dev/ingest.mjs'
+import { createAlertIngestHandler, isAlertIngestPath, createRunIngestHandler, isRunIngestRequest } from './dev/ingest.mjs'
+import { createRunStore } from './dev/runs.mjs'
+import { createChangeFlow, changeFlowEnabled, changeWorktreeRoot, collectSecrets, execRunner, changeDenyRules, changeRule, startedForAgent, finishedForAgent, CHANGE_START, CHANGE_FINISH, CHANGE_TOOL_NAMES, CHANGE_TOOL_DESCRIPTORS } from './dev/change.mjs'
 import { createFleetStore } from './fleet/store.mjs'
 import { createFleetHttpHandler, createFleetReportHandler, FLEET_REPORT_PATH } from './fleet/http.mjs'
 import { createCollector as createFleetCollector } from './fleet/collect.mjs'
 import { createJournalStore } from './journal/store.mjs'
 import { createTranscriber } from './journal/transcribe.mjs'
 import { createThreadStore, validThreadId } from './chat/store.mjs'
-import { createUploadStore, validUploadId } from './chat/uploads.mjs'
+import { createUploadStore, servedHeaders, validUploadId } from './chat/uploads.mjs'
+import { redactTokens } from './chat/redact.mjs'
 import { createFileAccess, chatFileRedirect, mimeFor as fileMime } from './chat/files.mjs'
 import { fetchFavicon } from './chat/favicon.mjs'
+import { createConnectionIconStore, validConnectionId } from './connections/icons.mjs'
 import { createProjectStore, moveMemoryEntries, validProjectId } from './chat/projects.mjs'
 import { createChatRuns } from './chat/runs.mjs'
 import { QUEUE_LIMIT, moveQueued, queueAfterRun } from './chat/queue.mjs'
+import { chatRefMeta, chatRefOf, cleanNote, createInboxOutcomes, inboxMarker, validInboxId } from './chat/inbox-outcome.mjs'
 import { AGENT_SPAWN, killTree, trackAgent } from './scripts/kill-tree.mjs'
 import { createSteering, progressNote, steerPrompt, steerText } from './chat/steer.mjs'
 import { approvalPart, permissionResult, normalizeDecision, statusForDecision, sessionRules, mergeAllowedTools, createApprovalWaits } from './chat/approvals.mjs'
 import { ASK_TOOL, ASK_TOOL_DESCRIPTOR, QUESTION_RULES, DISMISSED_FOR_AGENT, QUESTIONS_LATER_FOR_AGENT, normalizeQuestions, normalizeAnswers, attachedIds, answersForAgent, answersMessage, createQuestionWaits, createHolds, holdableTimeout } from './chat/questions.mjs'
+import { PREVIEW_TOOL, RENDER_TOOL, VISUAL_RULES, visualToolDescriptors, previewVisual, storeVisual, renderedResult, visualToolError } from './chat/visuals.mjs'
 import { usageTally, addUsage, replyStats } from './chat/stats.mjs'
+import { memoryFileStats, outsideDir, MEMORY_HEAD_CHARS } from './chat/memory-ref.mjs'
 import { planHistory, renderTranscript, attachmentBlock, projectBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer, failureText } from './chat/turn.mjs'
 import { listThreads as listOtherThreads, readThread as readOtherThread, threadsRule, findChatPlace, listChatPlaces, projectPath as chatProjectPath } from './chat/thread-tools.mjs'
 import { describeMcpCall, describeCommand, humanizeTool, stringifyInput, resultText, genericToolDetail, chatToolFromClaude, connectorLook } from './chat/tools.mjs'
 import { claudeRecordSteps, createCliAgentWatch, isClaudeAgentTool, watchSessionLog, agentLabel } from './chat/subagents.mjs'
-import { manualModelFor } from './chat/route.mjs'
+import { manualModelFor, newChatChoice, turnModelFields } from './chat/route.mjs'
 import { chatReach, limitReach, reachRules, browserRules, WORK_RULES, COMPUTER_RULES } from './chat/reach.mjs'
 import { THREAD_ICONS, parseTitleReply, cleanIcon } from './chat/thread-icons.mjs'
 import { createBrowserManager } from './browser/manager.mjs'
-import { callBrowserTool, browserToolDescriptors, BROWSER_TOOLS } from './browser/tools.mjs'
+import { attachBrowserSocket, panelOwner, BROWSER_WS_PATH } from './browser/socket.mjs'
+import { callBrowserTool, browserToolDescriptors } from './browser/tools.mjs'
 import { embedLocalImages } from './browser/shots.mjs'
 import { HANDOFF_TOOL, HANDOFF_TOOL_DESCRIPTOR, HANDOFF_LATER, HANDOFF_GONE, normalizeReason, handoffDone, handoffSkipped, handoffMessage } from './browser/handoff.mjs'
 import { createVoiceService, realtimeTools, VOICE_INSTRUCTIONS } from './chat/voice.mjs'
@@ -107,7 +123,7 @@ import { receivedNotification, parseSummary, fallbackSummary, failedNotification
 import { deriveWeights, ignoredSince } from './notify/weights.mjs'
 import { scanFeeds, DEFAULT_SOURCES } from './notify/feed.mjs'
 import { scanTimexCollabs, emptyState as emptyTimexCollabState } from './notify/timex-collabs.mjs'
-import { slotTimeOn, DEFAULT_SLOTS } from './notify/schedule.mjs'
+import { slotTimeOn, DEFAULT_SLOTS, normalizePlanSettings } from './notify/schedule.mjs'
 import { usageFacts } from './notify/usage.mjs'
 import { decideUpdate, readInstalledVersion, proposalFor } from './notify/updates.mjs'
 import { parsePeople, birthdayFacts, metricFacts, goalFacts, taskFacts } from './notify/signals.mjs'
@@ -117,13 +133,20 @@ import { createListMcpTools, LIST_MCP_TOOL_DEFINITIONS } from './lists/mcp.mjs'
 import { createRecHttpHandler } from './recs/http.mjs'
 import { createRecMcpTools, REC_MCP_TOOL_DEFINITIONS, recPromptRule } from './recs/mcp.mjs'
 import { createRecService, resurfaceDeferredRecs } from './recs/service.mjs'
+import { createAwayStore, normalizeSpan as normalizeAwaySpan } from './away/store.mjs'
+import { createAwayHttpHandler } from './away/http.mjs'
+import { createAwayMcpTools, AWAY_MCP_TOOL_DEFINITIONS } from './away/mcp.mjs'
+import { createLinkedinReader } from './linkedin/reader.mjs'
+import { createLinkedinMcpTools, LINKEDIN_MCP_TOOL_DEFINITIONS } from './linkedin/mcp.mjs'
+import { ACTION_VERBS as LINKEDIN_VERBS, linkedinHistory, normalizeLinkedinProposal, proposalTitle as linkedinTitle, stagingConflict as linkedinConflict } from './linkedin/proposals.mjs'
+import { LINKEDIN_TOTEM_PROMPT } from './linkedin/totem.mjs'
+import { dateGroundingBlock } from './away/grounding.mjs'
+import { createAwayHold, releasedAfterAway } from './away/hold.mjs'
+import { AWAY_KIND_LABELS, describeSpan as describeAwaySpan } from './away/days.mjs'
 import { todoCommandFromInboxProposal } from './todos/proposals.mjs'
-import { createGitHubClient } from './todos/connectors/github-client.mjs'
-import { createGitHubAppClient } from './todos/connectors/github-app-client.mjs'
-import { createGitHubConnector } from './todos/connectors/github-sync.mjs'
-import { createGoogleSheetsClient } from './todos/connectors/google-sheets-client.mjs'
-import { createTaskSheetConnector, unconfiguredTaskSheetHealth } from './todos/connectors/task-sheet-sync.mjs'
-import { configureTaskSheet, taskSheetConfigured, taskSheetSettings } from './todos/connectors/task-sheet-policy.mjs'
+import { createTaskSheetFeed } from './todos/connectors/task-sheet-feed.mjs'
+import { createIssueStates } from './todos/issue-states.mjs'
+import { assertIssueRepo, createIssueFiler } from './todos/inbox-issue.mjs'
 import {
   readEvents as readCameraEvents, commitEvents as commitCameraEvents, scanBacklog as scanCameraBacklog,
   summarize as summarizeCamera, readReportState as readCameraReportState, writeReportState as writeCameraReportState,
@@ -131,6 +154,8 @@ import {
 import { stagingDir as cameraStagingDir } from './camera/paths.mjs'
 import { createOwnerAuth } from './auth/owner.mjs'
 import { createAuthHttpHandler } from './auth/http.mjs'
+import { createApprovalCode, ApprovalRefused } from './auth/approval-code.mjs'
+import { approvalRouteFor, inboxApprovalRisk, normalizeApiPath } from './auth/approval-routes.mjs'
 import { guardRequest, upgradeOriginAllowed } from './auth/guard.mjs'
 import { etagResponse } from './http/etag.mjs'
 import { createAiSettings, createEnvBackedSettings, authFailureMessage } from './ai/settings.mjs'
@@ -149,12 +174,14 @@ import {
   MULTI_ACCOUNT_DRIVERS,
   mergeExecFields,
   claudeSecretDenyRules,
+  claudePathRules,
   effectiveApiKeyVar,
 } from './providers/instances.mjs'
 import {
   readToolState, recordPull, applyToggle, toolView, claudeToolRules, probeClaudeTools,
   normalizeAccess, claudePermissionMode, codexSandbox,
 } from './providers/claude-tools.mjs'
+import { parseClaudeAuthStatus } from './providers/claude-auth.mjs'
 import {
   loadConfig as loadAiUsageConfig,
   ensureUsageOptIns,
@@ -278,6 +305,9 @@ const {
   // restart this bridge (the "self-update" runner). Off unless set; once the
   // job exists, its switch in Totems is what counts.
   TOTEM_SELF_UPDATE_ENABLED = 'false',
+  // LinkedIn networking: a totem that stages a few LinkedIn actions a week for the
+  // owner to do himself (linkedin/, docs/linkedin.md). Off unless set.
+  LINKEDIN_NETWORKING_ENABLED = 'false',
   CAMERA_SYNC_INTERVAL_MINUTES = '15',
   // How long photos may sit in staging before Totem says something. They're
   // stuck until the MacBook — the only machine that can reach iCloud Photos — is
@@ -336,25 +366,44 @@ const log = (...a) => console.log(new Date().toISOString(), ...a)
 // for machine callers. TOTEM_AUTH=proxy hands sign-in to an auth proxy in front.
 const AUTH_FILE = process.env.AUTH_FILE || join(HERE, 'data', 'auth.json')
 const ownerAuth = createOwnerAuth({ file: AUTH_FILE, mode: process.env.TOTEM_AUTH, bridgeSecret: BRIDGE_SECRET, log })
-const authHttpHandler = createAuthHttpHandler(ownerAuth)
+// The approval code (auth/approval-code.mjs): the second credential the approval
+// routes need, which agents holding BRIDGE_SECRET do not have. Its hash is in its
+// own file; the install decision and the latch live in auth.json.
+const APPROVAL_CODE_FILE = process.env.APPROVAL_CODE_FILE || join(HERE, 'data', 'approval-code.json')
+const approvalCode = createApprovalCode({
+  file: APPROVAL_CODE_FILE,
+  existingInstall: EXISTING_INSTALL,
+  authMode: ownerAuth.mode,
+  log,
+  policy: { read: () => ownerAuth.approvalPolicy(), write: (patch) => ownerAuth.updateApprovalPolicy(patch) },
+  report: (event) => reportApprovalCode(event),
+})
+const authHttpHandler = createAuthHttpHandler(ownerAuth, { approvalCode })
 
-// Settings -> AI: API keys entered in the dashboard (ai/settings.mjs). Loaded
+// Settings -> Providers: API keys entered in the dashboard (ai/settings.mjs). Loaded
 // before anything spawns a CLI, since they reach the CLIs through this process's
 // environment. A key already in the real environment wins.
 const AI_SETTINGS_FILE = process.env.AI_SETTINGS_FILE || join(HERE, 'data', 'ai-settings.json')
 const aiSettings = createAiSettings({ file: AI_SETTINGS_FILE, log })
 await aiSettings.load()
 
-// Settings -> Integrations: the public URL and the task sheet settings, entered in
+// data/integrations.json: the public URL (Settings -> General), the task sheet (Settings -> Tasks) and CLIProxy (Settings -> Providers), entered in
 // the dashboard instead of .env. Same rules as the AI keys: 0600 file, the real
 // environment wins, secrets never go back to the browser.
 const INTEGRATION_KEYS = [
   { name: 'PUBLIC_URL', label: 'Public URL', secret: false, group: 'general' },
-  // Google Sheet task sync (docs/task-sheet.md). Read once at startup.
+  // The shared task sheet, read-only through the Drive sign-in (docs/task-sheet.md).
+  // Read on every fetch, so no restart.
   { name: 'TASK_SHEET_ID', label: 'Spreadsheet ID', secret: false, group: 'sheet' },
   { name: 'TASK_SHEET_TAB', label: 'Tab name', secret: false, group: 'sheet' },
   { name: 'TASK_SHEET_ASSIGNEES', label: 'Your names in the Who column (comma-separated)', secret: false, group: 'sheet' },
-  { name: 'TASK_SHEET_TITLE', label: 'Required spreadsheet title (optional)', secret: false, group: 'sheet' },
+  { name: 'TASK_SHEET_TITLE', label: 'Display name (optional)', secret: false, group: 'sheet' },
+  { name: 'TASK_SHEET_ACCOUNT', label: 'Google Drive account (optional)', secret: false, group: 'sheet' },
+  // CLIProxyAPI, holding the Claude and Codex logins the agent CLIs spend
+  // (docs/cliproxy.md). Read on every call, so no restart. Give Totem a scoped
+  // management key, not the proxy's root key.
+  { name: 'CLIPROXY_URL', label: 'Proxy URL', secret: false, group: 'cliproxy' },
+  { name: 'CLIPROXY_MANAGEMENT_KEY', label: 'Management key', secret: true, group: 'cliproxy' },
 ]
 const integrationSettings = createEnvBackedSettings({
   file: process.env.INTEGRATIONS_FILE || join(HERE, 'data', 'integrations.json'),
@@ -421,33 +470,13 @@ const STUDIO_STATE_FILE = process.env.STUDIO_STATE_FILE || join(HERE, 'data', 's
 // /api/habits*, and the agent edits the same file directly (see HABIT_RULES), so
 // "mark reading done" works identically from the web UI, the phone, or chat.
 const HABITS_FILE = process.env.HABITS_FILE || join(HERE, 'data', 'habits.json')
+// Trips and days off (away/). Assigned once the action log exists; read by every
+// prompt's date block, the notification drain and the away tools.
+const AWAY_FILE = process.env.AWAY_FILE || join(HERE, 'data', 'away.json')
+let awayStore = null
 const GITHUB_CACHE_FILE = process.env.GITHUB_CACHE_FILE || join(HERE, 'data', 'github-cache.json')
 const TODO_DATABASE_FILE = process.env.TODO_DATABASE_FILE || join(HERE, 'data', 'todos.db')
 const TODO_BACKUP_DIR = process.env.TODO_BACKUP_DIR || join(HERE, 'data', 'todo-backups')
-const GOOGLE_SHEETS_CREDENTIALS_FILE = process.env.GOOGLE_SHEETS_CREDENTIALS_FILE || ''
-// Google Sheet task sync (todos/connectors/task-sheet-*.mjs, docs/task-sheet.md).
-// Which spreadsheet, tab and assignees come from TASK_SHEET_* (env or Settings ->
-// Integrations).
-// The Tag column is validated against the install's venture tags.
-configureTaskSheet({
-  spreadsheetId: process.env.TASK_SHEET_ID || '',
-  spreadsheetTitle: process.env.TASK_SHEET_TITLE || '',
-  tab: process.env.TASK_SHEET_TAB || 'Action Items',
-  sheetId: process.env.TASK_SHEET_GID || 0,
-  assignees: process.env.TASK_SHEET_ASSIGNEES || '',
-  ventureTags: () => todoService.listVentureTags().map((tag) => tag.name),
-})
-const TASK_SHEET_CONFIGURED = Boolean(
-  taskSheetConfigured() && GOOGLE_SHEETS_CREDENTIALS_FILE && existsSync(GOOGLE_SHEETS_CREDENTIALS_FILE),
-)
-// GitHub App credentials for the todo connector. With these set, the connector mints
-// its own installation tokens; without them it falls back to the `gh` CLI, which
-// borrows whatever personal token happens to be logged in on this machine.
-const GITHUB_APP_ID = process.env.GITHUB_APP_ID || ''
-const GITHUB_APP_PRIVATE_KEY_FILE = process.env.GITHUB_APP_PRIVATE_KEY_FILE || ''
-const GITHUB_APP_INSTALLATION_ID = process.env.GITHUB_APP_INSTALLATION_ID || ''
-const GITHUB_ASSIGNEE_LOGIN = process.env.GITHUB_ASSIGNEE_LOGIN || ''
-const GITHUB_APP_CONFIGURED = Boolean(GITHUB_APP_ID && GITHUB_APP_PRIVATE_KEY_FILE && existsSync(GITHUB_APP_PRIVATE_KEY_FILE))
 // How long a cached repo list stays fresh before /api/github/repos refetches from
 // the `gh` CLI. Cheap enough to refetch, but this keeps page loads instant and
 // avoids hammering the API on every dashboard visit. `?refresh=1` forces a refetch.
@@ -499,7 +528,8 @@ const PROVIDER_DEFS = {
     authCommand: 'claude setup-token',
     statusCommand: 'claude doctor',
     // No statusArgs: `claude doctor` is an interactive TUI, so health for Claude
-    // Code is read from the credentials file's token expiry instead.
+    // Code asks `claude auth status --json` (checkProviderHealth), falling back
+    // to the credentials file on a CLI without it.
     statusArgs: null,
     testCommand: 'claude -p --output-format text "reply with exactly: ok"',
     authPaths: [join(homedir(), '.claude', '.credentials.json')],
@@ -573,11 +603,11 @@ const INBOX_RULES =
   `JOURNAL PROPOSALS: pending action items mined from the owner's nightly journal are staged in ${JOURNAL_INBOX_FILE} ` +
   'as a checklist, each with a stable id (P1, P2, ...). If this message looks like the owner confirming, ' +
   'skipping, or editing those proposals (by id, or by describing one), read inbox.md, act ONLY on the ' +
-  'proposals he names: create todo-type items with tasks__create_task, passing syncTarget only when ' +
-  'the proposal has one exact `sync: sheet` or `sync: github` marker; create Calendar events with ' +
-  'the Calendar tool; and create github-type items with tasks__create_task plus syncTarget github ' +
-  '(the linked issue file IS the finished issue body — pass it verbatim to the connector; never call ' +
-  '`gh issue create` directly, re-author it, or hand it to a coding agent). Verify weekday/date first ' +
+  'proposals he names: create todo-type items with tasks__create_task as local tasks (a `sync:` marker ' +
+  'cannot be honoured any more: tell him rather than sharing); create Calendar events with the Calendar tool; ' +
+  'and leave github-type items for him to accept in the Totem inbox, which files the finished issue ' +
+  '(never call `gh issue create` yourself, re-author it, make a task for it, or hand it to a coding ' +
+  'agent). Verify weekday/date first ' +
   'for dated items, then mark those lines done (change "- [ ]" to ' +
   '"- [x]" with a short result note) and leave untouched proposals alone. Commit and push memory after. ' +
   'Never act on a proposal he did not confirm.'
@@ -636,47 +666,15 @@ function localDateParts(date = new Date()) {
   return Object.fromEntries(parts.map((p) => [p.type, p.value]))
 }
 
-function localDateLabel(date) {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: MORNING_BRIEFING_TZ,
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(date)
-}
-
 function endOfTodayMs() {
   const d = new Date()
   d.setHours(23, 59, 59, 999)
   return d.getTime()
 }
 
+// The date block every prompt carries, away spans included (away/grounding.mjs).
 function temporalContext() {
-  const now = new Date()
-  const nowLabel = new Intl.DateTimeFormat('en-US', {
-    timeZone: MORNING_BRIEFING_TZ,
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZoneName: 'short',
-  }).format(now)
-  const upcoming = Array.from({ length: 14 }, (_, i) => {
-    const d = new Date(now)
-    d.setUTCDate(d.getUTCDate() + i)
-    const parts = localDateParts(d)
-    return `${localDateLabel(d)} = ${parts.year}-${parts.month}-${parts.day}`
-  }).join('; ')
-  return (
-    `LOCAL DATE CONTEXT: now is ${nowLabel} in ${MORNING_BRIEFING_TZ}. ` +
-    `Upcoming local dates: ${upcoming}. ` +
-    'When the user uses a relative date like today, tomorrow, this Saturday, Saturday, this Thursday, next Thursday, next week, next week Thursday, or this weekend, resolve it to an explicit YYYY-MM-DD by looking it up in the table above (match the weekday name, then read off its ISO date). "Next <weekday>" means the soonest future occurrence of that weekday that is in the week after the current one. ' +
-    'Before creating or moving any calendar event or dated task, verify the chosen weekday and ISO date are the same pair shown in the table. If they do not match, stop and correct the date before acting. ' +
-    'When creating a Totem task, pass the resolved calendar date as dueDate "YYYY-MM-DD". Totem tasks are date-based; put a specific time in the description when it matters. Never pass a relative natural-language due string like "next thursday".'
-  )
+  return dateGroundingBlock({ now: new Date(), tz: MORNING_BRIEFING_TZ, spans: awayStore?.snapshot() || [] })
 }
 
 // The web dashboard renders replies as GitHub-flavored Markdown in a real chat
@@ -713,7 +711,7 @@ const GATEWAY_RULES =
   'APP TOOLS: Totem tasks plus real-world integrations (Google Calendar, Plaud, and any other ' +
   'connected app) are all available through the Totem MCP gateway. Their tools are namespaced ' +
   'as "<app>__<tool>" — e.g. tasks__create_task, tasks__get_tasks, and google-calendar__list-events. ' +
-  'Use tasks__* for Personal and Ventures commitments. A task stays private/local unless the owner explicitly asks to share or sync it and you pass exactly one syncTarget (github or sheet); a Ventures tag alone never shares it. When a request touches one of these apps, call the matching gateway ' +
+  'Use tasks__* for Personal and Ventures commitments. A task always stays private/local: nothing shares one out (tasks no longer create GitHub issues or sync to a sheet). The shared task sheet is read-only: Totem shows its rows and never writes to it. When a request touches one of these apps, call the matching gateway ' +
   'tool directly rather than assuming the capability is missing. The gateway also exposes Totem\'s own ' +
   'Strava connector as strava__* (strava__get_activities, strava__get_mileage, strava__get_gear, …) when ' +
   'Strava is connected.'
@@ -754,11 +752,8 @@ function redact(text = '') {
   for (const { key, value } of secretValues) {
     out = out.split(value).join(`[redacted ${key}]`)
   }
-  return out
-    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [redacted]')
-    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g, '[redacted github token]')
-    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, '[redacted api key]')
-    .replace(/\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASS|KEY|AUTH|COOKIE|SESSION)[A-Z0-9_]*)=([^\s"'`]+)/gi, '$1=[redacted]')
+  // The token shapes are shared with the dashboard and the app (chat/redact.mjs).
+  return redactTokens(out)
 }
 
 function truncate(text, max = 600) {
@@ -1116,28 +1111,30 @@ async function getActiveProvider() {
 }
 
 // ---------------------------------------------------------------------------
-// Settings -> AI
+// Settings -> Providers
 // ---------------------------------------------------------------------------
 
-// Settings -> Integrations: what each integration needs and where its values
+// The integrations (General, Tasks and Providers in Settings): what each needs and where its values
 // come from.
 function buildIntegrations() {
   const fields = integrationSettings.describe()
+  // "Connected" only when it is set up and its last read did not fail.
+  const sheet = taskSheetFeed.status()
   const group = (g) => fields.filter((f) => f.group === g)
   return {
     publicUrl: group('general')[0],
     integrations: [
       {
-        id: 'sheet', label: 'Google Sheet task sync', configured: TASK_SHEET_CONFIGURED,
-        console: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
-        restartRequired: true, docs: 'docs/task-sheet.md',
-        // A file path the server reads, so it is set in the environment only, and
-        // the dashboard is told whether it is usable rather than what it is.
-        credentialsFile: {
-          name: 'GOOGLE_SHEETS_CREDENTIALS_FILE',
-          state: !GOOGLE_SHEETS_CREDENTIALS_FILE ? 'unset' : existsSync(GOOGLE_SHEETS_CREDENTIALS_FILE) ? 'found' : 'missing',
-        },
+        id: 'sheet', label: 'Task sheet', configured: sheet.configured && !sheet.error,
+        docs: 'docs/task-sheet.md', restartRequired: false,
+        blurb: 'Read through your Google Drive sign-in (Settings → Connections); Totem never writes to the sheet. The account is needed only when more than one Drive account is connected.',
         fields: group('sheet'),
+      },
+      {
+        id: 'cliproxy', label: 'CLIProxy', configured: cliproxyClient.configured(),
+        docs: 'docs/cliproxy.md', restartRequired: false,
+        blurb: 'The proxy that holds your Claude and Codex logins. With it set, usage limits show every login the proxy pools instead of this machine\'s own. Use a scoped management key: the full one can read every login\'s tokens.',
+        fields: group('cliproxy'),
       },
     ],
   }
@@ -2251,6 +2248,25 @@ const drive = createDrive({
   runs: sourceRuns,
 })
 
+// The shared task sheet, read-only (todos/connectors/task-sheet-feed.mjs,
+// docs/task-sheet.md): GET /api/todos/sheet. Handed only Drive's read calls, so
+// nothing on this path can write to the sheet.
+const taskSheetFeed = createTaskSheetFeed({
+  drive: {
+    configured: () => drive.configured(),
+    accountLabels: () => drive.accountLabels(),
+    requireAccount: (label) => drive.requireAccount(label),
+    sheetInfo: (args) => drive.sheetInfo(args),
+    sheetRead: (args) => drive.sheetRead(args),
+  },
+  runs: sourceRuns,
+})
+// The two-way sync's run log id, retired with it: its last health (failing,
+// perhaps) would otherwise sit in Connections until pruned.
+if (sourceRuns.get('sheet-tasks') && sourceRuns.get('sheet-tasks').state !== 'unconfigured') {
+  sourceRuns.markUnconfigured('sheet-tasks', 'Retired: the task sheet is now read through Google Drive (task-sheet).')
+}
+
 const DRIVE_RULES =
   'GOOGLE DRIVE. The owner\'s Google Drive is the drive tools (totem_drive_* on /mcp, drive__* through the gateway): '
   + 'every file each connected account can open, including Google Sheets and Docs. Find a file with search (plain words, '
@@ -2471,7 +2487,7 @@ async function cliInstalled(cli) {
 
 class AiNotConfiguredError extends Error {
   constructor(cli) {
-    super(`AI is not set up yet: the ${cli} CLI is not installed on this machine. Open Settings → AI to pick a provider.`)
+    super(`AI is not set up yet: the ${cli} CLI is not installed on this machine. Open Settings → Providers to pick a provider.`)
     this.code = 'AI_NOT_CONFIGURED'
   }
 }
@@ -2663,7 +2679,11 @@ async function checkProviderHealth(id) {
   if (keyVar) return { ...base, state: 'ready', detail: `using ${keyVar}`, auth: 'api-key' }
 
   if (instance.driver === 'claude') {
-    const r = await claudeCredentialHealth(instance)
+    // Ask the CLI first: on macOS the live login is in the Keychain and the
+    // credentials file can be a stale copy. The file is only read for a CLI
+    // too old to have `auth status`.
+    const res = await execFileCapture(instance.cli, ['auth', 'status', '--json'], { timeout: 15_000, env: instanceEnvironment(instance) })
+    const r = parseClaudeAuthStatus(res.stdout) || await claudeCredentialHealth(instance)
     return { ...base, ...r, fix: r.state === 'ready' ? null : authCommand }
   }
 
@@ -3072,16 +3092,6 @@ function describeClaudeTool(block) {
 // withholding the tools that change things. Read and search stay available.
 const CLAUDE_WRITE_TOOLS = ['Bash', 'Edit', 'Write', 'NotebookEdit']
 
-// Claude Code permission rules for writing to exact paths. An absolute path is
-// written with a leading `//`; a folder covers everything under it.
-function claudeWriteRules(paths) {
-  return paths.filter(Boolean).flatMap((path) => {
-    const abs = `/${String(path).replace(/\/+$/, '')}`
-    const target = /\.[a-z0-9]{1,8}$/i.test(abs) ? abs : `${abs}/**`
-    return ['Edit', 'Write'].map((tool) => `${tool}(${target})`)
-  })
-}
-
 // Images go in natively: with `images`, the prompt is sent as one stream-json
 // user message whose content is the text plus a base64 block per image, which is
 // the same thing the Claude Code TUI sends for a pasted screenshot.
@@ -3120,7 +3130,7 @@ async function readSteerImages(files) {
 // into a `can_use_tool` control request on stdout. `approve(request, signal)`
 // resolves the permission result, which goes back on stdin; `allowRules` are the
 // chat's saved "Always allow" rules.
-async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, onAgent, signal, model, effort, readOnly, access = null, instance, resume, images = [], browser = null, allowWrite = [], allowRules: savedRules = [], approve = null, steering = null, timeoutMs = TIMEOUT } = {}) {
+async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, onAgent, signal, model, effort, readOnly, access = null, instance, resume, images = [], browser = null, allowWrite = [], readOnlyPaths = [], allowRules: savedRules = [], approve = null, steering = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('claude')
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
   const m = currentClaudeModel(bareModelId(model) || CLAUDE_MODEL)
@@ -3136,16 +3146,24 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
   // With Totem's ask_questions (chat/questions.mjs), Claude Code's own
   // AskUserQuestion goes: a print-mode run cannot show it, and it stops at four.
   if (browser?.ask) toolRules.deny.push('AskUserQuestion')
+  // No file-tool writes to a change worktree's data, env or .git (dev/change.mjs).
+  toolRules.deny.push(...changeDenyRules({ liveRoot: HERE, worktreeRoot: CHANGE_WORKTREES_DIR, recordsFile: CHANGE_RECORDS_FILE }))
+  // Files the prompt names as read-only (a folder chat's parent memory): readable, never written.
+  toolRules.deny.push(...claudePathRules(readOnlyPaths, ['Edit', 'Write']))
   args.push('--disallowedTools', ...(readOnly ? CLAUDE_WRITE_TOOLS : []), ...claudeSecretDenyRules(HERE), ...toolRules.deny)
-  // A chat's access mode (the composer's Supervised … Full access). Only chats
-  // pass one; jobs and phone requests keep Claude's default mode.
+  // A chat's access mode (the composer's Supervised … Full access), or a totem's
+  // Access setting. Other jobs and phone requests keep Claude's default mode.
   const permissionMode = !readOnly && access ? claudePermissionMode(access) : null
   if (permissionMode) args.push('--permission-mode', permissionMode)
   // A print-mode run cannot ask for permission, so a write the prompt asks for
   // (a chat's documents folder, a project's memory file) is allowed by path here
   // or it is refused, and so is every connector the owner left on. Deny rules
   // above still win over these.
-  const allowRules = readOnly ? [] : [...claudeWriteRules(allowWrite), ...toolRules.allow, ...savedRules]
+  // What the prompt tells it to keep it is also told to read first (a memory file
+  // is named, not pasted: chat/memory-ref.mjs), and outside the working folder
+  // Claude would ask, so every such path gets a Read rule too.
+  const readRules = claudePathRules([...allowWrite, ...readOnlyPaths], ['Read'])
+  const allowRules = readOnly ? readRules : [...readRules, ...claudePathRules(allowWrite, ['Edit', 'Write']), ...toolRules.allow, ...savedRules]
   if (allowRules.length) args.push('--allowedTools', ...allowRules)
   const asks = !!(approve && steering && !readOnly)
   if (asks) args.push('--permission-prompt-tool', 'stdio')
@@ -3587,7 +3605,7 @@ function spawnOpenCodeStream(text, { label = 'request', onActivity, onTool, onTe
 // catches (inbox, jobs, web chat) or should surface it.
 async function runCodex(text, options = {}) {
   const budget = agentBudget(options)
-  const res = await spawnCodexStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, effort: options.effort, instance: options.instance, sandbox: options.readOnly ? 'read-only' : null, browser: options.browser || null, extraArgs: options.network && !options.readOnly ? ['-c', 'sandbox_workspace_write.network_access=true'] : [], timeoutMs: budget })
+  const res = await spawnCodexStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, effort: options.effort, instance: options.instance, sandbox: options.readOnly ? 'read-only' : null, access: options.readOnly ? null : options.access || null, browser: options.browser || null, extraArgs: options.network && !options.readOnly ? ['-c', 'sandbox_workspace_write.network_access=true'] : [], timeoutMs: budget })
   if (res.stopped) return 'Stopped the running request.'
   // A turn that failed part-way (a usage limit after "I'll look into it") said
   // something, but not the answer.
@@ -3600,7 +3618,7 @@ async function runCodex(text, options = {}) {
 
 async function runCursor(text, options = {}) {
   const budget = agentBudget(options)
-  const res = await spawnCursorStream(text, { label: 'agent request', onActivity: options.onActivity, onText: options.onText, cursorModel: options.cursorModel, instance: options.instance, browser: options.browser || null, timeoutMs: budget })
+  const res = await spawnCursorStream(text, { label: 'agent request', onActivity: options.onActivity, onText: options.onText, cursorModel: options.cursorModel, instance: options.instance, access: options.access || null, browser: options.browser || null, timeoutMs: budget })
   if (res.stopped) return 'Stopped the running request.'
   // A killed run that produced *some* stdout used to fall through to the generic
   // "finished without a final response" line below, which reads like a shrug and
@@ -3614,7 +3632,7 @@ async function runCursor(text, options = {}) {
 
 async function runClaude(text, options = {}) {
   const budget = agentBudget(options)
-  const res = await spawnClaudeStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, effort: options.effort, readOnly: options.readOnly, instance: options.instance, browser: options.browser || null, allowWrite: options.allowWrite || [], timeoutMs: budget })
+  const res = await spawnClaudeStream(text, { label: 'agent request', onActivity: options.onActivity, onTool: options.onTool, onText: options.onText, model: options.model, effort: options.effort, readOnly: options.readOnly, access: options.access || null, instance: options.instance, browser: options.browser || null, allowWrite: options.allowWrite || [], timeoutMs: budget })
   if (res.stopped) return 'Stopped the running request.'
   const reply = res.result.trim()
   if (reply) return reply
@@ -3874,7 +3892,7 @@ function extractRevisedBody(reply) {
   return (fence ? fence[1] : text).trim()
 }
 
-async function reviseSkill({ id, body, instruction, provider, model, reasoning, actor = 'ethan' }) {
+async function reviseSkill({ id, body, instruction, provider, model, reasoning, actor = OWNER_ACTOR }) {
   const skill = await skillStore.get(id)
   if (!skill) throw new Error('no such skill')
   // Revise what is on screen, not what is on disk — same rule as the preview, so
@@ -4404,6 +4422,16 @@ function refusedAsCrossSite(req, res, { text = false } = {}) {
 // Machine callers only (the inbound MCP server): the bearer secret, nothing else.
 function bearerAuthorized(req) {
   return ownerAuth.bearerOk(req)
+}
+
+// The approval routes (auth/approval-routes.mjs): a signed-in session or the
+// approval code, never the bearer secret alone. Resolves to 'session' or 'code'.
+function approveRequest(req, risk) {
+  return approvalCode.check(req, { risk, hasSession: ownerAuth.hasSession(req) })
+}
+
+function sendApprovalRefusal(res, e) {
+  return send(res, e.status, { error: { code: e.code, message: e.message } })
 }
 
 function requestBaseUrl(req) {
@@ -5167,7 +5195,8 @@ const INBOX_LINE_RE = /^- \[( |x)\]\s*([A-Za-z]+\d+)\s*\|\s*([^|]+?)\s*\|\s*(.+)
 // being added") so accept/deny is never a leap of faith.
 const INBOX_DESTINATIONS = {
   todo: 'Totem tasks',
-  sheet: 'Totem tasks → Action Items sheet',
+  // Sharing to the task sheet was retired: accepting one of these is refused.
+  sheet: 'Totem tasks (sheet sharing retired)',
   calendar: 'Google Calendar',
   agent: 'GitHub issue', // legacy kind, files an issue exactly like `github`
   github: 'GitHub issue',
@@ -5186,6 +5215,12 @@ const INBOX_DESTINATIONS = {
   // An email, finished down to the threading headers. Only the dashboard can
   // send it or save it as a Gmail draft (see doResolveInboxItem).
   email: 'Gmail',
+  // A trip or day off an agent found in an email or the calendar. Accepting adds
+  // it to the away spans (away/), which every prompt's date block then carries.
+  away: 'Away',
+  // Something to do on LinkedIn, which the owner does himself (linkedin/). Accepting
+  // records that he did it; nothing is sent anywhere.
+  linkedin: 'LinkedIn',
 }
 
 const isGithubKind = (kind) => kind === 'github' || kind === 'agent'
@@ -5213,6 +5248,9 @@ const INBOX_TYPE_LABELS = { feature: 'enhancement', enhancement: 'enhancement', 
 async function buildInboxIssue(item) {
   const repo = item.meta.repo
   if (!repo) throw new Error('github proposal missing repo')
+  // Checked when the proposal is read, so a bad repo is unreadable (Accept disabled,
+  // refused with 409), never a send that fails after it was marked dispatching.
+  assertIssueRepo(repo)
   const bodyFile = item.meta.issue || item.meta.prompt || item.meta.prompt_ref || ''
   const staged = await readInboxIssueBody(item.meta)
   const labels = item.meta.labels
@@ -5224,8 +5262,12 @@ async function buildInboxIssue(item) {
 
 const shellQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`
 
+// Files an accepted github proposal through the service user's `gh`, and makes no task
+// (todos/inbox-issue.mjs).
+const inboxIssueFiler = createIssueFiler({ run: (args) => ghCapture(args) })
+
 // The gh invocation an accept represents, rendered for the details drop-down.
-// The connector performs the equivalent argv-safe call after acceptance.
+// inboxIssueFiler makes the equivalent argv-safe call after acceptance.
 function inboxIssueCommand({ repo, title, labels, bodyFile }) {
   const parts = ['gh', 'issue', 'create', '--repo', repo, '--title', shellQuote(title)]
   for (const label of labels) parts.push('--label', shellQuote(label))
@@ -5238,7 +5280,8 @@ function inboxIssueCommand({ repo, title, labels, bodyFile }) {
 function ghCapture(args, { timeout = 30_000 } = {}) {
   return new Promise((resolve, reject) => {
     execFile('gh', args, { timeout, maxBuffer: 25 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(String(stderr || err.message).trim()))
+      // stdout rides along: `gh api graphql` exits 1 on a partial answer that still has data.
+      if (err) reject(Object.assign(new Error(String(stderr || err.message).trim()), { stdout: String(stdout || '') }))
       else resolve(String(stdout))
     })
   })
@@ -5296,7 +5339,10 @@ async function buildGithubRepos({ refresh = false } = {}) {
 // real rate-limit endpoint, in this process. Idle cadence is ~90s; a live
 // dashboard stream flips it to 15s; a Totem agent turn refreshes that backend
 // immediately (plus one follow-up, because vendors lag the spend).
-const aiUsage = new AiUsagePoller()
+const cliproxyClient = createCliproxyClient()
+const aiUsage = new AiUsagePoller({
+  proxy: createCliproxySource({ client: cliproxyClient, runs: sourceRuns, log }),
+})
 
 /**
  * Tell the quota poller that this provider just ran. Fire-and-forget: the
@@ -5407,8 +5453,21 @@ async function buildAiUsageSettings() {
       plan: o.plan ?? null,
       priceUsd: o.priceUsd ?? null,
       renewsAt: o.renewsAt ?? null,
-      accounts: accounts
-        .filter((a) => a.backend === id)
+      accounts: [
+        // While CLIProxy holds this provider its logins replace this machine's own.
+        ...accounts.filter((a) => a.backend === id && !aiUsage.covered(id)),
+        ...aiUsage.proxyAccounts
+          .filter((a) => a.backend === id)
+          .map((a) => ({
+            id: a.id,
+            backend: a.backend,
+            label: a.label,
+            displayName: (config.accountNames?.[a.id] || '').trim() || a.displayName,
+            source: 'cliproxy',
+            discovered: true,
+            hidden: (config.hidden || []).includes(a.id),
+          })),
+      ]
         .map((a) => {
           const live = polled.get(a.id) || {}
           return {
@@ -5417,7 +5476,7 @@ async function buildAiUsageSettings() {
             label: a.label,
             displayName: a.displayName,
             // Claude/Codex profiles are a directory; Cursor's is the auth file.
-            path: (a.home || a.authFile || '').replace(HOME, '~'),
+            path: a.source === 'cliproxy' ? 'CLIProxy' : (a.home || a.authFile || '').replace(HOME, '~'),
             discovered: a.discovered !== false,
             hidden: a.hidden,
             status: live.status ?? null,
@@ -5619,11 +5678,12 @@ function parseInboxLine(line) {
 // Everything the Inbox tab's details drop-down shows: the concrete payload that
 // accepting will send, so a yes/no decision is made on the real thing rather than
 // a one-line summary. `fields` are labelled key/values; github items also carry
-// the finished issue body and the gh command.
-async function inboxItemPreview(item) {
+// the finished issue body and the gh command. Built from `loaded`
+// (loadInboxProposal), the same reading the accept will use.
+async function inboxItemPreview(item, loaded) {
   if (isGithubKind(item.kind)) {
     try {
-      const issue = await buildInboxIssue(item)
+      const issue = proposalValue(loaded)
       return {
         summary: `Files a new issue in ${issue.repo}`,
         fields: [
@@ -5641,7 +5701,7 @@ async function inboxItemPreview(item) {
   }
   if (item.kind === 'command') {
     let command
-    try { command = await readInboxCommand(item) }
+    try { command = proposalValue(loaded) }
     catch (e) { return { summary: 'This command proposal is not readable', error: e.message, fields: [] } }
     const screen = screenCommand(command)
     return {
@@ -5662,7 +5722,7 @@ async function inboxItemPreview(item) {
   }
   if (item.kind === 'prompt') {
     try {
-      const { provider, model, effort, promptText } = await resolveInboxPrompt(item)
+      const { provider, model, effort, promptText } = proposalValue(loaded)
       const suggested = [provider, model].filter(Boolean).join('/')
       return {
         summary: 'Opens a new T3 Code thread with this prompt; you pick the project and model there',
@@ -5682,11 +5742,14 @@ async function inboxItemPreview(item) {
   }
   if (item.kind === 'todo' || item.kind === 'sheet') {
     return {
-      summary: `Creates a Totem task in ${item.meta.project || item.meta.area || 'Personal'}${item.meta.sync ? ` and syncs it to ${item.meta.sync}` : ''}`,
+      // A `sync:` marker or a sheet proposal is refused on accept: tasks are not shared out any more.
+      summary: item.kind === 'sheet' || item.meta.sync
+        ? 'Cannot be accepted: sharing a task out of Totem was removed'
+        : `Creates a Totem task in ${item.meta.project || item.meta.area || 'Personal'}`,
       fields: [
         ['Task', item.title],
         ['Area', item.meta.project || item.meta.area || 'Personal'],
-        ...(item.meta.sync ? [['Explicit sync', item.meta.sync]] : []),
+        ...(item.meta.sync ? [['Sync (refused)', item.meta.sync]] : []),
         ['Due', item.when || 'no date'],
         ['Description', item.src ? `From inbox ${item.id} (src: ${item.src})` : '(none)'],
       ],
@@ -5711,7 +5774,7 @@ async function inboxItemPreview(item) {
   }
   if (item.kind === 'imessage') {
     try {
-      const body = await readInboxMessage(item)
+      const body = proposalValue(loaded)
       return {
         summary: `Sends a ${item.meta.service === 'SMS' ? 'text' : 'message'} to ${item.meta.recipient || item.meta.to} from the owner's Messages`,
         fields: [
@@ -5729,7 +5792,7 @@ async function inboxItemPreview(item) {
   }
   if (item.kind === 'email') {
     try {
-      const email = await readInboxEmail(item)
+      const email = proposalValue(loaded)
       const names = (list) => list.map((x) => (x.name ? `${x.name} <${x.email}>` : x.email)).join(', ')
       return {
         summary: `Sends an email from ${email.from || email.account}, or saves it as a draft there`,
@@ -5751,6 +5814,44 @@ async function inboxItemPreview(item) {
       return { summary: 'This email cannot be sent as staged', error: e.message, fields: [] }
     }
   }
+  if (item.kind === 'away') {
+    try {
+      const span = awaySpanFromInbox(item)
+      const overlaps = awayStore.snapshot().filter((s) => s.start <= span.end && span.start <= s.end)
+      return {
+        summary: `Marks the owner away: ${describeAwaySpan(span)}`,
+        fields: [
+          ['Away', span.label],
+          ['Dates', span.start === span.end ? span.start : `${span.start} to ${span.end}, inclusive`],
+          ['Kind', AWAY_KIND_LABELS[span.kind] || span.kind],
+          ...(span.note ? [['Note', span.note]] : []),
+          ...(overlaps.length ? [['Overlaps', overlaps.map(describeAwaySpan).join('; ')]] : []),
+          ['Evidence', item.meta.why || '(not explained — do not approve)'],
+          ['Proposed by', item.src || 'unknown'],
+        ],
+      }
+    } catch (e) {
+      return { summary: 'This away proposal cannot be added as written', error: e.message, fields: [] }
+    }
+  }
+  if (item.kind === 'linkedin') {
+    try {
+      const card = proposalValue(loaded)
+      return {
+        summary: `For you to do on LinkedIn yourself: ${LINKEDIN_VERBS[card.action].toLowerCase()} ${card.authorName}. Totem does nothing there; Mark done records that you did it.`,
+        // The action, author, excerpt and draft are on the card itself (`linkedin` below).
+        fields: [
+          ['Link', card.targetUrl],
+          ['Why', card.reason],
+          ['Proposed by', item.src || 'unknown'],
+        ],
+        // Drawn by the dashboard as the card itself: the excerpt, the draft to copy, and the link.
+        linkedin: { action: card.action, url: card.targetUrl, author: card.authorName, excerpt: card.postExcerpt, draft: card.draftText },
+      }
+    } catch (e) {
+      return { summary: 'This LinkedIn card cannot be read as staged', error: e.message, fields: [] }
+    }
+  }
   if (item.kind === 'calendar') {
     return {
       summary: 'Creates a Google Calendar event',
@@ -5764,6 +5865,45 @@ async function inboxItemPreview(item) {
   return { summary: `Unknown kind "${item.kind}" — accepting will fail`, fields: [] }
 }
 
+// One reading of a proposal, through the same readers its accept uses
+// (logs/approval-proposals.mjs). The value is what is previewed, screened,
+// fingerprinted, digested and, on accept, sent or run: the staged file is never
+// read again between the owner seeing it and it going out. `error` is a
+// proposal that cannot be carried out as staged; an email whose account was
+// removed is still read raw, so it is screened and recognised all the same.
+async function loadInboxProposal(item) {
+  let value = null
+  let error = null
+  try {
+    if (item.kind === 'email') value = await readInboxEmail(item)
+    else if (item.kind === 'imessage') value = await readInboxMessage(item)
+    else if (item.kind === 'prompt') value = await resolveInboxPrompt(item)
+    else if (item.kind === 'command') value = await readInboxCommand(item)
+    else if (item.kind === 'linkedin') value = await readInboxLinkedin(item)
+    else if (isGithubKind(item.kind)) value = await buildInboxIssue(item)
+  } catch (e) {
+    error = e
+    if (item.kind === 'email') value = await readInboxEmailFile(item).catch(() => null)
+  }
+  return { value, error, digest: proposalDigest(item, value), ...proposalShape(item, value) }
+}
+
+// The value an accept may use, or the reason it cannot be accepted.
+const proposalValue = (loaded) => { if (loaded.error) throw loaded.error; return loaded.value }
+
+// Only for the badge's count, which polls: fingerprints by raw line. The hold an
+// accept is checked against is computed fresh (doResolveInboxItem).
+const inboxFingerprints = new Map()
+async function inboxHeld(item) {
+  let fingerprint = inboxFingerprints.get(item.raw)
+  if (!fingerprint) {
+    fingerprint = (await loadInboxProposal(item)).fingerprint
+    if (inboxFingerprints.size > 500) inboxFingerprints.clear()
+    inboxFingerprints.set(item.raw, fingerprint)
+  }
+  return approvalDenials.holdFor({ fingerprint, id: item.id })
+}
+
 // Open proposals only — the UI never shows already-actioned/skipped lines.
 async function readInboxItems() {
   let text
@@ -5772,17 +5912,29 @@ async function readInboxItems() {
   const open = []
   for (const line of text.split('\n')) {
     const item = parseInboxLine(line)
-    if (item && item.status === 'open') {
-      const srcHint = (item.src || '').toLowerCase()
-      const source = item.meta.source || (srcHint.includes('journal') ? 'journal' : srcHint.includes('plaud') || srcHint.includes('meeting') ? 'plaud' : 'inbox')
-      const baseDest = INBOX_DESTINATIONS[item.kind] || item.kind
-      const destination = item.meta.project ? `${baseDest} → ${item.meta.project}` : baseDest
-      open.push({ ...item, source, destination })
-    }
+    if (item && item.status === 'open') open.push(item)
   }
-  // Previews read one small staged file per github item — cheap, and it keeps the
-  // list endpoint a single round trip for the dashboard.
-  const items = await Promise.all(open.map(async (item) => ({ ...item, preview: await inboxItemPreview(item) })))
+  // One reading per item: the preview, the screen, the hold and the digest the
+  // dashboard sends back on accept all come from it. A proposal carrying a
+  // hidden character says so on its card and cannot be accepted; one the owner
+  // denied in the last week is `held`, pointing at that denial.
+  const items = await Promise.all(open.map(async (item) => {
+    const loaded = await loadInboxProposal(item)
+    const preview = await inboxItemPreview(item, loaded)
+    const refused = hiddenControlReason(loaded.parts)
+    const held = await approvalDenials.holdFor({ fingerprint: loaded.fingerprint, id: item.id })
+    const srcHint = (item.src || '').toLowerCase()
+    const source = item.meta.source || (srcHint.includes('journal') ? 'journal' : srcHint.includes('plaud') || srcHint.includes('meeting') ? 'plaud' : 'inbox')
+    const baseDest = INBOX_DESTINATIONS[item.kind] || item.kind
+    const destination = item.meta.project ? `${baseDest} → ${item.meta.project}` : baseDest
+    return {
+      ...item, source, destination,
+      preview: refused ? { ...preview, error: `Refused: ${refused}` } : preview,
+      refused: refused || null, held, digest: loaded.digest,
+      // The chat that staged it, whose card and agent hear the outcome (chat/inbox-outcome.mjs).
+      chat: chatRefOf(item.meta),
+    }
+  }))
   return { items }
 }
 
@@ -5795,14 +5947,17 @@ async function countInboxItems() {
   try { text = await readFile(JOURNAL_INBOX_FILE, 'utf8') }
   catch { return { open: 0, byKind: {} } }
   let open = 0
+  let held = 0
   const byKind = {}
   for (const line of text.split('\n')) {
     const item = parseInboxLine(line)
     if (!item || item.status !== 'open') continue
+    // A held proposal is not waiting on him: that is the point of holding it.
+    if (await inboxHeld(item)) { held += 1; continue }
     open += 1
     byKind[item.kind] = (byKind[item.kind] || 0) + 1
   }
-  return { open, byKind }
+  return { open, held, byKind }
 }
 
 // One inbox line is one row of a pipe-delimited file, so a title carrying a "|"
@@ -6053,22 +6208,44 @@ async function resolveInboxGoalMetric(item) {
   return { goal, metric, patch: hasDelta ? { delta: number } : { value: number } }
 }
 
-async function actionInboxItem(item, today, actor = OWNER_ACTOR, mode = 'accept') {
+// `prepared.value` is the proposal as the owner saw it (loadInboxProposal); the
+// staged file is never read here, so a proposal that could not be read when it
+// was shown cannot be read now and approved unseen. `prepared.dispatching()` is called right before
+// the request that leaves this machine: a failure after it may have taken effect,
+// so it ends `uncertain`, not open for a second try.
+async function actionInboxItem(item, today, actor = OWNER_ACTOR, mode = 'accept', prepared = {}) {
+  const value = async () => {
+    if (prepared.value === undefined || prepared.value === null) throw new Error(`${item.id} has nothing readable to ${mode}`)
+    return prepared.value
+  }
+  const dispatching = () => prepared.dispatching?.()
   if (item.kind === 'todo' || item.kind === 'sheet') {
     const todo = await todoCommands.create(
       todoCommandFromInboxProposal(item),
       { actor, reason: `Accepted inbox proposal ${item.id}`, correlationId: item.id },
     )
     const dest = item.meta.project || item.meta.area || 'Personal'
-    return `confirmed ${today} → Totem task ${todo.id} (${dest}${item.meta.sync ? `, synced to ${item.meta.sync}` : ''})`
+    return `confirmed ${today} → Totem task ${todo.id} (${dest})`
   }
   if (item.kind === 'calendar') {
+    dispatching()
     const { event } = await createCalendarEvent({
       title: item.title,
       when: item.when,
       description: item.src ? `From journal proposal ${item.id} (src: ${item.src})` : '',
     })
     return `confirmed ${today} → Calendar ${event.id}`
+  }
+  if (item.kind === 'away') {
+    try {
+      const span = awayStore.create(awaySpanFromInbox(item), { actor, source: `inbox ${item.id}`, reason: `Accepted inbox proposal ${item.id}`, correlationId: item.id })
+      return `confirmed ${today} → away span ${span.id}`
+    } catch (e) {
+      // Already listed (added by hand, or an earlier copy accepted): the owner's yes is
+      // satisfied, and the proposal must not stay open asking again.
+      if (e?.code !== 'AWAY_DUPLICATE') throw e
+      return `confirmed ${today} → already listed as away span ${e.details.existing.id}`
+    }
   }
   if (item.kind === 'goal') {
     const { goal, metric, patch } = await resolveInboxGoalMetric(item)
@@ -6077,8 +6254,9 @@ async function actionInboxItem(item, today, actor = OWNER_ACTOR, mode = 'accept'
     return `confirmed ${today} → ${change} ${metric.unit || ''} on "${metric.label}" (${goal.title})`.replace(/\s+/g, ' ')
   }
   if (item.kind === 'email') {
-    const email = await readInboxEmail(item)
+    const email = await value()
     const to = email.to.map((x) => x.email).join(', ')
+    dispatching()
     if (mode === 'draft') {
       const d = await gmail.createDraft({ prepared: email })
       return `confirmed ${today} → saved as a draft in ${email.from || email.account} (${d.draftId})`
@@ -6087,37 +6265,39 @@ async function actionInboxItem(item, today, actor = OWNER_ACTOR, mode = 'accept'
     return `confirmed ${today} → sent from ${email.from || email.account} to ${to} (${out.messageId})`
   }
   if (item.kind === 'imessage') {
-    const text = await readInboxMessage(item)
+    const text = await value()
     const target = /;[-+];/.test(item.meta.to || '') ? { chat: item.meta.to } : { to: item.meta.to, service: item.meta.service || null }
+    dispatching()
     const out = await apple.send({ ...target, text })
     return `confirmed ${today} → sent to ${out.to}${out.recorded ? '' : ' (Messages has not recorded it yet)'}`
+  }
+  // The owner did it on LinkedIn himself; accepting is his word that he did.
+  if (item.kind === 'linkedin') {
+    const card = await value()
+    return `confirmed ${today} → done on LinkedIn (${card.action})`
   }
   // Heavy work goes to T3 Code: the dashboard opens the preview's openUrl in the
   // same click, so accepting only records that it was handed off.
   if (item.kind === 'prompt') {
-    await resolveInboxPrompt(item)
+    await value()
     return `confirmed ${today} → opened in T3 Code`
   }
   // A shell command. Re-screened here: a proposal staged before a refusal rule
   // existed must not sail through on accept.
   if (item.kind === 'command') {
-    const command = await readInboxCommand(item)
+    const command = await value()
     const screen = screenCommand(command)
     if (!screen.ok) throw new Error(`refused: ${screen.why}`)
     startInboxCommandRun({ item, command })
     return `confirmed ${today} → running, output ${item.id}`
   }
-  // The staged file is already the finished issue. The GitHub task connector
-  // owns issue creation and local linking, so inbox acceptance uses the same
-  // command boundary as every other task share.
+  // The staged file is already the finished issue: accepting files it, and that is all.
   if (isGithubKind(item.kind)) {
-    const issue = await buildInboxIssue(item)
-    const todo = await todoCommands.create(
-      todoCommandFromInboxProposal(item, { github: issue }),
-      { actor, reason: `Accepted inbox proposal ${item.id}`, correlationId: item.id },
-    )
-    const link = todo.externalLinks?.find((candidate) => candidate.connector === 'github')
-    return `confirmed ${today} → ${link?.externalUrl || `Totem task ${todo.id} synced to GitHub`}`
+    const issue = await value()
+    assertIssueRepo(issue.repo)
+    dispatching()
+    const filed = await inboxIssueFiler.file(issue)
+    return `confirmed ${today} → ${filed.url || `${issue.repo}#${filed.number}`}`
   }
   throw new Error(`don't know how to accept a "${item.kind}" proposal`)
 }
@@ -6126,8 +6306,10 @@ async function actionInboxItem(item, today, actor = OWNER_ACTOR, mode = 'accept'
 // waiting on the resolve response. The output id is the inbox id, so the model
 // that proposed it knows where to look without being told.
 function startInboxCommandRun({ item, command }) {
+  const key = `${item.id}:run`
   ;(async () => {
     try {
+      await approvalInflight.begin({ key, id: item.id, kind: 'command', action: 'accept', title: item.title, phase: 'running' })
       const out = await runProposedCommand({
         command,
         cwd: item.meta.cwd || null,
@@ -6151,6 +6333,8 @@ function startInboxCommandRun({ item, command }) {
       })
       await jobStore.notify({ level: 'error', title: `${item.id} could not run — ${item.title}`, body: message, url: '/logs' }).catch(() => {})
       log(`inbox ${item.id}: command failed to start: ${message}`)
+    } finally {
+      await approvalInflight.end(key).catch(() => {})
     }
   })()
 }
@@ -6169,31 +6353,70 @@ function resolveInboxItem(args) {
 // Staging goes through the SAME queue as accept/deny. Both rewrite inbox.md, so
 // an append racing a resolve would drop one of the two edits — and an id picked
 // from a stale read would collide with a concurrent stage.
-function queueInboxPrompt(args) {
-  const next = inboxResolveQueue.then(() => doQueueInboxPrompt(args))
+async function queueInboxPrompt(args) {
+  refuseHiddenControls([args?.title, args?.prompt, args?.explanation, args?.why])
+  const next = inboxResolveQueue.then(() => doQueueInboxPrompt(args)).then(withInboxHold)
   inboxResolveQueue = next.then(() => {}, () => {})
   return next
 }
 
-function queueInboxCommand(args) {
-  const next = inboxResolveQueue.then(() => doQueueInboxCommand(args))
+async function queueInboxCommand(args) {
+  refuseHiddenControls([args?.title, args?.command, args?.explanation, args?.why, args?.cwd, Object.values(args?.meta || {})])
+  const next = inboxResolveQueue.then(() => doQueueInboxCommand(args)).then(withInboxHold)
   inboxResolveQueue = next.then(() => {}, () => {})
   return next
+}
+
+// A proposal carrying a hidden direction or tag character never reaches the
+// inbox (logs/approval-hardening.mjs). Checked on every string the caller sent.
+function refuseHiddenControls(parts) {
+  const reason = hiddenControlReason(parts)
+  if (reason) throw new Error(`refused: ${reason}`)
+}
+
+// Tell the stager when the owner already said no to this exact proposal this
+// week: it is held rather than put in front of him again.
+async function withInboxHold(result) {
+  try {
+    const text = await readFile(JOURNAL_INBOX_FILE, 'utf8')
+    const item = text.split('\n').map(parseInboxLine).find((x) => x && x.id === result.id)
+    const held = item ? await approvalDenials.holdFor({ fingerprint: (await loadInboxProposal(item)).fingerprint, id: item.id }) : null
+    if (!held) return result
+    return {
+      ...result,
+      held,
+      ...tellOwner(`Held: you denied the same proposal as ${held.id} on ${held.deniedAt.slice(0, 10)}, so it is not asking again. It is in the Inbox under Held if you want it after all.`),
+    }
+  } catch {
+    return result
+  }
 }
 
 // The Gmail reads (reply threading, recipients) happen before taking the queue,
 // so a slow API call never holds up the other stagers.
-async function queueInboxEmail({ why, src = 'mcp', ...fields }) {
+async function queueInboxEmail({ why, src = 'mcp', chat = null, ...fields }) {
   const reason = String(why || '').trim()
   if (reason.length < 8) throw new Error('why is required: say why this email should be sent')
   const email = await gmail.prepareEmail(fields)
-  const next = inboxResolveQueue.then(() => doQueueInboxEmail({ email, reason, src }))
+  // What will be sent, not the quoted message it answers: someone else's email
+  // may carry direction marks for good reasons, and it is not ours to send.
+  const people = [...(email.to || []), ...(email.cc || []), ...(email.bcc || [])].flatMap((x) => [x?.name, x?.email])
+  refuseHiddenControls([reason, email.subject, email.body, people])
+  const next = inboxResolveQueue.then(() => doQueueInboxEmail({ email, reason, src, chat })).then(withInboxHold)
   inboxResolveQueue = next.then(() => {}, () => {})
   return next
 }
 
-function queueInboxMessage(args) {
-  const next = inboxResolveQueue.then(() => doQueueInboxMessage(args))
+async function queueInboxAway({ chat = null, ...args } = {}) {
+  refuseHiddenControls([args?.why, Object.values(args || {})])
+  const next = inboxResolveQueue.then(() => doQueueInboxAway({ ...args, chat })).then(withInboxHold)
+  inboxResolveQueue = next.then(() => {}, () => {})
+  return next
+}
+
+async function queueInboxMessage(args) {
+  refuseHiddenControls([args?.text, args?.why, args?.to, args?.chat])
+  const next = inboxResolveQueue.then(() => doQueueInboxMessage(args)).then(withInboxHold)
   inboxResolveQueue = next.then(() => {}, () => {})
   return next
 }
@@ -6213,12 +6436,22 @@ async function nextInboxId() {
 }
 
 // Keys the stager owns. A caller passing `meta` cannot redefine what will run.
-const RESERVED_INBOX_META = new Set(['command', 'cwd', 'timeout', 'what', 'why', 'src', 'prompt', 'issue', 'provider'])
+const RESERVED_INBOX_META = new Set(['command', 'cwd', 'timeout', 'what', 'why', 'src', 'prompt', 'issue', 'provider', 'thread', 'run'])
+
+// A proposal a chat run staged: the card joins that reply, where the owner can
+// decide it without leaving the chat (chat/inbox-outcome.mjs). Never fails the stage.
+function stagedInChat(chat, card) {
+  const live = chat?.runId && runInboxCard(chat.runId)
+  if (live) Promise.resolve().then(() => live({ ...card, status: 'pending', stagedAt: Date.now() })).catch((e) => log('inbox: chat card failed', e?.message || e))
+}
+
+/** A running reply's own way to update an inbox card it staged, or null once it has ended. */
+const runInboxCard = (runId) => [...agentBrowserAccess.values()].find((a) => a.runId === runId)?.inboxCard || null
 
 // Stage a shell command. Screened before anything is written: a refused command
 // never reaches the inbox at all, so the owner is not asked to reject things that
 // were never allowed in the first place.
-async function doQueueInboxCommand({ title, command, explanation, why, cwd = null, timeout = null, src = 'mcp', meta: extraMeta = null }) {
+async function doQueueInboxCommand({ title, command, explanation, why, cwd = null, timeout = null, src = 'mcp', meta: extraMeta = null, chat = null }) {
   const cleanTitle = inboxSafe(title)
   if (!cleanTitle) throw new Error('title is required')
   const cmd = String(command || '').trim()
@@ -6250,10 +6483,12 @@ async function doQueueInboxCommand({ title, command, explanation, why, cwd = nul
   }
   meta.push(`what: ${inboxSafe(what)}`)
   meta.push(`why: ${inboxSafe(reason)}`)
+  meta.push(...chatRefMeta(chat))
   meta.push(`src: ${inboxSafe(src) || 'mcp'}`)
   const line = `- [ ] ${id} | command | ${cleanTitle} | ${meta.join(' | ')}`
   const prefix = !text || text.endsWith('\n') ? text : `${text}\n`
   await writeFile(JOURNAL_INBOX_FILE, `${prefix}${line}\n`)
+  stagedInChat(chat, { id, kind: 'command', title: cleanTitle })
   actionLog.record({
     action: 'inbox.stage', actor: src, channel: 'inbox', target: id, status: 'ok',
     summary: `staged command proposal: ${cmd}`, why: reason,
@@ -6263,11 +6498,106 @@ async function doQueueInboxCommand({ title, command, explanation, why, cwd = nul
   return { id, kind: 'command', title: cleanTitle, command: cmd, commandFile: rel, cwd: cwd || null, explanation: what, why: reason, status: 'open', line }
 }
 
+// An away proposal's span, read back from its inbox line. Validated by the same
+// rules the store applies, so the preview and the accept agree.
+function awaySpanFromInbox(item) {
+  return normalizeAwaySpan({ start: item.meta.start, end: item.meta.end, label: item.meta.label, kind: item.meta.kind, note: item.meta.note })
+}
+
+// Stage a trip or day off an agent inferred (away/mcp.mjs). Validated here with
+// the store's own rules, so nothing is staged that accepting would refuse;
+// accepting is what adds it.
+async function doQueueInboxAway({ why, src = 'mcp', chat = null, ...fields }) {
+  const span = normalizeAwaySpan(fields)
+  const reason = String(why || '').trim()
+  if (reason.length < 8) throw new Error('why is required: say which email or event shows the owner is away')
+  const { id, text } = await nextInboxId()
+  // One proposal per set of dates, whatever became of it: a totem that scans the
+  // inbox every morning would otherwise re-propose the same trip daily. Checked
+  // here, under the inbox queue, so two stagers cannot both miss each other.
+  for (const line of text.split('\n')) {
+    const earlier = parseInboxLine(line)
+    if (earlier?.kind !== 'away' || earlier.meta.start !== span.start || earlier.meta.end !== span.end) continue
+    const status = earlier.status === 'open' ? 'open' : /^skipped\b/.test(earlier.note || '') ? 'denied' : 'accepted'
+    return { alreadyProposed: { id: earlier.id, status } }
+  }
+  const range = span.start === span.end ? span.start : `${span.start} to ${span.end}`
+  const meta = [`start: ${span.start}`, `end: ${span.end}`, `kind: ${span.kind}`, `label: ${inboxSafe(span.label)}`]
+  if (span.note) meta.push(`note: ${inboxSafe(span.note)}`)
+  meta.push(`why: ${inboxSafe(reason)}`, ...chatRefMeta(chat), `src: ${inboxSafe(src) || 'mcp'}`)
+  const title = `Away: ${inboxSafe(span.label)} (${range})`
+  const line = `- [ ] ${id} | away | ${title} | ${meta.join(' | ')}`
+  const prefix = !text || text.endsWith('\n') ? text : `${text}\n`
+  await mkdir(dirname(JOURNAL_INBOX_FILE), { recursive: true })
+  await writeFile(JOURNAL_INBOX_FILE, `${prefix}${line}\n`)
+  stagedInChat(chat, { id, kind: 'away', title })
+  actionLog.record({
+    action: 'inbox.stage', actor: src, channel: 'inbox', target: id, status: 'ok',
+    summary: `staged away proposal: ${span.label} (${range})`, why: reason,
+    detail: { kind: 'away', start: span.start, end: span.end }, correlationId: id,
+  })
+  log(`inbox ${id}: staged away proposal from ${src}`)
+  return { id, kind: 'away', status: 'open', line }
+}
+
+// A LinkedIn action for the owner to do himself (linkedin/proposals.mjs). The card
+// is a JSON file, because a draft holds pipes and newlines one inbox line cannot.
+async function queueInboxLinkedin({ chat = null, ...args } = {}) {
+  // The draft is what he pastes into LinkedIn; the excerpt and name are display
+  // only and already had their format characters dropped by the normaliser.
+  refuseHiddenControls([args?.draftText, args?.reason, args?.src])
+  const next = inboxResolveQueue.then(() => doQueueInboxLinkedin({ ...args, chat }))
+  inboxResolveQueue = next.then(() => {}, () => {})
+  return next
+}
+
+async function doQueueInboxLinkedin({ src = 'mcp', chat = null, ...fields }) {
+  const card = normalizeLinkedinProposal(fields)
+  const { id, text } = await nextInboxId()
+  // Once per target, whatever became of it, and no more than MAX_PENDING open at a
+  // time; checked under the inbox queue so two stagers cannot both miss each other.
+  const conflict = linkedinConflict(text.split('\n').map(parseInboxLine).filter(Boolean), card)
+  if (conflict) return conflict
+  const rel = `inbox-prompts/${id}.linkedin.json`
+  await mkdir(dirname(join(MEMORY_ROOT, rel)), { recursive: true })
+  await writeFile(join(MEMORY_ROOT, rel), `${JSON.stringify(card, null, 2)}\n`)
+  const title = inboxSafe(linkedinTitle(card))
+  const meta = [`action: ${card.action}`, `author: ${inboxSafe(card.authorName)}`, `target: ${card.targetUrl}`, `card: ${rel}`, `why: ${inboxSafe(card.reason)}`, ...chatRefMeta(chat), `src: ${inboxSafe(src) || 'mcp'}`]
+  const line = `- [ ] ${id} | linkedin | ${title} | ${meta.join(' | ')}`
+  const prefix = !text || text.endsWith('\n') ? text : `${text}\n`
+  await mkdir(dirname(JOURNAL_INBOX_FILE), { recursive: true })
+  await writeFile(JOURNAL_INBOX_FILE, `${prefix}${line}\n`)
+  stagedInChat(chat, { id, kind: 'linkedin', title })
+  actionLog.record({
+    action: 'inbox.stage', actor: src, channel: 'inbox', target: id, status: 'ok',
+    summary: `staged a LinkedIn card: ${title}`, why: card.reason,
+    detail: { kind: 'linkedin', action: card.action, target: card.targetUrl, cardFile: rel }, correlationId: id,
+  })
+  log(`inbox ${id}: staged a LinkedIn card from ${src}`)
+  return { id, kind: 'linkedin', status: 'open', line }
+}
+
+// A LinkedIn card as staged, checked against its own line: the target the line
+// names (and dedupe reads) is the one the card opens.
+async function readInboxLinkedin(item) {
+  const rel = item.meta.card || ''
+  if (!/^inbox-prompts\/[A-Za-z]+\d+\.linkedin\.json$/.test(rel)) throw new Error('LinkedIn card is missing its card file')
+  const card = normalizeLinkedinProposal(JSON.parse(await readFile(join(MEMORY_ROOT, rel), 'utf8')))
+  if (card.targetUrl !== item.meta.target) throw new Error('the LinkedIn card and its inbox line name different links')
+  return card
+}
+
+/** Every LinkedIn card in the inbox, newest first (linkedin__list_proposals). */
+async function linkedinInboxHistory() {
+  const text = await readFile(JOURNAL_INBOX_FILE, 'utf8').catch(() => '')
+  return linkedinHistory(text.split('\n').map(parseInboxLine).filter(Boolean))
+}
+
 // Stage a message for the owner to send. The recipient is resolved now, so a
 // handle Messages has never seen or a chat that does not exist fails here and not
 // after the owner has said yes. The text lives in its own file: a message may
 // hold pipes and newlines that one inbox line cannot.
-async function doQueueInboxMessage({ chat = null, to = null, service = null, text, why, src = 'mcp' }) {
+async function doQueueInboxMessage({ chat = null, to = null, service = null, text, why, src = 'mcp', from = null }) {
   if (!apple.enabled) throw new Error('Apple Messages is not enabled on this Totem')
   const body = String(text || '').trim()
   if (!body) throw new Error('text is required')
@@ -6287,10 +6617,11 @@ async function doQueueInboxMessage({ chat = null, to = null, service = null, tex
   const title = `Message ${recipient}: ${preview}${body.length > 60 ? '…' : ''}`
   const meta = [`to: ${inboxSafe(address)}`, `recipient: ${recipient}`, `message: ${rel}`]
   if (target.service && target.service !== 'iMessage') meta.push(`service: ${target.service}`)
-  meta.push(`why: ${inboxSafe(reason)}`, `src: ${inboxSafe(src) || 'mcp'}`)
+  meta.push(`why: ${inboxSafe(reason)}`, ...chatRefMeta(from), `src: ${inboxSafe(src) || 'mcp'}`)
   const line = `- [ ] ${id} | imessage | ${title} | ${meta.join(' | ')}`
   const prefix = !inboxText || inboxText.endsWith('\n') ? inboxText : `${inboxText}\n`
   await writeFile(JOURNAL_INBOX_FILE, `${prefix}${line}\n`)
+  stagedInChat(from, { id, kind: 'imessage', title })
   actionLog.record({
     action: 'inbox.stage', actor: src, channel: 'inbox', target: id, status: 'ok',
     summary: `staged a message to ${recipient}`, why: reason,
@@ -6304,7 +6635,7 @@ async function doQueueInboxMessage({ chat = null, to = null, service = null, tex
 // resolved now, by the same prepareEmail the send uses: the account, recipients,
 // subject and reply threading. The finished email is a JSON file, because a body
 // holds pipes and newlines one inbox line cannot.
-async function doQueueInboxEmail({ email, reason, src }) {
+async function doQueueInboxEmail({ email, reason, src, chat = null }) {
   const { id, text: inboxText } = await nextInboxId()
   const rel = `inbox-prompts/${id}.email.json`
   const full = join(MEMORY_ROOT, rel)
@@ -6313,10 +6644,11 @@ async function doQueueInboxEmail({ email, reason, src }) {
   const first = email.to[0]
   const recipient = inboxSafe(first.name || first.email) + (email.to.length > 1 ? ` +${email.to.length - 1}` : '')
   const title = `Email ${recipient}: ${inboxSafe(email.subject).slice(0, 70)}`
-  const meta = [`account: ${inboxSafe(email.account)}`, `recipient: ${recipient}`, `email: ${rel}`, `why: ${inboxSafe(reason)}`, `src: ${inboxSafe(src) || 'mcp'}`]
+  const meta = [`account: ${inboxSafe(email.account)}`, `recipient: ${recipient}`, `email: ${rel}`, `why: ${inboxSafe(reason)}`, ...chatRefMeta(chat), `src: ${inboxSafe(src) || 'mcp'}`]
   const line = `- [ ] ${id} | email | ${title} | ${meta.join(' | ')}`
   const prefix = !inboxText || inboxText.endsWith('\n') ? inboxText : `${inboxText}\n`
   await writeFile(JOURNAL_INBOX_FILE, `${prefix}${line}\n`)
+  stagedInChat(chat, { id, kind: 'email', title })
   actionLog.record({
     action: 'inbox.stage', actor: src, channel: 'inbox', target: id, status: 'ok',
     summary: `staged an email to ${recipient}: ${email.subject}`, why: reason,
@@ -6326,10 +6658,16 @@ async function doQueueInboxEmail({ email, reason, src }) {
   return { id, kind: 'email', account: email.account, to: email.to.map((x) => x.email), subject: email.subject, status: 'open' }
 }
 
-async function readInboxEmail(item) {
+// The staged email as written, with no checks: what the screen and the hold
+// still read when the account behind it has gone.
+async function readInboxEmailFile(item) {
   const rel = item.meta.email || ''
   if (!/^inbox-prompts\/[A-Za-z]+\d+\.email\.json$/.test(rel)) throw new Error('email proposal is missing its email file')
-  const email = JSON.parse(await readFile(join(MEMORY_ROOT, rel), 'utf8'))
+  return JSON.parse(await readFile(join(MEMORY_ROOT, rel), 'utf8'))
+}
+
+async function readInboxEmail(item) {
+  const email = await readInboxEmailFile(item)
   // The account must still be connected; a removed one fails here, not mid-send.
   email.account = gmail.requireAccount(email.account)
   if (!email.to?.length || !email.subject || !email.body) throw new Error('the staged email is incomplete')
@@ -6362,7 +6700,7 @@ async function readInboxCommand(item) {
 // Stage a heavy-work prompt as a confirm-only proposal. Ids continue the same
 // P<N> sequence as every other source, counting resolved lines too so a number is
 // never reused.
-async function doQueueInboxPrompt({ title, prompt, provider, model = null, effort = null, explanation = '', why = '', src = 'mcp' }) {
+async function doQueueInboxPrompt({ title, prompt, provider, model = null, effort = null, explanation = '', why = '', src = 'mcp', chat = null }) {
   const cleanTitle = inboxSafe(title)
   if (!cleanTitle) throw new Error('title is required')
   const body = String(prompt ?? '').trim()
@@ -6397,10 +6735,12 @@ async function doQueueInboxPrompt({ title, prompt, provider, model = null, effor
   meta.push(`prompt: ${rel}`)
   meta.push(`what: ${inboxSafe(what)}`)
   meta.push(`why: ${inboxSafe(reason)}`)
+  meta.push(...chatRefMeta(chat))
   meta.push(`src: ${inboxSafe(src) || 'mcp'}`)
   const line = `- [ ] ${id} | prompt | ${cleanTitle} | ${meta.join(' | ')}`
   const prefix = !text || text.endsWith('\n') ? text : `${text}\n`
   await writeFile(JOURNAL_INBOX_FILE, `${prefix}${line}\n`)
+  stagedInChat(chat, { id, kind: 'prompt', title: cleanTitle })
   const runLabel = `${resolved}${chosenModel ? `/${chosenModel}` : ''}${chosenEffort ? ` (${chosenEffort})` : ''}`
   actionLog.record({
     action: 'inbox.stage', actor: src, channel: 'inbox', target: id, status: 'ok',
@@ -6418,7 +6758,12 @@ async function doQueueInboxPrompt({ title, prompt, provider, model = null, effor
 // Accept or deny one open proposal: do the side effect (accept only), then flip
 // its inbox.md line to "- [x]" with a stamped note. The id+status guard makes
 // this idempotent — once resolved, a repeat for the same id is rejected.
-async function doResolveInboxItem({ id, action, actor = 'ethan', approvedVia = null }) {
+// `authorize(item)` is the dashboard's approval gate (auth/approval-code.mjs); it
+// runs once the proposal is read, because how much proof it takes depends on it.
+// `digest` is the one the dashboard displayed (readInboxItems): a proposal whose
+// staged file changed since is refused, not approved unseen.
+// `note` is the owner's word to the chat that staged it, sent with the outcome.
+async function doResolveInboxItem({ id, action, actor = OWNER_ACTOR, approvedVia = null, authorize = null, digest = null, note: ownerNote = '' }) {
   if (!/^[A-Za-z]+\d+$/.test(id || '')) throw new Error('bad proposal id')
   if (action !== 'accept' && action !== 'deny' && action !== 'draft') throw new Error('action must be accept, deny or draft')
   const text = await readFile(JOURNAL_INBOX_FILE, 'utf8').catch(() => '')
@@ -6427,7 +6772,7 @@ async function doResolveInboxItem({ id, action, actor = 'ethan', approvedVia = n
     const p = parseInboxLine(l)
     return p && p.id === id && p.status === 'open'
   })
-  if (idx === -1) throw new Error(`proposal ${id} is not open (already resolved or unknown)`)
+  if (idx === -1) throw Object.assign(new Error(`proposal ${id} is not open (already resolved or unknown)`), { status: 409, code: 'PROPOSAL_NOT_OPEN' })
   const item = parseInboxLine(lines[idx])
   // Words sent to another person in the owner's name: only his own click in the
   // dashboard sends them, never an agent holding an approval session.
@@ -6442,16 +6787,78 @@ async function doResolveInboxItem({ id, action, actor = 'ethan', approvedVia = n
   if (item.kind === 'prompt' && action === 'accept' && approvedVia !== 'dashboard') {
     throw new Error('A prompt proposal is opened in T3 Code from the Totem dashboard (Inbox). Ask the owner to accept it there.')
   }
+  if (item.kind === 'away' && action === 'accept' && approvedVia !== 'dashboard') throw new Error('An away proposal is accepted only by the owner, in the Totem dashboard (Inbox).')
+  // "Mark done" says the owner did it on LinkedIn; only he can say that.
+  if (item.kind === 'linkedin' && action === 'accept' && approvedVia !== 'dashboard') throw new Error('A LinkedIn card is marked done only by the owner, in the Totem dashboard (Inbox).')
   if (action === 'draft' && item.kind !== 'email') throw new Error('only an email proposal can be saved as a draft')
+  let proof = null
+  if (authorize) {
+    try {
+      proof = await authorize(item)
+    } catch (e) {
+      actionLog.record({
+        action: `inbox.${action}`, actor: actor || OWNER_ACTOR, channel: 'inbox', target: id, status: 'denied',
+        summary: `refused: ${action} of ${item.kind} proposal "${item.title}" without the owner's proof`,
+        error: e?.message || String(e), correlationId: id, detail: { code: e?.code || null },
+      })
+      throw e
+    }
+  }
+  // Read once: what is screened, compared and checked for a hold is what is sent.
+  const loaded = await loadInboxProposal(item)
+  if (action !== 'deny') {
+    const refuse = (code, message, status) => {
+      actionLog.record({
+        action: `inbox.${action}`, actor: actor || OWNER_ACTOR, channel: 'inbox', target: id, status: 'denied',
+        summary: `refused: ${action} of ${item.kind} proposal "${item.title}": ${message}`, correlationId: id, detail: { code },
+      })
+      throw Object.assign(new Error(message), { status, code })
+    }
+    // What could not be read when the card was shown is never read again to be sent.
+    if (loaded.error) refuse('PROPOSAL_UNREADABLE', `This proposal could not be read (${loaded.error.message || loaded.error}), so it cannot be accepted. Ask for it to be staged again.`, 409)
+    const hidden = hiddenControlReason(loaded.parts)
+    if (hidden) refuse('HIDDEN_CHARACTER', `refused: ${hidden}`, 422)
+    if (approvedVia === 'dashboard' && !digest) {
+      refuse('CLIENT_TOO_OLD', 'This app or page is too old to approve proposals safely. Update the app, or reload the dashboard, and try again.', 409)
+    }
+    if (approvedVia === 'dashboard' && digest !== loaded.digest) {
+      refuse('PROPOSAL_CHANGED', 'This proposal changed since you saw it, or this page is out of date. Reload the Inbox and read it again.', 409)
+    }
+    // A hold is lifted only by the owner's "Show anyway" (POST /api/inbox/release).
+    const held = await approvalDenials.holdFor({ fingerprint: loaded.fingerprint, id })
+    if (held) refuse('HELD', heldMessage(held), 409)
+  }
   const p = localDateParts()
   const today = `${p.year}-${p.month}-${p.day}`
   const startedAt = Date.now()
+  // Written before the side effect starts: a restart from here on ends it as
+  // `uncertain`, not as a proposal still open for a second send.
+  if (action !== 'deny') await approvalInflight.begin({ key: id, id, kind: item.kind, action, title: item.title })
   let note
+  let dispatched = false
   try {
-    note = action === 'deny' ? `skipped ${today}` : await actionInboxItem(item, today, actor, action)
+    note = action === 'deny' ? `skipped ${today}` : await actionInboxItem(item, today, actor, action, {
+      value: loaded.value,
+      dispatching: () => { dispatched = true },
+    })
   } catch (e) {
+    // Gmail or Messages may have acted before the reply was lost: settle it as
+    // uncertain, so it is neither reported failed nor left open to send twice.
+    if (dispatched) {
+      const settled = settleInboxLine(lines.join('\n'), id, `uncertain ${today}: ${UNCERTAIN_LOST_NOTE}`)
+      if (settled !== null) await writeFile(JOURNAL_INBOX_FILE, settled)
+      await approvalInflight.end(id).catch(() => {})
+      actionLog.record({
+        action: `inbox.${action}`, actor: 'system', channel: 'inbox', target: id, status: 'uncertain',
+        summary: `${item.kind} proposal "${item.title}" may or may not have gone out: ${UNCERTAIN_LOST_NOTE}`,
+        error: e?.message || String(e), startedAt, correlationId: id,
+      })
+      tellInboxChat(item, { action, note: ownerNote, stamp: e?.message || '', uncertain: true, tell: approvedVia === 'dashboard' })
+      throw Object.assign(new Error(`${id} may or may not have gone out (${e?.message || e}). It is marked uncertain: check before retrying.`), { status: 409, code: 'UNCERTAIN' })
+    }
+    await approvalInflight.end(id).catch(() => {})
     actionLog.record({
-      action: `inbox.${action}`, actor: actor || 'ethan', channel: 'inbox', target: id, status: 'error',
+      action: `inbox.${action}`, actor: actor || OWNER_ACTOR, channel: 'inbox', target: id, status: 'error',
       summary: `${action} of ${item.kind} proposal "${item.title}" failed`,
       why: item.meta?.why || null, error: e?.message || String(e), startedAt, correlationId: id,
     })
@@ -6459,19 +6866,35 @@ async function doResolveInboxItem({ id, action, actor = 'ethan', approvedVia = n
   }
   lines[idx] = `${lines[idx].replace('- [ ]', '- [x]')} | ${note}`
   await writeFile(JOURNAL_INBOX_FILE, lines.join('\n'))
+  if (action !== 'deny') await approvalInflight.end(id)
+  // His own no, from the dashboard, is remembered for a week, so the same
+  // proposal does not come back and ask again. A denial through an MCP session
+  // or Totem's own housekeeping is not his.
+  if (action === 'deny' && approvedVia === 'dashboard') {
+    await approvalDenials.record({ fingerprint: loaded.fingerprint, id, kind: item.kind, title: item.title })
+  }
   actionLog.record({
     action: `inbox.${action}`,
-    actor: actor || 'ethan',
+    actor: actor || OWNER_ACTOR,
     channel: 'inbox',
     target: id,
     status: action === 'deny' ? 'denied' : 'ok',
     summary: `${action === 'deny' ? 'denied' : action === 'draft' ? 'saved as draft' : 'accepted'} ${item.kind} proposal "${item.title}" → ${note}`,
     why: item.meta?.why || null,
-    detail: { kind: item.kind, destination: item.destination, what: item.meta?.what || null, approvedVia: approvedVia || 'dashboard' },
+    detail: { kind: item.kind, destination: item.destination, what: item.meta?.what || null, approvedVia: approvedVia || 'dashboard', ...(proof ? { proof } : {}) },
     startedAt,
     correlationId: id,
   })
+  // The chat that asked, if one did: its card always; its agent only of the
+  // owner's own decision, not an agent's under an approval session (that agent
+  // already knows what it did).
+  tellInboxChat(item, { action, note: ownerNote, stamp: note, tell: approvedVia === 'dashboard' })
   return { ok: true, id, action, note }
+}
+
+// Off the inbox queue: starting the chat's turn never holds up the next decision.
+function tellInboxChat(item, outcome) {
+  inboxOutcomes.report(item, outcome).catch((e) => log(`inbox ${item.id}: telling its chat failed`, e?.message || e))
 }
 
 function redactArg(arg) {
@@ -6670,7 +7093,7 @@ function cleanMcpId(id = '') {
   return /^[A-Za-z0-9_-]+$/.test(s) ? s : ''
 }
 
-function normalizeMcpServer(raw = {}) {
+function normalizeMcpServer(raw = {}, id = '') {
   const enabled = raw.enabled !== false
   const name = raw.name ? { name: String(raw.name).trim() } : {}
   const headers = raw.headers && typeof raw.headers === 'object' && !Array.isArray(raw.headers)
@@ -6680,10 +7103,14 @@ function normalizeMcpServer(raw = {}) {
     ? Object.fromEntries(Object.entries(raw.env).filter(([k, v]) => k && v != null).map(([k, v]) => [String(k), String(v)]))
     : undefined
   if (raw.url) {
+    const oauth = normalizeOAuthRegistration(raw.oauth)
+    const route = serverRoute(id, raw)
     return {
       transport: 'http',
       url: String(raw.url),
       ...(headers && Object.keys(headers).length ? { headers } : {}),
+      ...(oauth ? { oauth } : {}),
+      ...(route ? { route } : {}),
       ...name,
       enabled,
     }
@@ -6766,7 +7193,7 @@ async function readMcpManifest() {
     const servers = {}
     for (const [rawId, rawServer] of Object.entries(raw.servers || {})) {
       const id = cleanMcpId(rawId)
-      const server = normalizeMcpServer(rawServer)
+      const server = normalizeMcpServer(rawServer, id)
       if (id && server) servers[id] = server
     }
     return {
@@ -6894,13 +7321,15 @@ function stripManagedCodexServers(text, ids) {
   return kept.join('\n').trimEnd()
 }
 
-async function syncCodexMcp(manifest, instance = instanceFor('codex')) {
+// Rewrites the managed block to hold exactly `manifest`, and strips those ids (and
+// any in `strip`) where they sit outside it.
+async function syncCodexMcp(manifest, instance = instanceFor('codex'), { strip = [] } = {}) {
   const path = instanceMcpSource(instance)
   let existing = ''
   try { existing = await readFile(path, 'utf8') } catch {}
   const backup = await backupFileIfExists(path)
   const ids = new Set(Object.keys(manifest.servers || {}))
-  const base = stripManagedCodexServers(existing, ids)
+  const base = stripManagedCodexServers(existing, new Set([...ids, ...strip]))
   const next = `${base}${base ? '\n\n' : ''}${codexMcpBlock(manifest)}`
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, next)
@@ -6983,8 +7412,7 @@ async function syncClaudeMcp(manifest, instance = instanceFor('claude')) {
   }
 }
 
-// Only enabled servers are pushed to providers; a disabled connection is
-// actively removed from each provider on toggle-off (see setMcpConnectionEnabled).
+// Drops connections the owner switched off from a manifest.
 function enabledServersManifest(manifest) {
   const servers = Object.fromEntries(
     Object.entries(manifest.servers || {}).filter(([, s]) => s.enabled !== false),
@@ -7014,15 +7442,12 @@ async function runProviderSync(manifest, providerIds) {
 }
 
 async function syncMcpProviders(providerIds = instanceList().map((i) => i.id)) {
-  const manifest = await readMcpManifest()
-  if (!Object.keys(manifest.servers || {}).length) throw new Error('No MCP connections configured yet; add one first')
-  const out = await runProviderSync(manifest, providerIds)
+  const out = await runProviderSync(await providerManifest(), providerIds)
   return buildMcpSettings({ synced: out })
 }
 
-// Providers a manifest change should propagate to: everything enabled in the
-// Providers tab (falling back to all). This is what makes "enable once → works
-// everywhere" hold — one connection lands in every active provider's config.
+// Providers a manifest change is synced to: everything enabled in the Providers
+// tab (falling back to all).
 async function targetSyncProviders() {
   const cfg = await readProviderConfig()
   return cfg.enabledProviders?.length ? cfg.enabledProviders : PROVIDER_IDS
@@ -7048,6 +7473,17 @@ function gatewayManifest() {
   return { version: 1, importedFrom: null, updatedAt: new Date().toISOString(), servers: { [GATEWAY_ID]: gatewayServerSpec() } }
 }
 
+// What a provider's own config holds in a mode: the gateway alone, or nothing.
+// Never the manifest's servers: the gateway reads those itself, so adding,
+// toggling or removing a connection needs no provider to list it. Writing the
+// manifest into Codex's managed block replaced the gateway there, and Codex
+// chats lost every Totem tool. Reads the stored mode, not MCP_MODE, which is
+// 'off' until the config is first read.
+async function providerManifest() {
+  const { mcpMode } = await readProviderConfig()
+  return normalizeMcpMode(mcpMode) === 'gateway' ? gatewayManifest() : { version: 1, servers: {} }
+}
+
 // Switch a set of providers to gateway mode: strip every individual app server
 // from each provider's config, then register the one gateway entry. The gateway
 // itself still talks to those apps — they just stop being wired per-provider.
@@ -7059,7 +7495,7 @@ async function applyGatewayMode(providers) {
   for (const provider of providers) {
     try {
       for (const id of realIds) {
-        try { await removeProviderServer(provider, id, manifest) } catch {}
+        try { await removeProviderServer(provider, id, gw) } catch {}
       }
       const [res] = await runProviderSync(gw, [provider])
       out.push(res || { provider, ok: false, message: 'no sync result' })
@@ -7249,12 +7685,13 @@ async function oauthDiscover(server) {
 }
 
 // RFC 7591 dynamic client registration — a public (PKCE, no-secret) client.
-async function oauthRegisterClient(endpoint, redirectUri, scope) {
+async function oauthRegisterClient(endpoint, redirectUri, scope, registration) {
   const r = await fetch(endpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({
-      client_name: 'Totem Gateway',
+      client_name: registration?.clientName || 'Totem Gateway',
+      ...(registration?.softwareId ? { software_id: registration.softwareId } : {}),
       redirect_uris: [redirectUri],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
@@ -7266,6 +7703,10 @@ async function oauthRegisterClient(endpoint, redirectUri, scope) {
   const j = await r.json()
   if (!j.client_id) throw new Error('registration returned no client_id')
   return { clientId: j.client_id, clientSecret: j.client_secret || '' }
+}
+
+function sameRegistration(a, b) {
+  return (a?.clientName || '') === (b?.clientName || '') && (a?.softwareId || '') === (b?.softwareId || '')
 }
 
 async function saveGatewayToken(id, token) {
@@ -7295,21 +7736,26 @@ async function startGatewayOAuth({ id, clientId, clientSecret } = {}) {
 
   let cid = String(clientId || '').trim()
   let csec = String(clientSecret || '').trim()
+  let registration
   if (!cid) {
     // Re-authenticating (e.g. to widen scopes): reuse the client credentials we
     // already stored so the user doesn't have to re-paste them for providers
     // without dynamic registration (GitHub, etc.).
+    // A client registered under another name or software_id keeps that one (T3
+    // Code signs it into the client id), so a changed `oauth` registers afresh.
     const existing = await readGatewayToken(sid)
-    if (existing?.clientId) {
+    if (existing?.clientId && sameRegistration(existing.registration, server.oauth)) {
       cid = existing.clientId
       csec = existing.clientSecret || ''
+      registration = existing.registration
     }
   }
   if (!cid) {
     if (disco.registrationEndpoint) {
-      const reg = await oauthRegisterClient(disco.registrationEndpoint, redirectUri, scope)
+      const reg = await oauthRegisterClient(disco.registrationEndpoint, redirectUri, scope, server.oauth)
       cid = reg.clientId
       csec = reg.clientSecret
+      registration = server.oauth
     } else {
       const e = new Error(`${connectionLabel(sid)} doesn’t support automatic app registration. Create an OAuth app in its developer console with redirect URI ${redirectUri}, then paste its client ID (and secret, if any).`)
       e.code = 'needs-client-credentials'
@@ -7335,6 +7781,7 @@ async function startGatewayOAuth({ id, clientId, clientSecret } = {}) {
   gatewayOAuthSessions.set(state, {
     id: sid, verifier, redirectUri, scope,
     tokenEndpoint: disco.tokenEndpoint, clientId: cid, clientSecret: csec, resource: disco.resource,
+    ...(registration ? { registration } : {}),
     createdAt: Date.now(),
   })
 
@@ -7385,6 +7832,7 @@ async function completeGatewayOAuth(query) {
     tokenEndpoint: sess.tokenEndpoint,
     clientId: sess.clientId,
     clientSecret: sess.clientSecret,
+    ...(sess.registration ? { registration: sess.registration } : {}),
     scope: sess.scope,
     accessToken: tok.access_token,
     refreshToken: tok.refresh_token || '',
@@ -7434,7 +7882,7 @@ async function addMcpConnection(body = {}) {
   const manifest = await readMcpManifest()
   const next = { ...manifest, servers: { ...manifest.servers, [built.id]: built.server } }
   await persistManifest(next)
-  const synced = await runProviderSync(next, await targetSyncProviders())
+  const synced = await runProviderSync(await providerManifest(), await targetSyncProviders())
   return buildMcpSettings({ verify: false, synced, added: built.id })
 }
 
@@ -7448,11 +7896,11 @@ async function setMcpConnectionEnabled(body = {}) {
   const providers = await targetSyncProviders()
   let synced
   if (enabled) {
-    synced = await runProviderSync(next, providers)
+    synced = await runProviderSync(await providerManifest(), providers)
   } else {
     synced = []
     for (const provider of providers) {
-      try { synced.push(await removeProviderServer(provider, id, next)) }
+      try { synced.push(await removeProviderServer(provider, id, await providerManifest())) }
       catch (e) { synced.push({ provider, ok: false, message: String(e.message || e) }) }
     }
   }
@@ -7467,16 +7915,19 @@ async function removeMcpConnection(body = {}) {
   delete servers[id]
   const next = { ...manifest, servers }
   await persistManifest(next)
+  await setConnectionIcon(id, null).catch((e) => log('connection icon cleanup failed', e?.message || e))
   const providers = await targetSyncProviders()
   const synced = []
   for (const provider of providers) {
-    try { synced.push(await removeProviderServer(provider, id, next)) }
+    try { synced.push(await removeProviderServer(provider, id, await providerManifest())) }
     catch (e) { synced.push({ provider, ok: false, message: String(e.message || e) }) }
   }
   return buildMcpSettings({ verify: false, synced, removed: id })
 }
 
 // Best-effort removal of a single server id from one provider's config.
+// `manifest` is what the provider should still hold (providerManifest()):
+// Codex's managed block is rewritten whole, so it is rewritten to that.
 async function removeProviderServer(provider, id, manifest) {
   const providerId = normalizeProviderId(provider, '')
   const instance = instanceFor(providerId)
@@ -7493,8 +7944,7 @@ async function removeProviderServer(provider, id, manifest) {
     return { provider: instance.id, ok: true, source: path, message: `Removed ${id}` }
   }
   if (instance?.driver === 'codex') {
-    // Rewriting the managed block from the (already-pruned) manifest drops the id.
-    return await syncCodexMcp(enabledServersManifest(manifest), instance)
+    return await syncCodexMcp(enabledServersManifest(manifest), instance, { strip: [id] })
   }
   if (instance?.driver === 'opencode') {
     const path = join(homedir(), '.config', 'opencode', 'opencode.jsonc')
@@ -7940,7 +8390,11 @@ async function codexGatewayApprovalArgs(instance) {
   try { servers = parseCodexMcpConfig(await readFile(instanceMcpSource(instance), 'utf8')) } catch { return [] }
   return [GATEWAY_ID, ...LEGACY_GATEWAY_IDS]
     .filter((id) => servers[id]?.command || servers[id]?.url)
-    .flatMap((id) => ['-c', `mcp_servers.${id}.default_tools_approval_mode="approve"`])
+    // Codex hands a stdio MCP server only a few environment variables; the run
+    // token must be named for the gateway to say which chat run is calling
+    // (x-totem-run). Never on a url server: Codex refuses to start ("env_vars is
+    // not supported for streamable_http").
+    .flatMap((id) => ['-c', `mcp_servers.${id}.default_tools_approval_mode="approve"`, ...(servers[id]?.command ? ['-c', `mcp_servers.${id}.env_vars=["TOTEM_RUN_TOKEN"]`] : [])])
 }
 
 async function readMcpConnections(providerId) {
@@ -8069,7 +8523,7 @@ async function serveStatic(req, res) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })
       return res.end(idx)
     } catch {
-      return sendText(res, 404, 'dashboard not built — run: cd web && npm install && npm run build')
+      return sendText(res, 404, 'dashboard not built — run: cd web && pnpm install && pnpm run build')
     }
   }
 }
@@ -8078,6 +8532,8 @@ async function serveStatic(req, res) {
 // handler awaited forever and the client saw a hung request rather than an error.
 function readJsonBody(req, maxBytes = 2e6) {
   return new Promise((resolve, reject) => {
+    // Decoded as a stream, so a character split across two chunks stays whole.
+    req.setEncoding('utf8')
     let body = ''
     let over = false
     req.on('data', (d) => {
@@ -8146,13 +8602,21 @@ const chatFiles = createFileAccess({
 // Chat projects (chat/projects.mjs): shared instructions, memory and files.
 const CHAT_PROJECTS_DIR = process.env.CHAT_PROJECTS_DIR || join(HERE, 'data', 'chat-projects')
 const projectStore = createProjectStore({ dir: CHAT_PROJECTS_DIR })
+// The icon the owner picked for each connection (connections/icons.mjs).
+const connectionIcons = createConnectionIconStore({ file: process.env.CONNECTION_ICONS_FILE || join(HERE, 'data', 'connection-icons.json') })
+/** Uploads something other than a chat message keeps: project files and pictures, connection icons. */
+async function keptUploadIds() {
+  const ids = await projectStore.fileIds()
+  for (const id of await connectionIcons.imageIds()) ids.add(id)
+  return ids
+}
 const threadStore = createThreadStore({
   dir: THREADS_DIR,
   log,
   // A deleted thread takes its attachments with it, except those a project
   // keeps: a file shared into a project outlives the chat it arrived in.
   onDelete: async (thread) => {
-    const kept = await projectStore.fileIds().catch(() => new Set())
+    const kept = await keptUploadIds().catch(() => new Set())
     const drop = (id) => (kept.has(id) ? null : chatUploads.remove(id))
     for (const m of thread.messages || []) {
       for (const a of m.attachments || []) await drop(a.id)
@@ -8165,20 +8629,26 @@ const threadStore = createThreadStore({
 const chatRuns = createChatRuns({ log, onEnd: (run) => drainChatQueue(run.threadId, run.outcome || (run.status === 'stopped' ? 'stopped' : 'error')) })
 
 // ---- Agent browser ------------------------------------------------------------
-// T3 Code's collaborative browser, for Totem's agents: headless Chromium driven
-// by Playwright (browser/manager.mjs) behind T3's `preview_*` tool names
-// (browser/tools.mjs). Each chat run gets a random token and an HTTP MCP server
-// at /agent-mcp bound to its thread, the way T3 hands each session its own
-// `t3-code` server: the browser session is the chat's, so tabs and logins carry
-// across turns, and every page change streams a frame to the chat (`browser`
-// events) so the owner watches what the agent is looking at.
+// T3 Code's collaborative browser, for Totem's agents: a headless Chrome or
+// Chromium (browser/pick.mjs) driven by Playwright (browser/manager.mjs) behind
+// T3's `preview_*` tool names (browser/tools.mjs). Each chat run gets a random
+// token and an HTTP MCP server at /agent-mcp bound to its thread, the way T3
+// hands each session its own `t3-code` server: the browser session is the
+// chat's, so tabs and logins carry across turns. Every page change sends a
+// frame to the chat (`browser` events), and an open panel watches the page live
+// over its own socket (browser/socket.mjs), where the owner can drive it too.
 const BROWSER_ENABLED = String(process.env.BROWSER_ENABLED ?? 'true').toLowerCase() !== 'false'
+// A window on the host's screen instead of headless: for a host whose sites'
+// bot checks still refuse headless Chrome. Needs a display (macOS under launchd
+// in the owner's GUI session has one); off by default.
+const BROWSER_HEADED = String(process.env.BROWSER_HEADED ?? '').toLowerCase() === 'true'
 const BROWSER_MCP_URL = `http://127.0.0.1:${BRIDGE_PORT}/agent-mcp`
 const BROWSER_MCP_NAME = 'totem-browser'
 const agentBrowserAccess = new Map() // token → { threadId, push, browser, ask, holds }
 const browserFrames = new Map() // threadId → the latest frame, for a viewer that arrives late
 const browserManager = createBrowserManager({
   log,
+  headed: BROWSER_HEADED,
   onFrame: (threadId, f) => {
     const frame = { tabId: f.tabId, url: f.url, title: f.title, image: `data:image/jpeg;base64,${f.jpeg.toString('base64')}`, at: Date.now() }
     browserFrames.delete(threadId)
@@ -8188,7 +8658,25 @@ const browserManager = createBrowserManager({
   },
 })
 const browserReady = () => BROWSER_ENABLED && browserManager.available()
-const BROWSER_TOOL_NAMES = BROWSER_TOOLS.map((t) => t.name)
+// The newest picture of a chat's browser: the last action's frame, or the live
+// stream's when someone has watched since (the iPhone app and a late viewer read this).
+function latestBrowserFrame(threadId) {
+  const shot = browserFrames.get(threadId) || null
+  const live = browserManager.latestFrame(threadId)
+  if (!live || (shot && shot.at >= live.at)) return shot
+  return { tabId: live.tabId, url: live.url, title: live.title, image: `data:image/jpeg;base64,${live.jpeg.toString('base64')}`, at: live.at }
+}
+
+// LinkedIn, read-only through this browser (linkedin/reader.mjs, docs/linkedin.md).
+// The sign-in is a `*-tokens.json` file, under the same deny rules as the others.
+const linkedinReader = createLinkedinReader({
+  browser: browserManager,
+  available: browserReady,
+  file: process.env.LINKEDIN_SESSION_FILE || join(HERE, 'data', 'linkedin-tokens.json'),
+  runs: sourceRuns,
+  maxPagesPerHour: Number(process.env.LINKEDIN_MAX_PAGES_PER_HOUR) || 20,
+  log,
+})
 
 /** A run's key to its chat's browser; revoke() when the run ends. */
 function grantBrowserAccess(threadId, push) {
@@ -8203,14 +8691,54 @@ function grantBrowserAccess(threadId, push) {
  * `ask_questions` (chat/questions.mjs) when `ask` is given. `holds` stop the
  * run's clock while a question waits; the streamers read it off the grant.
  */
-function grantChatAccess(threadId, push, { browser = false, ask = null, handoff = null } = {}) {
+function grantChatAccess(threadId, push, { browser = false, ask = null, handoff = null, change = null, visual = null, runId = null, inboxCard = null } = {}) {
   const withBrowser = browser && browserReady()
-  if (!withBrowser && !ask) return null
+  if (!withBrowser && !ask && !change) return null
   const token = randomBytes(24).toString('base64url')
   const holds = createHolds()
   const handOver = withBrowser ? handoff : null
-  agentBrowserAccess.set(token, { threadId, push, browser: withBrowser, ask, handoff: handOver, holds })
-  return { token, url: BROWSER_MCP_URL, browser: withBrowser, ask: !!ask, handoff: !!handOver, holds, revoke: () => agentBrowserAccess.delete(token) }
+  // `runId` and `inboxCard`: a proposal this run stages through the gateway names
+  // its chat (the gateway sends the token as x-totem-run) and joins this reply as
+  // a card (chat/inbox-outcome.mjs).
+  // `visual`: html_render's callback (chat/visuals.mjs), with html_preview. Only
+  // beside the browser: a chart page can carry data out by navigating itself,
+  // which is no new way out for a run that has the browser, and would be one for
+  // a run with no network of its own (Codex's sandbox). Neither launches anything until called.
+  const charts = withBrowser ? visual : null
+  agentBrowserAccess.set(token, { threadId, push, browser: withBrowser, ask, handoff: handOver, change, visual: charts, holds, runId, inboxCard })
+  return { token, url: BROWSER_MCP_URL, browser: withBrowser, ask: !!ask, handoff: !!handOver, change: !!change, visual: !!charts, holds, revoke: () => agentBrowserAccess.delete(token) }
+}
+
+// Changing Totem from a chat (dev/change.mjs): change_start and change_finish on
+// the same endpoint. The agent works in a fresh worktree off origin/main outside
+// this checkout, and the bridge, running this checkout's code, checks the paths,
+// runs the tests, pushes the branch and opens the PR. Never a merge.
+const CHANGE_WORKTREES_DIR = changeWorktreeRoot()
+const CHANGE_RECORDS_FILE = process.env.CHANGE_RECORDS_FILE || join(HERE, 'data', 'changes.json')
+// Off unless the owner sets CHANGE_FLOW_ENABLED=true (AGENTS.md §4).
+const CHANGE_FLOW_ENABLED = changeFlowEnabled(process.env, { gitCheckout: existsSync(join(HERE, '.git')) })
+const changeFlow = createChangeFlow({
+  liveRoot: HERE, agentCwd: AGENT_CWD, worktreeRoot: CHANGE_WORKTREES_DIR,
+  recordsFile: CHANGE_RECORDS_FILE,
+  run: execRunner({ log }), log,
+  skillText: () => renderSkill('change-totem').then((r) => r.text, () => ''),
+  // No change may carry these: the secrets in Totem's credential files (and
+  // data/*-tokens.json, the MCP manifest's env), the calendar MCP's tokens and
+  // the environment's.
+  secrets: () => collectSecrets({
+    files: [AUTH_FILE, AI_SETTINGS_FILE, process.env.INTEGRATIONS_FILE || join(HERE, 'data', 'integrations.json'), join(homedir(), '.config', 'google-calendar-mcp', 'tokens.json')],
+    dataDir: join(HERE, 'data'),
+    catalog: {
+      secret: MCP_CATALOG.flatMap((c) => (c.fields || []).filter((f) => f.secret === true).map((f) => f.key)),
+      notSecret: MCP_CATALOG.flatMap((c) => (c.fields || []).filter((f) => f.secret === false).map((f) => f.key)),
+    },
+  }),
+})
+// Worktrees whose PR merged or closed, or abandoned without one, go away.
+if (CHANGE_FLOW_ENABLED) {
+  const sweep = () => changeFlow.cleanup().catch((e) => log('change: cleanup failed', e?.message || e))
+  setTimeout(sweep, 60_000).unref()
+  setInterval(sweep, 6 * 60 * 60_000).unref()
 }
 
 // The browser handed to the owner (browser/handoff.mjs): the one waiting in each
@@ -8234,6 +8762,18 @@ const BROWSER_RULES_HANDOFF = browserRules(BROWSER_MCP_NAME, { handoff: true })
 // How long a CLI is told to wait on ask_questions. Past it the call fails and the
 // question is answered as a message instead.
 const QUESTION_CALL_TIMEOUT_MS = 24 * 60 * 60_000
+
+/**
+ * The tools a run's /agent-mcp grant lists. Codex is told to approve exactly
+ * these (browserArgs), and the gateway's `browser` filter (mcp-gateway.mjs) must
+ * pass every name, or Cursor and OpenCode never see it.
+ */
+function agentMcpTools(access) {
+  return [
+    ...(access.browser ? browserToolDescriptors() : []), ...(access.handoff ? [HANDOFF_TOOL_DESCRIPTOR] : []),
+    ...(access.ask ? [ASK_TOOL_DESCRIPTOR] : []), ...(access.change ? CHANGE_TOOL_DESCRIPTORS : []), ...visualToolDescriptors(access),
+  ]
+}
 
 // Agent-side MCP endpoint. Loopback only, never through the tunnel (cloudflared
 // also connects from localhost, so its headers are refused), and only with a
@@ -8263,13 +8803,15 @@ async function handleAgentMcp(req, res) {
       protocolVersion: asked && MCP_SUPPORTED_PROTOCOLS.has(asked) ? asked : MCP_PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: BROWSER_MCP_NAME, version: '1.0.0' },
-      instructions: [access.browser && (access.handoff ? BROWSER_RULES_HANDOFF : BROWSER_RULES), access.ask && QUESTION_RULES].filter(Boolean).join('\n\n'),
+      instructions: [access.browser && (access.handoff ? BROWSER_RULES_HANDOFF : BROWSER_RULES), access.ask && QUESTION_RULES, access.visual && VISUAL_RULES].filter(Boolean).join('\n\n'),
     })
   }
   if (method === 'ping') return ok({})
-  if (method === 'tools/list') return ok({ tools: [...(access.browser ? browserToolDescriptors() : []), ...(access.handoff ? [HANDOFF_TOOL_DESCRIPTOR] : []), ...(access.ask ? [ASK_TOOL_DESCRIPTOR] : [])] })
-  // Calls that wait on the owner: questions, and the browser handed to him.
-  const waitsOnOwner = params?.name === ASK_TOOL ? access.ask : params?.name === HANDOFF_TOOL ? access.handoff : null
+  if (method === 'tools/list') return ok({ tools: agentMcpTools(access) })
+  // Calls that wait on the owner (questions, the browser handed to him) or take
+  // minutes (a change's tests and push) answer as a stream.
+  const waitsOnOwner = params?.name === ASK_TOOL ? access.ask : params?.name === HANDOFF_TOOL ? access.handoff
+    : access.change && CHANGE_TOOL_NAMES.includes(params?.name) ? access.change[params.name] : null
   if (method === 'tools/call' && waitsOnOwner) {
     // The answer can be hours away. The response is a stream so the client has
     // its headers at once, with a comment every so often to keep it open; the
@@ -8291,6 +8833,18 @@ async function handleAgentMcp(req, res) {
     if (!res.destroyed && !res.writableEnded) res.end(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n\n`)
     return
   }
+  // Charts shown inline (chat/visuals.mjs): a preview in the box's Chromium, then the page itself.
+  if (method === 'tools/call' && params?.name === PREVIEW_TOOL && access.visual) {
+    return ok(await previewVisual(params.arguments || {}, { renderPage: browserManager.renderPage }))
+  }
+  if (method === 'tools/call' && params?.name === RENDER_TOOL && access.visual) {
+    try {
+      return ok(await access.visual(params.arguments || {}))
+    } catch (e) {
+      log('chat: html_render failed', e?.message || e)
+      return ok(visualToolError(`The chart could not be shown: ${e?.message || e}`))
+    }
+  }
   if (method === 'tools/call') {
     if (!access.browser) return ok({ content: [{ type: 'text', text: `no such tool here: ${params?.name}` }], isError: true })
     const saveDir = join(CHAT_OUTPUTS_DIR, access.threadId, 'screenshots')
@@ -8304,8 +8858,9 @@ function browserArgs(driver, access) {
   if (!access) return { args: [], env: {} }
   if (driver === 'claude') {
     // `timeout`: a question can wait on the owner for hours (chat/questions.mjs).
-    const config = { mcpServers: { [BROWSER_MCP_NAME]: { type: 'http', url: access.url, headers: { Authorization: `Bearer ${access.token}` }, ...(access.ask || access.handoff ? { timeout: QUESTION_CALL_TIMEOUT_MS } : {}) } } }
-    return { args: ['--mcp-config', JSON.stringify(config), '--allowedTools', `mcp__${BROWSER_MCP_NAME}`], env: {} }
+    const config = { mcpServers: { [BROWSER_MCP_NAME]: { type: 'http', url: access.url, headers: { Authorization: `Bearer ${access.token}` }, ...(access.ask || access.handoff || access.change ? { timeout: QUESTION_CALL_TIMEOUT_MS } : {}) } } }
+    // TOTEM_RUN_TOKEN: the gateway names this run on its calls to /mcp (x-totem-run).
+    return { args: ['--mcp-config', JSON.stringify(config), '--allowedTools', `mcp__${BROWSER_MCP_NAME}`], env: { TOTEM_RUN_TOKEN: access.token } }
   }
   if (driver === 'codex') {
     // The token travels in the environment, not argv (bearer_token_env_var).
@@ -8315,16 +8870,16 @@ function browserArgs(driver, access) {
       args: [
         '-c', `${key}.url="${access.url}"`, '-c', `${key}.bearer_token_env_var="TOTEM_BROWSER_TOKEN"`,
         '-c', `${key}.default_tools_approval_mode="approve"`,
-        ...[...(access.browser ? BROWSER_TOOL_NAMES : []), ...(access.handoff ? [HANDOFF_TOOL] : []), ...(access.ask ? [ASK_TOOL] : [])].flatMap((t) => ['-c', `${key}.tools.${t}.approval_mode="approve"`]),
+        ...agentMcpTools(access).flatMap((t) => ['-c', `${key}.tools.${t.name}.approval_mode="approve"`]),
         // Codex gives an MCP call 60 seconds by default; a question waits on the owner.
-        ...(access.ask || access.handoff ? ['-c', `${key}.tool_timeout_sec=${Math.round(QUESTION_CALL_TIMEOUT_MS / 1000)}`] : []),
+        ...(access.ask || access.handoff || access.change ? ['-c', `${key}.tool_timeout_sec=${Math.round(QUESTION_CALL_TIMEOUT_MS / 1000)}`] : []),
       ],
-      env: { TOTEM_BROWSER_TOKEN: access.token },
+      env: { TOTEM_BROWSER_TOKEN: access.token, TOTEM_RUN_TOKEN: access.token },
     }
   }
   // Cursor and OpenCode reach it through the gateway's `browser` builtin, which
   // reads the run's token from the environment it inherits.
-  return { args: [], env: { TOTEM_BROWSER_TOKEN: access.token, TOTEM_BROWSER_URL: access.url } }
+  return { args: [], env: { TOTEM_BROWSER_TOKEN: access.token, TOTEM_BROWSER_URL: access.url, TOTEM_RUN_TOKEN: access.token } }
 }
 
 // Attachments and screenshots are stored by id only; every copy that leaves the
@@ -8333,8 +8888,8 @@ function signMessage(m) {
   if (!m) return m
   const out = { ...m }
   if (m.attachments) out.attachments = m.attachments.map((a) => ({ ...a, url: chatUploads.urlFor(a.id) }))
-  if (m.parts?.some((p) => p.type === 'image' || p.type === 'file' || p.attachments)) {
-    out.parts = m.parts.map((p) => (p.type === 'image' || p.type === 'file' ? { ...p, url: chatUploads.urlFor(p.uploadId) }
+  if (m.parts?.some((p) => p.type === 'image' || p.type === 'file' || p.type === 'visual' || p.attachments)) {
+    out.parts = m.parts.map((p) => (p.type === 'image' || p.type === 'file' || p.type === 'visual' ? { ...p, url: chatUploads.urlFor(p.uploadId) }
       : p.type === 'questions' && p.attachments ? { ...p, ...answerAttachments(p.attachments) }
       : p.type === 'steer' && p.attachments ? { ...p, attachments: signAttachments(p.attachments) } : p))
   }
@@ -8355,7 +8910,7 @@ function answerAttachments(files) {
 function partUploadIds(m) {
   const ids = []
   for (const p of m.parts || []) {
-    if (p.type === 'image' || p.type === 'file') ids.push(p.uploadId)
+    if (p.type === 'image' || p.type === 'file' || p.type === 'visual') ids.push(p.uploadId)
     if (p.type === 'questions') for (const list of Object.values(p.attachments || {})) for (const a of list) ids.push(a.id)
   }
   return ids
@@ -8420,12 +8975,12 @@ const MODEL_SEEDS = {
       note: 'Fast and strong; the pick for coding and multi-step tasks when Opus is overkill. $2/$10 per MTok.' },
     { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', recommended: true,
       note: 'Fastest and cheapest, and far smarter than Haiku 4.5 (close to Sonnet 5.5 on office and computer-use work, well behind it on agentic coding). Best value for quick chats, summaries, classification, routing, subagents and frequent totems. $0.10/$0.50 per MTok up to 100K-token prompts.' },
-    { id: 'claude-fable-5-1', name: 'Claude Fable 5.1',
-      note: 'Largest and slowest; for the hardest problems. $10/$50 per MTok.' },
+    { id: 'claude-fable-5-2', name: 'Claude Fable 5.2',
+      note: 'Largest and slowest; for the hardest problems, hours-long agent runs and deep research. Defaults to high effort. $8/$40 per MTok.' },
   ],
 }
 // Old threads and settings saved the aliases; read them as what they ran.
-const CLAUDE_ALIASES = { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', fable: 'claude-fable-5-1', haiku: 'claude-haiku-5-5' }
+const CLAUDE_ALIASES = { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', fable: 'claude-fable-5-2', haiku: 'claude-haiku-5-5' }
 // Models taken out of the catalog, and what a saved choice of one runs instead:
 // its own line's successor, never the catalog default (that would quietly turn a
 // cheap Haiku job into an Opus one).
@@ -8434,6 +8989,7 @@ const CLAUDE_SUCCESSORS = {
   'claude-sonnet-5': 'claude-sonnet-5-5',
   'claude-haiku-4-5': 'claude-haiku-5-5',
   'claude-haiku-4-5-20251001': 'claude-haiku-5-5',
+  'claude-fable-5-1': 'claude-fable-5-2',
 }
 /** A Claude id or alias as the current catalog id it stands for. */
 function currentClaudeModel(id) {
@@ -8763,12 +9319,14 @@ const IMAGE_RULES = `IMAGES: When you recommend, compare or describe things that
 // any document its file tools wrote elsewhere — is snapshotted into the chat.
 // Files are the exception: answer in the chat unless a file was asked for or is
 // plainly the better deliverable. A plan, summary or explanation is a reply.
-function filesRule(dir) {
+function filesRule(dir, { visuals = false } = {}) {
   return 'FILES: Answer in the chat itself by default. Plans, summaries, explanations, lists, comparisons and notes are replies, '
     + 'not files, however long. Do not create a file (Markdown or otherwise) unless the owner asks for one ("make a doc", '
     + '"save it as a file", "give me an HTML page", "export a CSV"), or the deliverable only works as a file: something '
     + 'visual or interactive, a spreadsheet-sized table he will download, or a long document he clearly means to keep and '
-    + `reuse outside the chat. When you do make one, save it in ${dir} (create the folder if it is missing): Markdown (.md) for `
+    + 'reuse outside the chat. '
+    + (visuals ? 'A chart, graph or diagram to look at is not a file: show it inline (CHARTS, below) unless he asks for the file. ' : '')
+    + `When you do make one, save it in ${dir} (create the folder if it is missing): Markdown (.md) for `
     + 'documents, one self-contained .html (inline CSS and JS, nothing external it needs to load) for anything visual or '
     + 'interactive, .csv for tables (or .xlsx/.docx/.pptx when he works in Office). He reads this chat from other devices, so a '
     + 'file saved anywhere else on this machine is out of his reach: everything you make for him goes in that folder. He sees '
@@ -8915,12 +9473,22 @@ async function loadChatFiles(attachments) {
   return out
 }
 
+// A memory file is named in a chat's prompt, not pasted (chat/memory-ref.mjs).
+// OpenCode asks before touching a path outside its working folder and
+// `opencode run` cannot ask, so for it a memory file out there comes as its start.
+const memoryStatsFor = (path, driver) => memoryFileStats(path, {
+  tz: MORNING_BRIEFING_TZ,
+  headChars: driver === 'opencode' && outsideDir(path, AGENT_CWD) ? MEMORY_HEAD_CHARS : 0,
+})
+
 // A project chat's shared context (projectBlock in chat/turn.mjs), read fresh
-// each turn: the memory and the file list change between turns.
-// A folder's chat also reads its parent project's, read-only.
-async function chatProjectContext(projectId) {
+// each turn: the memory's summary and the file list change between turns. The
+// memory itself is only named; the agent reads it when the request needs it.
+// A folder's chat also gets its parent project's, read-only.
+// `readOnly` are the files the chat may read but not write (the parent's memory).
+async function chatProjectContext(projectId, driver) {
   const project = validProjectId(projectId) ? await projectStore.get(projectId) : null
-  if (!project) return ''
+  if (!project) return { text: '', readOnly: [] }
   const withPaths = async (list) => {
     const files = []
     for (const f of list) {
@@ -8930,17 +9498,22 @@ async function chatProjectContext(projectId) {
     return files
   }
   const parentProject = project.parentId ? await projectStore.get(project.parentId) : null
+  const memoryOf = (id) => memoryStatsFor(projectStore.memoryPath(id), driver)
   const parent = parentProject
-    ? { project: parentProject, memory: await projectStore.readMemory(parentProject.id), files: await withPaths(parentProject.files) }
+    ? { project: parentProject, memory: await memoryOf(parentProject.id), files: await withPaths(parentProject.files) }
     : null
-  return projectBlock(project, { memory: await projectStore.readMemory(project.id), memoryPath: projectStore.memoryPath(project.id), files: await withPaths(project.files), parent })
+  return {
+    text: projectBlock(project, { memory: await memoryOf(project.id), files: await withPaths(project.files), parent }),
+    readOnly: parentProject ? [projectStore.memoryPath(parentProject.id)] : [],
+  }
 }
 
 function chatPrompt({ thread, userIndex, provider, text, files, voice, fresh, reach = null, project = '' }) {
   const plan = fresh ? { resumeId: null, replay: thread.messages.slice(0, userIndex) } : planHistory(thread, provider, userIndex)
   const extras = [
-    !voice && filesRule(join(CHAT_OUTPUTS_DIR, thread.id)), CHAT_MEMORY_RULES, !voice && WORK_RULES,
-    reach && reachRules(reach), reach?.computerUse && COMPUTER_RULES, reach?.browser && BROWSER_RULES_HANDOFF, reach?.ask && QUESTION_RULES,
+    !voice && filesRule(join(CHAT_OUTPUTS_DIR, thread.id), { visuals: !!reach?.visual }), CHAT_MEMORY_RULES, !voice && WORK_RULES,
+    reach && reachRules(reach), reach?.computerUse && COMPUTER_RULES, reach?.browser && BROWSER_RULES_HANDOFF, reach?.ask && QUESTION_RULES, reach?.change && changeRule(HERE),
+    reach?.visual && VISUAL_RULES,
     !voice && IMAGE_RULES, voice && VOICE_RULES,
   ].filter(Boolean)
   const extraBlock = extras.length ? `${extras.join('\n\n')}\n\n` : ''
@@ -9161,7 +9734,8 @@ async function startChatTurn(body) {
       const m = await chatUploads.meta(id)
       if (m) metas.push({ id: m.id, name: m.name, mime: m.mime, size: m.size, kind: m.kind, ...(m.preview ? { preview: m.preview } : {}) })
     }
-    userMessage = { id: userMessage?.id || randomUUID(), role: 'user', content: text, createdAt: now, ...(metas.length ? { attachments: metas } : {}), ...(voice ? { voice: true } : {}) }
+    const inbox = inboxMarker(body.inbox)
+    userMessage = { id: userMessage?.id || randomUUID(), role: 'user', content: text, createdAt: now, ...(metas.length ? { attachments: metas } : {}), ...(voice ? { voice: true } : {}), ...(inbox ? { inbox } : {}) }
     t.messages.push(userMessage)
     userIndex = t.messages.length - 1
     // A message of his own lets a held queue go again once this reply ends (T3 Code).
@@ -9195,7 +9769,7 @@ async function startChatTurn(body) {
     await projectStore.addFiles(projectId, userMessage.attachments.map((a) => ({ ...a, source: 'chat', threadId })))
       .catch((e) => log('chat: project file add failed', e?.message || e))
   }
-  const projectCtx = shareWithProject ? await chatProjectContext(projectId).catch(() => '') : ''
+  const projectCtx = shareWithProject ? await chatProjectContext(projectId, driver).catch(() => null) : null
   // A totem's own chat knows the totem; every chat knows which totems exist, so
   // it can propose a change to one (totems/core.mjs).
   const totemId = thread.totemId || null
@@ -9204,7 +9778,7 @@ async function startChatTurn(body) {
   const totemList = voice ? [] : (await jobStore.list().catch(() => [])).filter((j) => !j.runner && !j.skillId && String(j.prompt || '').trim())
   const totemJob = totemId ? totemList.find((j) => j.id === totemId) || await jobStore.get(totemId).catch(() => null) : null
   const totemCtx = totemJob
-    ? totemChatBlock({ totem: totemJob, memory: await readTotemMemory(totemId), memoryPath: totemMemoryPath(totemId), recentRuns: (await jobStore.runs({ jobId: totemId, limit: 5 })).reverse() })
+    ? totemChatBlock({ totem: totemJob, memory: await memoryStatsFor(totemMemoryPath(totemId), driver), recentRuns: (await jobStore.runs({ jobId: totemId, limit: 5 })).reverse() })
     : ''
   const totemRule = totemList.length ? `${totemsRule(totemList)}\n\n` : ''
   // This chat's id, and when (rarely) to look at the others through threads__*.
@@ -9215,7 +9789,7 @@ async function startChatTurn(body) {
   const memberJobs = (thread.members || []).map((id) => totemList.find((j) => j.id === id)).filter(Boolean)
   const othersCount = chatSettings.totemsInChat ? totemList.filter((j) => j.id !== totemId && !memberJobs.includes(j)).length : 0
   const groupRule = MCP_MODE === 'gateway' && !voice ? totemsChatRule({ chatId: threadId, members: memberJobs, others: othersCount }) : ''
-  const contextBlock = `${projectCtx}${totemCtx}${totemRule}${groupRule ? `${groupRule}\n\n` : ''}${othersRule}`
+  const contextBlock = `${projectCtx?.text || ''}${totemCtx}${totemRule}${groupRule ? `${groupRule}\n\n` : ''}${othersRule}`
   const needsTitle = !existing?.title || userIndex === 0
   const streamLive = streamingEnabled(provider, config)
   // The browser, computer use and the hour: every dashboard or app chat, never voice.
@@ -9421,6 +9995,24 @@ async function startChatTurn(body) {
         forward({ type: 'approval', approval: { id: part.id, status: statusForDecision(r.decision), decision: r.decision, ...(r.feedback ? { feedback: r.feedback } : {}), decidedAt: Date.now() } })
         return permissionResult(request, r)
       }
+      // change_start / change_finish (dev/change.mjs): the PR card joins the reply.
+      // Stop, or the CLI giving up on the call, ends the work where it stands.
+      const changeSignal = (gone) => AbortSignal.any([signal, gone].filter(Boolean))
+      const changeTools = {
+        [CHANGE_START]: (input, gone) => changeFlow.start(threadId, input, { signal: changeSignal(gone) })
+          .then((r) => ({ content: [{ type: 'text', text: startedForAgent(r) }] }), (e) => ({ content: [{ type: 'text', text: e.message }], isError: true })),
+        [CHANGE_FINISH]: async (input, gone) => {
+          try {
+            const card = await changeFlow.finish(threadId, input, { signal: changeSignal(gone) })
+            forward({ type: 'change', change: card })
+            await save()
+            actionLog.record({ action: 'change.pr', actor: normalizeActor(provider), channel: 'web', target: card.url, status: 'ok', summary: `Opened ${card.url}: ${card.title}`, detail: { branch: card.branch, head: card.head, files: card.files, checks: card.checks.state }, correlationId: assistant.id })
+            return { content: [{ type: 'text', text: finishedForAgent(card) }] }
+          } catch (e) {
+            return { content: [{ type: 'text', text: e.message }], isError: true }
+          }
+        },
+      }
       try {
         // A skill command ($morning, /journal, …) runs the skill rather than chatting.
         const matchedSkill = !body.regenerate && !files.length ? await lookupSkillCommand(text.toLowerCase(), text) : null
@@ -9447,7 +10039,23 @@ async function startChatTurn(body) {
         // Questions for the owner (chat/questions.mjs) ride on the same endpoint;
         // Cursor and OpenCode reach it only through the gateway.
         const canAsk = !voice && (driver === 'claude' || driver === 'codex' || MCP_MODE === 'gateway')
-        browserAccess = grantChatAccess(threadId, push, { browser: reach.browser, ask: canAsk ? askOwner : null, handoff: handOver })
+        // A chart shown inline (chat/visuals.mjs): stored as an upload, added to
+        // this reply where it was called, and saved at once so a reload has it.
+        const showVisual = async (args) => {
+          const made = await storeVisual(args, { uploads: chatUploads })
+          if (made.error) return visualToolError(made.error)
+          forward({ type: 'visual', visual: { ...made.part, url: chatUploads.urlFor(made.part.uploadId) } })
+          await save()
+          return renderedResult(made.part)
+        }
+        browserAccess = grantChatAccess(threadId, push, {
+          browser: reach.browser, ask: canAsk ? askOwner : null, handoff: handOver, change: canAsk && CHANGE_FLOW_ENABLED && access === 'full' ? changeTools : null,
+          visual: canAsk ? showVisual : null,
+          // An inbox proposal this reply stages shows in it as a card (chat/inbox-outcome.mjs).
+          runId: run.id, inboxCard: (card) => { forward({ type: 'inbox', inbox: card }); return save() },
+        })
+        // What the prompt may tell the agent it has: what the grant actually gave.
+        const offered = { ...reach, browser: !!browserAccess?.browser, ask: !!browserAccess?.ask, change: !!browserAccess?.change, visual: !!browserAccess?.visual }
         // Steering (chat/steer.mjs): Claude Code takes the owner's words into the
         // running turn; every other CLI is interrupted and resumed with them.
         const liveSteer = driver === 'claude'
@@ -9468,7 +10076,7 @@ async function startChatTurn(body) {
           // Codex numbers its items per process (item_0, item_1…), so a resumed
           // attempt would reuse the ids of cards already in this reply.
           const tag = attempts++ ? `~${attempts}` : ''
-          let { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, voice, fresh, reach: { ...reach, browser: !!browserAccess?.browser, ask: !!browserAccess?.ask }, project: promptContext })
+          let { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, voice, fresh, reach: offered, project: promptContext })
           if (steers) {
             const note = steerPrompt(steers, { owner: OWNER_NAME || 'Owner', progress: progressNote(assistant) })
             // The session this run started, resumed with the owner's words; without
@@ -9477,7 +10085,7 @@ async function startChatTurn(body) {
               prompt = `${temporalContext()}\n\n${note}`
               resumeId = sessionId
             } else {
-              ({ prompt } = chatPrompt({ thread, userIndex, provider, text: `${text}\n\n${note}`, files, voice, fresh: true, reach: { ...reach, browser: !!browserAccess?.browser, ask: !!browserAccess?.ask }, project: promptContext }))
+              ({ prompt } = chatPrompt({ thread, userIndex, provider, text: `${text}\n\n${note}`, files, voice, fresh: true, reach: offered, project: promptContext }))
               resumeId = null
             }
           }
@@ -9504,8 +10112,10 @@ async function startChatTurn(body) {
               features: reach.computerUse ? ['computer_use'] : [],
               browser: browserAccess,
               // Where the prompt tells it to write: this chat's documents, the owner's memory
-              // (CHAT_MEMORY_RULES), and its project's memory.
+              // (CHAT_MEMORY_RULES), and its project's memory. Claude may read them too, and
+              // a folder's parent memory, which the prompt names but never pastes.
               allowWrite: [join(CHAT_OUTPUTS_DIR, threadId), MEMORY_ROOT, shareWithProject && projectStore.memoryPath(projectId), totemJob && totemMemoryPath(totemId)].filter(Boolean),
+              readOnlyPaths: projectCtx?.readOnly || [],
               // Permission asks come to the owner (chat/approvals.mjs); never on a voice turn.
               approve: voice ? null : askApproval,
               allowRules: (await threadStore.get(threadId).catch(() => null))?.allowedTools || [],
@@ -9531,12 +10141,14 @@ async function startChatTurn(body) {
             signal.removeEventListener('abort', end)
           }
         }
+        // A chart shown inline (chat/visuals.mjs) is an answer even with no words after it.
+        const shownCharts = () => assistant.parts.filter((p) => p.type === 'visual').length
         let { r, resumeId } = await runOnce({ fresh: false })
         // A session the CLI no longer has (cleared history, a different account
         // home) fails fast with nothing said. Start over once with the transcript.
         // Not after a turn that failed (a usage limit): the session was fine, and a
         // fresh start would only send the whole transcript into the same wall.
-        if (resumeId && !r.stopped && !r.turnFailed && !steering.waiting && !(r.result || '').trim() && !assistant.content.trim()) {
+        if (resumeId && !r.stopped && !r.turnFailed && !steering.waiting && !(r.result || '').trim() && !assistant.content.trim() && !shownCharts()) {
           log(`chat: resume of ${provider} session ${resumeId} produced nothing; retrying fresh`)
           sessionId = ''
           ;({ r } = await runOnce({ fresh: true }))
@@ -9551,8 +10163,9 @@ async function startChatTurn(body) {
             cliAgents.cut(p.id)
           }
           const before = assistant.content.length
+          const chartsBefore = shownCharts()
           ;({ r } = await runOnce({ fresh: false, steers }))
-          if (!signal.aborted && !r.stopped && !steering.waiting && !(r.result || '').trim() && assistant.content.length === before && sessionId) {
+          if (!signal.aborted && !r.stopped && !steering.waiting && !(r.result || '').trim() && assistant.content.length === before && shownCharts() === chartsBefore && sessionId) {
             log(`chat: steered resume of ${provider} produced nothing; retrying fresh`)
             ;({ r } = await runOnce({ fresh: true, steers }))
           }
@@ -9564,7 +10177,7 @@ async function startChatTurn(body) {
           push({ type: 'delta', text: assistant.content || finalText })
         }
         if (r.stopped) status = 'stopped'
-        else if (!finalText && !assistant.content.trim()) {
+        else if (!finalText && !assistant.content.trim() && !shownCharts()) {
           status = 'error'
           error = r.timedOut
             ? `${providerLabel(provider)} ran out of time after ${Math.round(timeoutMs / 60_000)} minutes without answering.`
@@ -9585,7 +10198,6 @@ async function startChatTurn(body) {
         delete run.steer
         delete run.questions
         if (pending) { clearTimeout(pending); pending = null }
-        browserAccess?.revoke()
         // Screenshots the agent chose to show (![…](/path.png)) become attachments.
         if (/!\[[^\]]*\]\(\s*<?(file:\/\/)?\//.test(assistant.content + finalText)) {
           const embed = (t) => embedLocalImages(t, {
@@ -9625,7 +10237,10 @@ async function startChatTurn(body) {
         }
         await save((t) => {
           if (sessionId && status !== 'error') {
-            t.sessions = { ...(t.sessions || {}), [provider]: { id: sessionId, through: t.messages.length } }
+            // Through this reply only: an inbox outcome recorded while it ran (chat/inbox-outcome.mjs)
+            // comes after it, unseen, and must be replayed next turn.
+            const at = t.messages.findIndex((m) => m.id === assistant.id)
+            t.sessions = { ...(t.sessions || {}), [provider]: { id: sessionId, through: at >= 0 ? at + 1 : t.messages.length } }
           }
           // Finished (or failed) and now waiting on him, until he replies or marks it read.
           // A totem's chat posts on a schedule, so it never waits.
@@ -9633,6 +10248,12 @@ async function startChatTurn(body) {
           // A reply that lands while the chat is snoozed wakes it early.
           if (status !== 'stopped' && Number(t.snoozedUntil) > Date.now()) t.snoozedUntil = Date.now()
         })
+        // Only now: until this save, an inbox card decided meanwhile must reach this
+        // reply's own copy (inboxCard), or the save would write it back as pending.
+        // A delayed save that decision scheduled goes too: the final save wrote it,
+        // and firing later it would revert a card decided in the file since.
+        if (pending) { clearTimeout(pending); pending = null }
+        browserAccess?.revoke()
         // What the queue goes by when this run ends (drainChatQueue).
         run.outcome = status
         push({ type: 'done', message: signMessage(structuredClone(assistant)) })
@@ -9711,6 +10332,7 @@ async function changeChatQueue(body) {
         model: typeof body.model === 'string' ? body.model : undefined,
         effort: typeof body.effort === 'string' ? body.effort : undefined,
         modelSettings: body.modelSettings,
+        inbox: body.inbox,
       }]
     })
     announceQueue(threadId, t)
@@ -9777,7 +10399,7 @@ async function drainChatQueue(threadId, outcome) {
   try {
     await startChatTurn({
       threadId, queuedId: next.id, text: next.text, attachments: (next.attachments || []).map((a) => a.id),
-      provider: next.provider, model: next.model, effort: next.effort, modelSettings: next.modelSettings,
+      provider: next.provider, model: next.model, effort: next.effort, modelSettings: next.modelSettings, inbox: next.inbox,
     })
   } catch (e) {
     log('chat queue: next message failed to start', e?.message || e)
@@ -9789,6 +10411,19 @@ async function drainChatQueue(threadId, outcome) {
     await threadStore.update(threadId, (t) => { t.queue = [next, ...(t.queue || [])]; t.queueHeld = true }).catch(() => {})
   }
 }
+
+// An inbox proposal's outcome, back in the chat that staged it (chat/inbox-outcome.mjs):
+// a turn through startChatTurn, or the queue or a steer while a reply runs.
+const inboxOutcomes = createInboxOutcomes({
+  threads: threadStore,
+  running: (threadId) => !!chatRuns.active(threadId),
+  liveCard: runInboxCard,
+  startTurn: (turn) => startChatTurn(turn),
+  steer: (threadId, text) => steerRun(threadId, text),
+  enqueue: (turn) => changeChatQueue({ ...turn, action: 'add' }),
+  followUp: () => chatSettings.followUp,
+  log,
+})
 
 // What each enabled account can do in chat. Computer use is a probe, not a
 // guess: Codex is asked what desktop tools it has, and the answer is cached. On
@@ -9911,28 +10546,30 @@ async function handleChatApi(req, res, path) {
     const threadId = new URL(req.url, 'http://x').searchParams.get('threadId')
     if (!validThreadId(threadId)) return send(res, 400, { error: 'missing threadId' })
     const open = browserManager.sessionKeys().includes(threadId)
-    return send(res, 200, { available: browserReady(), open, frame: open ? browserFrames.get(threadId) || null : null, handoff: open ? browserHandoffs.get(threadId) || null : null })
+    return send(res, 200, { available: browserReady(), open, frame: open ? latestBrowserFrame(threadId) : null, handoff: open ? browserHandoffs.get(threadId) || null : null })
   }
   // The owner driving the chat's browser himself from the panel: a sign-in the
-  // agent must not type, a cookie banner, a captcha. Coordinates are viewport
-  // pixels; the reply carries the frame after the input. Typed text is never
-  // logged (it is often a password).
+  // agent must not type, a cookie banner, a captcha. An approval route (low):
+  // a signed-in session or the approval code, never the bearer alone. The open
+  // panel sends the same raw events (mouse, wheel, key, text; browser/input.mjs)
+  // over its socket (browser/socket.mjs), behind the same check; this route
+  // takes them when the socket cannot connect, and `look` for a fresh frame.
+  // Coordinates are viewport pixels; the reply carries the latest frame. Typed
+  // text is never logged (it is often a password).
   if (req.method === 'POST' && path === '/api/chat/browser/input') {
-    const { threadId, kind, x, y, text, key, modifiers, deltaX, deltaY } = await readJsonBody(req)
+    const body = await readJsonBody(req)
+    const { threadId, kind } = body
     if (!validThreadId(threadId)) return send(res, 400, { error: 'missing threadId' })
     if (!browserManager.sessionKeys().includes(threadId)) return send(res, 404, { error: 'this chat has no browser open' })
-    const mods = Array.isArray(modifiers) ? modifiers.filter((m) => ['Alt', 'Control', 'Meta', 'Shift'].includes(m)) : []
     try {
-      if (kind === 'click' && Number.isFinite(x) && Number.isFinite(y)) await browserManager.click(threadId, { x, y })
-      else if (kind === 'type' && typeof text === 'string' && text && text.length <= 4000) await browserManager.type(threadId, { text })
-      else if (kind === 'press' && typeof key === 'string' && /^[\w+-]{1,24}$/.test(key)) await browserManager.press(threadId, { key, modifiers: mods })
-      else if (kind === 'scroll' && (Number.isFinite(deltaX) || Number.isFinite(deltaY))) await browserManager.scroll(threadId, { deltaX: Number(deltaX) || 0, deltaY: Number(deltaY) || 0 })
+      // `owner`: the panel's id, which its socket shares, so either one lets go of what the other pressed.
+      if (['mouse', 'wheel', 'key', 'text'].includes(kind)) await browserManager.input(threadId, body, panelOwner(body.owner) || 'http')
       else if (kind === 'look') await browserManager.look(threadId)
       else return send(res, 400, { error: 'unknown input' })
     } catch (e) {
-      return send(res, 422, { error: String(e?.message || e), frame: browserFrames.get(threadId) || null })
+      return send(res, 422, { error: String(e?.message || e), frame: latestBrowserFrame(threadId) })
     }
-    return send(res, 200, { frame: browserFrames.get(threadId) || null })
+    return send(res, 200, { frame: latestBrowserFrame(threadId) })
   }
   if (req.method === 'POST' && path === '/api/chat/browser/close') {
     const { threadId } = await readJsonBody(req)
@@ -10053,12 +10690,14 @@ async function handleChatApi(req, res, path) {
       return send(res, e.status || 500, { error: e.message || String(e) })
     }
   }
-  if (req.method === 'GET' && (path === '/api/chat/files' || path === '/api/chat/files/raw')) {
+  if ((req.method === 'GET' && (path === '/api/chat/files' || path === '/api/chat/files/raw' || path === '/api/chat/files/link')) || (req.method === 'HEAD' && path === '/api/chat/files/raw')) {
     const q = new URL(req.url, 'http://x').searchParams
     const thread = q.get('thread')
     if (thread && !/^[A-Za-z0-9_-]{6,80}$/.test(thread)) return send(res, 400, { error: 'bad thread id' })
     try {
-      if (path === '/api/chat/files/raw') return await chatFiles.serve(res, q.get('path'), { download: q.has('download') })
+      // How the dashboard opens any file on the box: checked here, then read from the signed link.
+      if (path === '/api/chat/files/link') return send(res, 200, await chatFiles.link(q.get('path')))
+      if (path === '/api/chat/files/raw') return await chatFiles.serve(res, q.get('path'), { download: q.has('download'), head: req.method === 'HEAD' })
       // A chat with nothing saved yet has no folder; that is an empty list, not an error.
       if (thread && !existsSync(join(CHAT_OUTPUTS_DIR, thread))) return send(res, 200, { root: join(CHAT_OUTPUTS_DIR, thread), entries: [], truncated: false })
       return send(res, 200, await chatFiles.list(thread ? join(CHAT_OUTPUTS_DIR, thread) : q.get('path')))
@@ -10077,7 +10716,7 @@ async function handleChatApi(req, res, path) {
     const id = path.slice('/api/chat/uploads/'.length)
     // Only an attachment nobody sent yet: a sent one belongs to its thread, and
     // a project's file to its project.
-    const used = (await threadUploadIds()).has(id) || (await projectStore.fileIds()).has(id)
+    const used = (await threadUploadIds()).has(id) || (await keptUploadIds()).has(id)
     if (!used) await chatUploads.remove(id)
     return send(res, 200, { ok: !used })
   }
@@ -10285,10 +10924,13 @@ const projectSummary = (p, threads) => ({ ...p, files: undefined, ...(p.image ? 
 // A project's picture must be an upload that is really a raster image (an .ico
 // favicon counts); SVG never is, since uploads are served inline from this origin.
 async function projectImageError(body) {
-  if (!body?.image) return null
-  const meta = await chatUploads.meta(body.image)
+  return body?.image ? pictureUploadError(body.image, 'a project picture') : null
+}
+
+async function pictureUploadError(id, what) {
+  const meta = await chatUploads.meta(id)
   if (!meta) return 'that image upload was not found'
-  if (meta.kind !== 'image' && !/^image\/(x-icon|vnd\.microsoft\.icon)$/.test(meta.mime)) return 'a project picture must be a PNG, JPEG, GIF, WebP or ICO image'
+  if (meta.kind !== 'image' && !/^image\/(x-icon|vnd\.microsoft\.icon)$/.test(meta.mime)) return `${what} must be a PNG, JPEG, GIF, WebP or ICO image`
   return null
 }
 
@@ -10302,7 +10944,7 @@ async function setProjectImage(id, image) {
 async function dropUnusedUploads(ids) {
   if (!ids.length) return
   const used = await threadUploadIds()
-  const kept = await projectStore.fileIds()
+  const kept = await keptUploadIds()
   for (const id of ids) if (!used.has(id) && !kept.has(id)) await chatUploads.remove(id)
 }
 
@@ -10432,10 +11074,55 @@ async function handleChatProjectsApi(req, res, path) {
 setInterval(async () => {
   try {
     const referenced = await threadUploadIds()
-    for (const id of await projectStore.fileIds()) referenced.add(id)
+    for (const id of await keptUploadIds()) referenced.add(id)
     await chatUploads.sweepOrphans({ referenced })
   } catch (e) { log('chat upload sweep failed', e?.message || e) }
 }, 6 * 60 * 60_000).unref?.()
+
+// Connection icons, as a folder's: GET every one; PUT {icon} or {image} (an
+// upload id), DELETE back to the brand logo; POST /favicon {site} wears a website's icon.
+const connectionIconsPayload = async () => {
+  const icons = {}
+  for (const [id, c] of Object.entries(await connectionIcons.all())) icons[id] = c.image ? { image: c.image, imageUrl: chatUploads.urlFor(c.image) } : c
+  return { icons }
+}
+
+async function setConnectionIcon(id, choice) {
+  const before = await connectionIcons.set(id, choice)
+  if (before?.image && before.image !== choice?.image) await dropUnusedUploads([before.image])
+}
+
+async function handleConnectionIconsApi(req, res, path) {
+  if (path === '/api/connections/icons') {
+    return req.method === 'GET' ? send(res, 200, await connectionIconsPayload()) : send(res, 405, { error: 'method not allowed' })
+  }
+  const m = /^\/api\/connections\/icons\/([^/]+)(\/favicon)?$/.exec(path)
+  if (!m) return false
+  const [, id, favicon] = m
+  if (!validConnectionId(id)) return send(res, 400, { error: 'not a connection id' })
+  if (favicon) {
+    if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' })
+    const { site } = await readJsonBody(req)
+    let icon
+    try { icon = await fetchFavicon(site) } catch (e) { return send(res, e.status || 502, { error: e.message }) }
+    const saved = await chatUploads.save(icon)
+    await setConnectionIcon(id, { image: saved.id })
+    return send(res, 200, await connectionIconsPayload())
+  }
+  if (req.method === 'DELETE') {
+    await setConnectionIcon(id, null)
+    return send(res, 200, await connectionIconsPayload())
+  }
+  if (req.method !== 'PUT') return send(res, 405, { error: 'method not allowed' })
+  const body = await readJsonBody(req)
+  const choice = body?.image ? { image: body.image } : { icon: body?.icon }
+  if (choice.image) {
+    const error = await pictureUploadError(choice.image, 'a connection icon')
+    if (error) return send(res, 400, { error })
+  }
+  try { await setConnectionIcon(id, choice) } catch (e) { return send(res, e.status || 500, { error: e.message }) }
+  return send(res, 200, await connectionIconsPayload())
+}
 
 // ---------------------------------------------------------------------------
 // Usage tab — live-ish coding-assistant usage + subscription facts.
@@ -10479,6 +11166,7 @@ function decodeJwtPayload(token) {
 // family's older price. Haiku 5.5 is the prompt-≤100K price (5× above that);
 // a per-line estimate cannot see the prompt size, and most prompts are short.
 const CLAUDE_PRICE_PER_MTOK = {
+  'claude-fable-5-2': { input: 8, output: 40 },
   'claude-fable-5-1': { input: 10, output: 50 },
   'claude-opus-5-5': { input: 4, output: 20 },
   'claude-sonnet-5-5': { input: 2, output: 10 },
@@ -10952,7 +11640,10 @@ const MCP_SUPPORTED_PROTOCOLS = new Set([MCP_PROTOCOL_VERSION, '2025-03-26', '20
 // 2.10.0: totem_apple_* — Messages, Contacts and Photos on the Mac, when enabled —
 // and the `imessage` inbox kind, which only the dashboard can accept.
 // 2.11.0: totem_screen_get_status and totem_screen_screenshot, when SCREEN_ENABLED is on.
-const MCP_SERVER_INFO = { name: 'totem', title: 'Totem', version: '2.11.0' }
+// 2.12.0: totem_away_list and totem_away_propose, and the `away` inbox kind (docs/away.md).
+// 2.13.0: totem_linkedin_* (read-only LinkedIn, where a browser exists) and the
+// `linkedin` inbox kind, which the owner does himself (docs/linkedin.md).
+const MCP_SERVER_INFO = { name: 'totem', title: 'Totem', version: '2.13.0' }
 
 // Every tool answers with compact JSON rather than prose: the calling model is the
 // one doing the reasoning, so it wants data, not sentences. `fetchedAt` rides along
@@ -11038,7 +11729,7 @@ function mcpInstructions() {
     'no staging step and no undo. totem_create_task, totem_update_task (which is also how you',
     'complete one), totem_create_event, totem_update_event, totem_log_habit and totem_write_note',
     'all write immediately to his local task database, Google Calendar, habit tracker and notes. A',
-    'task stays private unless syncTarget explicitly names github or sheet; area, ventureTag, source,',
+    'task stays private (nothing shares a task out; the shared task sheet is read-only); area, ventureTag, source,',
     'or task wording never implies sharing. Read before',
     'you write: get the task or event first so you are editing the right one, and search the brain',
     'before adding a note so you extend the right file instead of creating a near-duplicate. Say',
@@ -11534,11 +12225,38 @@ const recMcpTool = ({ name, description, inputSchema }) => ({
   },
 })
 
+// Away spans: read, and propose through the inbox. No write tool on purpose
+// (away/mcp.mjs); the gateway re-serves these as away__list and away__propose.
+let awayMcpTools = null
+const awayMcpTool = (definition) => ({
+  name: definition.name,
+  description: definition.description,
+  inputSchema: definition.inputSchema,
+  handler: async (args, session) => {
+    if (!awayMcpTools) throw new Error('away MCP tools are not initialized')
+    return await awayMcpTools[definition.name](args, { actor: normalizeActorName(session), chat: session?.chat })
+  },
+})
+
+// LinkedIn: read, and propose actions the owner does himself. No tool acts on
+// LinkedIn (linkedin/mcp.mjs); the gateway re-serves these as linkedin__*.
+let linkedinMcpTools = null
+const linkedinMcpTool = (definition) => ({
+  name: definition.name,
+  description: definition.description,
+  inputSchema: definition.inputSchema,
+  handler: async (args, session) => {
+    if (!linkedinMcpTools) throw new Error('LinkedIn MCP tools are not initialized')
+    return await linkedinMcpTools[definition.name](args, { actor: normalizeActorName(session), client: session?.client, chat: session?.chat })
+  },
+})
+
 const MCP_TOOLS = [
   todoMcpTool('totem_get_tasks'),
   ...GOAL_MCP_TOOL_DEFINITIONS.map((definition) => goalMcpTool(definition.name)),
   ...LIST_MCP_TOOL_DEFINITIONS.map((definition) => listMcpTool(definition.name)),
   ...REC_MCP_TOOL_DEFINITIONS.map(recMcpTool),
+  ...AWAY_MCP_TOOL_DEFINITIONS.map(awayMcpTool),
   {
     name: 'totem_get_calendar',
     description:
@@ -11868,6 +12586,7 @@ const MCP_TOOLS = [
           explanation: args.explanation || '',
           why: args.why || '',
           src: normalizeActorName(session),
+          chat: session?.chat,
         })
       } catch (e) {
         // A rejected model or reasoning level is recoverable in one retry, so hand
@@ -12002,7 +12721,7 @@ const MCP_TOOLS = [
       additionalProperties: false,
     },
     handler: async (args, session) => {
-      const staged = await queueInboxCommand({ ...args, src: normalizeActorName(session) })
+      const staged = await queueInboxCommand({ ...args, src: normalizeActorName(session), chat: session?.chat })
       return {
         ...staged,
         staged: true,
@@ -12057,7 +12776,7 @@ const MCP_TOOLS = [
         id: { type: 'string', description: 'Inbox proposal id. Required.' },
         action: { type: 'string', enum: ['accept', 'deny'], description: 'Required. Both need approval — silently clearing his queue is a loss too.' },
         approvalSessionId: { type: 'string', description: 'Reusable id returned by totem_request_approval. Required.' },
-        code: { type: 'string', description: 'The 6-digit code, only if the owner read it to you.' },
+        code: { type: 'string', description: 'The 6-digit code, only if the owner read it to you. Accepted only on a Totem with no approval code set; otherwise he approves the session in Totem → Logs.' },
       },
       required: ['id', 'action', 'approvalSessionId'],
       additionalProperties: false,
@@ -12387,20 +13106,21 @@ const MCP_TOOLS = [
       const opening = message
         ? [{ id: randomUUID(), role: 'assistant', content: message, status: 'done', createdAt: now, parts: [{ type: 'text', text: message }] }]
         : []
+      // The folder's default model, else its project's, else Settings → Providers, as a new
+      // chat in the dashboard gets. Stored on the chat, model named, before anything
+      // runs, so the composer shows it, the first run uses it, and a model picked in
+      // another chat never stands in for it.
+      const config = await readProviderConfig()
+      const choice = await newChatChoice({
+        projects, projectId, config, driverOf,
+        resolveModel: (provider, effort) => resolveChatModel(provider, null, effort, config),
+      })
       const thread = await threadStore.put(id, {
         id, kind: 'regular', title, messages: opening, createdAt: now, updatedAt: now,
+        provider: choice.provider, ...(choice.modelSettings ? { modelSettings: choice.modelSettings } : {}),
         ...(projectId ? { projectId } : {}), ...(key ? { sourceKey: key } : {}), ...(message && !start ? { needsReply: true } : {}),
       })
-      if (start) {
-        // The project's (or its folder's parent's) default account and model, as a new chat in the dashboard gets.
-        const own = projectId ? projects.find((p) => p.id === projectId) : null
-        const home = own?.provider ? own : own?.parentId ? projects.find((p) => p.id === own.parentId) : own
-        const ms = home?.modelSettings || null
-        await startChatTurn({
-          threadId: id, text: start,
-          ...(home?.provider ? { provider: home.provider, model: ms?.modelId, effort: ms?.effort, modelSettings: ms } : {}),
-        })
-      }
+      if (start) await startChatTurn({ threadId: id, text: start, ...turnModelFields(choice, driverOf(choice.provider)) })
       return view(thread, { created: true, folderCreated: !!place.newFolder, started: !!start, running: !!start })
     },
   },
@@ -12798,7 +13518,7 @@ const APPLE_MCP_TOOLS = [
       additionalProperties: false,
     },
     handler: async (args, session) => {
-      const staged = await queueInboxMessage({ ...args, src: normalizeActorName(session) })
+      const staged = await queueInboxMessage({ ...args, src: normalizeActorName(session), from: session?.chat })
       return { ...staged, staged: true, sent: false, nextStep: 'Tell the owner the message is waiting in his Totem inbox for him to send.' }
     },
   },
@@ -12989,12 +13709,15 @@ const GMAIL_MCP_TOOLS = [
       additionalProperties: false,
     },
     handler: async (args, session) => {
-      const staged = await queueInboxEmail({ ...args, src: normalizeActorName(session) })
+      const staged = await queueInboxEmail({ ...args, src: normalizeActorName(session), chat: session?.chat })
       return { ...staged, staged: true, sent: false, nextStep: 'Tell the owner the email is waiting in his Totem inbox, where he can send it or save it as a draft.' }
     },
   },
 ]
 if (gmail.configured()) MCP_TOOLS.push(...GMAIL_MCP_TOOLS)
+// Only where there is a browser to read LinkedIn with.
+const LINKEDIN_TOOLS_ON = browserReady()
+if (LINKEDIN_TOOLS_ON) MCP_TOOLS.push(...LINKEDIN_MCP_TOOL_DEFINITIONS.map(linkedinMcpTool))
 
 // Google Drive tools, registered when Totem has a Google OAuth client. Ids are
 // "account:id"; a bare id works with one account connected.
@@ -13311,6 +14034,11 @@ const listMcpMeta = Object.fromEntries(LIST_MCP_TOOL_DEFINITIONS.map((definition
   { title: definition.title, annotations: definition.annotations, outputSchema: definition.outputSchema },
 ]))
 const recMcpMeta = Object.fromEntries(REC_MCP_TOOL_DEFINITIONS.map(({ name, title, annotations, outputSchema }) => [name, { title, annotations, outputSchema }]))
+const awayMcpMeta = Object.fromEntries(AWAY_MCP_TOOL_DEFINITIONS.map((definition) => [
+  definition.name,
+  { title: definition.title, annotations: definition.annotations, outputSchema: definition.outputSchema },
+]))
+const linkedinMcpMeta = Object.fromEntries(LINKEDIN_MCP_TOOL_DEFINITIONS.map(({ name, title, annotations, outputSchema }) => [name, { title, annotations, outputSchema }]))
 
 // Apple tools (registered only when APPLE_ENABLED is on; see APPLE_MCP_TOOLS).
 const APPLE_MCP_META = {
@@ -13550,11 +14278,13 @@ const MCP_TOOL_META = {
   ...(gmail.configured() ? GMAIL_MCP_META : {}),
   ...(drive.configured() ? DRIVE_MCP_META : {}),
   ...(screen.enabled ? SCREEN_MCP_META : {}),
+  ...(LINKEDIN_TOOLS_ON ? linkedinMcpMeta : {}),
   // ---- Reads ---------------------------------------------------------------
   totem_get_tasks: todoMcpMeta('totem_get_tasks'),
   ...goalMcpMeta,
   ...listMcpMeta,
   ...recMcpMeta,
+  ...awayMcpMeta,
   totem_get_calendar: {
     title: 'Read calendar', annotations: ANN.readRemote,
     outputSchema: out({
@@ -14356,9 +15086,13 @@ async function handleMcpRequest(req, res) {
   }
 
   const incomingId = req.headers['mcp-session-id'] || null
+  // A chat run's gateway names the run (x-totem-run, its /agent-mcp token), so a
+  // proposal it stages remembers the chat that asked (chat/inbox-outcome.mjs).
+  const run = agentBrowserAccess.get(String(req.headers['x-totem-run'] || ''))
   const session = {
     id: incomingId,
     client: (incomingId && MCP_SESSIONS.get(incomingId)?.client) || mcpClientFromUserAgent(req.headers['user-agent']),
+    chat: run?.runId ? { threadId: run.threadId, runId: run.runId } : null,
   }
   const finish = (code, body) => {
     const headers = { 'content-type': 'application/json' }
@@ -14417,7 +15151,7 @@ if (TERMINAL_ENABLED && nodePty) {
   // credentials a shell on this box would never normally see. Subtract exactly the
   // names that file defines rather than guessing at a deny-list.
   const hiddenEnvKeys = readEnvFileKeys(join(HERE, '.env'))
-  // Keys entered in Settings -> AI are in this environment too.
+  // Keys entered in Settings -> Providers are in this environment too.
   for (const name of aiSettings.secretNames()) hiddenEnvKeys.add(name)
 
   terminalSessions = createTerminalSessions({
@@ -14462,9 +15196,12 @@ let goalHttpHandler = null
 let listHttpHandler = null
 let recHttpHandler = null
 let recService = null
+let awayHttpHandler = null
 let devHttpHandler = null
 let alertIngestHandler = null
+let runIngestHandler = null
 let fleetHttpHandler = null
+let cliproxyHttpHandler = null
 let sourceHttpHandler = null
 let fleetReportHandler = null
 let journalHttpHandler = null
@@ -14566,6 +15303,10 @@ const server = http.createServer(async (req, res) => {
   if (alertIngestHandler && isAlertIngestPath(req.url.split('?')[0])) {
     if (await alertIngestHandler(req, res, new URL(req.url, 'http://x'))) return
   }
+  // An ORCH thread's status push, on the same token (POST only; dev/ingest.mjs).
+  if (runIngestHandler && isRunIngestRequest(req.method, req.url.split('?')[0])) {
+    if (await runIngestHandler(req, res, new URL(req.url, 'http://x'))) return
+  }
 
   // Fleet agents on other machines report with their own token (fleet/http.mjs).
   if (fleetReportHandler && req.url.split('?')[0] === FLEET_REPORT_PATH) {
@@ -14579,21 +15320,38 @@ const server = http.createServer(async (req, res) => {
   // Chat attachments are read by <img> tags, which cannot send a bearer token, so
   // this one route authorises itself with a per-file signature (chat/uploads.mjs).
   // A signed-in session or the bearer header also works, for fetch()-based downloads.
-  if (req.method === 'GET' && req.url.startsWith('/api/chat/uploads/')) {
+  if ((req.method === 'GET' || req.method === 'HEAD') && req.url.startsWith('/api/chat/uploads/')) {
     const u = new URL(req.url, 'http://x')
     const id = u.pathname.slice('/api/chat/uploads/'.length)
     if (!chatUploads.verify(id, u.searchParams.get('sig') || '') && !authorized(req)) return send(res, 401, { error: 'unauthorized' })
-    const file = await chatUploads.read(id)
-    if (!file) return send(res, 404, { error: 'not found' })
-    const inline = /^(image\/|text\/plain|application\/pdf)/.test(file.meta.mime)
+    const file = req.method === 'HEAD' ? { meta: await chatUploads.meta(id) } : await chatUploads.read(id)
+    if (!file?.meta) return send(res, 404, { error: 'not found' })
+    // Inline or a download, and under which sandbox: chat/uploads.mjs servedHeaders.
     res.writeHead(200, {
-      'content-type': file.meta.mime,
-      'content-length': file.buffer.length,
+      ...servedHeaders(file.meta, { download: u.searchParams.has('download') }),
+      'content-length': file.buffer?.length ?? file.meta.size,
       'cache-control': 'private, max-age=31536000, immutable',
-      'content-disposition': `${inline && !u.searchParams.has('download') ? 'inline' : 'attachment'}; filename="${file.meta.name.replace(/"/g, '')}"`,
-      'x-content-type-options': 'nosniff',
     })
-    return res.end(file.buffer)
+    return res.end(req.method === 'HEAD' ? undefined : file.buffer)
+  }
+
+  // A chat file opened from its signed link (chat/files.mjs link()): the canvas,
+  // an <iframe>, an <img> and the desktop app's native download carry no bearer,
+  // so a browser unlocked with BRIDGE_SECRET alone reads files this way. Only this
+  // exact spelling skips the gate, and only with a signature for exactly this path;
+  // anything else falls through to the signed-in route below.
+  if ((req.method === 'GET' || req.method === 'HEAD') && req.url.startsWith('/api/chat/files/raw?') && /[?&]sig=/.test(req.url)) {
+    const q = new URL(req.url, 'http://x').searchParams
+    const file = q.get('path')
+    if (chatFiles.verify(file, q.get('exp'), q.get('sig'))) {
+      try {
+        return await chatFiles.serve(res, file, { download: q.has('download'), head: req.method === 'HEAD', signed: true })
+      } catch (e) {
+        if (res.headersSent) return void res.destroy()
+        return send(res, e.status || 500, { error: e.status ? e.message : 'internal error' })
+      }
+    }
+    if (!authorized(req)) return send(res, 401, { error: 'unauthorized' })
   }
 
   // Sign-in routes: status, one-time setup, login, logout, change password.
@@ -14614,16 +15372,30 @@ const server = http.createServer(async (req, res) => {
   if (req.url.startsWith('/api/')) {
     if (!authorized(req)) return send(res, 401, { error: 'unauthorized' })
     if (refusedAsCrossSite(req, res)) return
-    const path = req.url.split('?')[0]
-    // Allow-listed read routes get a weak ETag and answer If-None-Match with a 304.
+    // One spelling of the path for every check and route below (auth/approval-routes.mjs).
+    const path = normalizeApiPath(req.url)
+    // Allow-listed GETs (never an approval route) get a weak ETag and answer If-None-Match with a 304.
     etagResponse(req, res, path)
+    const approvalRoute = approvalRouteFor(req.method, path)
+    // A per-proposal route is checked here at low risk (the bearer alone, a wrong
+    // code), and again at the proposal's own risk once it is read. `req.approvedBy`
+    // carries a verified code over, so it is not checked twice.
+    if (approvalRoute) {
+      try { req.approvedBy = await approveRequest(req, approvalRoute.risk === 'per-item' ? 'low' : approvalRoute.risk) } catch (e) {
+        if (e instanceof ApprovalRefused) return sendApprovalRefusal(res, e)
+        log('approval check failed', path, e)
+        return send(res, 500, { error: 'internal error' })
+      }
+    }
     try {
       if (todoHttpHandler && await todoHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (goalHttpHandler && await goalHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (listHttpHandler && await listHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (recHttpHandler && await recHttpHandler(req, res, new URL(req.url, 'http://x'))) return
+      if (awayHttpHandler && await awayHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (devHttpHandler && await devHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (fleetHttpHandler && await fleetHttpHandler(req, res, new URL(req.url, 'http://x'))) return
+      if (cliproxyHttpHandler && await cliproxyHttpHandler(req, res, new URL(req.url, 'http://x'), path)) return
       if (sourceHttpHandler && await sourceHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (journalHttpHandler && await journalHttpHandler(req, res, new URL(req.url, 'http://x'))) return
       if (pushHttpHandler && await pushHttpHandler(req, res, new URL(req.url, 'http://x'))) return
@@ -14698,6 +15470,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'GET' && path === '/api/connections') {
         return send(res, 200, await buildConnections())
+      }
+      if (path.startsWith('/api/connections/icons')) {
+        const handled = await handleConnectionIconsApi(req, res, path)
+        if (handled !== false) return
       }
       // Studio state: system-workflow toggles/times + built-in data connections.
       if (req.method === 'GET' && path === '/api/studio') {
@@ -15079,9 +15855,15 @@ const server = http.createServer(async (req, res) => {
         } catch (e) {
           return send(res, 400, { error: String(e.message || e) })
         }
+        // A new CLIProxy URL or key changes which accounts the limits show.
+        if (Object.keys(body?.values || {}).some((k) => k.startsWith('CLIPROXY_'))) {
+          // Saved again, even unchanged: the owner may have fixed the proxy side.
+          cliproxyClient.forgetRefusal()
+          aiUsage.poll().catch((e) => log(`ai-usage poll after a CLIProxy change failed: ${e.message}`))
+        }
         return send(res, 200, buildIntegrations())
       }
-      // Settings -> AI. Provider + model live in provider-config.json (shared with
+      // Settings -> Providers. Provider + model live in provider-config.json (shared with
       // the Providers tab); API keys in ai-settings.json and never come back out.
       if (req.method === 'GET' && path === '/api/ai/settings') {
         return send(res, 200, await buildAiSettings())
@@ -15286,9 +16068,41 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, await countInboxItems())
       }
       if (req.method === 'POST' && path === '/api/inbox/resolve') {
-        const { id, action } = await readJsonBody(req)
-        // From the dashboard, the owner IS the approval — no grant needed.
-        return send(res, 200, await resolveInboxItem({ id, action, actor: 'ethan', approvedVia: 'dashboard' }))
+        const { id, action, digest, note } = await readJsonBody(req)
+        // From the dashboard, the owner IS the approval — no grant needed. How much
+        // proof that takes depends on the proposal, so the gate runs once it is read.
+        try {
+          return send(res, 200, await resolveInboxItem({
+            id, action, digest, note: cleanNote(note), actor: OWNER_ACTOR, approvedVia: 'dashboard',
+            authorize: (item) => (req.approvedBy === 'code' || inboxApprovalRisk(item, action) === 'low'
+              ? req.approvedBy
+              : approveRequest(req, 'high')),
+          }))
+        } catch (e) {
+          if (e instanceof ApprovalRefused) return sendApprovalRefusal(res, e)
+          // Refusals with a reason the dashboard can act on: changed, held, hidden character, uncertain.
+          if (e?.code && Number(e?.status) >= 400 && Number(e.status) < 500) return send(res, e.status, { error: { code: e.code, message: e.message } })
+          throw e
+        }
+      }
+      // The approval card's Reply: the owner's words go to the chat that staged an
+      // open proposal, which stays open. Decides nothing, so it is no approval route.
+      if (req.method === 'POST' && path === '/api/inbox/reply') {
+        const { id, text } = await readJsonBody(req)
+        const words = cleanNote(text)
+        if (!validInboxId(id) || !words) return send(res, 400, { error: 'id and text are required' })
+        const item = (await readFile(JOURNAL_INBOX_FILE, 'utf8').catch(() => '')).split('\n').map(parseInboxLine).find((x) => x && x.id === id && x.status === 'open')
+        if (!item) return send(res, 409, { error: { code: 'PROPOSAL_NOT_OPEN', message: `proposal ${id} is not open` } })
+        const via = await inboxOutcomes.reply(item, words)
+        if (!via) return send(res, 404, { error: 'no chat staged this proposal' })
+        return send(res, 200, { ok: true, id, via, threadId: chatRefOf(item.meta).threadId })
+      }
+      // A proposal held because he denied the same one recently: show it anyway.
+      if (req.method === 'POST' && path === '/api/inbox/release') {
+        const { id } = await readJsonBody(req)
+        if (!/^[A-Za-z]+\d+$/.test(String(id || ''))) return send(res, 400, { error: 'bad proposal id' })
+        await approvalDenials.release(String(id))
+        return send(res, 200, { ok: true, id })
       }
 
       // ---- Live runs: what is happening right now --------------------------
@@ -15304,7 +16118,7 @@ const server = http.createServer(async (req, res) => {
         const stopped = runRegistry.stop(id)
         if (stopped) {
           actionLog.record({
-            action: 'run.stop', actor: 'ethan', target: id, status: 'ok',
+            action: 'run.stop', actor: OWNER_ACTOR, target: id, status: 'ok',
             summary: `stopped run ${id} from the dashboard`, correlationId: id,
           })
         }
@@ -15476,6 +16290,24 @@ if (terminalSessions) {
   log(`terminal panel enabled at ${TERMINAL_WS_PATH} (max ${TERMINAL_MAX_SESSIONS} sessions)`)
 }
 
+// The browser panel's live view and input (browser/socket.mjs). Watching: a
+// signed-in same-origin upgrade, or the bearer subprotocol. Driving: the gate
+// POST /api/chat/browser/input has in APPROVAL_ROUTES, a session or the code.
+attachBrowserSocket(server, {
+  manager: browserManager,
+  secret: BRIDGE_SECRET,
+  authorize: (req) => authorized(req) && upgradeOriginAllowed(req, { publicUrl: publicUrl() }),
+  approve: async (req, code) => {
+    req.headers['x-totem-approval-code'] = code || ''
+    try { await approveRequest(req, approvalRouteFor('POST', '/api/chat/browser/input').risk); return true } catch (e) {
+      if (e instanceof ApprovalRefused) return { message: e.message, code: e.code }
+      throw e
+    }
+  },
+  validThreadId,
+  log,
+})
+
 if (screen.enabled) {
   attachScreenRelay(server, {
     path: SCREEN_WS_PATH,
@@ -15489,12 +16321,24 @@ if (screen.enabled) {
   log(`screen view enabled at ${SCREEN_WS_PATH} → ${screen.host}:${screen.port}`)
 }
 
-server.listen(Number(BRIDGE_PORT), () => {
+// Approval state is settled before the port opens: the code's latch and install
+// decision (auth/approval-code.mjs, which reads auth.json), and any accept a
+// restart cut off, which a request arriving first could accept a second time.
+// A failure here leaves the gate closed (the code reads as `unset`, a leftover's
+// proposal refuses a new accept), so the port opens anyway. setImmediate: the
+// rest of this module (jobStore among it) is defined by then.
+async function prepareApprovals() {
+  await ownerAuth.init()
+  await approvalCode.init().catch((e) => log(`approval code init failed: ${e.message}`))
+  await settleUncertainApprovals().catch((e) => log(`uncertain approvals: ${e?.message || e}`))
+}
+
+setImmediate(() => prepareApprovals().catch((e) => log(`approval state: ${e?.message || e}`)).then(() => server.listen(Number(BRIDGE_PORT), () => {
   // First run: no owner yet, so print the one-time link that creates one. Only a
   // request carrying this token can open setup; it lives in memory and a restart
   // mints a new one.
   ownerAuth.init()
-    .then((token) => {
+    .then(async (token) => {
       if (ownerAuth.mode === 'proxy') return log('dashboard sign-in: TOTEM_AUTH=proxy — trusting the auth proxy in front of this port')
       if (!token) return
       const base = publicUrl() || `http://localhost:${BRIDGE_PORT}`
@@ -15521,7 +16365,7 @@ server.listen(Number(BRIDGE_PORT), () => {
   // Warm the quota poller so the first dashboard load has real numbers rather
   // than an empty first cycle. Failures are logged, not fatal.
   startAiUsage().catch(() => {})
-})
+})))
 
 // ---------------------------------------------------------------------------
 // The job engine — one scheduler for everything Totem does on a timer.
@@ -15576,16 +16420,6 @@ const JOB_RUNNER_DEFS = {
     // No agent, so no AI to choose.
     agentless: true,
   },
-  'github-todos-sync': {
-    label: 'GitHub task sync',
-    detail: 'Pulls assigned and watched issues, refreshes linked tasks, and drains durable GitHub writes. No prompt, so nothing to edit.',
-    agentless: true,
-  },
-  'task-sheet-sync': {
-    label: 'Action Items Sheet sync',
-    detail: 'Reconciles explicitly shared and owner-assigned Ventures action items. No prompt, so nothing to edit.',
-    agentless: true,
-  },
   'todo-maintenance': {
     label: 'Task maintenance',
     detail: 'Applies the saved auto-archive and recycle-retention preferences, with a database backup before any purge. No prompt, so nothing to edit.',
@@ -15599,7 +16433,7 @@ const JOB_RUNNER_DEFS = {
   'self-update': {
     label: 'Deploy Totem',
     detail: 'Pulls the branch into this checkout (fast-forward only, never over uncommitted work), installs dependencies if they changed, rebuilds the dashboard and restarts the bridge. No prompt, so nothing to edit.',
-    // Plain git and npm. An agent can't do this job: restarting the bridge
+    // Plain git and pnpm. An agent can't do this job: restarting the bridge
     // kills the run that asked for it.
     agentless: true,
   },
@@ -15694,29 +16528,6 @@ const SEED_JOB_DEFS = {
     enabled: isTruthyFlag(STRAVA_SYNC_ENABLED),
     schedule: { type: 'interval', everyMinutes: Math.max(15, Number(STRAVA_SYNC_INTERVAL_MINUTES) || 180) },
   },
-  'github-todos-sync': {
-    name: 'GitHub task sync',
-    description: 'Refresh linked GitHub issues and import newly assigned or watched issues.',
-    iconName: 'github',
-    action: 'Reconcile GitHub issues with local tasks',
-    requires: [],
-    runner: 'github-todos-sync',
-    // On only for a deliberately configured GitHub App, or an explicit opt-in to
-    // borrowing the gh CLI's login. A gh login that happens to exist on this
-    // machine is not a request to start syncing issues.
-    enabled: GITHUB_APP_CONFIGURED || isTruthyFlag(process.env.GITHUB_TODOS_SYNC_ENABLED),
-    schedule: { type: 'interval', everyMinutes: 15 },
-  },
-  'task-sheet-sync': {
-    name: 'Action Items Sheet sync',
-    description: 'Reconcile the configured Google Sheet of action items with shared Ventures tasks.',
-    iconName: 'table',
-    action: 'Reconcile Action Items with local tasks',
-    requires: [],
-    runner: 'task-sheet-sync',
-    enabled: TASK_SHEET_CONFIGURED,
-    schedule: { type: 'interval', everyMinutes: 15 },
-  },
   'todo-maintenance': {
     name: 'Task maintenance',
     description: 'Apply saved auto-archive and recycle retention settings, backing up before a permanent purge.',
@@ -15762,6 +16573,19 @@ const SEED_JOB_DEFS = {
     runner: 'camera-sync',
     enabled: isTruthyFlag(CAMERA_SYNC_ENABLED),
     schedule: { type: 'interval', everyMinutes: Math.max(5, Number(CAMERA_SYNC_INTERVAL_MINUTES) || 15) },
+  },
+  // An agent totem (its `prompt`): reads LinkedIn and stages a few cards a week for
+  // the owner to do himself. Monday, and Wednesday for midweek.
+  'linkedin-networking': {
+    name: 'LinkedIn networking',
+    description: 'Read LinkedIn twice a week and stage a few likes, comments, replies and connections for you to do yourself.',
+    iconName: 'users',
+    action: 'Stage up to five LinkedIn actions in the inbox',
+    requires: [],
+    prompt: LINKEDIN_TOTEM_PROMPT,
+    enabled: isTruthyFlag(LINKEDIN_NETWORKING_ENABLED),
+    notify: 'agent',
+    schedule: { type: 'weekly', time: '09:00', days: [1, 3] },
   },
   'goals-review': {
     name: 'Sunday goals review',
@@ -15840,67 +16664,19 @@ const SEED_JOB_DEFS = {
 // vocabulary so a spike in one can be expanded into the other.
 const ACTION_LOG_FILE = process.env.ACTION_LOG_FILE || join(HERE, 'data', 'action-log.jsonl')
 const APPROVALS_FILE = process.env.APPROVALS_FILE || join(HERE, 'data', 'approvals.json')
+// The owner's recent denials (held duplicates) and accepted actions still being
+// carried out (an `uncertain` outcome after a restart). logs/approval-*.mjs.
+const approvalDenials = createDenialLedger({ file: process.env.APPROVAL_DENIALS_FILE || join(HERE, 'data', 'approval-denials.json') })
+const approvalInflight = createInflightLedger({ file: process.env.APPROVAL_INFLIGHT_FILE || join(HERE, 'data', 'approval-inflight.json') })
 const OUTPUTS_DIR = process.env.OUTPUTS_DIR || join(HERE, 'data', 'outputs')
 
 const actionLog = createActionLog({ file: ACTION_LOG_FILE, log })
 
-// Local-first tasks. Connector adapters are intentionally fail-closed until the
-// GitHub and Action Items implementations are installed by their feature slices;
-// private/local tasks are fully available immediately.
-const todoDatabase = openTodoDatabase({ file: TODO_DATABASE_FILE })
+// Local-first tasks. Nothing syncs a task out: the GitHub task connector (011) and
+// the two-way sheet sync (012) were retired. The shared task sheet is a read-only
+// feed (taskSheetFeed).
+const todoDatabase = openTodoDatabase({ file: TODO_DATABASE_FILE, actionLog })
 const todoService = createTodoService({ db: todoDatabase, actionLog, tz: MORNING_BRIEFING_TZ })
-const githubTodoClient = GITHUB_APP_CONFIGURED
-  ? createGitHubAppClient({
-    appId: GITHUB_APP_ID,
-    privateKey: readFileSync(GITHUB_APP_PRIVATE_KEY_FILE, 'utf8'),
-    installationId: GITHUB_APP_INSTALLATION_ID || null,
-    assignee: GITHUB_ASSIGNEE_LOGIN || null,
-  })
-  : createGitHubClient({ execFile })
-log(GITHUB_APP_CONFIGURED
-  ? `todos: GitHub connector using App ${GITHUB_APP_ID}${GITHUB_APP_INSTALLATION_ID ? ` installation ${GITHUB_APP_INSTALLATION_ID}` : ''}`
-  : 'todos: GitHub connector using the gh CLI — set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_FILE to use a GitHub App')
-const githubTodoConnector = createGitHubConnector({
-  db: todoDatabase,
-  service: todoService,
-  client: githubTodoClient,
-  workerId: `bridge-${process.pid}`,
-  actionLog,
-  runs: sourceRuns,
-})
-const unavailableTodoConnector = (name) => ({
-  async create() { throw new Error(`${name} todo connector is not configured`) },
-  async rename() { throw new Error(`${name} todo connector is not configured`) },
-  async updateLinked() { throw new Error(`${name} todo connector is not configured`) },
-  async appendNote() { throw new Error(`${name} todo connector is not configured`) },
-  async bulk() { throw new Error(`${name} todo connector is not configured`) },
-  async refreshTask() { throw new Error(`${name} todo connector is not configured`) },
-  async link() { throw new Error(`${name} todo connector is not configured`) },
-  async share() { throw new Error(`${name} todo connector is not configured`) },
-  unshare() { throw new Error(`${name} todo connector is not configured`) },
-  getHealth() { return { status: 'unconfigured', conflicts: [], lastSuccessAt: null, lastError: `${name} todo connector is not configured` } },
-  getSettings() { return { configured: false } },
-  async reconcile() { throw new Error(`${name} todo connector is not configured`) },
-  async bootstrapSchema() { throw new Error(`${name} todo connector is not configured`) },
-})
-const sheetTodoConnector = TASK_SHEET_CONFIGURED
-  ? createTaskSheetConnector({
-      db: todoDatabase,
-      service: todoService,
-      client: createGoogleSheetsClient({ credentialsFile: GOOGLE_SHEETS_CREDENTIALS_FILE }),
-      workerId: `bridge-${process.pid}`,
-      actionLog,
-      runs: sourceRuns,
-    })
-  : {
-      ...unavailableTodoConnector('Action Items'),
-      // Say which setting is missing rather than a bare "not configured".
-      getHealth: () => unconfiguredTaskSheetHealth(todoDatabase, [
-        ...(taskSheetSettings().spreadsheetId ? [] : ['TASK_SHEET_ID']),
-        ...(taskSheetSettings().assignees.length ? [] : ['TASK_SHEET_ASSIGNEES']),
-        ...(GOOGLE_SHEETS_CREDENTIALS_FILE && existsSync(GOOGLE_SHEETS_CREDENTIALS_FILE) ? [] : ['GOOGLE_SHEETS_CREDENTIALS_FILE']),
-      ]),
-    }
 const todoMaintenance = createTodoMaintenance({
   db: todoDatabase,
   service: todoService,
@@ -15908,11 +16684,15 @@ const todoMaintenance = createTodoMaintenance({
 })
 const todoCommands = createTodoCommands({
   service: todoService,
-  github: githubTodoConnector,
-  sheet: sheetTodoConnector,
   maintenance: todoMaintenance,
 })
-todoHttpHandler = createTodoHttpHandler({ service: todoService, commands: todoCommands })
+// A task's GitHub issue link is a plain link; its open/closed state is read through
+// the service user's `gh`, as the Dev tab reads GitHub (todos/issue-states.mjs).
+// The GitHub task sync's source went with it (migration 011); forgetting it at boot
+// keeps it out of Settings -> Connections.
+sourceRuns.forget('github-tasks')
+const todoIssueStates = createIssueStates({ links: (o) => todoService.issueLinks(o), run: ghCapture })
+todoHttpHandler = createTodoHttpHandler({ service: todoService, commands: todoCommands, sheetFeed: taskSheetFeed, issueStates: todoIssueStates })
 todoMcpTools = createTodoMcpTools({ service: todoService, commands: todoCommands })
 
 // Goals share the task database so a goal can link a real task by foreign key, and take
@@ -15933,8 +16713,24 @@ listHttpHandler = createListHttpHandler({ service: listService })
 listMcpTools = createListMcpTools({ service: listService })
 
 recService = createRecService({ db: todoDatabase, actionLog, timeZone: MORNING_BRIEFING_TZ })
-recHttpHandler = createRecHttpHandler({ service: recService, authMethod: (req) => ownerAuth.authenticate(req).via })
+// A record is the owner's (and skips the 30-day declined hold) only with a signed-in
+// session or the approval code; the bearer alone records as an agent.
+recHttpHandler = createRecHttpHandler({
+  service: recService,
+  authMethod: (req) => ownerAuth.authenticate(req).via,
+  ownerProof: (req) => approveRequest(req, 'low').then(() => true, () => false),
+})
 recMcpTools = createRecMcpTools({ service: recService })
+awayStore = createAwayStore({ file: AWAY_FILE, actionLog, log })
+awayHttpHandler = createAwayHttpHandler({ store: awayStore, tz: MORNING_BRIEFING_TZ })
+linkedinMcpTools = createLinkedinMcpTools({
+  reader: linkedinReader,
+  stage: (card, session) => queueInboxLinkedin({ ...card, chat: session?.chat }),
+  history: linkedinInboxHistory,
+  // The calling chat's own browser, where the owner signed in (preview_handoff).
+  chatBrowserState: (session) => browserManager.storageState(session.chat.threadId),
+})
+awayMcpTools = createAwayMcpTools({ store: awayStore, stage: (span, session) => queueInboxAway({ ...span, chat: session?.chat }), tz: MORNING_BRIEFING_TZ })
 
 
 
@@ -15950,6 +16746,9 @@ const runRegistry = createRunRegistry({ log })
 const approvals = createApprovalStore({
   file: APPROVALS_FILE,
   log,
+  // Only while sign-in alone approves (an install that predates the approval code):
+  // the notification ledger is readable by agents, so a code in it proves nothing.
+  oneTimeCodes: () => approvalCode.oneTimeCodesAllowed(),
   onRequest: async (grant) => {
     await jobStore.notify({
       level: 'warn',
@@ -15958,7 +16757,7 @@ const approvals = createApprovalStore({
       category: 'approval.pending',
       url: '/logs',
       title: `Approval needed: ${grant.explanation.slice(0, 80)}`,
-      body: `Session requested by ${grant.requestedBy}.\nWhy: ${grant.why}\nApprove in Totem → Logs, or read back code ${grant.code}. Expires ${grant.expiresAt}.`,
+      body: `Session requested by ${grant.requestedBy}.\nWhy: ${grant.why}\n${grant.code ? `Approve in Totem → Logs, or read back code ${grant.code}.` : 'Approve it in Totem → Logs.'} Expires ${grant.expiresAt}.`,
     })
     actionLog.record({
       action: 'approval.request',
@@ -15977,7 +16776,59 @@ const approvalController = createApprovalController({
   resolveInboxItem,
   actionLog,
   actorForSession: normalizeActorName,
+  oneTimeCodes: () => approvalCode.oneTimeCodesAllowed(),
 })
+
+// What the approval code tells the owner (auth/approval-code.mjs, once per
+// problem): a code file Totem did not write, an edited copy of its record, and,
+// once, that an install predating the code still approves on sign-in alone.
+function reportApprovalCode({ kind, reason }) {
+  const tampered = kind === 'tampered'
+  actionLog.record({
+    action: `approval.code.${kind}`, actor: 'system', target: 'approval-code', status: tampered ? 'denied' : 'ok',
+    summary: tampered ? `approvals refused: ${reason}` : reason,
+  })
+  jobStore.notify({
+    level: tampered ? 'error' : 'warn',
+    title: tampered ? 'Approval code changed outside Totem' : kind === 'legacy' ? 'Set an approval code' : 'Approval code record edited',
+    body: tampered
+      ? `${reason}. Sends, commands and prompts are refused until you set a new code in Settings → Security. If you just ran npm run approval-code, restart Totem instead.`
+      : kind === 'legacy'
+        ? 'Approvals here rely on your sign-in alone, which an agent reading the server\'s files could forge. Set an approval code in Settings → Security.'
+        : `${reason}. Totem put it back; the code itself is unchanged.`,
+    url: '/settings/security#approval-code',
+  }).catch(() => {})
+}
+
+// Accepted actions an earlier process began and never finished. Nobody knows how
+// far they got, so each ends as `uncertain` (never failed, never left open for a
+// second send) and the owner is told to check before retrying. Runs before the
+// port opens (prepareApprovals), so no request can accept the same proposal first.
+async function settleUncertainApprovals() {
+  const p = localDateParts()
+  const doing = (entry) => (entry.phase === 'running' ? 'running' : 'being carried out')
+  const settled = await settleLeftovers({
+    ledger: approvalInflight,
+    today: `${p.year}-${p.month}-${p.day}`,
+    settleLine: async (id, note) => {
+      const text = await readFile(JOURNAL_INBOX_FILE, 'utf8').catch(() => '')
+      const next = settleInboxLine(text, id, note)
+      if (next !== null) await writeFile(JOURNAL_INBOX_FILE, next)
+    },
+    record: (entry, note) => actionLog.record({
+      action: `inbox.${entry.action}`, actor: 'system', channel: 'inbox', target: entry.id, status: 'uncertain',
+      summary: `${entry.kind} proposal "${entry.title}" was ${doing(entry)} when the bridge restarted; ${note}`,
+      detail: { kind: entry.kind, phase: entry.phase, startedAt: entry.startedAt }, correlationId: entry.id,
+    }),
+    notify: (entry) => jobStore.notify({
+      level: 'warn',
+      title: `${entry.id} may not have finished: ${entry.title}`.slice(0, 120),
+      body: `The bridge restarted while this ${entry.kind} was ${doing(entry)}. Check whether it happened before trying again.`,
+      url: '/logs',
+    }),
+  })
+  for (const entry of settled) log(`inbox ${entry.id}: ${entry.kind} ${entry.action} left uncertain by a restart`)
+}
 
 const JOBS_FILE = process.env.JOBS_FILE || join(HERE, 'data', 'jobs.json')
 const JOB_RUNS_FILE = process.env.JOB_RUNS_FILE || join(HERE, 'data', 'job-runs.jsonl')
@@ -16071,6 +16922,9 @@ const notifier = createNotifier({
   apns: (() => { const c = apnsConfigFromEnv(); return c ? createApnsSender(c) : null })(),
   log,
 })
+// Nudges wait out an away day, one night at a time, and come back when quiet hours end
+// (away/hold.mjs). The digest's quiet hours are the defaults, so the hold uses the same.
+notifyGate.addHold(createAwayHold({ spans: () => awayStore.snapshot(), tz: MORNING_BRIEFING_TZ, quietHours: normalizePlanSettings({}).quietHours }))
 
 const jobStore = createJobStore({
   file: JOBS_FILE,
@@ -16078,10 +16932,11 @@ const jobStore = createJobStore({
   notificationsFile: NOTIFICATIONS_FILE,
   seedDefs: SEED_JOB_DEFS,
   runners: JOB_RUNNER_DEFS,
-  // The sheet sync's job used to be keyed by the original sheet's name. A saved
-  // job under that id keeps its schedule and enabled state.
-  renamedIds: { 'wallpass-sheet-sync': 'task-sheet-sync' },
-  renamedRunners: { 'wallpass-sheet-sync': 'task-sheet-sync' },
+  // Jobs whose code is gone. A saved entry under one is dropped, not left to fail
+  // every 15 minutes or come back as a seed: the two-way sheet sync (it
+  // became a read-only feed, GET /api/todos/sheet) and the GitHub task
+  // connector (migration 011).
+  retiredIds: ['task-sheet-sync', 'github-todos-sync'],
   tz: MORNING_BRIEFING_TZ,
   log,
   webhookUrl: NOTIFY_WEBHOOK_URL,
@@ -16121,8 +16976,16 @@ const devService = createDevService({
   github: devGithub,
   alerts: devAlerts,
 })
-devHttpHandler = createDevHttpHandler({ service: devService })
+// Orchestrated runs: each ORCH thread pushes its status to POST /api/dev/runs/:slug.
+const devRuns = createRunStore({
+  file: process.env.DEV_RUNS_FILE || join(HERE, 'data', 'dev-runs.json'),
+  notify: (n) => jobStore.notify(n),
+  t3Url: () => T3_CODE_URL,
+  log,
+})
+devHttpHandler = createDevHttpHandler({ service: devService, runs: devRuns })
 alertIngestHandler = createAlertIngestHandler({ alerts: devAlerts })
+runIngestHandler = createRunIngestHandler({ runs: devRuns })
 const devWatcher = createDevWatcher({ config: devService.config, github: devGithub, alerts: devAlerts, log })
 
 // ---------------------------------------------------------------------------
@@ -16137,6 +17000,28 @@ const fleetStore = createFleetStore({
   log,
 })
 fleetHttpHandler = createFleetHttpHandler({ store: fleetStore, publicUrl })
+
+// ---------------------------------------------------------------------------
+// The CLIProxy tab: the proxy's Claude and Codex logins, managed. docs/cliproxy.md.
+// Changes go through APPROVAL_ROUTES; quota comes from the usage poller.
+// ---------------------------------------------------------------------------
+const cliproxyManager = createCliproxyManager({
+  client: cliproxyClient,
+  // Hidden logins included: the tab manages them too.
+  snapshot: () => ({ ...aiUsage.snapshot, accounts: aiUsage.proxyAnnotated }),
+  refresh: (id) => aiUsage.poll(id),
+  stateFile: process.env.CLIPROXY_STATE_FILE || join(HERE, 'data', 'cliproxy.json'),
+  audit: async (action, detail) => actionLog.record({
+    action,
+    actor: OWNER_ACTOR,
+    channel: 'web',
+    target: detail?.account || detail?.provider || null,
+    status: 'ok',
+    summary: `${action.replace('cliproxy.', 'CLIProxy ').replace(/_/g, ' ')}${detail?.account ? ` ${detail.account}` : ''}${detail?.result ? ` → ${detail.result}` : ''}`,
+    detail,
+  }),
+})
+cliproxyHttpHandler = createCliproxyHttpHandler({ manager: cliproxyManager, configured: () => cliproxyClient.configured() })
 fleetReportHandler = createFleetReportHandler({ store: fleetStore })
 let fleetCollector = null
 async function fleetLoop() {
@@ -16316,6 +17201,8 @@ async function collectNotifyFacts({ now = Date.now() } = {}) {
       tz,
       nameOf: (account) => account.displayName || AI_USAGE_BACKENDS[account.backend] || account.backend,
       options: { lowPct: Number(NOTIFY_USAGE_LOW_PCT) || undefined },
+      pools: aiUsage.snapshot?.pools || [],
+      providerName: (backend) => AI_USAGE_BACKENDS[backend] || backend,
     }),
   ]
 
@@ -16722,17 +17609,20 @@ const JOB_RUNNERS = {
     if (dirty) throw new Error(`not deploying: the checkout has uncommitted changes (${dirty.split('\n').length} file(s)). Commit, stash or move that work to a worktree, then run this again`)
     const branch = (await git('rev-parse', '--abbrev-ref', 'HEAD')).trim()
     if (branch !== ref) throw new Error(`not deploying: the checkout is on "${branch}", not "${ref}"`)
+    // Checked before pulling, so a box without pnpm is left on the version it runs.
+    const pnpm = await resolvePnpmAsync()
+    if (!pnpm) throw new Error(`not deploying: ${NO_PNPM} For this service that means its PATH (the systemd unit or launchd plist); nothing was pulled`)
     const before = (await git('rev-parse', 'HEAD')).trim()
     await git('pull', '--ff-only', '--quiet', 'origin', ref)
     const after = (await git('rev-parse', 'HEAD')).trim()
     if (before === after) return { output: `Already on ${after.slice(0, 7)}; nothing to deploy.`, status: 'skipped', agentless: true }
     const changed = (await git('diff', '--name-only', before, after)).split('\n').filter(Boolean)
     const steps = [`pulled ${before.slice(0, 7)} → ${after.slice(0, 7)} (${changed.length} file(s))`]
-    if (changed.some((f) => /(^|\/)package(-lock)?\.json$/.test(f))) {
-      await execText('npm', ['install', '--no-audit', '--no-fund'], { cwd: HERE, timeoutMs: 10 * 60_000 })
+    if (changed.some((f) => /(^|\/)(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$/.test(f))) {
+      await execText(pnpm.cmd, [...pnpm.args, 'install', '--frozen-lockfile'], { cwd: HERE, env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' }, timeoutMs: 10 * 60_000 })
       steps.push('installed dependencies')
     }
-    await execText('npm', ['run', 'build'], { cwd: HERE, timeoutMs: 10 * 60_000 })
+    await execText(pnpm.cmd, [...pnpm.args, 'run', 'build'], { cwd: HERE, env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' }, timeoutMs: 10 * 60_000 })
     steps.push('rebuilt the dashboard')
     const log1 = (await git('log', '--oneline', '--no-decorate', '-n', '10', `${before}..${after}`)).trim()
     return {
@@ -16796,29 +17686,6 @@ const JOB_RUNNERS = {
     // Nothing new is the normal outcome most of the day; skipped keeps a quiet
     // run from reading as a broken one.
     return { output: summary, channel: 'strava-sync', status: r.added ? 'ok' : 'skipped', agentless: true }
-  },
-  'github-todos-sync': async () => {
-    const result = await githubTodoConnector.reconcile()
-    const output = `${result.pulled} imported, ${result.outbox.processed} queued writes completed, ${result.outbox.exhausted} exhausted${result.pullError ? `; pull error: ${result.pullError}` : ''}`
-    return {
-      output,
-      channel: 'github-todos-sync',
-      status: result.pullError || result.outbox.exhausted ? 'error' : result.pulled || result.outbox.processed ? 'ok' : 'skipped',
-      agentless: true,
-    }
-  },
-  'task-sheet-sync': async () => {
-    if (!TASK_SHEET_CONFIGURED) {
-      return { output: 'The task sheet is not configured — set TASK_SHEET_ID, TASK_SHEET_ASSIGNEES and GOOGLE_SHEETS_CREDENTIALS_FILE', channel: 'task-sheet-sync', status: 'skipped', agentless: true }
-    }
-    const result = await sheetTodoConnector.reconcile()
-    const output = `${result.imported} imported, ${result.refreshed} linked rows refreshed, ${result.outbox.processed} queued writes completed, ${result.outbox.exhausted} exhausted${result.pullError ? `; pull error: ${result.pullError}` : ''}`
-    return {
-      output,
-      channel: 'task-sheet-sync',
-      status: result.pullError || result.outbox.exhausted ? 'error' : result.imported || result.outbox.processed ? 'ok' : 'skipped',
-      agentless: true,
-    }
   },
   'todo-maintenance': async () => {
     const result = await todoMaintenance.run({
@@ -17074,6 +17941,9 @@ async function maybeNotifyJobRun(job, record, totemNotify = null) {
 // owner talks to it in. The thread is made the first time something needs it.
 const TOTEMS_DIR = process.env.TOTEMS_DIR || join(HERE, 'data', 'totems')
 const totemThreadId = (jobId) => `totem-${jobId}`.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 128)
+// What a totem makes for the owner (a script, a report): its chat's outputs
+// folder, so the chat's Files panel shows it on every device.
+const totemFilesDir = (jobId) => join(CHAT_OUTPUTS_DIR, totemThreadId(jobId))
 const totemMemoryPath = (jobId) => join(TOTEMS_DIR, String(jobId).replace(/[^A-Za-z0-9_-]/g, '_'), 'memory.md')
 const TOTEM_MEMORY_MAX = 40_000
 // Totems he started in the builder and has not created yet (totems/drafts.mjs).
@@ -17121,14 +17991,16 @@ async function runAgentTotem(job, agentOptions, { trigger = 'schedule', event = 
   await mkdir(dirname(memoryPath), { recursive: true })
   const recentRuns = (await jobStore.runs({ jobId: job.id, limit: 6 })).reverse()
   const browser = job.browser ? grantBrowserAccess(totemThreadId(job.id), () => {}) : null
+  const filesDir = totemFilesDir(job.id)
   try {
     const reply = await runAgent(
-      totemRunPrompt({ totem: job, memory: await readTotemMemory(job.id), memoryPath, recentRuns, browser: !!browser, trigger, event }),
+      totemRunPrompt({ totem: job, memory: await readTotemMemory(job.id), memoryPath, filesDir, recentRuns, browser: !!browser, trigger, event }),
       'job',
-      // A totem's run gets a long budget (a watcher may browse) and may write only its own memory.
+      // A totem's run gets a long budget (a watcher may browse) and may write its own
+      // memory and files folder; its Access setting (`access`) may allow more.
       // `network`: Codex's sandbox blocks the network by default, and a totem that
       // watches the web has to be able to fetch it.
-      { ...agentOptions, allowWrite: [memoryPath], browser, network: true, timeoutMs: 15 * 60_000 },
+      { ...agentOptions, allowWrite: [memoryPath, filesDir], access: job.access || null, browser, network: true, timeoutMs: 15 * 60_000 },
     )
     const { report, notify, quiet } = parseRunReply(reply)
     // QUIET is "checked, nothing new": recorded as skipped, so a watcher's
@@ -17205,11 +18077,11 @@ async function askTotemInChat({ chat, totem, message }) {
     recentRuns: (await jobStore.runs({ jobId: job.id, limit: 5 })).reverse(),
     chatTitle: thread.title || '', others,
     transcript: thread.messages.filter((m) => m.status !== 'streaming').map((m) => ({ role: m.role, content: m.content })),
-    message: question, browser: !!browser,
+    message: question, browser: !!browser, filesDir: totemFilesDir(job.id),
   })
   const a = { id: `ask-${randomUUID().slice(0, 12)}`, chatId: thread.id, job, startedAt: Date.now(), result: null }
   log(`totem ask: ${job.name} in chat ${thread.id}`)
-  a.done = runAgent(prompt, 'job', { ...pre.agentOptions, allowWrite: [memoryPath], browser, network: true, timeoutMs: 10 * 60_000 })
+  a.done = runAgent(prompt, 'job', { ...pre.agentOptions, allowWrite: [memoryPath, totemFilesDir(job.id)], access: job.access || null, browser, network: true, timeoutMs: 10 * 60_000 })
     .then((reply) => {
       const text = String(reply || '').trim()
       a.result = text ? { status: 'done', reply: text.length > 4000 ? `${text.slice(0, 3990)}…` : text } : { status: 'error', error: `${job.name} gave no answer` }
@@ -17371,7 +18243,7 @@ async function handleTotemsApi(req, res, path) {
       name: d.name, description: String(d.summary || String(d.instructions).split(/(?<=[.!?])\s/)[0]).slice(0, 300), iconName: cleanIcon(d.icon) || 'sparkles',
       enabled: body.enabled !== false, schedule: d.schedule, trigger: d.trigger || null, notify: ['agent', 'always', 'errors', 'never'].includes(d.notify) ? d.notify : 'agent',
       prompt: d.instructions, provider: pick?.provider || 'default', model: pick?.model || null, effort: pick?.effort || null,
-      taskType: d.taskType, browser: d.browser === true, recommendations: d.recommendations, threadId: null,
+      taskType: d.taskType, browser: d.browser === true, access: d.access === 'full' ? 'full' : null, recommendations: d.recommendations, threadId: null,
     })
     await writeTotemMemory(job.id, '')
     await ensureTotemThread(job)
@@ -17555,9 +18427,15 @@ async function jobTick() {
 // and so the revalidation snapshot is only built when something is actually due.
 async function drainNotifications(now) {
   try {
-    const due = await notifyStore.listQueue({ state: 'pending' })
+    // All of it: the release thinning below must see every held digest, not the first 200.
+    const due = await notifyStore.listQueue({ state: 'pending', limit: Infinity })
     if (!due.some((entry) => entry.deliverAt <= now || (entry.expiresAt && entry.expiresAt < now))) return
     const revalidate = await revalidateNotifications({ at: now })
+    // Held over an away day: older copies of the same notification (an earlier digest,
+    // a repeated key) go unsent; anything distinct still arrives (away/hold.mjs).
+    for (const id of releasedAfterAway(due, { at: now })) {
+      await notifyStore.finish(id, { outcome: 'stale' })
+    }
     const result = await notifier.drain({ at: now, revalidate })
     for (const item of result.sent) {
       const outcome = item.ok ? 'sent' : item.suppressed ? 'suppressed as a repeat' : item.held ? 'held' : 'failed'

@@ -1,15 +1,7 @@
-import type { Todo, TodoDueFilter, TodoQuery, TodoSort, TodoSortOrder, TodoStatus } from './types'
+// Search and sort over the task list, for the web's Tasks page (the list's grouping
+// is todos/board.ts buildList, shared with the iPhone app).
+import type { Todo, TodoDueFilter, TodoQuery, TodoSort, TodoSortOrder } from './types'
 import { todoSource } from './types'
-
-export const BOARD_STATUSES: readonly TodoStatus[] = ['todo', 'doing', 'done']
-
-export function groupBoard(todos: readonly Todo[]): Record<TodoStatus, Todo[]> {
-  return {
-    todo: sortTodos(todos.filter(todo => todo.status === 'todo'), 'manual'),
-    doing: sortTodos(todos.filter(todo => todo.status === 'doing'), 'manual'),
-    done: sortTodos(todos.filter(todo => todo.status === 'done'), 'manual'),
-  }
-}
 
 function githubIdentifiers(todo: Todo): string[] {
   return todo.externalLinks.flatMap(link => {
@@ -72,33 +64,4 @@ export function sortTodos(todos: readonly Todo[], sort: TodoSort | TodoSortOrder
     }
     return a.position - b.position || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
   })
-}
-
-export interface MoveRollback { before: Todo[] }
-
-export function optimisticMove(todos: readonly Todo[], id: string, status: TodoStatus, index: number) {
-  const before = [...todos]
-  const moving = todos.find(todo => todo.id === id)
-  if (!moving) return { todos: [...todos], rollback: { before } }
-  const remaining = todos.filter(todo => todo.id !== id)
-  const statusItems = remaining.filter(todo => todo.status === status)
-  const bounded = Math.max(0, Math.min(index, statusItems.length))
-  const previous = statusItems[bounded - 1]?.position
-  const next = statusItems[bounded]?.position
-  const position = previous === undefined
-    ? (next === undefined ? 0 : next - 1024)
-    : (next === undefined ? previous + 1024 : (previous + next) / 2)
-  return {
-    todos: remaining.concat({ ...moving, status, position }),
-    rollback: { before },
-  }
-}
-
-export function rollbackMove(_todos: readonly Todo[], rollback: MoveRollback): Todo[] {
-  return rollback.before
-}
-
-export function nextMobileStatus(status: TodoStatus, direction: -1 | 1): TodoStatus {
-  const current = BOARD_STATUSES.indexOf(status)
-  return BOARD_STATUSES[Math.max(0, Math.min(BOARD_STATUSES.length - 1, current + direction))]
 }

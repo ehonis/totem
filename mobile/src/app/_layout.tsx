@@ -52,6 +52,8 @@ const ROUTES: { name: string; options: object }[] = [
   { name: 'chat/agents', options: sheet([0.6, 1]) },
   { name: 'chat/file', options: sheet([0.75, 1], colors.bg) },
   { name: 'chat/snooze', options: sheet([0.5]) },
+  // A list's Snoozed or Settled chats, opened from the drawer's foot.
+  { name: 'chat/shelf', options: sheet([0.75, 1]) },
   // Voice takes the whole screen and stays until ended: no swipe-down to leave it live.
   { name: 'chat/voice', options: { presentation: 'fullScreenModal', animation: 'fade', gestureEnabled: false, contentStyle: { backgroundColor: '#08090d' } } },
   // Tasks
@@ -67,6 +69,7 @@ const ROUTES: { name: string; options: object }[] = [
   // The morning check-in: a page of rows, full height like WHOOP's journal.
   { name: 'habit/checkin', options: sheet([1]) },
   { name: 'overview/habit-day', options: sheet([0.75, 1]) },
+  { name: 'overview/away', options: sheet([0.85, 1]) },
   // Goals
   { name: 'goal/new', options: sheet([1]) },
   // Opens with the keyboard up on the title (or the note), so it starts full height.
@@ -79,6 +82,13 @@ const ROUTES: { name: string; options: object }[] = [
   { name: 'search-result', options: sheet([0.75, 1]) },
   // Pushed screens with the system back button.
   { name: 'settings/[pane]', options: pushedOptions('Settings', 'Settings') },
+  // A pane's own detail screens (routed here, drawn in features/settings/*).
+  { name: 'settings/provider', options: pushedOptions('', 'Providers') },
+  { name: 'settings/skill', options: pushedOptions('', 'Skills') },
+  { name: 'settings/usage-tracking', options: pushedOptions('Edit tracking', 'Usage') },
+  { name: 'settings/connection', options: pushedOptions('', 'Connections') },
+  { name: 'settings/add-connection', options: sheet([1]) },
+  { name: 'settings/log', options: sheet([0.6, 1]) },
   { name: 'totem/[id]', options: pushedOptions('', 'Totems') },
   { name: 'totem/new', options: pushedOptions('', 'Totems') },
   { name: 'totem/group', options: sheet([0.85, 1]) },

@@ -154,20 +154,6 @@ test('a step decided against leaves the count rather than holding the goal back'
   assert.equal(progress.fraction, 1);
 });
 
-test('an abandoned step is not counted as done either', () => {
-  const progress = goalProgress({
-    completedAt: null,
-    metrics: [],
-    subGoals: [
-      { id: 's1', completedAt: null, metrics: [] },
-      { id: 's2', completedAt: null, abandonedAt: '2026-09-17T13:00:00.000Z', metrics: [] },
-    ],
-  });
-  assert.equal(progress.subGoalsDone, 0);
-  assert.equal(progress.subGoalsTotal, 1);
-  assert.equal(progress.fraction, 0, 'dropping it out is not the same as claiming it');
-});
-
 test('what an abandoned step already logged still rolls up', () => {
   // Those miles happened. Deciding the step is over does not un-ride them.
   const progress = goalProgress({

@@ -1,8 +1,37 @@
 // The dashboard's design tokens (web/src/styles.css :root), as one object.
 // Keep the names the CSS uses so a value can be looked up in either direction.
 import { StyleSheet } from 'react-native'
+import { findBackground, type Background } from './lib/backgrounds'
 
-export const colors = {
+// Settings → Appearance › Background (backgrounds.ts), read once at launch: every
+// StyleSheet below and in the screens is built from these values at import time,
+// so a new palette applies when the app restarts (the pane offers to). Read
+// straight from storage, not through settings.ts, so nothing here imports React.
+function storedPalette(): Background | null {
+  try {
+    const raw = globalThis.localStorage?.getItem('app_settings')
+    const id = raw ? JSON.parse(raw)?.background : null
+    const b = id ? findBackground(id) : null
+    return b && b.id !== 'original' ? b : null
+  } catch {
+    return null
+  }
+}
+
+const palette = storedPalette()
+
+/** The palette this launch drew with; null for Original, the stylesheet's own colours. */
+export const activePalette: Background | null = palette
+/** A code block's header and a table's head (Original's own values otherwise). */
+export const surfaces = {
+  codeHead: palette ? palette.panel : '#161922',
+  tableHead: palette ? palette.panel : '#1a1d26',
+}
+
+/** Its id ('original' when none is set). */
+export const activeBackground: string = palette?.id ?? 'original'
+
+const base = {
   bg: '#0f1115',
   bg2: '#161922',
   bg3: '#1d212c',
@@ -14,6 +43,8 @@ export const colors = {
   green: '#3fb950',
   red: '#f0506e',
   amber: '#e3b341',
+  // --away: trips and days off (the Overview band, the calendar).
+  away: '#2dd4bf',
   // Shell (shell.css) shades that are not tokens on the web.
   rail: '#0b0c10',
   drawerOn: '#252a37',
@@ -25,6 +56,20 @@ export const colors = {
   toastInfo: '#3463d6',
   white: '#ffffff',
 } as const
+
+export const colors: { readonly [K in keyof typeof base]: string } = palette
+  ? {
+    ...base,
+    bg: palette.bg,
+    bg2: palette.panel,
+    bg3: palette.raised,
+    line: palette.line,
+    muted: palette.muted,
+    rail: palette.rail,
+    // The web points --rail-on and --rail-hover at the palette's own surfaces.
+    drawerOn: palette.raised,
+  }
+  : base
 
 /** `color-mix(in srgb, var(--text) N%, transparent)`, which the shell uses for quiet chrome. */
 export const textAlpha = (pct: number) => `rgba(230, 232, 238, ${pct / 100})`

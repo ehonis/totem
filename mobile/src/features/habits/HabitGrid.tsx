@@ -17,6 +17,8 @@ import {
 const CELL = 13
 const GAP = 3
 const HEIGHT = 7 * CELL + 6 * GAP
+// Rows run Monday to Sunday (logic.ts dayOfWeek).
+const WEEKDAY_LABELS = ['Mon', '', 'Wed', '', 'Fri', '', '']
 
 export interface HabitGridProps {
   habit: Habit
@@ -33,8 +35,7 @@ function Scroller({ children }: { children: React.ReactNode }) {
       ref={ref}
       horizontal
       showsHorizontalScrollIndicator={false}
-      // No bounce at the ends, so a swipe past the newest week goes on to the next
-      // Productivity page instead of rubber-banding the grid.
+      // No bounce: the newest week stays pinned to the right edge.
       bounces={false}
       onContentSizeChange={() => ref.current?.scrollToEnd({ animated: false })}
       contentContainerStyle={{ paddingBottom: 2 }}
@@ -81,47 +82,73 @@ function DayGrid({ habit, entries, today, onPick }: HabitGridProps) {
   }, [today])
 
   return (
-    <Scroller>
-      <MonthLabels labels={labels} pitch={CELL + GAP} width={GRID_WEEKS * (CELL + GAP)} />
-      <View style={{ flexDirection: 'row', gap: GAP }}>
-        {weeks.map((col) => (
-          <Press
-            key={col[0].date}
-            accessibilityLabel={`${habit.name}, week of ${col[0].date}`}
-            onPress={(e) => {
-              const row = Math.min(6, Math.max(0, Math.floor(offsetY(e) / (CELL + GAP))))
-              const cell = col[row]
-              if (!cell || cell.future) return
-              tap()
-              onPick(cell.date)
-            }}
-            style={{ gap: GAP }}
-          >
-            {col.map(({ date, future }) => {
-              // Cells take no touches, so the column is the touch target and
-              // locationY is measured from its top (on iOS it is relative to
-              // whichever view was hit, which would make every tap row 0).
-              if (future) return <View key={date} pointerEvents="none" style={{ width: CELL, height: CELL }} />
-              const e = entries[date]?.[habit.id]
-              const level = levelOf(e?.count || 0, habit.target)
-              return (
-                <View
-                  key={date}
-                  pointerEvents="none"
-                  style={[
-                    s.cell,
-                    level ? { backgroundColor: mixHex(habit.color, colors.bg3, LEVEL_MIX[level]) } : null,
-                    date === today && { borderColor: colors.text },
-                  ]}
+    <View>
+      <View style={{ flexDirection: 'row' }}>
+        {/* Mon, Wed and Fri down the side, outside the scroll, so the rows read as days. */}
+        <View style={s.weekdays} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+          {WEEKDAY_LABELS.map((label, i) => (
+            <T key={i} size={10} muted lineHeight={CELL} style={{ height: CELL }}>{label}</T>
+          ))}
+        </View>
+        <View style={{ flex: 1 }}>
+          <Scroller>
+            <MonthLabels labels={labels} pitch={CELL + GAP} width={GRID_WEEKS * (CELL + GAP)} />
+            <View style={{ flexDirection: 'row', gap: GAP }}>
+              {weeks.map((col) => (
+                <Press
+                  key={col[0].date}
+                  accessibilityLabel={`${habit.name}, week of ${col[0].date}`}
+                  onPress={(e) => {
+                    const row = Math.min(6, Math.max(0, Math.floor(offsetY(e) / (CELL + GAP))))
+                    const cell = col[row]
+                    if (!cell || cell.future) return
+                    tap()
+                    onPick(cell.date)
+                  }}
+                  style={{ gap: GAP }}
                 >
-                  {e?.note ? <View style={[s.noteDot, { backgroundColor: level ? colors.bg : colors.muted }]} /> : null}
-                </View>
-              )
-            })}
-          </Press>
-        ))}
+                  {col.map(({ date, future }) => {
+                    // Cells take no touches, so the column is the touch target and
+                    // locationY is measured from its top (on iOS it is relative to
+                    // whichever view was hit, which would make every tap row 0).
+                    if (future) return <View key={date} pointerEvents="none" style={{ width: CELL, height: CELL }} />
+                    const e = entries[date]?.[habit.id]
+                    const level = levelOf(e?.count || 0, habit.target)
+                    return (
+                      <View
+                        key={date}
+                        pointerEvents="none"
+                        style={[
+                          s.cell,
+                          level ? { backgroundColor: mixHex(habit.color, colors.bg3, LEVEL_MIX[level]) } : null,
+                          date === today && { borderColor: colors.text },
+                        ]}
+                      >
+                        {e?.note ? <View style={[s.noteDot, { backgroundColor: level ? colors.bg : colors.muted }]} /> : null}
+                      </View>
+                    )
+                  })}
+                </Press>
+              ))}
+            </View>
+          </Scroller>
+        </View>
       </View>
-    </Scroller>
+      <Legend color={habit.color} />
+    </View>
+  )
+}
+
+/** Less ▢▢▢▢▢ More, in the habit's own colour, under the day grid. */
+function Legend({ color }: { color: string }) {
+  return (
+    <View style={s.legend} accessible accessibilityLabel="Darker squares mean closer to the day's target">
+      <T size={10} muted>Less</T>
+      {LEVEL_MIX.map((mix, level) => (
+        <View key={level} style={[s.cell, { width: 10, height: 10, borderRadius: 2 }, level ? { backgroundColor: mixHex(color, colors.bg3, mix) } : null]} />
+      ))}
+      <T size={10} muted>More</T>
+    </View>
   )
 }
 
@@ -181,4 +208,7 @@ const s = StyleSheet.create({
     backgroundColor: colors.bg3, borderWidth: 1, borderColor: alpha('#ffffff', 0.04),
   },
   fill: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  // Month labels sit 18pt above the first row (MonthLabels: 14 high, 4 under).
+  weekdays: { width: 28, paddingTop: 18, gap: GAP },
+  legend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: 8 },
 })

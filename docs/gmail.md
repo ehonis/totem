@@ -7,7 +7,7 @@ will arrive, and the owner picks **Send**, **Save as draft** or **Skip** there.
 
 Code: `gmail/` (client and MIME), the "Gmail" blocks in `bridge.mjs` (tools, routes,
 the `email` inbox kind), `web/src/components/McpSettingsView.tsx` (Settings → Connections
-› Mail), `web/src/components/InboxView.tsx` (the email card).
+› Accounts), `web/src/components/InboxView.tsx` (the email card).
 
 ## Setup
 
@@ -18,13 +18,13 @@ the `email` inbox kind), `web/src/components/McpSettingsView.tsx` (Settings → 
 3. On the OAuth consent screen, add the scope `https://www.googleapis.com/auth/gmail.modify`.
    While the app is in **Testing**, add each Gmail address as a test user. Refresh tokens in
    Testing expire after 7 days, the same as Calendar's.
-4. Settings → Connections › Mail › Gmail: type a label (`personal`, `side`) and click Add
+4. Settings → Connections › Accounts › Gmail: type a label (`personal`, `side`) and click Add
    account. Finish Google's sign-in in the new tab. The callback is
    `http://localhost:<BRIDGE_PORT>/gmail-oauth/callback`. From a phone, swap `localhost` for
    a host the phone can reach, as with Calendar.
 
 The same sign-in asks for Calendar too, and the account's calendar is added under the same
-label (Settings → Connections › Calendar), unless that address already has a calendar
+label (Settings → Connections › MCP servers › Google Calendar), unless that address already has a calendar
 connected. Removing the Gmail account leaves the calendar working: the grant is revoked at
 Google only when no calendar still uses it.
 

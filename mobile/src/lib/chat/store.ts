@@ -257,19 +257,40 @@ export async function loadCapabilities({ probe = false } = {}) {
   catch (e) { if (!fail(e) && probe) pushError((e as Error).message) }
 }
 
-/** The provider + settings a chat should use, resolving defaults. */
-export function threadChoice(thread: ChatThread | null, draft: { provider?: string; modelSettings?: Partial<ModelSettings> } = {}) {
+/**
+ * The account and model a new chat in this project or folder starts on: the
+ * folder's own default, else its parent project's; null when neither has one
+ * (the default in Settings → Providers). An account that is no longer listed is
+ * passed over. projectModelDefault in chat/projects.mjs is the bridge's twin.
+ */
+function projectDefault(projectId?: string | null): { provider: string; modelSettings?: Partial<ModelSettings> } | null {
+  const own = projectById(projectId)
+  if (!own) return null
+  for (const p of [own, own.parentId ? projectById(own.parentId) : undefined]) {
+    if (p?.provider && providerById(p.provider)) return { provider: p.provider, modelSettings: p.modelSettings }
+  }
+  return null
+}
+
+/**
+ * The provider + settings a chat should use, resolving defaults. Most specific
+ * first: the chat's own choice, then (for a new chat) the model picked in its
+ * draft, then its folder's default, its project's, and Settings → Providers. `draft`
+ * is only read for a new chat (`thread` null): an existing chat's model is its
+ * own, never one picked somewhere else.
+ */
+export function threadChoice(thread: ChatThread | null, draft: { provider?: string; modelSettings?: Partial<ModelSettings>; projectId?: string | null } = {}) {
   // A chat's account is whichever answered it first (stored on the thread);
   // older chats fall back to the last reply's account.
   const lastReply = thread ? [...thread.messages].reverse().find((m) => m.role === 'assistant' && m.provider)?.provider : undefined
   const stored = thread?.provider || lastReply
-  const provider = stored && providerById(stored)
-    ? stored
-    : draft.provider && providerById(draft.provider) ? draft.provider : state.defaultProvider
+  const picked = !thread && draft.provider && providerById(draft.provider) ? draft.provider : undefined
+  const home = projectDefault(thread ? thread.projectId : draft.projectId)
+  const provider = stored && providerById(stored) ? stored : picked || home?.provider || state.defaultProvider
   const row = providerById(provider)
   // Settings saved under the retired Auto/Instant/Thinking presets never named
   // the model, so they count as unset.
-  const saved = thread ? thread.modelSettings : draft.modelSettings
+  const saved = thread ? thread.modelSettings : picked === provider ? draft.modelSettings : undefined
   const own = saved && !fromPreset(saved) ? saved : null
   // A chat that never saved settings (one started through the API, an older
   // chat, or one that ran on a preset) carries on with the model that last
@@ -278,15 +299,30 @@ export function threadChoice(thread: ChatThread | null, draft: { provider?: stri
   const lastModel = thread && !own
     ? [...thread.messages].reverse().find((m) => m.role === 'assistant' && m.provider === provider && m.model)?.model
     : undefined
-  // A brand-new chat starts on the default account's default model.
+  // Then the folder's or project's model, when the chat is on that account.
+  const inherited = home && home.provider === provider && home.modelSettings && !fromPreset(home.modelSettings) ? home.modelSettings : null
+  // A brand-new chat outside any project starts on the default account's default model.
   let settings = normalizeModelSettings(
-    own || (lastModel ? parseModelSpec(lastModel) : null) || defaultSettingsFor(row, state.defaultProvider, state.defaultModel),
+    own || (lastModel ? parseModelSpec(lastModel) : null) || inherited || defaultSettingsFor(row, state.defaultProvider, state.defaultModel),
   )
   if (row?.supportsModelPicker && !settings.modelId) {
     const first = visibleModels(state.models[provider])[0]?.id
     if (first) settings = { ...settings, modelId: first }
   }
   return { provider, row, settings }
+}
+
+/** A model picked in a new chat's composer, for the place it was picked in (`key`). */
+export interface DraftPick { key: string; provider: string; modelSettings: ModelSettings }
+
+/**
+ * What a composer passes threadChoice. A new chat gets the model picked for it
+ * in this place (Home, a project or a folder; `key`) and the project it starts
+ * in. An open chat gets nothing: its model is its own, never a pick made elsewhere.
+ */
+export function draftFor(pick: DraftPick | null, key: string, { open, projectId }: { open: boolean; projectId?: string }): { provider?: string; modelSettings?: ModelSettings; projectId?: string } {
+  if (open) return {}
+  return { ...(pick?.key === key ? { provider: pick.provider, modelSettings: pick.modelSettings } : {}), projectId }
 }
 
 // --- threads ----------------------------------------------------------------
@@ -338,8 +374,8 @@ function takeProject(project: Project) {
   set((s) => ({
     projectDetail: { ...s.projectDetail, [project.id]: project },
     projects: s.projects.some((p) => p.id === project.id)
-      // A removed picture is a missing key, which a spread would not clear.
-      ? s.projects.map((p) => (p.id === project.id ? { ...p, ...summary, image: summary.image, imageUrl: summary.imageUrl } : p))
+      // A removed picture or model is a missing key, which a spread would not clear.
+      ? s.projects.map((p) => (p.id === project.id ? { ...p, ...summary, image: summary.image, imageUrl: summary.imageUrl, provider: summary.provider, modelSettings: summary.modelSettings } : p))
       : [...s.projects, summary as Project].sort((a, b) => a.name.localeCompare(b.name)),
   }))
   return project
@@ -353,9 +389,9 @@ export async function loadProject(id: string) {
 }
 
 export async function createProject(body: { name: string; icon?: string; instructions?: string; parentId?: string }) {
-  // A new project starts on whatever a new chat would use right now.
-  const { provider, settings } = threadChoice(null)
-  const { project } = await createProjectApi({ ...body, provider, modelSettings: settings })
+  // No model of its own until one is picked: a folder follows its project, a
+  // project the default in Settings → Providers (projectDefault).
+  const { project } = await createProjectApi(body)
   takeProject(project)
   openProject(project.id)
   return project
@@ -757,6 +793,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
     case 'steer':
     case 'questions':
     case 'approval':
+    case 'inbox':
+    case 'visual':
     case 'delta':
     case 'tool':
     case 'agent':
@@ -855,7 +893,7 @@ export function send(input: SendInput): string {
   let thread = state.threads.find((t) => t.id === threadId) || null
   const projectId = thread ? thread.projectId : (input.projectId || undefined)
   const kind = projectId ? 'regular' : thread?.kind || input.kind || 'regular'
-  const { provider, row, settings } = threadChoice(thread, { provider: input.provider, modelSettings: input.modelSettings })
+  const { provider, row, settings } = threadChoice(thread, { provider: input.provider, modelSettings: input.modelSettings, projectId })
   const wire = wireModel(row?.driver || 'cursor', settings)
   const t0 = now()
   const userMessage: ChatMessage = {

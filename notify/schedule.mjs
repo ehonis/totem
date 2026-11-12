@@ -178,17 +178,6 @@ export function deliveryState(deliverAt, now, graceMs = DEFAULT_CATCH_UP_MINUTES
   return 'missed'
 }
 
-// "was due 2:00 PM" — appended to a late delivery so a nudge that arrives an hour
-// after its moment doesn't read as a nudge about now.
-export function lateSuffix(deliverAt, now, tz) {
-  const minutes = Math.round((now - deliverAt) / MINUTE)
-  if (minutes < 5) return ''
-  const p = localParts(deliverAt, tz)
-  const suffix = p.hour < 12 ? 'AM' : 'PM'
-  const hour = p.hour % 12 === 0 ? 12 : p.hour % 12
-  return `was due ${hour}:${String(p.minute).padStart(2, '0')} ${suffix}`
-}
-
 // Dedupe keys collapse "the same thing said again" without collapsing "the same
 // kind of thing about something else". The window is per-category and lives with
 // the categories, not here.

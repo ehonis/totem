@@ -29,6 +29,16 @@ describe('contextMarkdown', () => {
     expect(md).toMatch(/… \d+ more not shown/)
   })
 
+  it('quotes what the owner selected above the card\'s facts, redacted and capped', () => {
+    const md = contextMarkdown({ place: 'goals', title: 'Goal: Run', lines: ['- Distance: 12 of 30 mi'], selection: 'Distance\n\n12  of 30 mi\nghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' }, AT)
+    expect(md).toContain('The owner selected this on the card:\n\n> Distance\n> 12 of 30 mi\n')
+    expect(md.indexOf('> Distance')).toBeLessThan(md.indexOf('- Distance: 12 of 30 mi'))
+    expect(md).not.toContain('ABCDEFGHIJ')
+    const long = contextMarkdown({ place: 'goals', title: 'x', lines: [], selection: 'y'.repeat(50_000) }, AT)
+    expect(long.length).toBeLessThan(3000)
+    expect(contextMarkdown({ place: 'goals', title: 'x', lines: [], selection: '  \n ' }, AT)).not.toContain('selected')
+  })
+
   it('names the file after the card', () => {
     expect(contextFileName({ place: 'goals', title: 'Goal: Run 30 miles!', lines: [] })).toBe('goal-run-30-miles.md')
     expect(contextFileName({ place: 'dev.repo', title: '…', lines: [] })).toBe('dev-repo.md')
@@ -224,7 +234,7 @@ describe('size and secrets', () => {
     expect(md).not.toContain('more not shown')
   })
 
-  it('tokens in a card never reach the text', () => {
+  it('known token formats in a card are redacted', () => {
     const notes = [
       'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
       'github_pat_11ABCDEFG0123456789_abcdefghijklmnop',

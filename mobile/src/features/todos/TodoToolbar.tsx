@@ -1,7 +1,10 @@
-// The bar above the board (web/src/todos/TodoToolbar.tsx) at its phone size:
-// search, then Filter / Sort / Select as 44pt icon buttons. The web's popovers
-// are native menus — each filter a submenu with its options checked, the sort a
-// stack of "Sort by / then by" submenus — and what is on still shows as chips.
+// The bar above the list (web/src/todos/TodoToolbar.tsx) at its phone size: search,
+// then Filter and "…" as 44pt icon buttons. The web's popovers are native menus, each
+// filter a submenu with its options checked, and what is on still shows as chips.
+// There is no sort: the list's order is the shared one (due day, priority, tasks
+// before sheet rows, then the order you put them in). "Show" narrows to an area or to
+// the task sheet alone. The "…" holds Select (bulk actions) and the lifecycle panels
+// (snoozed, archive, recycle bin, retention), each with its count.
 import React from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { MenuView, type MenuAction } from '@react-native-menu/menu'
@@ -10,61 +13,66 @@ import { T } from '../../ui/Text'
 import { Input, Press } from '../../ui/kit'
 import { confirm, prompt, showMenu } from '../../ui/menu'
 import { tap } from '../../ui/haptics'
-import {
-  Hi, AdjustmentsHorizontalIcon, BarsArrowDownIcon, CheckCircleIcon, MagnifyingGlassIcon, XMarkIcon,
-} from '../../lib/icons'
+import { Hi, AdjustmentsHorizontalIcon, EllipsisHorizontalIcon, MagnifyingGlassIcon, XMarkIcon } from '../../lib/icons'
 import { useVentureTags } from '../../lib/todos/ventureTags'
-import type { TodoQuery, TodoSort, TodoSortOrder } from '../../lib/todos/types'
+import type { ListQuery } from './list'
 
-const SORT_OPTIONS: readonly { value: Exclude<TodoSort, 'manual'>; label: string }[] = [
-  { value: 'due', label: 'Due date' },
-  { value: 'priority', label: 'Priority' },
-  { value: 'updated', label: 'Recently updated' },
-  { value: 'created', label: 'Recently created' },
-]
+export type LifecyclePanel = 'snoozed' | 'deleted' | 'archive' | 'retention'
 
-type FilterKey = 'area' | 'ventureTag' | 'priority' | 'due' | 'source'
+type FilterKey = 'scope' | 'ventureTag' | 'priority' | 'due'
+type FilterOption = { value: string; label: string; note?: string; disabled?: boolean }
+type Filter = { key: FilterKey; label: string; all: string; options: readonly FilterOption[] }
 
 // One description of each filter, shared by the menu and the chips, so a filter
 // can never read one way when you set it and another way once it is on.
-const BASE_FILTERS: readonly { key: FilterKey; label: string; all: string; options: readonly { value: string; label: string }[] }[] = [
-  { key: 'area', label: 'Area', all: 'All areas', options: [{ value: 'Personal', label: 'Personal' }, { value: 'Ventures', label: 'Ventures' }] },
+const BASE_FILTERS: readonly Filter[] = [
+  // Filled with the areas and the task sheet; see filtersFor().
+  { key: 'scope', label: 'Show', all: 'Everything', options: [] },
   // Filled from the install's venture tags; see filtersFor().
   { key: 'ventureTag', label: 'Venture', all: 'All ventures', options: [] },
   { key: 'priority', label: 'Priority', all: 'All priorities', options: [{ value: '4', label: 'P1' }, { value: '3', label: 'P2' }, { value: '2', label: 'P3' }, { value: '1', label: 'P4' }] },
   { key: 'due', label: 'Due', all: 'Any due date', options: [{ value: 'overdue', label: 'Overdue' }, { value: 'today', label: 'Today' }, { value: 'upcoming', label: 'Upcoming' }, { value: 'none', label: 'No date' }] },
-  { key: 'source', label: 'Source', all: 'All sources', options: [{ value: 'local', label: 'Private' }, { value: 'github', label: 'GitHub' }, { value: 'sheet', label: 'Action Items' }] },
 ]
 
-// The venture filter lists the configured tags, and disappears (along with the
-// Ventures area option) when there are none.
-function filtersFor(tags: { name: string }[]) {
-  if (!tags.length) {
-    return BASE_FILTERS
-      .filter((filter) => filter.key !== 'ventureTag')
-      .map((filter) => (filter.key === 'area' ? { ...filter, options: filter.options.filter((option) => option.value !== 'Ventures') } : filter))
-  }
-  return BASE_FILTERS.map((filter) => (filter.key === 'ventureTag' ? { ...filter, options: tags.map((tag) => ({ value: tag.name, label: tag.name })) } : filter))
+/**
+ * The venture filter lists the configured tags, and disappears (along with the
+ * Ventures option) when there are none. Show offers the task sheet by its own name;
+ * one that is not set up is listed greyed, saying so.
+ */
+function filtersFor(tags: { name: string }[], sheet: { name: string; configured: boolean | null }): Filter[] {
+  const scope: FilterOption[] = [
+    { value: 'Personal', label: 'Personal tasks' },
+    ...(tags.length ? [{ value: 'Ventures', label: 'Ventures tasks' }] : []),
+    sheet.configured === false
+      ? { value: 'sheet', label: sheet.name, note: 'Not set up · Settings → Tasks', disabled: true }
+      : { value: 'sheet', label: sheet.name },
+  ]
+  return BASE_FILTERS
+    .filter((filter) => filter.key !== 'ventureTag' || tags.length > 0)
+    .map((filter) => filter.key === 'scope' ? { ...filter, options: scope }
+      : filter.key === 'ventureTag' ? { ...filter, options: tags.map((tag) => ({ value: tag.name, label: tag.name })) }
+        : filter)
 }
 
 interface Props {
-  query: TodoQuery
-  sort: TodoSortOrder
-  groupBySource: boolean
+  query: ListQuery
+  /** The task sheet, by the feed's name; `configured` is null until it has been read. */
+  sheet: { name: string; configured: boolean | null }
   bulkMode: boolean
   selectedCount: number
-  onQuery: (query: TodoQuery) => void
-  onSort: (sort: TodoSort[]) => void
-  onGroupBySource: (value: boolean) => void
+  /** Counts for the "…" menu's lifecycle rows. */
+  lifecycle: { snoozed: number; nextWake: string | null; deleted: number; archived: number }
+  onQuery: (query: ListQuery) => void
   onBulkMode: (value: boolean) => void
   onBulk: (operation: string, value?: unknown) => void
+  onLifecycle: (panel: LifecyclePanel) => void
 }
 
-export default function TodoToolbar({ query, sort, groupBySource, bulkMode, selectedCount, onQuery, onSort, onGroupBySource, onBulkMode, onBulk }: Props) {
-  const FILTERS = filtersFor(useVentureTags())
+export default function TodoToolbar({ query, sheet, bulkMode, selectedCount, lifecycle, onQuery, onBulkMode, onBulk, onLifecycle }: Props) {
+  const FILTERS = filtersFor(useVentureTags(), sheet)
 
   // Priority is the one filter the query holds as a number; everything else is the
-  // option value as typed, so the menu and the chips can treat all five as strings.
+  // option value as typed, so the menu and the chips can treat all four as strings.
   const valueOf = (key: FilterKey) => {
     const raw = query[key]
     return raw === null || raw === undefined ? '' : String(raw)
@@ -74,68 +82,49 @@ export default function TodoToolbar({ query, sort, groupBySource, bulkMode, sele
   const active = FILTERS.filter((filter) => valueOf(filter.key))
   const clearAll = () => onQuery(FILTERS.reduce((next, filter) => ({ ...next, [filter.key]: filter.key === 'priority' ? null : '' }), { ...query }))
 
-  const manual = sort[0] === 'manual'
-  const availableSorts = SORT_OPTIONS.filter((option) => !sort.includes(option.value))
-  const sortLabel = (criterion: TodoSort) => criterion === 'manual' ? 'Manual order' : SORT_OPTIONS.find((option) => option.value === criterion)?.label ?? criterion
-  const setCriterion = (index: number, value: TodoSort) => {
-    if (index === 0 && value === 'manual') return onSort(['manual'])
-    const next = manual ? [] : [...sort]
-    next[index] = value
-    onSort(next)
-  }
-  const removeCriterion = (index: number) => {
-    const next = sort.filter((_, criterionIndex) => criterionIndex !== index)
-    onSort(next.length ? [...next] : ['manual'])
-  }
-
   const filterActions: MenuAction[] = [
     ...FILTERS.map((filter): MenuAction => {
       const value = valueOf(filter.key)
       return {
         id: filter.key, title: filter.label,
         subtitle: filter.options.find((option) => option.value === value)?.label ?? filter.all,
-        subactions: [{ value: '', label: filter.all }, ...filter.options].map((option) => ({
-          id: `f:${filter.key}:${option.value}`, title: option.label, state: value === option.value ? 'on' : 'off',
+        subactions: [{ value: '', label: filter.all } as FilterOption, ...filter.options].map((option): MenuAction => ({
+          id: `f:${filter.key}:${option.value}`, title: option.label, subtitle: option.note, state: value === option.value ? 'on' : 'off',
+          attributes: option.disabled ? { disabled: true } : undefined,
         })),
       }
     }),
     {
       id: 'filter-more', title: '', displayInline: true, subactions: [
-        { id: 'group', title: 'Group by source', image: 'rectangle.split.3x1', state: groupBySource ? 'on' : 'off' },
         { id: 'clear', title: 'Clear filters', attributes: active.length ? undefined : { disabled: true } },
       ],
     },
   ]
 
-  const sortActions: MenuAction[] = [
-    ...sort.map((criterion, index): MenuAction => ({
-      id: `sort-${index}`, title: index === 0 ? 'Sort by' : 'Then by', subtitle: sortLabel(criterion),
-      subactions: [
-        ...(index === 0 ? [{ id: `s:${index}:manual`, title: 'Manual order', state: manual ? 'on' as const : 'off' as const }] : []),
-        ...SORT_OPTIONS.map((option) => ({
-          id: `s:${index}:${option.value}`, title: option.label, state: criterion === option.value ? 'on' as const : 'off' as const,
-          attributes: sort.includes(option.value) && option.value !== criterion ? { disabled: true } : undefined,
-        })),
-        ...(index > 0 ? [{ id: `s:${index}:remove`, title: 'Remove', attributes: { destructive: true } }] : []),
-      ],
-    })),
-    ...(!manual && availableSorts.length ? [{ id: 'then', title: 'Then by', image: 'plus' }] : []),
-  ]
-
   function pressFilter(id: string) {
     tap()
-    if (id === 'group') return onGroupBySource(!groupBySource)
     if (id === 'clear') return clearAll()
     const [, key, ...rest] = id.split(':')
     set(key as FilterKey, rest.join(':'))
   }
 
-  function pressSort(id: string) {
+  const count = (n: number) => n.toLocaleString()
+  const moreActions: MenuAction[] = [
+    { id: 'select', title: bulkMode ? 'Stop selecting' : 'Select tasks', image: 'checkmark.circle' },
+    {
+      id: 'panels', title: '', displayInline: true, subactions: [
+        { id: 'snoozed', title: 'Snoozed', subtitle: lifecycle.snoozed ? `${count(lifecycle.snoozed)}${lifecycle.nextWake ? ` · next back ${lifecycle.nextWake}` : ''}` : 'None', image: 'moon.zzz' },
+        { id: 'archive', title: 'Archive', subtitle: lifecycle.archived ? count(lifecycle.archived) : 'Empty', image: 'archivebox' },
+        { id: 'deleted', title: 'Recycle bin', subtitle: lifecycle.deleted ? count(lifecycle.deleted) : 'Empty', image: 'trash' },
+        { id: 'retention', title: 'Retention', subtitle: 'When finished tasks are archived and the bin emptied', image: 'clock.arrow.circlepath' },
+      ],
+    },
+  ]
+
+  function pressMore(id: string) {
     tap()
-    if (id === 'then') return onSort([...sort, availableSorts[0].value])
-    const [, index, value] = id.split(':')
-    if (value === 'remove') return removeCriterion(Number(index))
-    setCriterion(Number(index), value as TodoSort)
+    if (id === 'select') return onBulkMode(!bulkMode)
+    if (id === 'snoozed' || id === 'archive' || id === 'deleted' || id === 'retention') onLifecycle(id)
   }
 
   async function bulkTag() {
@@ -163,37 +152,29 @@ export default function TodoToolbar({ query, sort, groupBySource, bulkMode, sele
           clearButtonMode="while-editing"
           style={st.search}
         />
-        <MenuView title="Filter and group tasks" actions={filterActions} themeVariant="dark" onPressAction={({ nativeEvent }) => pressFilter(nativeEvent.event)}>
+        <MenuView title="Filter tasks" actions={filterActions} themeVariant="dark" onPressAction={({ nativeEvent }) => pressFilter(nativeEvent.event)}>
           <View style={[st.tool, active.length ? st.toolOn : null]} accessibilityRole="button" accessibilityLabel="Filter">
             <Hi icon={AdjustmentsHorizontalIcon} size={17} color={active.length ? colors.text : colors.muted} />
             {active.length ? <View style={st.count}><T size={10} weight={700} lineHeight={13} color="#0b0d12">{active.length}</T></View> : null}
           </View>
         </MenuView>
-        <MenuView
-          title="Manual order keeps the positions you put cards in. Any other order is a view — it never moves a card."
-          actions={sortActions}
-          themeVariant="dark"
-          onPressAction={({ nativeEvent }) => pressSort(nativeEvent.event)}
-        >
-          <View style={[st.tool, manual ? null : st.toolOn]} accessibilityRole="button" accessibilityLabel={manual ? 'Manual order' : sort.map(sortLabel).join(' → ')}>
-            <Hi icon={BarsArrowDownIcon} size={17} color={manual ? colors.muted : colors.text} />
+        <MenuView title="Tasks" actions={moreActions} themeVariant="dark" onPressAction={({ nativeEvent }) => pressMore(nativeEvent.event)}>
+          <View style={[st.tool, bulkMode && st.toolOn]} accessibilityRole="button" accessibilityLabel="More: select, snoozed, archive, recycle bin, retention" accessibilityState={{ selected: bulkMode }}>
+            <Hi icon={EllipsisHorizontalIcon} size={19} color={bulkMode ? colors.text : colors.muted} />
           </View>
         </MenuView>
-        <Press haptic onPress={() => onBulkMode(!bulkMode)} style={[st.tool, bulkMode && st.toolOn]} accessibilityRole="button" accessibilityLabel="Select" accessibilityState={{ selected: bulkMode }}>
-          <Hi icon={CheckCircleIcon} size={17} color={bulkMode ? colors.text : colors.muted} />
-        </Press>
       </View>
 
       {active.length > 0 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, alignItems: 'center' }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, alignItems: 'center', minHeight: 44 }}>
           {active.map((filter) => (
-            <Press haptic key={filter.key} style={st.chip} onPress={() => set(filter.key, '')} accessibilityLabel={`Clear ${filter.label} filter`}>
+            <Press haptic key={filter.key} style={st.chip} hitSlop={7} onPress={() => set(filter.key, '')} accessibilityLabel={`Clear ${filter.label} filter`}>
               <T size={12} muted>{filter.label}</T>
               <T size={12}>{filter.options.find((option) => option.value === valueOf(filter.key))?.label ?? valueOf(filter.key)}</T>
               <Hi icon={XMarkIcon} size={12} color={colors.text} />
             </Press>
           ))}
-          <Press haptic onPress={clearAll} style={{ minHeight: 30, justifyContent: 'center', paddingHorizontal: 6 }}>
+          <Press haptic onPress={clearAll} hitSlop={7} style={{ minHeight: 30, justifyContent: 'center', paddingHorizontal: 6 }}>
             <T size={12} muted style={{ textDecorationLine: 'underline' }}>Clear all</T>
           </Press>
         </ScrollView>
@@ -220,14 +201,14 @@ export default function TodoToolbar({ query, sort, groupBySource, bulkMode, sele
 
 function BulkBtn({ label, onPress, disabled, danger }: { label: string; onPress: () => void; disabled?: boolean; danger?: boolean }) {
   return (
-    <Press haptic disabled={disabled} onPress={onPress} style={st.bulkBtn}>
+    <Press haptic disabled={disabled} onPress={onPress} style={st.bulkBtn} hitSlop={4} accessibilityRole="button">
       <T size={12} color={danger ? '#ff7f95' : colors.text}>{label}</T>
     </Press>
   )
 }
 
 const st = StyleSheet.create({
-  toolbar: { gap: 6, paddingBottom: 8, marginBottom: 8, borderBottomWidth: 1, borderBottomColor: colors.line },
+  toolbar: { gap: 8, paddingBottom: 4 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   search: { flex: 1, minHeight: 44, borderRadius: 8, paddingHorizontal: 10, gap: 7 },
   tool: {
@@ -246,5 +227,5 @@ const st = StyleSheet.create({
   bulk: {
     paddingVertical: 6, borderWidth: 1, borderColor: alpha(colors.accent, 0.35), borderRadius: 9, backgroundColor: '#172033',
   },
-  bulkBtn: { minHeight: 32, justifyContent: 'center', paddingHorizontal: 9, borderWidth: 1, borderColor: colors.line, borderRadius: 7, backgroundColor: colors.bg2 },
+  bulkBtn: { minHeight: 38, justifyContent: 'center', paddingHorizontal: 9, borderWidth: 1, borderColor: colors.line, borderRadius: 7, backgroundColor: colors.bg2 },
 })

@@ -1,8 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { useChat, showFiles, loadFiles, openArtifact, fileArtifact, type FileEntry } from './store'
+import React, { useMemo, useState } from 'react'
+import { useChat, showFiles, loadFiles, openFile, type FileEntry } from './store'
+import { usePanelEscape } from './escape'
 import { TI, formatBytes } from './ui'
 import { IconX, IconFolder, IconFolderOpen, IconChevronRight, IconChevronDown, IconArrowDown, IconRefresh } from './icons'
-import { artifactIcon, downloadUrl } from './ArtifactPanel'
+import { artifactIcon } from './ArtifactPanel'
+import { downloadFile } from '../links'
 
 // T3 Code's files viewer, for a chat: the folder its agent saves into on the box
 // (data/chat-outputs/<thread>/, listed by chat/files.mjs), beside the chat in the
@@ -32,12 +34,7 @@ export default function FilesPanel({ threadId }: { threadId: string | null }) {
   const rows = useMemo(() => visibleRows(listing?.entries || [], closed), [listing, closed])
   const count = listing?.entries.filter((e) => !e.dir).length || 0
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') showFiles(false) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open])
+  usePanelEscape(open, () => showFiles(false))
 
   if (!open || !threadId) return null
   const toggle = (rel: string) => setClosed((c) => { const n = new Set(c); if (n.has(rel)) n.delete(rel); else n.add(rel); return n })
@@ -73,14 +70,15 @@ export default function FilesPanel({ threadId }: { threadId: string | null }) {
                   </button>
                 ) : (
                   <div className="vc-file-row">
-                    <button type="button" className="vc-file-open" onClick={() => openArtifact(fileArtifact(entry.path, entry.size))} title={entry.path}>
+                    <button type="button" className="vc-file-open" onClick={() => openFile(entry.path)} title={entry.path}>
                       <TI icon={artifactIcon(entry.mime || '', entry.name)} size={17} />
                       <span className="vc-file-name">{entry.name}</span>
                       {entry.size != null && <span className="vc-file-size">{formatBytes(entry.size)}</span>}
                     </button>
-                    <a className="vc-icon-btn" href={downloadUrl(fileArtifact(entry.path).url)} download={entry.name} title="Download" aria-label={`Download ${entry.name}`}>
+                    {/* Signed on the click (links.ts), so a list left open for a day still downloads. */}
+                    <button type="button" className="vc-icon-btn" onClick={() => downloadFile(entry.path)} title="Download" aria-label={`Download ${entry.name}`}>
                       <TI icon={IconArrowDown} size={16} />
-                    </a>
+                    </button>
                   </div>
                 )}
               </li>
@@ -91,19 +89,5 @@ export default function FilesPanel({ threadId }: { threadId: string | null }) {
         {listing && <p className="vc-files-note" title={listing.root}>{listing.root}</p>}
       </div>
     </aside>
-  )
-}
-
-/** The header chip that opens the panel, once the chat has saved something. */
-export function FilesChip({ threadId }: { threadId: string | null }) {
-  const listing = useThreadFiles(threadId)
-  const open = useChat((s) => s.filesOpen)
-  const count = listing?.entries.filter((e) => !e.dir).length || 0
-  if (!count || open) return null
-  return (
-    <button type="button" className="vc-agents-chip" onClick={() => showFiles(true)} title="Files this chat saved">
-      <TI icon={IconFolder} size={15} />
-      <span>{count} file{count === 1 ? '' : 's'}</span>
-    </button>
   )
 }

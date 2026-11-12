@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { createDevGithub, ghErrorMessage, reviewState, runState } from './github.mjs'
+import { prSummary, createDevGithub, ghErrorMessage, reviewState, runState } from './github.mjs'
 import { fakeGh, repoRoutes } from './fixtures.mjs'
 
 test('a repo card sums up CI on main, PRs, runners and the review switch', async () => {
@@ -125,6 +125,7 @@ test('merged PRs are searched in two-week slices, paged, deduplicated and sorted
     const q = decodeURIComponent(/q=([^&]+)/.exec(key)[1])
     const page = Number(/&page=(\d+)/.exec(key)[1])
     asked.push([q.split('merged:')[1], page])
+    if (q.endsWith('>=2026-09-15')) return { items: [{ ...item('b/two', 8, '2026-09-20T12:00:00Z'), body: 'Adds a Runs card so the owner can see every ORCH at once.\n\n## Summary\n- x' }] }
     if (q.endsWith('2026-09-01..2026-09-14')) {
       // A full first page means there is a second.
       if (page === 1) return { items: Array.from({ length: 100 }, (_, i) => item('a/one', i + 1, '2026-09-02T10:00:00Z')) }
@@ -135,6 +136,16 @@ test('merged PRs are searched in two-week slices, paged, deduplicated and sorted
   const pulls = await createDevGithub({ run }).mergedPulls('2026-09-01', { today: new Date('2026-09-20T15:00:00Z') })
   assert.deepEqual(asked, [['2026-09-01..2026-09-14', 1], ['>=2026-09-15', 1], ['2026-09-01..2026-09-14', 2]])
   assert.equal(pulls.length, 102, 'a PR seen twice is counted once')
-  assert.deepEqual(pulls[0], { repo: 'b/two', number: 7, title: 'PR 7', url: 'https://github.com/b/two/pull/7', mergedAt: '2026-09-01T09:00:00Z' })
+  assert.deepEqual(pulls[0], { repo: 'b/two', number: 7, title: 'PR 7', url: 'https://github.com/b/two/pull/7', mergedAt: '2026-09-01T09:00:00Z', summary: null })
   assert.equal(pulls.at(-1).number, 8)
+  assert.equal(pulls.at(-1).summary, 'Adds a Runs card so the owner can see every ORCH at once.', 'the body search already returns gives the one-liner')
+})
+
+test('a PR summary is the body\'s first plain line, and nothing for a heading, list or template', () => {
+  assert.equal(prSummary('Adds X so Y can Z.\n\nMore.'), 'Adds X so Y can Z.')
+  assert.equal(prSummary('\r\n  Fixes the **header** in [chat](https://x) for `narrow` columns.\r\n'), 'Fixes the header in chat for narrow columns.')
+  for (const body of ['## Summary\n- a', '- a list', '1. first', '> quote', '<!-- template -->', '| a | b |', '![img](x)', '```js', '', null, 'ok']) {
+    assert.equal(prSummary(body), null, String(body))
+  }
+  assert.equal(prSummary('x'.repeat(400)).length, 240)
 })

@@ -1213,7 +1213,7 @@ export function HabitMetricSection({ habit, entries, today, compact, days: fixed
                 `needs-reauth` set by the last failed refresh), not the old
                 "a token file exists" check that hid this button precisely when the
                 grant was dead. The grant is Bushido's, so this links there; the
-                permanent link lives in Studio → Connections. */}
+                permanent link lives in Settings → Connections. */}
             {syncable && needsAttention && <WhoopBushidoLink status={whoop} />}
             {onSync && (
               <button

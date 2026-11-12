@@ -3,6 +3,7 @@ import { getUsage, getAssistantUsage, AuthError } from '../api'
 import { useSettings } from '../settings'
 import AiUsagePanel from './AiUsagePanel'
 import AiUsageSettings from './AiUsageSettings'
+import { SettingsPage, SettingsSection } from './settings/ui'
 import {
   fmtInt, fmtUsd, fmtTok, relTime,
   CHANNEL_ORDER, CHANNEL_META, PROVIDER_ORDER, PROVIDER_META,
@@ -199,13 +200,10 @@ function AssistantPanel({ a }: { a: any }) {
 
 interface UsageViewProps {
   onAuthError: () => void
-  embedded?: boolean
-  /** Arrived via /settings/providers#usage — bring the section into view. */
-  scrollIntoView?: boolean
 }
 
-export default function UsageView({ onAuthError, embedded = false, scrollIntoView = false }: UsageViewProps) {
-  const { autoRefresh, reduceMotion } = useSettings()
+export default function UsageView({ onAuthError }: UsageViewProps) {
+  const { autoRefresh } = useSettings()
   const [data, setData] = useState<any>(null)
   const [assistant, setAssistant] = useState<any>(null)
   const [err, setErr] = useState<any>(null)
@@ -230,20 +228,6 @@ export default function UsageView({ onAuthError, embedded = false, scrollIntoVie
     load()
   }, [load])
 
-  // Deep-linked from Overview ▸ Providers ▸ Usage. The section sits below the
-  // provider list, so without this you land on the settings page and still have
-  // to hunt for it. Runs after the first paint so the anchor has a position.
-  // Re-runs once the data lands, since the cards above it change height while
-  // they load and would otherwise leave the section off-screen again.
-  const anchor = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!scrollIntoView) return undefined
-    const id = requestAnimationFrame(() => {
-      anchor.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
-    })
-    return () => cancelAnimationFrame(id)
-  }, [scrollIntoView, reduceMotion, Boolean(data)])
-
   useEffect(() => {
     load()
     // Live-ish: re-poll every 30s while mounted, unless auto-refresh is off.
@@ -255,85 +239,53 @@ export default function UsageView({ onAuthError, embedded = false, scrollIntoVie
   const services = data?.services || []
   const monthly = services.reduce((sum: number, s: any) => sum + (s.priceUsd || 0), 0)
   const subtitle = monthly
-    ? `${fmtUsd(monthly)}/mo across ${services.length} subscriptions`
-    : 'Assistant activity & coding-assistant subscriptions'
-
-  // The gear opens the panel that owns which profiles are tracked, what they're
-  // called, and the subscription facts the vendors don't publish.
-  const settingsButton = (
-    <button
-      className={`btn compact ${settingsOpen ? 'on' : ''}`}
-      onClick={() => setSettingsOpen((v) => !v)}
-      title="Edit accounts, names, prices, and what's shown here"
-      aria-expanded={settingsOpen}
-    >
-      <Hi icon={Cog6ToothIcon} size={15} /> {settingsOpen ? 'Done' : 'Settings'}
-    </button>
-  )
-
-  // Deliberately outside `body`: a broken /api/usage is one of the things you'd
-  // open the settings to fix, so the editor must not depend on it loading.
-  const settingsPanel = settingsOpen && (
-    <>
-      <div className="group-title">Usage settings</div>
-      <AiUsageSettings onAuthError={onAuthError} onChanged={onSettingsChanged} />
-    </>
-  )
-
-  const body = err ? <div className="muted inline-warn"><WarnIcon /> {err}</div>
-    : !data ? <div className="muted">Loading…</div>
-    : (
-      <>
-        {/* Live rate limits come from the bridge's AI-usage poller — it watches
-            every Claude/Codex/Cursor profile, not just the one this box logs into. */}
-        <div className="group-title">Live quota</div>
-        <AiUsagePanel onAuthError={onAuthError} autoRefresh reloadKey={reloadKey} />
-        <div className="group-title">Assistant activity</div>
-        <AssistantPanel a={assistant} />
-        <div className="group-title">Subscriptions</div>
-        <div className="usage-grid">
-          {services.map((s: any) => <ServiceCard key={s.id} s={s} quotaElsewhere />)}
-        </div>
-      </>
-    )
-
-  // Embedded inside the Providers tab: render as a section rather than a
-  // standalone view with its own page header.
-  if (embedded) {
-    return (
-      <>
-        <div className="settings-section-title" id="usage" ref={anchor}>
-          <span />
-          <strong>Usage</strong>
-          <div className="settings-section-actions">{settingsButton}</div>
-        </div>
-        <div className="muted settings-note">
-          {subtitle}{data && <> · updated {relTime(data.generatedAt)}</>}
-        </div>
-        {settingsPanel}
-        {body}
-      </>
-    )
-  }
+    ? `${fmtUsd(monthly)}/mo across ${services.length} subscriptions. `
+    : ''
 
   return (
-    <div className="view">
-      <div className="view-head">
-        <div>
-          <h1 style={{ marginBottom: 2 }}>Usage</h1>
-          <div className="muted" style={{ fontSize: 13 }}>
-            {subtitle}
-            {data && <> · updated {relTime(data.generatedAt)}</>}
-          </div>
+    <SettingsPage>
+      <SettingsSection
+        id="quota"
+        title="Live quota"
+        description={`${subtitle}What is left in each account’s limits, read live. A short bar means running out.`}
+        plain
+        action={
+          <>
+            <button
+              className={`btn compact ${settingsOpen ? 'on' : ''}`}
+              onClick={() => setSettingsOpen((v) => !v)}
+              title="Edit which accounts are tracked, their names and prices"
+              aria-expanded={settingsOpen}
+            >
+              <Hi icon={Cog6ToothIcon} size={15} /> {settingsOpen ? 'Done' : 'Edit tracking'}
+            </button>
+          </>
+        }
+      >
+        {/* Outside the data below: a broken /api/usage is one of the things you
+            open this to fix, so the editor must not depend on it loading. */}
+        {settingsOpen && <AiUsageSettings onAuthError={onAuthError} onChanged={onSettingsChanged} />}
+        {err ? <div className="muted inline-warn"><WarnIcon /> {err}</div>
+          : <AiUsagePanel onAuthError={onAuthError} autoRefresh reloadKey={reloadKey} />}
+      </SettingsSection>
+      {data && !err && (
+        <>
+          <SettingsSection id="activity" title="Assistant activity" description="Requests Totem answered, by channel and account." plain>
+            <AssistantPanel a={assistant} />
+          </SettingsSection>
+          <SettingsSection id="subscriptions" title="Subscriptions" description="Price, renewal and token use per subscription." plain>
+            <div className="usage-grid">
+              {services.map((s: any) => <ServiceCard key={s.id} s={s} quotaElsewhere />)}
+            </div>
+          </SettingsSection>
+        </>
+      )}
+      {!data && !err && (
+        // The shape of what is coming, rather than a stray "Loading…".
+        <div className="s-skeleton" role="status">
+          <span>Loading activity and subscriptions…</span><span /><span />
         </div>
-        <div className="view-head-actions">
-          {settingsButton}
-          <button className="btn" onClick={load}>Refresh</button>
-        </div>
-      </div>
-
-      {settingsPanel}
-      {body}
-    </div>
+      )}
+    </SettingsPage>
   )
 }

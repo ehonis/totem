@@ -11,3 +11,13 @@ export function keepDrawerPan(gesture: PanGesture) {
 }
 
 export const drawerPan = () => pan
+
+// The drawer's close, kept for screens over it: a chat opened from the shelf
+// sheet closes the sheet and the drawer under it in one go.
+let close: (() => void) | undefined
+
+export function keepDrawerClose(fn: () => void) {
+  close = fn
+}
+
+export const closeDrawer = () => close?.()

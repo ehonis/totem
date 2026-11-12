@@ -2,7 +2,8 @@
 
 Press <kbd>Ctrl</kbd>+<kbd>`</kbd> anywhere in Totem (or click the terminal button
 bottom-right) and a right-docked panel slides in with a real login shell on the box.
-Tabs for multiple shells, drag the left edge to resize, and every command you run
+Tabs for multiple shells, drag the left edge to resize (the shared handle, see
+`docs/chat.md` → Side panel widths; double-click resets it), and every command you run
 counts on the **Totem activity** card.
 
 Off by default. Set `TERMINAL_ENABLED=true` in `.env` and restart.
@@ -29,7 +30,8 @@ manager rather than one PTY per socket.
 | Command detection for the activity metric | `terminal/commands.mjs` |
 | WebSocket transport + handshake auth | `terminal/ws.mjs` |
 | Wiring, config, and the activity hook | `bridge.mjs` (search `TERMINAL_ENABLED`) |
-| Panel UI (tabs, resize, xterm instances) | `web/src/components/TerminalPanel.tsx` |
+| Panel UI (tabs, xterm instances) | `web/src/components/TerminalPanel.tsx` |
+| Resize handle (shared with every side panel) | `web/src/components/ResizeHandle.tsx`, `panelResize.ts` |
 | Browser socket client (reconnect, multiplexing) | `web/src/terminal/client.ts` |
 | Toggle, hotkey, layout column | `web/src/App.tsx`, `.app.term-open` in `styles.css` |
 
@@ -174,12 +176,12 @@ echoing prompt is counted but never written to the activity log.
 ## Gotchas
 
 - **`node-pty` is this repo's only native module.** On Linux it compiles from source
-  at `npm install` (the shipped prebuilds are macOS/Windows only), so the box needs a
+  at `pnpm install` (the shipped prebuilds are macOS/Windows only), so the box needs a
   C++ toolchain. It uses N-API, so the built binary survives Node major upgrades —
   verified working on both Node 22 and 24. It is loaded with a dynamic `import()` and
   a `catch`, so if it ever fails to load you lose the terminal panel, not the bridge.
-- **`npm install` at the repo root is now part of deploy.** The bridge is no longer
-  dependency-free. `git pull && npm install && systemctl --user restart
+- **`pnpm install` at the repo root is now part of deploy.** The bridge is no longer
+  dependency-free. `git pull && pnpm install && systemctl --user restart
   assistant-bridge`.
 - **Dev mode needs `ws: true`** on the Vite `/api` proxy, or the socket 404s under
   `npm run dev` while every other `/api` call works fine. Already set in

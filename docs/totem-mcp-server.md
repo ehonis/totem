@@ -328,9 +328,9 @@ So the id is never trusted:
   the server — and keeps only `visibility: "list"` entries in the **newest generation** it
   advertises. That is Sol / Terra / Luna today and follows the CLI's own picker as models ship, with
   no code change. `CODEX_MODEL_ALLOWLIST` overrides it. Claude Code publishes no catalog, so its
-  models are seeded in `MODEL_SEEDS` as full ids (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1), each
+  models are seeded in `MODEL_SEEDS` as full ids (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.2), each
   with a one-line `note` on what it is for and what it costs. The aliases (`opus`, `sonnet`,
-  `haiku`, `fable`) and retired ids (`CLAUDE_SUCCESSORS`: Opus 5, Sonnet 5, Haiku 4.5) are read as
+  `haiku`, `fable`) and retired ids (`CLAUDE_SUCCESSORS`: Opus 5, Sonnet 5, Haiku 4.5, Fable 5.1) are read as
   their current successor, so an old saved choice keeps working without falling back to Opus.
 - `resolveModelChoice(provider, model, effort)` is the single gate. **Strict** for anything being
   staged or proposed: an unknown id throws with `validModels` attached, so the caller can retry in
@@ -589,6 +589,16 @@ checking something off. `list_todos` is relational only: an item and a task neve
 another. All reads and writes stay in local SQLite (`openWorldHint: false`), and service-owned
 action logging records each mutation once. The same tools are available to local agents under the
 gateway's `lists__*` namespace.
+
+### 6.9d Away spans — **BUILT**
+
+Two tools: `totem_away_list` (read-only: today's trip or day off and the ones still to come) and
+`totem_away_propose`, which stages an `away` inbox item and never creates the span itself; the
+owner accepts it in the dashboard; `totem_resolve_inbox` refuses an `away` accept even under an
+approval session. The same dates are proposed once (a repeat returns `alreadyProposed`). There is
+no create, update or delete tool, because a trip found in an email is an inference (§5 of
+AGENTS.md, confirm-only). Gateway: `away__list`, `away__propose`
+(gateway 1.13.0). See `docs/away.md`.
 
 ### 6.10 Versioning and protocol negotiation — **BUILT**
 

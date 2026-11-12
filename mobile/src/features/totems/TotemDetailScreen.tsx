@@ -155,7 +155,7 @@ function SettingsTab({ job }: { job: any }) {
   }
   async function remove() {
     const ok = await confirm(`Delete ${job.name}?`, {
-      message: `Its memory and chat are deleted too.${job.kind === 'seeded' ? ' It shipped with Totem; you can restore it from Settings → Jobs.' : ''}`,
+      message: `Its memory and chat are deleted too.${job.kind === 'seeded' ? ' It shipped with Totem; you can restore it from the Totems page on the web dashboard.' : ''}`,
     })
     if (!ok) return
     try {
@@ -230,6 +230,14 @@ function SettingsTab({ job }: { job: any }) {
           <View style={st.switchRow}>
             <Toggle value={!!job.browser} onChange={(v) => save({ browser: v })} />
             <T size={13.5} color={textAlpha(80)} style={{ flex: 1 }}>Use the browser for pages that need JavaScript</T>
+          </View>
+        </Section>
+      ) : null}
+      {agent ? (
+        <Section title="Full access">
+          <View style={st.switchRow}>
+            <Toggle value={job.access === 'full'} onChange={(v) => save({ access: v ? 'full' : null })} />
+            <T size={13.5} color={textAlpha(80)} style={{ flex: 1 }}>Run any command (ssh included) and write anywhere, with nobody approving</T>
           </View>
         </Section>
       ) : null}

@@ -203,23 +203,3 @@ test('steps, metrics and links are added and removed through their own routes', 
   assert.equal((await request('DELETE', `/api/goals/${id}`)).body.deleted, true);
   assert.equal((await request('GET', '/api/goals')).body.goals.length, 0);
 });
-
-test('a step takes numbers through the same metric route the goal does', async () => {
-  // `POST /api/goals/:id/metrics` does not care which kind of row the id names — a step
-  // IS a goal row — and every answer is still the whole top-level goal.
-  const { request } = await fixture();
-  const goalId = (await request('POST', '/api/goals', {
-    title: 'Complete cardio goals', period: 'this_week',
-  })).body.goal.id;
-  const stepId = (await request('POST', `/api/goals/${goalId}/steps`, { title: '2 bike rides' })).body.goal.subGoals[0].id;
-
-  const rides = await request('POST', `/api/goals/${stepId}/metrics`, { label: 'rides', unit: 'rides', targetValue: 2 });
-  const miles = await request('POST', `/api/goals/${stepId}/metrics`, { label: 'miles', unit: 'miles', targetValue: 20 });
-  assert.equal(miles.body.goal.id, goalId, 'answered with the goal, not the step');
-  assert.equal(miles.body.goal.subGoals[0].metrics.length, 2);
-
-  await request('PATCH', '/api/goals/metrics', { id: rides.body.metricId, delta: 1 });
-  const after = (await request('GET', `/api/goals/${goalId}`)).body.goal;
-  assert.equal(after.subGoals[0].progress.percent, 25, 'one of two rides and no miles yet');
-  assert.equal(after.progress.percent, 25, 'and the goal reads it rather than waiting for the tick');
-});

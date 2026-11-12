@@ -15,7 +15,7 @@ import { createInterface } from 'node:readline'
 const OAUTH_DIR = mkdtempSync(join(tmpdir(), 'totem-gateway-oauth-'))
 process.env.GATEWAY_OAUTH_DIR = OAUTH_DIR
 process.on('exit', () => rmSync(OAUTH_DIR, { recursive: true, force: true }))
-const { Gateway } = await import('./mcp-gateway.mjs')
+const { Gateway, serverRoute, normalizeOAuthRegistration } = await import('./mcp-gateway.mjs')
 
 const HERE = import.meta.dirname
 const GATEWAY = join(HERE, 'mcp-gateway.mjs')
@@ -71,12 +71,15 @@ const builtins = () => ({ taskClient: fakeBuiltin('get_tasks'), goalClient: fake
 
 test('a hung stdio server times out at initialize, is killed with its children, and built-ins still list', { timeout: 10_000 }, async (t) => {
   const { pidFile } = tempDir(t)
-  const gateway = new Gateway({ servers: { stuck: stdioServer('launcher', pidFile) } }, { ...builtins(), timeouts: FAST })
+  // Two node processes must boot before the deadline, or the launcher dies before its
+  // child exists and there is no tree to kill; on a loaded runner that took over 500 ms.
+  const timeouts = { ...FAST, handshakeMs: 3000, serverMs: 3500 }
+  const gateway = new Gateway({ servers: { stuck: stdioServer('launcher', pidFile) } }, { ...builtins(), timeouts })
   t.after(() => gateway.closeAll())
 
   const started = Date.now()
   await gateway.connectAll()
-  assert.ok(Date.now() - started < FAST.serverMs + 1000, 'connectAll settles within the budget')
+  assert.ok(Date.now() - started < timeouts.serverMs + 1000, 'connectAll settles within the budget')
 
   const names = gateway.tools.map((tool) => tool.name)
   assert.ok(names.includes('tasks__get_tasks') && names.includes('goals__get_goals') && names.includes('lists__get_lists'))
@@ -86,7 +89,7 @@ test('a hung stdio server times out at initialize, is killed with its children, 
   assert.equal(health.ok, false)
   assert.equal(health.timedOut, true)
   assert.equal(health.phase, 'initialize')
-  assert.match(health.error, /no answer to initialize after 300ms/)
+  assert.match(health.error, /no answer to initialize after 3s/)
   assert.equal(gateway.statusReport().servers.find((s) => s.id === 'stuck').timedOut, true)
 
   await waitFor(() => readPids(pidFile).length === 2)
@@ -167,9 +170,12 @@ test('an HTTP server that never answers, or stalls mid-body, is aborted with the
   assert.ok(await waitFor(() => closedRequests.includes('/silent initialize') && closedRequests.includes('/stalls tools/list')))
 })
 
-test('a tools/call slower than every connect timeout still succeeds', { timeout: 10_000 }, async (t) => {
+test('a tools/call slower than every connect timeout still succeeds', { timeout: 15_000 }, async (t) => {
   const { pidFile } = tempDir(t)
-  const gateway = new Gateway({ servers: { slow: stdioServer('slow-call', pidFile, { FIXTURE_CALL_MS: '1200' }) } }, { builtins: false, timeouts: FAST })
+  // Connect budgets roomy enough for a busy runner to start the fixture; the call outlasts
+  // all of them.
+  const timeouts = { handshakeMs: 2000, pageMs: 2000, serverMs: 2500 }
+  const gateway = new Gateway({ servers: { slow: stdioServer('slow-call', pidFile, { FIXTURE_CALL_MS: '3500' }) } }, { builtins: false, timeouts })
   await gateway.connectAll()
   assert.equal(gateway.health.get('slow').ok, true)
   const result = await gateway.callTool('slow__slow_echo', {})
@@ -314,4 +320,72 @@ test('--status waits for a token refresh in flight before it exits', { timeout: 
   assert.equal(JSON.parse(stdout).servers.find((s) => s.id === 'rotating').timedOut, true)
   assert.equal(auth.state.issued, 1)
   assert.equal(savedRefreshToken(join(dir, 'oauth'), 'rotating'), auth.state.valid)
+})
+
+// An in-process downstream that records its calls.
+function recordingClient(toolNames, { fail } = {}) {
+  const calls = []
+  return {
+    calls,
+    async start() { if (fail) throw new Error(fail) },
+    async listTools() { return toolNames.map((name) => ({ name, description: name, inputSchema: { type: 'object' } })) },
+    async callTool(name, args) { calls.push({ name, args }); return { content: [{ type: 'text', text: name }] } },
+    close() {},
+  }
+}
+
+test('a call naming a routed environmentId goes to that route, without the environmentId', async () => {
+  const mini = recordingClient(['t3_thread_launch', 't3_thread_read'])
+  const devbox = recordingClient(['t3_thread_launch', 't3_thread_read'])
+  const gateway = new Gateway({ servers: {
+    t3code: { client: mini },
+    't3code-devbox': { client: devbox, route: { for: 't3code', match: { environmentId: 'env-dev' } } },
+  } }, { builtins: false })
+  await gateway.connectAll()
+
+  assert.deepEqual(gateway.tools.map((t) => t.name).sort(), ['t3code__t3_thread_launch', 't3code__t3_thread_read'])
+  assert.equal(gateway.statusReport().servers.find((s) => s.id === 't3code-devbox').routeFor, 't3code')
+
+  await gateway.callTool('t3code__t3_thread_launch', { environmentId: 'env-dev', title: 'x' })
+  await gateway.callTool('t3code__t3_thread_read', { environmentId: 'env-win', threadId: 't1' })
+  await gateway.callTool('t3code__t3_thread_read', { threadId: 't2' })
+
+  assert.deepEqual(devbox.calls, [{ name: 't3_thread_launch', args: { title: 'x' } }])
+  assert.deepEqual(mini.calls, [
+    { name: 't3_thread_read', args: { environmentId: 'env-win', threadId: 't1' } },
+    { name: 't3_thread_read', args: { threadId: 't2' } },
+  ])
+})
+
+test('a route that did not connect leaves the call, environmentId and all, to the server it stands in for', async () => {
+  const mini = recordingClient(['t3_thread_read'])
+  const devbox = recordingClient(['t3_thread_read'], { fail: 'needs sign-in' })
+  const gateway = new Gateway({ servers: {
+    t3code: { client: mini },
+    't3code-devbox': { client: devbox, route: { for: 't3code', match: { environmentId: 'env-dev' } } },
+  } }, { builtins: false })
+  await gateway.connectAll()
+
+  await gateway.callTool('t3code__t3_thread_read', { environmentId: 'env-dev', threadId: 't1' })
+  assert.deepEqual(devbox.calls, [])
+  assert.deepEqual(mini.calls, [{ name: 't3_thread_read', args: { environmentId: 'env-dev', threadId: 't1' } }])
+})
+
+test('serverRoute takes only a well-formed route to another server', () => {
+  const route = { for: 't3code', match: { environmentId: 'e1' } }
+  assert.deepEqual(serverRoute('dev', { route }), route)
+  assert.equal(serverRoute('dev', {}), null)
+  assert.equal(serverRoute('t3code', { route }), null)
+  assert.equal(serverRoute('dev', { route: { for: 't3code', match: {} } }), null)
+  assert.equal(serverRoute('dev', { route: { for: 't3code', match: { environmentId: 7 } } }), null)
+  assert.equal(serverRoute('dev', { route: { for: 'bad id', match: { environmentId: 'e1' } } }), null)
+  assert.equal(serverRoute('dev', { route: { for: 't3code', match: ['e1'] } }), null)
+})
+
+test('normalizeOAuthRegistration keeps a client name and a plain software id', () => {
+  assert.deepEqual(normalizeOAuthRegistration({ clientName: ' Totem ', softwareId: 't3code-peer-link' }), { clientName: 'Totem', softwareId: 't3code-peer-link' })
+  assert.deepEqual(normalizeOAuthRegistration({ clientName: 'Totem', softwareId: 'no spaces allowed' }), { clientName: 'Totem' })
+  assert.equal(normalizeOAuthRegistration({}), undefined)
+  assert.equal(normalizeOAuthRegistration('Totem'), undefined)
+  assert.equal(normalizeOAuthRegistration(null), undefined)
 })

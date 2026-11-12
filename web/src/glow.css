@@ -105,6 +105,13 @@
    glow-paused on blur). The reply swing is left running. */
 :root.glow-paused .page-glow::before,
 :root.glow-paused .page-glow::after { animation-play-state: paused; }
+/* Held still while a panel is dragged or the window resized too: the lights
+   blend with each other (screen), and a moving blend over a page that is
+   changing size was most of a drag's cost on the compositor. The drift takes
+   half a minute, so a pause for a drag cannot be seen; paused, it resumes from
+   where it stood. The reply swing is left running. */
+body.panel-resizing .page-glow::before, body.panel-resizing .page-glow::after,
+:root.window-resizing .page-glow::before, :root.window-resizing .page-glow::after { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) {
   .page-glow::before, .page-glow::after, .vc .page-glow { animation: none; }
 }

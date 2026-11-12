@@ -8,6 +8,8 @@ import { colors } from '../../theme'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { FAB_CLEARANCE } from '../../shell/Screen'
+import { awayOn, dayKey, type AwaySpan } from '../../lib/away'
+import AwaySegment from './AwaySegment'
 import EventChip from './EventChip'
 import {
   HOUR_PX, acctColor, acctFill, fmtTime, isToday, minsOfDay, packDay, parseDate, sameDay, type CalEvent,
@@ -36,6 +38,7 @@ function useMinute() {
 
 interface TimeGridProps {
   days: Date[]
+  away: AwaySpan[]
   events: CalEvent[]
   /** Vertical offset to open at; kept across swipes so the hours don't jump. */
   initialY: number
@@ -46,7 +49,7 @@ interface TimeGridProps {
   onRefresh: () => void
 }
 
-export default function TimeGrid({ days, events, initialY, onScrollY, onPickDay, onSelectEvent, refreshing, onRefresh }: TimeGridProps) {
+export default function TimeGrid({ days, away, events, initialY, onScrollY, onPickDay, onSelectEvent, refreshing, onRefresh }: TimeGridProps) {
   const scroller = useRef<ScrollView>(null)
   const now = useMinute()
   // Width of the day columns together: the screen less the view's padding, border and gutter.
@@ -64,6 +67,7 @@ export default function TimeGrid({ days, events, initialY, onScrollY, onPickDay,
     [days, events],
   )
   const hasAllDay = allDayByDay.some((l) => l.length)
+  const awayByDay = useMemo(() => days.map((d) => awayOn(away, dayKey(d))), [days, away])
   const packed = useMemo(
     () => days.map((d) => packDay(events.filter((e) => !e.allDay && sameDay(parseDate(e.start), d)))),
     [days, events],
@@ -90,6 +94,16 @@ export default function TimeGrid({ days, events, initialY, onScrollY, onPickDay,
         })}
       </View>
 
+      {awayByDay.some(Boolean) && (
+        <View style={[st.allday, { flexDirection: 'row' }]}>
+          <View style={st.alldayGutter}><T size={11} muted align="right">away</T></View>
+          {days.map((d, i) => (
+            <View key={d.getTime()} style={[st.alldayCol, { paddingHorizontal: 0 }]}>
+              {awayByDay[i] && <AwaySegment span={awayByDay[i]!} day={d} labelled={i === 0 || awayByDay[i - 1]?.id !== awayByDay[i]!.id} />}
+            </View>
+          ))}
+        </View>
+      )}
       {hasAllDay && (
         <ScrollView style={st.allday} nestedScrollEnabled showsVerticalScrollIndicator={false}>
           <View style={{ flexDirection: 'row' }}>

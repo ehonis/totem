@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import MetricSourceWarning from './MetricSourceWarning'
 import SourceHealthPanel from './SourceHealthPanel'
 import {
-  failingSourceFor, groupSources, resetSourceHealthCache, sourceSummary,
+  failingSourceFor, isMcpSource, resetSourceHealthCache, sortSources, sourceSummary, waitingLabel,
   type SourceHealth, type SourceHealthPayload,
 } from './health'
 
@@ -51,15 +51,33 @@ describe('sourceSummary', () => {
   })
 })
 
-describe('groupSources', () => {
-  it('lists each goal\'s sources under it and the rest after, failing first', () => {
-    const data = payload(
-      [failingStrava, source({ source: 'gmail:home', label: 'Gmail · home' }), source({ source: 'feed:hn', label: 'Feed · hn', state: 'failing' })],
-      [{ id: 'g1', title: 'Ride 40 miles', periodType: 'week', sources: ['strava'], failing: ['strava'] }],
-    )
-    const { goals, other } = groupSources(data)
-    expect(goals.map((g) => [g.goal.title, g.sources.map((s) => s.source)])).toEqual([['Ride 40 miles', ['strava']]])
-    expect(other.map((s) => s.source)).toEqual(['feed:hn', 'gmail:home'])
+describe('sortSources', () => {
+  const data = payload([
+    source({ source: 'gmail:home', label: 'Gmail · home' }),
+    source({ source: 'drive:work', label: 'Google Drive · work', state: 'degraded', failures: 1 }),
+    failingStrava,
+    source({ source: 'feed:hn', label: 'Feed · hn', state: 'failing' }),
+    source({ source: 'feed:pods', label: 'Feed · pods', state: 'unconfigured' }),
+    source({ source: 'mcp:notion', kind: 'mcp', label: 'MCP server · notion', state: 'failing' }),
+  ])
+  it('puts what is wrong first, failing before erroring, then what waits, then what works', () => {
+    const { problems, waiting, healthy } = sortSources(data)
+    expect(problems.map((s) => s.source)).toEqual(['feed:hn', 'mcp:notion', 'strava', 'drive:work'])
+    expect(waiting.map((s) => s.source)).toEqual(['feed:pods'])
+    expect(healthy.map((s) => s.source)).toEqual(['gmail:home'])
+  })
+  it('leaves out what the caller shows elsewhere', () => {
+    expect(sortSources(data, { exclude: isMcpSource }).problems.map((s) => s.source)).toEqual(['feed:hn', 'strava', 'drive:work'])
+  })
+  it('is empty without a payload', () => {
+    expect(sortSources(null)).toEqual({ problems: [], waiting: [], healthy: [] })
+  })
+})
+
+describe('waitingLabel', () => {
+  it('counts sources not set up and not read yet apart', () => {
+    expect(waitingLabel([source({ state: 'unconfigured' }), source({ state: 'unconfigured' }), source({ state: 'unknown' })])).toBe('2 not set up · 1 not read yet')
+    expect(waitingLabel([source({ state: 'unknown' })])).toBe('1 not read yet')
   })
 })
 
@@ -95,12 +113,24 @@ describe('SourceHealthPanel', () => {
     expect(await screen.findByText(/Source health is off until Totem restarts: unable to open database file/)).toBeTruthy()
   })
 
-  it('shows a failing source under the goal it feeds, with its error', async () => {
-    serve(payload([failingStrava], [{ id: 'g1', title: 'Ride 40 miles', periodType: 'week', sources: ['strava'], failing: ['strava'] }]))
+  it('says so when the source log cannot be read, rather than showing nothing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'boom' }), { status: 500 })))
+    const onLoad = vi.fn()
+    render(<SourceHealthPanel onLoad={onLoad} />)
+    expect(await screen.findByText(/could not read its source log/)).toBeTruthy()
+    expect(onLoad).toHaveBeenCalledWith(null)
+  })
+
+  it('shows a failing source in full, with its error and the goal it feeds, and folds what works', async () => {
+    serve(payload([failingStrava, source({ source: 'gmail:home', label: 'Gmail · home' }), source({ source: 'calendar:home', label: 'Google Calendar · home' })],
+      [{ id: 'g1', title: 'Ride 40 miles', periodType: 'week', sources: ['strava'], failing: ['strava'] }]))
     render(<SourceHealthPanel />)
-    expect(await screen.findByText('Ride 40 miles')).toBeTruthy()
+    expect(await screen.findByText('Strava')).toBeTruthy()
     expect(screen.getByText('Failing')).toBeTruthy()
     expect(screen.getByText('could not reach Bushido for Strava')).toBeTruthy()
-    expect(screen.getByText(/1 source is failing/)).toBeTruthy()
+    expect(screen.getByText(/Ride 40 miles/)).toBeTruthy()
+    expect(screen.getByText('1 failing')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /2 working/ }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('Gmail · home')).toBeNull()
   })
 })

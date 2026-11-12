@@ -4,7 +4,7 @@
 import React, { useMemo } from 'react'
 import { ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native'
 import { marked, type Token, type Tokens } from 'marked'
-import { colors, fonts, textAlpha } from '../theme'
+import { colors, fonts, surfaces, textAlpha } from '../theme'
 
 const LINK = '#8fb0ff'
 const LINE = '#2a2f3c'
@@ -88,10 +88,10 @@ export default React.memo(function Markdown({ text, size = 15, muted = false }: 
 const st = StyleSheet.create({
   inlineCode: { fontFamily: fonts.mono, backgroundColor: '#262a36', color: '#e9ecf3', borderRadius: 6, paddingHorizontal: 4 },
   code: { marginBottom: 16, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0b0d12', borderWidth: 1, borderColor: LINE },
-  codeHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 34, paddingLeft: 14, paddingRight: 16, backgroundColor: '#161922' },
+  codeHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 34, paddingLeft: 14, paddingRight: 16, backgroundColor: surfaces.codeHead },
   codeLang: { fontSize: 12, color: textAlpha(40), fontFamily: fonts[400] },
   copy: { fontSize: 12, color: textAlpha(62), fontFamily: fonts[400] },
   codeText: { fontFamily: fonts.mono, fontSize: 13, lineHeight: 21, color: '#cfd4de' },
   cell: { borderWidth: StyleSheet.hairlineWidth, borderColor: LINE, paddingHorizontal: 12, paddingVertical: 7, minWidth: 80 },
-  th: { backgroundColor: '#1a1d26', fontFamily: fonts[600], color: colors.text },
+  th: { backgroundColor: surfaces.tableHead, fontFamily: fonts[600], color: colors.text },
 })

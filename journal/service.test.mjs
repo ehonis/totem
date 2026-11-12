@@ -214,8 +214,14 @@ test('a failed transcription keeps the audio, notifies, and can be retried', asy
   await assert.rejects(h.service.ingestNow(entry.id), /retry it first/)
   fail = false
   await h.service.retryTranscription(entry.id)
-  await new Promise((r) => setTimeout(r, 20)) // the queued transcription runs on its own chain
-  assert.equal((await h.store.get(entry.id)).status, 'transcribed')
+  // The queued transcription runs on its own chain; wait for it rather than for a fixed
+  // time, which a busy CI runner can overrun.
+  let status
+  for (const deadline = Date.now() + 5000; Date.now() < deadline; await new Promise((r) => setTimeout(r, 10))) {
+    status = (await h.store.get(entry.id)).status
+    if (status !== 'queued' && status !== 'transcribing') break
+  }
+  assert.equal(status, 'transcribed')
 })
 
 test('a failed ingest is recorded, notified, and re-runnable', async () => {

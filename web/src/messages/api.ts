@@ -5,6 +5,7 @@
 // 'automation_denied'); the shared helper only reads a nested one.
 
 import { AuthError, authHeaders } from '../api'
+import { approvalHeaders } from '../approvalCode'
 
 export type AppleState = 'ready' | 'partial' | 'no-access' | 'error' | 'off' | 'unsupported'
 
@@ -71,7 +72,8 @@ export class AppleError extends Error {
 }
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = authHeaders(init.body ? { 'content-type': 'application/json' } : {})
+  // Sending is an approval route: it carries this device's approval code.
+  const headers = authHeaders({ ...(init.body ? { 'content-type': 'application/json' } : {}), ...approvalHeaders(path, init.method || 'GET') })
   const res = await fetch(path, { ...init, headers })
   if (res.status === 401) throw new AuthError()
   const body = await res.json().catch(() => ({}))

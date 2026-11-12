@@ -88,7 +88,7 @@ test('excluded routes never get an ETag or a 304, even for If-None-Match: *', as
     '/api/chat/runs', '/api/chat/runs/thread-1/stream', '/api/ai-usage/stream',
     '/api/ai/settings', '/api/integrations', '/api/chat/settings', '/api/mcp', '/api/connections',
     '/api/calendar/accounts', '/api/gmail/accounts', '/api/drive/accounts',
-    '/api/todos/connectors/sheet', '/api/todos/connectors/github', '/api/journal/settings',
+    '/api/todos/sheet', '/api/todos/issue-states', '/api/journal/settings',
     '/api/auth/status', '/api/threads/t1/messages', '/health', '/version', '/', '/index.html', '/chat',
     '/api/inbox', '/api/journal', '/api/journal/entries/e1', '/api/goals/search', '/api/search',
   ]
@@ -152,6 +152,7 @@ test('the allow list covers record ids but not their sub-routes', () => {
   assert.ok(!etagEligible('GET', '/api/lists/l1/items'))
   assert.ok(!etagEligible('HEAD', '/api/todos'))
   assert.ok(!etagEligible('GET', '/api/goals/search'))
+  assert.ok(!etagEligible('GET', '/api/todos/sheet'))
 })
 
 test('the real goals routes: the list is tagged, a typed search is not', async (t) => {

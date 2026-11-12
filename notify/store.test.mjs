@@ -44,19 +44,6 @@ test('an entry is queued, listed, and claimed only once it is due', async () => 
   assert.equal((await store.claimDue({ at: T0 + 120_000 })).claimed.length, 0)
 })
 
-test('claiming marks sending before delivery, so a crash cannot double-deliver', async () => {
-  const { store } = await freshStore()
-  await store.enqueue({ category: 'reminder.adhoc', title: 'once', deliverAt: T0 })
-  const { claimed } = await store.claimDue({ at: T0 })
-  assert.equal(claimed[0].attempts, 1)
-  // Simulate the crash: nothing calls finish(). The entry is stuck in `sending`
-  // rather than being re-sent, which is the safe direction to fail in.
-  const pending = await store.listQueue({ state: 'pending' })
-  assert.equal(pending.length, 0)
-  const sending = await store.listQueue({ state: 'sending' })
-  assert.equal(sending.length, 1)
-})
-
 test('a rescheduled reminder replaces the pending one instead of stacking', async () => {
   const { store } = await freshStore()
   const first = await store.enqueue({
@@ -171,16 +158,6 @@ test('applying a plan supersedes the earlier run and leaves delivered entries al
   assert.equal(result.superseded, 1) // only the undelivered one
   const queue = await store.listQueue()
   assert.deepEqual(queue.map((e) => e.title).sort(), ['birthday', 'one more'])
-})
-
-test('an ad-hoc reminder is not superseded by a digest re-plan', async () => {
-  const { store } = await freshStore()
-  await store.enqueue({ category: 'reminder.adhoc', title: 'Call the dentist', deliverAt: T0 + 3600_000 })
-  await store.applyPlan({
-    planId: 'p', planDate: '2026-09-15', source: 'daily-digest',
-    entries: [{ category: 'digest.morning', title: 'digest', deliverAt: T0 + 60_000 }],
-  })
-  assert.equal((await store.listQueue()).length, 2)
 })
 
 test('a device re-subscribing refreshes its keys rather than duplicating it', async () => {

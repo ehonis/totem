@@ -13,7 +13,7 @@ import * as Clipboard from 'expo-clipboard'
 import * as WebBrowser from 'expo-web-browser'
 import { Image } from 'expo-image'
 import { Markdown as NitroMarkdown, type CustomRenderers, type PartialMarkdownTheme, type NodeStyleOverrides } from 'react-native-nitro-markdown'
-import { colors, fonts, textAlpha } from '../theme'
+import { colors, fonts, surfaces, textAlpha } from '../theme'
 import { bridgeUrl, withAccess } from '../lib/connection'
 import { tap } from './haptics'
 import { openUrl } from '../lib/siblingApps'
@@ -93,8 +93,8 @@ function themeFor(size: number, muted: boolean): { theme: PartialMarkdownTheme; 
       colors: {
         text: body, textMuted: colors.muted, heading: muted ? colors.muted : colors.text, link: LINK,
         code: '#e9ecf3', codeBackground: '#262a36', codeLanguage: textAlpha(40),
-        blockquote: LINE, border: LINE, surface: 'transparent', surfaceLight: '#1a1d26', accent: colors.accent,
-        tableBorder: LINE, tableHeader: '#1a1d26', tableHeaderText: colors.text, tableRowEven: 'transparent', tableRowOdd: 'transparent',
+        blockquote: LINE, border: LINE, surface: 'transparent', surfaceLight: surfaces.tableHead, accent: colors.accent,
+        tableBorder: LINE, tableHeader: surfaces.tableHead, tableHeaderText: colors.text, tableRowEven: 'transparent', tableRowOdd: 'transparent',
       },
       spacing: { xs: 4, s: 6, m: 10, l: 14, xl: 24 },
       fontSizes: { xs: 12, s: Math.round(size * 0.86), m: size, l: size + 2, xl: size + 6, h1: Math.round(size * 1.45), h2: Math.round(size * 1.25), h3: Math.round(size * 1.08), h4: size, h5: size, h6: size },
@@ -140,7 +140,7 @@ export default React.memo(function Markdown({ text, size = 15, muted = false }: 
 
 const st = StyleSheet.create({
   code: { marginBottom: 16, borderRadius: 12, overflow: 'hidden', backgroundColor: '#0b0d12', borderWidth: 1, borderColor: LINE },
-  codeHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 34, paddingLeft: 14, paddingRight: 8, backgroundColor: '#161922' },
+  codeHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 34, paddingLeft: 14, paddingRight: 8, backgroundColor: surfaces.codeHead },
   codeLang: { fontSize: 12, color: textAlpha(40), fontFamily: fonts[400] },
   copy: { fontSize: 12, color: textAlpha(62), fontFamily: fonts[400], paddingHorizontal: 8, paddingVertical: 4 },
   codeText: { fontFamily: fonts.mono, fontSize: 13, lineHeight: 21, color: '#cfd4de' },

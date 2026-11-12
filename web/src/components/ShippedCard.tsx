@@ -341,9 +341,12 @@ export default function ShippedCard({ onAuthError }: { onAuthError: () => void }
             <div className="shipped-day">
               <h3>{fmtDay(day.date)} · {day.count} PR{day.count === 1 ? '' : 's'}</h3>
               {day.pulls.length === 0 ? <div className="muted dev-none">Nothing merged.</div> : day.pulls.map((p: DevShippedPull) => (
-                <div className="dev-row" key={p.url}>
+                <div className="dev-row shipped-pr" key={p.url}>
                   <span className="activity-tip-dot" style={{ background: view.colorOf.get(p.repo) || OTHER_COLOR }} />
-                  <a href={p.url} target="_blank" rel="noreferrer" className="dev-grow">{p.title}</a>
+                  <span className="dev-grow">
+                    <a href={p.url} target="_blank" rel="noreferrer">{p.title}</a>
+                    {p.summary && <span className="muted shipped-pr-summary">{p.summary}</span>}
+                  </span>
                   <span className="muted">{view.by !== 'repo' && view.groupOf.has(p.repo) ? `${view.groupOf.get(p.repo)} · ` : ''}{repoName(p.repo)} #{p.number}</span>
                   <span className="muted dev-time">{new Date(p.mergedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
                 </div>

@@ -22,6 +22,7 @@
 //   totemsChatRule / totemAskPrompt — totems brought into a chat (group chats).
 
 import { normalizeTrigger } from '../jobs/triggers.mjs'
+import { memoryEditable, memoryRef } from '../chat/memory-ref.mjs'
 
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '')
 
@@ -55,8 +56,13 @@ Use NOTIFY only when there is something the owner would want to be interrupted f
  * One run of an agent totem. `recentRuns` are the last few run records
  * (newest last); their previews are how the totem knows what it said lately.
  * A run its watch started carries `trigger: 'watch'` and the `event` it saw.
+ *
+ * The memory stays inline here and in totemAskPrompt, unlike in chats: a run is
+ * a fresh session (never resumed), so it is sent once per run rather than once
+ * per turn, and it is the run's state (what it saw last, what it already told
+ * him), which every run needs to tell what changed and not notify twice.
  */
-export function totemRunPrompt({ totem, memory = '', memoryPath = '', recentRuns = [], browser = false, trigger = 'schedule', event = '' } = {}) {
+export function totemRunPrompt({ totem, memory = '', memoryPath = '', filesDir = '', recentRuns = [], browser = false, trigger = 'schedule', event = '' } = {}) {
   const wakes = totem.trigger ? `when something it watches changes (${totem.scheduleLabel})` : `on a schedule (${totem.scheduleLabel || 'on its schedule'})`
   const lines = [
     `You are "${totem.name}", one of the owner's totems: a standing agent that wakes ${wakes} to do one job for him, and remembers between runs.`,
@@ -81,10 +87,27 @@ export function totemRunPrompt({ totem, memory = '', memoryPath = '', recentRuns
   lines.push(browser
     ? 'WEB: You may use the headless browser tools for pages that need JavaScript, as well as plain fetches and web search.'
     : 'WEB: Use web search and plain page fetches for anything online. There is no browser in this run.')
+  lines.push(...totemReachLines(totem, filesDir))
   lines.push('Work on your own: nobody is watching this run, so never ask a question. If you are blocked, say what is missing in the report and NOTIFY him once.')
   lines.push('Write a short report of what you did and found (a few lines, plain text), then the closing line.')
   lines.push(NOTIFY_RULES)
   return lines.join('\n\n')
+}
+
+/**
+ * Where a totem's run may write, and what to say when its Access setting stops a
+ * command. Nothing can approve a command in an unattended run, so a refusal is
+ * final: the fix is the owner raising Access in the totem's settings, which the
+ * agent cannot do itself.
+ */
+export function totemReachLines(totem, filesDir = '') {
+  const out = []
+  if (filesDir) out.push(`FILES: Save anything you make for him (a script, a report, a CSV) in ${filesDir} (create it if missing). He opens it from your chat's Files panel on any device; a file saved anywhere else is out of his reach.`)
+  if (totem?.access !== 'full') {
+    out.push('ACCESS: Commands and file writes outside your memory and files folder may be refused in this run, and nothing can approve them while it runs. '
+      + 'If one your job needs is refused, do not retry it in other forms: say in the report which commands were refused and that he can allow them by setting Access to Full in your settings, and notify once.')
+  }
+  return out
 }
 
 /** Split a run's reply into the report and the notify decision. */
@@ -113,15 +136,21 @@ export function parseRunReply(text) {
 
 // --- chat with a totem ----------------------------------------------------------
 
-export function totemChatBlock({ totem, memory = '', memoryPath = '', recentRuns = [] } = {}) {
+/**
+ * What a chat with a totem knows about it. Sent on every turn of a resumed chat,
+ * so the memory is named, not pasted (`memory` is memoryFileStats() from
+ * chat/memory-ref.mjs): the agent reads the file when the question turns on what
+ * the totem has seen or been told. Runs and asks still get it inline (above).
+ */
+export function totemChatBlock({ totem, memory = null, recentRuns = [] } = {}) {
   const runs = recentRuns.filter((r) => r && r.status !== 'running').slice(-5)
   return [
     `TOTEM: This chat is the owner talking to his totem "${totem.name}" (id ${totem.id}). You are that totem: answer as it, from what it knows.`,
     `Its job: ${String(totem.prompt || totem.description || '').trim() || '(no instructions yet)'}`,
     `Schedule: ${totem.scheduleLabel || 'not scheduled'}${totem.enabled ? '' : ' (paused)'}.`,
-    `Its memory (${memoryPath}):\n${String(memory || '').trim() || '(empty)'}`,
+    memoryRef('Its memory', memory, 'what the totem has checked, seen, notified about or been told between runs'),
     runs.length ? `Its last runs:\n${runs.map((r) => `- ${new Date(r.startedAt).toISOString()} ${r.status}${r.preview ? `: ${String(r.preview).replace(/\s+/g, ' ').slice(0, 300)}` : ''}`).join('\n')}` : 'It has not run yet.',
-    'When he tells you something to keep in mind (another item to watch, a preference, a correction), write it into that memory file with your file tools and say so in a sentence. To change the job itself or its schedule, propose it as described under TOTEMS below instead of only describing it.',
+    `When he tells you something to keep in mind (another item to watch, a preference, a correction), ${memoryEditable(memory) ? 'write it into that memory file with your file tools (read it first) and say so in a sentence' : 'say so in a sentence; this run cannot edit that file'}. To change the job itself or its schedule, propose it as described under TOTEMS below instead of only describing it.`,
   ].join('\n\n') + '\n\n'
 }
 
@@ -222,7 +251,7 @@ export function totemsChatRule({ chatId, members = [], others = 0 }) {
  * recent messages ([{role, content}], oldest first); `others` the names of the
  * other totems in it.
  */
-export function totemAskPrompt({ totem, memory = '', memoryPath = '', recentRuns = [], chatTitle = '', others = [], transcript = [], message = '', browser = false }) {
+export function totemAskPrompt({ totem, memory = '', memoryPath = '', filesDir = '', recentRuns = [], chatTitle = '', others = [], transcript = [], message = '', browser = false }) {
   const runs = recentRuns.filter((r) => r && r.status !== 'running').slice(-5)
   const convo = transcript.slice(-10).map((m) => `${m.role === 'user' ? 'Owner' : 'Host'}: ${String(m.content || '').trim().slice(0, 900)}`).filter((l) => !/:\s*$/.test(l))
   return [
@@ -233,6 +262,7 @@ export function totemAskPrompt({ totem, memory = '', memoryPath = '', recentRuns
     convo.length ? `THE CHAT SO FAR (oldest first):\n${convo.join('\n')}` : '',
     `THE HOST ASKS YOU:\n${String(message || '').trim()}`,
     browser ? 'WEB: You may use the browser tools, plain fetches and web search.' : 'WEB: Use web search and plain page fetches for anything online.',
+    ...totemReachLines(totem, filesDir),
     'Answer as yourself, in the first person, from what you know and what your tools can find now. Your answer is shown in the chat under your name, to the owner and the other totems, so write it for them: plain, short (a few short paragraphs or a list), Markdown allowed. ' +
     'Do the work rather than describing it. Never ask the host a question you could answer yourself; if something is missing, say what. ' +
     'If you learned something you will need on your next run, update your memory file before you finish. Do not end with NOTIFY or QUIET: this is a conversation, not a run.',
@@ -279,6 +309,7 @@ Choose:
 - schedule: one of {"type":"interval","everyMinutes":N} (N ≥ 15), {"type":"daily","time":"HH:MM"}, {"type":"weekly","time":"HH:MM","days":[0-6, Sunday=0]}, {"type":"window","from":"HH:MM","to":"HH:MM","everyMinutes":N,"days":[...]}. Times are ${timezone}. Pick the least frequent schedule that still does the job: a stock watch every 30-60 minutes, a daily digest once a day.
 - trigger: null, or a watch when the job is "when X changes, do Y" and X is one or more git branches or web pages. A watch is checked without AI every few minutes and wakes the totem only when something it watches changes, which is far cheaper than polling with a model. {"type":"watch","everyMinutes":N,"sources":[…]} where each source is {"kind":"git","repo":"<absolute checkout path or https/ssh remote URL>","ref":"<branch>"} (a local checkout watches its origin remote) or {"kind":"url","url":"https://…","contains":"<text whose appearance or disappearance matters, optional>"}. List every repo or page he named as its own source (up to 20) in one watch; never drop some to fit. N ≥ 1, or ≥ 5 when any source is a page. One check covers them all and a run is told which ones changed. With a trigger, schedule is ignored. Use the paths and URLs he gave; never invent one (leave trigger null and ask in questions instead). If he wants Totem itself redeployed when its main branch changes, do not design an agent for it: the built-in "Deploy Totem" totem does that (an agent restarting Totem would cut off its own run); say so in questions.
 - browser: true only if the job needs pages that load with JavaScript (store pages, dashboards); plain fetches and web search cover most things.
+- access: "full" only if the job must run shell commands that reach other machines (ssh), read system state beyond simple reads, or write files outside its memory and files folder; otherwise null. Full lets an unattended run do anything his account can, so never choose it for a job that only reads the web or Totem's own data.
 - notify: "agent" (the totem decides when to notify; right for watchers), "always" (every run sends its report; right for digests), or "errors".
 - recommendations: 2-4 model choices from the accounts below, cheapest first, that can do THIS job well. The goal is the lowest cost that still gets it right: a simple check or a short digest needs a small fast model; deep analysis or long writing needs a stronger one. For each: {"provider": account id, "model": model id exactly as listed (or "" for the account default), "effort": "low"|"medium"|"high"|"", "why": one short sentence}.
 - questions: what you need him to answer to get the job right (at most 3, each one short and concrete, e.g. "Which machines have it checked out, and what ssh alias reaches each?"). Ask when the scope is genuinely unclear or a detail would otherwise be guessed (a path, a host, a threshold, what counts as worth telling him); fill in sensible defaults for the rest. Do not ask again what he already answered. [] when nothing is open.
@@ -368,6 +399,7 @@ export function parseBuilderReply(text, { catalog = [], description = '' } = {})
     schedule: cleanSchedule(j.schedule),
     trigger: normalizeTrigger(j.trigger),
     browser: j.browser === true,
+    access: j.access === 'full' ? 'full' : null,
     notify,
     recommendations: recs.slice(0, 4),
     questions: (Array.isArray(j.questions) ? j.questions : []).map((q) => str(q, 300)).filter(Boolean).slice(0, 3),

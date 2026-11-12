@@ -137,7 +137,7 @@ export function ShortcutCheatSheet({ open, onClose }: CheatSheetProps) {
         ))}
         <div className="modal-actions">
           <span className="shortcut-sheet-foot">
-            <Hi icon={CommandLineIcon} size={14} /> Rebind these under Settings → Shortcuts.
+            <Hi icon={CommandLineIcon} size={14} /> Rebind these under Settings → Keyboard.
           </span>
         </div>
       </div>

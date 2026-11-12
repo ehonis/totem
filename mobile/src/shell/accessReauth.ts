@@ -40,7 +40,7 @@ export function useAccessReauth() {
       return
     }
     if (toastId.current) return
-    toastId.current = pushToast('Cloudflare Access needs you to sign in again.', 'info', {
+    toastId.current = pushToast('Cloudflare Access needs you to sign in again.', 'error', {
       duration: 0,
       action: { label: 'Sign in', icon: null, onClick: () => { toastId.current = null; void reauthAccess() } },
     })

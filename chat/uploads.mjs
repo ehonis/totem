@@ -15,6 +15,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
+import { VISUAL_CSP } from './visuals.mjs'
 
 const IMAGE_MIME = /^image\/(png|jpe?g|gif|webp|heic|heif|avif|bmp)$/i
 const TEXT_MIME = /^(text\/|application\/(json|xml|x-yaml|yaml|csv|javascript|x-sh|toml))/i
@@ -23,6 +24,26 @@ const MIME_BY_EXT = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
   '.heic': 'image/heic', '.ico': 'image/x-icon', '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown',
   '.csv': 'text/csv', '.json': 'application/json',
+}
+
+/**
+ * How GET /api/chat/uploads/<id> answers: inline or as a download, and under
+ * which policy. Everything inline except a PDF is sandboxed, so a file that can
+ * carry script (an SVG, a chart page) never runs with Totem's origin when it is
+ * opened on its own; an <img> tag is unaffected. A chart the agent rendered
+ * (chat/visuals.mjs, saved with `visual`) is the one HTML served as a page, and
+ * always under VISUAL_CSP. Other HTML stays a download.
+ */
+export function servedHeaders(meta, { download = false } = {}) {
+  const visual = meta.visual === true && meta.mime === 'text/html'
+  const pdf = meta.mime === 'application/pdf'
+  const inline = !download && (visual || pdf || /^(image\/|text\/plain)/.test(meta.mime))
+  return {
+    'content-type': visual ? 'text/html; charset=utf-8' : meta.mime,
+    'content-disposition': `${inline ? 'inline' : 'attachment'}; filename="${String(meta.name).replace(/"/g, '')}"`,
+    'x-content-type-options': 'nosniff',
+    ...(visual ? { 'content-security-policy': VISUAL_CSP, 'referrer-policy': 'no-referrer' } : inline && !pdf ? { 'content-security-policy': 'sandbox' } : {}),
+  }
 }
 
 export const validUploadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(id)
@@ -56,7 +77,7 @@ export function createUploadStore({ dir, secret, maxBytes = 25 * 1024 * 1024, lo
     return out
   }
 
-  async function save({ buffer, name, mime, kind: forcedKind }) {
+  async function save({ buffer, name, mime, kind: forcedKind, visual = false }) {
     if (!Buffer.isBuffer(buffer) || !buffer.length) throw Object.assign(new Error('empty upload'), { status: 400 })
     if (buffer.length > maxBytes) throw Object.assign(new Error(`file is larger than ${Math.round(maxBytes / 1e6)} MB`), { status: 413 })
     const id = randomUUID().replace(/-/g, '')
@@ -72,6 +93,9 @@ export function createUploadStore({ dir, secret, maxBytes = 25 * 1024 * 1024, lo
     }
     const kind = forcedKind === 'text' ? 'text' : attachmentKind(type, fileName)
     const meta = { id, name: fileName, file: fileName, mime: type, size: buffer.length, kind, createdAt: Date.now() }
+    // A chart the agent rendered inline (chat/visuals.mjs): the only HTML the
+    // uploads route serves as a page, and only under its sandboxing policy.
+    if (visual && type === 'text/html') meta.visual = true
     if (kind === 'text') meta.preview = buffer.toString('utf8', 0, 2000).replace(/\s+/g, ' ').trim().slice(0, 240)
     const folder = join(dir, id)
     await mkdir(folder, { recursive: true })

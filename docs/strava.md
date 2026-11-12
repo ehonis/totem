@@ -31,7 +31,7 @@ change to it.
 | Agent CLI | `strava/cli.mjs` | `node strava/cli.mjs <command>` — the agent CLIs' way in. Talks to the **bridge** (`/api/strava/*`) with the bridge secret from the environment or `.env`; never holds Strava credentials. |
 | Bridge | `bridge.mjs` "Strava" block | The remote `strava` client, `stravaApi()` route dispatcher, `STRAVA_RULES` (injected into every agent prompt once configured), the `totem_strava_*` MCP tools and their `MCP_TOOL_META`, the `strava-sync` job. |
 | Gateway | `mcp-gateway.mjs` `BUILTIN_SERVERS` | Re-serves the `totem_strava_*` slice of the bridge's `/mcp` to the agent CLIs as `strava__*` (e.g. `strava__get_mileage`). |
-| Dashboard | `web/src/components/StravaConnection.tsx` | Settings → Connections → Wearables & fitness: status as Bushido reports it, a link to Bushido to connect, sync buttons, Strava's own totals, each bike's odometer, API budget, scopes. |
+| Dashboard | `web/src/components/StravaConnection.tsx` | Settings → Connections › Accounts: status as Bushido reports it, a link to Bushido to connect, sync buttons, Strava's own totals, each bike's odometer, API budget, scopes. |
 | Bushido | `~/bushido/server/strava.js`, `~/bushido/app/src/strava.jsx` | Attaches a Strava activity to a logged session (the *Other training* card especially) with all its stats; see "Bushido" below. |
 
 ## Setup (once)

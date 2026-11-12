@@ -1,5 +1,5 @@
 /**
- * Settings → Shortcuts.
+ * Settings → Keyboard.
  *
  * Everything about the leader-key system is editable here: the leader itself,
  * how long a sequence stays open, and the key sequence behind each action.
@@ -14,6 +14,7 @@ import {
   ACTION_GROUPS,
   ACTIONS_BY_ID,
   DEFAULT_BINDINGS,
+  DEFAULT_SHORTCUTS,
   GRACE_MAX,
   GRACE_MIN,
   findConflicts,
@@ -24,31 +25,9 @@ import {
   writeConfig,
 } from '../shortcuts'
 import { Keycap } from './ShortcutOverlay'
+import { SettingsNote, SettingsPage, SettingsRow, SettingsSection, Switch } from './settings/ui'
 
 const MAX_SEQUENCE = 3
-
-interface ToggleProps {
-  checked: boolean
-  onChange: (value: boolean) => void
-  label: string
-  disabled?: boolean
-}
-
-function Toggle({ checked, onChange, label, disabled }: ToggleProps) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      className={`switch ${checked ? 'on' : ''}`}
-      onClick={() => onChange(!checked)}
-    >
-      <span />
-    </button>
-  )
-}
 
 interface SequenceInputProps {
   value: string
@@ -197,136 +176,90 @@ export default function ShortcutsSettings() {
   }, [confirmReset])
 
   const customised = useMemo(
-    () => ACTIONS.some((a) => (config.bindings[a.id] || '') !== (DEFAULT_BINDINGS[a.id] || '')),
-    [config.bindings],
+    () => config.leader !== DEFAULT_SHORTCUTS.leader || config.graceMs !== DEFAULT_SHORTCUTS.graceMs
+      || config.enabled !== DEFAULT_SHORTCUTS.enabled || config.showHud !== DEFAULT_SHORTCUTS.showHud
+      || ACTIONS.some((a) => (config.bindings[a.id] || '') !== (DEFAULT_BINDINGS[a.id] || '')),
+    [config],
+  )
+
+  const resetButton = (
+    <button
+      className={`btn compact${confirmReset ? ' danger' : ''}`}
+      disabled={!customised && !confirmReset}
+      title={customised ? 'Put every binding, the leader and the timing back to stock' : 'Nothing has been changed'}
+      onClick={() => {
+        if (!confirmReset) { setConfirmReset(true); return }
+        resetShortcuts()
+        setConfirmReset(false)
+      }}
+    >
+      <Hi icon={ArrowPathIcon} size={14} /> {confirmReset ? 'Confirm reset' : 'Restore defaults'}
+    </button>
   )
 
   return (
-    <div className="settings-pane">
-      <header className="settings-pane-head">
-        <h2>Shortcuts</h2>
-        <p>
-          Press the leader key, let go, then press the next key: <Keycap k={config.leader} />
-          <span className="key-then">then</span><Keycap k="t" /> opens Todos.
-        </p>
-      </header>
-
-      <div className="settings-section-title"><span /><strong>Behaviour</strong></div>
-      <div className="setting-list">
-        <SettingRow title="Keyboard shortcuts" desc="Turn the whole leader-key system on or off on this device.">
-          <Toggle
-            label="Keyboard shortcuts"
-            checked={config.enabled}
-            onChange={(v) => writeConfig({ enabled: v })}
-          />
-        </SettingRow>
-        <SettingRow title="Leader key" desc="The key that opens a sequence. Never fires while you're typing in a field.">
-          <LeaderInput value={config.leader} onChange={(leader) => writeConfig({ leader })} />
-        </SettingRow>
-        <SettingRow title="Grace period" desc="How long a half-typed sequence stays live before it's forgotten.">
-          <select
-            className="model-select"
-            value={String(config.graceMs)}
-            onChange={(e) => writeConfig({ graceMs: Number(e.target.value) })}
-          >
-            {GRACE_STEPS.filter((ms) => ms >= GRACE_MIN && ms <= GRACE_MAX).map((ms) => (
-              <option key={ms} value={ms}>{ms / 1000}s</option>
-            ))}
-          </select>
-        </SettingRow>
-        <SettingRow title="Show the hint panel" desc="After the leader key, list what one more press would do.">
-          <Toggle
-            label="Show the hint panel"
-            checked={config.showHud}
-            onChange={(v) => writeConfig({ showHud: v })}
-            disabled={!config.enabled}
-          />
-        </SettingRow>
-      </div>
+    <SettingsPage>
+      <SettingsSection
+        id="shortcuts-behaviour"
+        title="Shortcuts"
+        description={<>Press the leader, let go, then the next key: <Keycap k={config.leader} /><span className="key-then">then</span><Keycap k="t" /> opens Todos. Saved on this device.</>}
+        action={resetButton}
+      >
+        <SettingsRow id="shortcuts-enabled" title="Keyboard shortcuts" description="The whole leader-key system, on or off."
+          control={<Switch label="Keyboard shortcuts" checked={config.enabled} onChange={(v) => writeConfig({ enabled: v })} />} />
+        <SettingsRow id="leader" title="Leader key" description="The key that starts a sequence. It never fires while you are typing in a field."
+          control={<LeaderInput value={config.leader} onChange={(leader) => writeConfig({ leader })} />} />
+        <SettingsRow id="grace" title="Grace period" description="How long a half-typed sequence waits for its next key."
+          control={
+            <select className="model-select" aria-label="Grace period" value={String(config.graceMs)} onChange={(e) => writeConfig({ graceMs: Number(e.target.value) })}>
+              {GRACE_STEPS.filter((ms) => ms >= GRACE_MIN && ms <= GRACE_MAX).map((ms) => (
+                <option key={ms} value={ms}>{ms / 1000}s</option>
+              ))}
+            </select>
+          } />
+        <SettingsRow id="shortcut-hints" title="Show hints" description="After the leader, list what one more key would do."
+          control={<Switch label="Show hints" checked={config.showHud} onChange={(v) => writeConfig({ showHud: v })} disabled={!config.enabled} />} />
+      </SettingsSection>
 
       {leaderClash.length > 0 && (
-        <div className="shortcut-warn">
-          <WarnIcon />
+        <SettingsNote tone={customised ? 'warn' : 'info'}>
+          {customised && <WarnIcon />}
           <span>
             <Keycap k={config.leader} /> is both the leader and the first key of{' '}
-            {leaderClash.join(', ')} — press it twice to reach {leaderClash.length > 1 ? 'those' : 'that'}.
+            {leaderClash.join(', ')}: press it twice to reach {leaderClash.length > 1 ? 'those' : 'that'}.
           </span>
-        </div>
+        </SettingsNote>
       )}
-
       {Object.keys(conflicts).length > 0 && (
-        <div className="shortcut-warn error">
+        <SettingsNote tone="error">
           <WarnIcon />
           <span>
             {Object.keys(conflicts).length === 1 ? 'One sequence is' : `${Object.keys(conflicts).length} sequences are`}{' '}
-            bound twice. Only the first action listed will fire.
+            bound twice. Only the first action listed fires.
           </span>
-        </div>
+        </SettingsNote>
       )}
 
       {grouped.map(({ group, actions }) => (
-        <React.Fragment key={group}>
-          <div className="settings-section-title"><span /><strong>{group}</strong></div>
-          <div className="setting-list shortcut-editor">
-            {actions.map((action) => (
-              <div className={`setting-row shortcut-row${conflicted.has(action.id) ? ' conflict' : ''}`} key={action.id}>
-                <div className="setting-copy">
-                  <strong>{action.label}</strong>
-                  {conflicted.has(action.id) && (
-                    <span className="inline-warn"><WarnIcon /> Also bound to another action.</span>
-                  )}
-                </div>
-                <div className="setting-control">
-                  <SequenceInput
-                    value={config.bindings[action.id] || ''}
-                    leader={config.leader}
-                    label={action.label}
-                    onChange={(seq) => setBinding(action.id, seq)}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </React.Fragment>
+        <SettingsSection key={group} id={`shortcuts-${group.toLowerCase().replace(/\s+/g, '-')}`} title={group}>
+          {actions.map((action) => (
+            <SettingsRow
+              key={action.id}
+              title={action.label}
+              status={conflicted.has(action.id) ? <span className="s-bad"><WarnIcon /> Also bound to another action.</span> : undefined}
+              control={
+                <SequenceInput
+                  value={config.bindings[action.id] || ''}
+                  leader={config.leader}
+                  label={action.label}
+                  onChange={(seq) => setBinding(action.id, seq)}
+                />
+              }
+            />
+          ))}
+        </SettingsSection>
       ))}
-
-      <div className="settings-section-title"><span /><strong>Reset</strong></div>
-      <div className="setting-list">
-        <SettingRow
-          title="Restore defaults"
-          desc={customised ? 'Put every binding, the leader and the grace period back to stock.' : 'Nothing has been customised yet.'}
-        >
-          <button
-            className={`btn${confirmReset ? ' danger' : ''}`}
-            disabled={!customised && !confirmReset}
-            onClick={() => {
-              if (!confirmReset) { setConfirmReset(true); return }
-              resetShortcuts()
-              setConfirmReset(false)
-            }}
-          >
-            <Hi icon={ArrowPathIcon} size={15} /> {confirmReset ? 'Confirm reset' : 'Restore defaults'}
-          </button>
-        </SettingRow>
-      </div>
-    </div>
+    </SettingsPage>
   )
 }
 
-interface SettingRowProps {
-  title: string
-  desc?: string
-  children?: React.ReactNode
-}
-
-function SettingRow({ title, desc, children }: SettingRowProps) {
-  return (
-    <div className="setting-row">
-      <div className="setting-copy">
-        <strong>{title}</strong>
-        {desc && <span>{desc}</span>}
-      </div>
-      <div className="setting-control">{children}</div>
-    </div>
-  )
-}

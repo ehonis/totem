@@ -138,8 +138,22 @@ export function describeBrowserCall(tool, input) {
   }
 }
 
+// html_preview / html_render (chat/visuals.mjs): the card names the step, not
+// the page's source, which is all its input is.
+const VISUAL_CALL = /^(?:browser__)?html_(preview|render)$/
+function describeVisualCall(tool, input) {
+  const m = VISUAL_CALL.exec(tool)
+  if (!m) return null
+  let a = input
+  if (typeof a === 'string') { try { a = JSON.parse(a) } catch { a = {} } }
+  const title = typeof a?.title === 'string' ? a.title.trim().slice(0, 80) : ''
+  return { kind: 'mcp', title: m[1] === 'preview' ? 'Checked the chart' : 'Showed a chart', detail: title, tool, input: '' }
+}
+
 export function describeMcpCall({ name, server, input }) {
   const parsed = parseToolName(name, server)
+  const visual = describeVisualCall(parsed.tool, input)
+  if (visual) return { ...visual, server: parsed.app || parsed.server || '' }
   const browser = /^preview_/.test(parsed.tool) ? describeBrowserCall(parsed.tool, input) : null
   return {
     kind: 'mcp',

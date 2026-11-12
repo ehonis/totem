@@ -38,6 +38,7 @@ import { dirname } from 'node:path'
 import { mkdir, readFile, rename, writeFile, stat, appendFile } from 'node:fs/promises'
 import { normalizeSchedule, nextRunAfter, describeSchedule } from './schedule.mjs'
 import { normalizeTrigger, describeTrigger, cleanWatchState, sourceKey } from './triggers.mjs'
+import { ACCESS_MODES } from '../providers/claude-tools.mjs'
 
 // 'agent' is a totem's own judgement: it notifies when its run says NOTIFY (and
 // on errors). See totems/core.mjs.
@@ -51,6 +52,12 @@ const nowMs = () => Date.now()
 
 function normalizeNotify(value, fallback = 'errors') {
   return NOTIFY_MODES.includes(value) ? value : fallback
+}
+
+// Unlike a chat's, a totem's access has no default mode: unset (null) is the run's
+// standard limits, so a totem saved before the setting existed keeps them.
+export function normalizeTotemAccess(value) {
+  return ACCESS_MODES.includes(value) ? value : null
 }
 
 function clampCatchUp(value) {
@@ -107,13 +114,17 @@ function hydrate(id, saved, def, tz, runners = {}) {
     // What it runs. See the header for the precedence rule.
     runner,
     skillId: savedOr(saved, def, 'skillId'),
-    prompt: String(saved?.prompt || ''),
+    // A seed may ship an inline prompt (an agent totem); saved state wins once there is one.
+    prompt: String(saved?.prompt ?? def?.prompt ?? ''),
     requires: saved?.requires ?? def?.requires ?? [],
     action: saved?.action ?? def?.action ?? '',
     // Totem fields (totems/core.mjs). Every job is a totem; these say how it
     // thinks and where it talks.
     taskType: typeof saved?.taskType === 'string' ? saved.taskType.slice(0, 20) : '',
     browser: saved?.browser === true,
+    // What a totem's runs may do, as a chat's access mode (providers/claude-tools.mjs).
+    // null keeps the run's standard limits: reads, the web and its own memory.
+    access: normalizeTotemAccess(saved?.access),
     threadId: typeof saved?.threadId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(saved.threadId) ? saved.threadId : null,
     recommendations: cleanRecommendations(saved?.recommendations),
     // Hosts the git-sync runner keeps current (jobs/git-sync.mjs).
@@ -175,6 +186,7 @@ function persistable(job) {
     action: job.action,
     taskType: job.taskType,
     browser: job.browser,
+    access: job.access,
     threadId: job.threadId,
     recommendations: job.recommendations,
     gitSync: job.gitSync,
@@ -210,8 +222,15 @@ export function createJobStore({
   // under an old id is carried over, settings and history intact, on first read.
   renamedIds = {},
   renamedRunners = {},
+  // Ids of jobs Totem no longer ships. A saved job under one is dropped on read (it
+  // would otherwise point at a runner that is gone and fail on every tick), and so
+  // is the record of the owner having deleted it, so it never comes back as a seed.
+  // The file sheds them on the next list or write.
+  retiredIds = [],
 }) {
   let queue = Promise.resolve()
+  const retired = new Set(retiredIds)
+  let retiredPending = false
 
   function applyRenames(raw) {
     for (const [from, to] of Object.entries(renamedIds)) {
@@ -221,6 +240,13 @@ export function createJobStore({
     }
     for (const job of Object.values(raw.jobs)) {
       if (job && renamedRunners[job.runner]) job.runner = renamedRunners[job.runner]
+    }
+    for (const id of retired) {
+      if (Object.hasOwn(raw.jobs, id)) { delete raw.jobs[id]; retiredPending = true }
+    }
+    if (raw.deletedSeeds.some((id) => retired.has(id))) {
+      raw.deletedSeeds = raw.deletedSeeds.filter((id) => !retired.has(id))
+      retiredPending = true
     }
     return raw
   }
@@ -297,7 +323,11 @@ export function createJobStore({
   async function list({ seed } = {}) {
     return withLock(async () => {
       const raw = await ensureStore(seed)
-      if (backfillSeeds(raw)) await writeRaw(raw)
+      const dropped = retiredPending
+      if (backfillSeeds(raw) || dropped) {
+        await writeRaw(raw)
+        retiredPending = false
+      }
       return Object.entries(raw.jobs)
         .map(([id, saved]) => hydrateJob(id, saved))
         .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'seeded' ? -1 : 1))
@@ -359,6 +389,7 @@ export function createJobStore({
         effort: input?.effort || null,
         taskType: input?.taskType,
         browser: input?.browser === true,
+        access: input?.access,
         threadId: input?.threadId,
         recommendations: input?.recommendations,
         createdAt: new Date().toISOString(),
@@ -415,6 +446,7 @@ export function createJobStore({
         if (patch.effort !== undefined) next.effort = patch.effort || null
       }
       if (typeof patch.browser === 'boolean') next.browser = patch.browser
+      if (patch.access !== undefined) next.access = normalizeTotemAccess(patch.access)
       if (patch.taskType !== undefined) next.taskType = String(patch.taskType || '').slice(0, 20)
       if (patch.threadId !== undefined) next.threadId = patch.threadId || null
       if (patch.recommendations !== undefined) next.recommendations = patch.recommendations

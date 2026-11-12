@@ -1,0 +1,301 @@
+/* Settings, after T3 Code's settings dialog (components/SettingsView.tsx).
+   Everything is scoped under .stg-root, so the pane classes it restyles
+   (.setting-row, .settings-section-title, .model-select …) look as they always
+   did anywhere else they are used. No backdrop blur: the page glow under the
+   dialog moves every frame, and a full-screen blur would redraw with it. */
+
+.stg-root {
+  position: fixed; inset: 0; z-index: 70;
+  display: flex; align-items: center; justify-content: center;
+  padding: max(24px, env(safe-area-inset-top)) 24px 24px;
+  background: rgba(0, 0, 0, .56);
+  animation: stg-fade .14s ease-out;
+}
+@media (min-width: 1100px) { .stg-root { padding: 40px; } }
+@keyframes stg-fade { from { opacity: 0; } }
+@keyframes stg-pop { from { opacity: 0; transform: scale(.985); } }
+
+.stg {
+  --stg-line: color-mix(in srgb, var(--line) 80%, transparent);
+  --stg-card: color-mix(in srgb, var(--surface) 55%, transparent);
+  position: relative; display: flex; width: 100%; height: 100%; max-width: 1280px; max-height: 960px; min-height: 0;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .02) inset;
+  outline: none;
+  animation: stg-pop .16s ease-out;
+}
+
+/* ---- Section nav ---- */
+.stg-side { display: flex; flex-direction: column; min-height: 0; flex: none; }
+.stg-side > .stg-nav { flex: 1; }
+.stg-nav {
+  width: 240px; flex: none; display: flex; flex-direction: column; gap: 16px;
+  padding: 12px 8px; overflow-y: auto; min-height: 0;
+  background: var(--bg-2); border-right: 1px solid var(--stg-line);
+}
+.stg-search {
+  display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 8px;
+  color: var(--muted); border: 1px solid transparent; cursor: text;
+}
+.stg-search:hover { background: var(--rail-hover, var(--bg-3)); }
+.stg-search:focus-within { background: var(--bg); border-color: var(--line); color: var(--text); }
+.stg-search input {
+  flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text);
+  font: inherit; font-size: 13px; padding: 0;
+}
+.stg-search input::placeholder { color: var(--muted); }
+.stg-search kbd, .stg kbd.stg-kbd {
+  font: inherit; font-size: 11px; line-height: 1; padding: 3px 5px; border-radius: 5px;
+  border: 1px solid var(--line); color: var(--muted); background: var(--bg);
+}
+.stg-search-clear { display: inline-flex; padding: 3px; border: 0; border-radius: 5px; background: none; color: var(--muted); }
+.stg-search-clear:hover { color: var(--text); background: var(--bg-3); }
+
+.stg-group, .stg-group-items { display: flex; flex-direction: column; gap: 1px; }
+.stg-group h3 { margin: 0 0 4px; padding: 0 8px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.stg-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 8px;
+  border: 0; border-radius: 8px; background: none; color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  font: inherit; font-size: 13.5px; text-align: left;
+}
+.stg-item .ti { color: var(--muted); flex: none; }
+.stg-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stg-item:hover { background: var(--rail-hover, var(--bg-3)); color: var(--text); }
+.stg-item.on { background: var(--rail-on, var(--bg-3)); color: var(--text); font-weight: 500; }
+.stg-item.on .ti { color: var(--text); }
+.stg-item:focus-visible, .stg-result:focus-visible, .stg-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.stg-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.stg-result {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px;
+  background: none; color: var(--text); font: inherit; text-align: left;
+}
+.stg-result .ti { color: var(--muted); margin-top: 2px; flex: none; }
+.stg-result span { display: flex; flex-direction: column; min-width: 0; }
+.stg-result strong { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stg-result small { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stg-result.on { background: var(--rail-on, var(--bg-3)); }
+.stg-none { margin: 0; padding: 24px 8px; text-align: center; font-size: 12.5px; color: var(--muted); }
+
+/* ---- Pane ---- */
+.stg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.stg-head {
+  height: 48px; flex: none; display: flex; align-items: center; gap: 6px;
+  padding: 0 8px 0 20px; border-bottom: 1px solid var(--stg-line);
+}
+.stg-crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; color: var(--muted); }
+.stg-crumbs .ti { opacity: .7; }
+.stg-crumbs strong { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stg-title { margin: 0; font-size: 15px; font-weight: 600; }
+.stg-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: none;
+  border: 0; border-radius: 8px; background: none; color: var(--muted);
+}
+.stg-icon-btn:hover { background: var(--bg-3); color: var(--text); }
+.stg-close { margin-left: auto; }
+
+.stg-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+
+/* A pane's column: T3's readable width (max-w-4xl), the same for every pane. */
+.stg .sp { width: 100%; max-width: 896px; margin: 0 auto; padding: 24px 24px 56px; display: flex; flex-direction: column; gap: 28px; }
+
+/* ---- Sections and groups ---- */
+.stg .ss { display: flex; flex-direction: column; gap: 10px; outline: none; min-width: 0; }
+.stg .ss-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 0 4px; min-height: 28px; }
+.stg .ss-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stg .ss-head h2 { margin: 0; font-size: 15px; line-height: 28px; font-weight: 600; letter-spacing: -.005em; }
+.stg .ss-head p { margin: 0; font-size: 12.5px; color: var(--muted); max-width: 640px; text-wrap: pretty; }
+.stg .ss-action { display: flex; align-items: center; gap: 6px; flex: none; min-height: 28px; }
+
+.stg .setting-list.sg, .stg .s-group {
+  display: block; margin: 0; gap: 0;
+  border: 1px solid var(--stg-line); border-radius: 12px; background: var(--stg-card);
+}
+.stg .setting-list.sg > * + * { border-top: 1px solid var(--stg-line); }
+.stg .setting-list.sg > p { margin: 0; padding: 12px 16px; font-size: 12.5px; }
+
+/* ---- Rows ---- */
+.stg .setting-row.sr {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 32px; row-gap: 12px;
+  padding: 12px 16px; border-bottom: 0; outline: none; border-radius: 0;
+}
+.stg .setting-list.sg > .setting-row.sr:first-child { border-top-left-radius: 11px; border-top-right-radius: 11px; }
+.stg .setting-list.sg > .setting-row.sr:last-child { border-bottom-left-radius: 11px; border-bottom-right-radius: 11px; }
+.stg .sr .setting-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.stg .sr-title { display: flex; align-items: center; gap: 6px; min-height: 20px; }
+.stg .sr-title strong { font-size: 13.5px; font-weight: 500; }
+.stg .sr .setting-copy .sr-desc { font-size: 12.5px; line-height: 1.45; color: var(--muted); max-width: 600px; text-wrap: pretty; }
+.stg .sr .setting-copy .sr-status { font-size: 12px; color: var(--muted); }
+.stg .sr .setting-control { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.stg .setting-row.sr.sr-stack { grid-template-columns: minmax(0, 1fr); }
+.stg .sr-stack .setting-control { display: block; }
+.stg .sr-body { grid-column: 1 / -1; min-width: 0; }
+.stg .sr-reset {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 5px; background: none; color: var(--muted);
+}
+.stg .sr-reset:hover { color: var(--text); background: var(--bg-3); }
+@media (max-width: 600px) {
+  .stg .setting-row.sr { grid-template-columns: minmax(0, 1fr); }
+  .stg .sr .setting-control { justify-content: flex-start; }
+  /* A switch stays at the right edge, as in iOS's lists and T3. */
+  .stg .setting-row.sr:has(> .setting-control > .switch:only-child) { grid-template-columns: minmax(0, 1fr) auto; }
+}
+
+/* A search hit lands here: one soft flash, then nothing. */
+.stg .s-pulse { animation: s-pulse 1.4s ease-out; }
+@keyframes s-pulse {
+  0%, 30% { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+  100% { background: transparent; box-shadow: inset 0 0 0 1px transparent; }
+}
+
+/* ---- Controls, at T3's size ---- */
+.stg .model-select, .stg .s-input {
+  width: auto; min-width: 160px; max-width: 100%; height: 32px;
+  padding: 0 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--text); font: inherit; font-size: 13px;
+}
+.stg select.model-select { padding-right: 28px; }
+.stg .model-select:focus, .stg .s-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.stg .s-input.wide { min-width: 260px; }
+.stg .s-input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.stg .btn { height: 32px; padding: 0 12px; border-radius: 8px; font-size: 13px; white-space: nowrap; }
+.stg .btn.compact, .stg .btn.small { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.stg .switch { width: 34px; height: 20px; }
+.stg .switch span { width: 16px; height: 16px; }
+.stg .switch.on { background: var(--accent); border-color: var(--accent); }
+.stg .switch.on span { transform: translateX(14px); }
+.stg .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stg code { font-size: 11.5px; padding: 1px 5px; border-radius: 5px; background: var(--bg-3); }
+.stg .s-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* ---- Notes ---- */
+.stg .s-note {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 10px;
+  font-size: 12.5px; line-height: 1.5; border: 1px solid var(--stg-line); background: var(--stg-card); color: var(--text);
+}
+.stg .s-note.warn { border-color: color-mix(in srgb, var(--amber) 35%, transparent); background: color-mix(in srgb, var(--amber) 8%, transparent); }
+.stg .s-note.error { border-color: color-mix(in srgb, var(--red) 40%, transparent); background: color-mix(in srgb, var(--red) 8%, transparent); }
+.stg .s-note.ok { border-color: color-mix(in srgb, var(--green) 35%, transparent); background: color-mix(in srgb, var(--green) 7%, transparent); }
+.stg .s-error { color: var(--red); font-size: 12.5px; margin: 0; }
+.stg .s-ok { color: var(--green); }
+.stg .s-bad { color: var(--red); }
+
+/* ---- Older pane layouts, folded into the dialog's column ----
+   Providers, Connections, Skills, Logs and Usage were pages of their own; inside
+   the dialog the breadcrumb is their title, so their big page headings go. */
+.stg .view { padding: 0; height: auto; overflow: visible; background: none; }
+.stg .settings-shell, .stg .studio-pane { width: 100%; max-width: none; margin: 0; padding: 0; }
+.stg .sp > .view .settings-shell { padding: 0; }
+/* Their page heading becomes a section heading, like every other pane's. */
+.stg .settings-top, .stg .studio-pane-head, .stg .view-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  padding: 0 4px; margin: 0 0 14px;
+}
+.stg .settings-top h1, .stg .studio-pane-head h2, .stg .view-head h1 { margin: 0; font-size: 15px; line-height: 28px; font-weight: 600; letter-spacing: -.005em; }
+.stg .settings-top p, .stg .studio-pane-head p, .stg .view-head p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); max-width: 640px; }
+.stg .settings-section-title {
+  margin: 24px 0 10px; padding: 0 4px; gap: 0; color: var(--text);
+}
+.stg .settings-section-title span { display: none; }
+.stg .settings-section-title strong { font-size: 15px; font-weight: 600; letter-spacing: -.005em; text-transform: none; }
+
+/* ---- Phone: the dialog is the screen ---- */
+.stg.stg-narrow { max-width: none; max-height: none; border: 0; border-radius: 0; flex-direction: column; animation: none; }
+.stg-root:has(.stg-narrow) { padding: 0; background: var(--bg); animation: none; }
+.stg-narrow .stg-side { flex: 1; min-height: 0; padding-top: env(safe-area-inset-top); }
+.stg-narrow .stg-main { padding-top: env(safe-area-inset-top); }
+.stg-narrow .stg-head { padding: 0 6px 0 12px; height: 52px; }
+.stg-narrow .stg-side .stg-head { padding-left: 16px; }
+.stg-narrow .stg-nav { width: 100%; flex: 1; border-right: 0; background: var(--bg); padding: 12px 12px calc(24px + env(safe-area-inset-bottom)); gap: 20px; }
+.stg-narrow .stg-search { height: 40px; background: var(--bg-2); border-color: var(--line); }
+.stg-narrow .stg-search input { font-size: 16px; }
+.stg-narrow .stg-group-items { border: 1px solid var(--stg-line); border-radius: 12px; background: var(--stg-card); overflow: hidden; gap: 0; }
+.stg-narrow .stg-group h3 { padding: 0 4px; margin-bottom: 6px; }
+.stg-narrow .stg-item { height: 48px; padding: 0 14px; border-radius: 0; font-size: 15px; gap: 12px; }
+.stg-narrow .stg-item + .stg-item { border-top: 1px solid var(--stg-line); }
+.stg-narrow .stg-item-go { color: var(--muted); opacity: .7; }
+.stg-narrow .stg-result { padding: 10px; }
+.stg-narrow .stg-body { padding-bottom: env(safe-area-inset-bottom); }
+.stg-narrow .sp { padding: 16px 16px 48px; gap: 24px; }
+
+/* ---- Pieces specific to a pane ---- */
+.stg .ss-meta { font-size: 12px; }
+.stg .s-code-big { font-size: 13px; padding: 4px 8px; letter-spacing: .04em; user-select: all; }
+
+/* Tasks › Venture tags: one tag per line. */
+.stg .tag-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px 8px 16px; flex-wrap: wrap; }
+.stg .tag-row .s-input { flex: 1 1 180px; min-width: 0; }
+.stg .tag-color { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: none; cursor: pointer; flex: none; }
+.stg .tag-color::-webkit-color-swatch-wrapper { padding: 3px; }
+.stg .tag-color::-webkit-color-swatch { border: 0; border-radius: 4px; }
+.stg .tag-renames { font-size: 12px; }
+.stg .tag-row-actions { display: flex; gap: 6px; margin-left: auto; }
+.stg .tag-save { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 10px 16px; font-size: 12.5px; background: color-mix(in srgb, var(--accent) 6%, transparent); border-bottom-left-radius: 11px; border-bottom-right-radius: 11px; }
+
+/* A fold inside a row: "show the last ten". */
+.stg .s-fold summary { cursor: pointer; font-size: 12.5px; color: var(--muted); width: fit-content; }
+.stg .s-fold summary:hover { color: var(--text); }
+.stg .s-plain-list { list-style: none; margin: 8px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.stg .s-plain-list li { display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; }
+.stg .s-plain-list strong { font-weight: 500; }
+
+/* Providers: the account rail and its detail, inside the dialog. */
+.stg .provider-workbench { margin: 0; }
+.stg .provider-rail, .stg .provider-card { border-color: var(--stg-line); background: var(--stg-card); }
+.stg .provider-detail-pane > .settings-section-title:first-of-type { margin-top: 18px; }
+.provider-advanced { margin-top: 18px; border: 1px solid var(--stg-line, var(--line)); border-radius: 12px; background: var(--stg-card, transparent); }
+.provider-advanced > summary {
+  display: flex; align-items: baseline; gap: 10px; padding: 12px 16px; cursor: pointer; list-style: none;
+  font-size: 13.5px; font-weight: 500;
+}
+.provider-advanced > summary::-webkit-details-marker { display: none; }
+.provider-advanced > summary::before { content: '›'; display: inline-block; width: 10px; color: var(--muted); transition: transform .15s ease; }
+.provider-advanced[open] > summary::before { transform: rotate(90deg); }
+.provider-advanced > summary small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.provider-advanced > :not(summary) { margin: 0 12px 12px; }
+.provider-advanced .provider-card { margin: 0 12px 12px; }
+.provider-advanced-label { font-size: 12px; font-weight: 500; color: var(--muted); margin: 4px 16px 8px !important; }
+.stg .provider-switch.on { background: var(--accent); border-color: var(--accent); }
+.stg .s-link { display: inline; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.stg .s-link:hover { text-decoration: underline; }
+@media (max-width: 600px) {
+  .stg .ss-head { flex-direction: column; gap: 8px; }
+  .stg .ss-action { flex-wrap: wrap; }
+}
+.stg-narrow .stg-body { scrollbar-gutter: auto; }
+
+/* Older panes' cards take the same surface as every settings group, so the
+   dialog reads as one design. */
+.stg .card, .stg .conn-list, .stg .usage-card, .stg .quota-card, .stg .skill-card, .stg .app-row-list {
+  border-color: var(--stg-line); background: var(--stg-card); border-radius: 12px;
+}
+.stg .card { padding: 14px 16px; }
+.stg .card + .card { margin-top: 16px; }
+.stg .card-head h2 { font-size: 13.5px; font-weight: 600; }
+.stg-restore { margin-left: auto; }
+.stg-restore + .stg-close { margin-left: 4px; }
+.stg-restore:disabled { opacity: .5; cursor: default; }
+.stg-restore-short { display: none; }
+@media (max-width: 720px) { .stg-restore-long { display: none; } .stg-restore-short { display: inline; } }
+
+/* Connections' sections read like every other pane's. */
+.stg .conn-section { margin-top: 28px; gap: 10px; }
+.stg .conn-section-head { padding: 0 4px; }
+.stg .conn-section-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -.005em; line-height: 28px; }
+.stg .conn-section-meta { font-size: 12px; }
+.stg .conn-section-note { margin: -4px 4px 2px; font-size: 12.5px; }
+
+/* On a phone a disabled Restore is noise beside the close button. */
+.provider-remove { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 4px 0; font-size: 12.5px; flex-wrap: wrap; }
+.stg .provider-command { flex-wrap: wrap; }
+.stg .s-skeleton { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.stg .s-skeleton span { height: 120px; border-radius: 12px; border: 1px solid var(--stg-line); background: var(--stg-card); animation: s-breathe 1.6s ease-in-out infinite; }
+@keyframes s-breathe { 50% { opacity: .55; } }
+
+.provider-setting-status { font-size: 12px; }
+.stg .s-skeleton span:first-child { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12.5px; }
+/* A skill's command badge stays on one line; the title gives way instead. */
+.stg .skill-command { white-space: nowrap; flex: none; }
+.stg .skill-card strong, .stg .skill-card h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

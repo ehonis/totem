@@ -109,3 +109,13 @@ export { default as IconArrowForwardUp } from '@tabler/icons-react/dist/esm/icon
 export { default as IconShield } from '@tabler/icons-react/dist/esm/icons/IconShield.mjs'
 export { default as IconShieldCheck } from '@tabler/icons-react/dist/esm/icons/IconShieldCheck.mjs'
 export { default as IconShieldX } from '@tabler/icons-react/dist/esm/icons/IconShieldX.mjs'
+export { default as IconGitPullRequest } from '@tabler/icons-react/dist/esm/icons/IconGitPullRequest.mjs'
+export { default as IconAlertTriangle } from '@tabler/icons-react/dist/esm/icons/IconAlertTriangle.mjs'
+export { default as IconChartBar } from '@tabler/icons-react/dist/esm/icons/IconChartBar.mjs'
+export { default as IconArrowsMaximize } from '@tabler/icons-react/dist/esm/icons/IconArrowsMaximize.mjs'
+// The Windows desktop app's window buttons (components/WindowControls.tsx).
+export { default as IconMinus } from '@tabler/icons-react/dist/esm/icons/IconMinus.mjs'
+export { default as IconSquare } from '@tabler/icons-react/dist/esm/icons/IconSquare.mjs'
+export { default as IconSquares } from '@tabler/icons-react/dist/esm/icons/IconSquares.mjs'
+// The desktop app's "Restart to update" (components/DesktopUpdate.tsx).
+export { default as IconCircleArrowDown } from '@tabler/icons-react/dist/esm/icons/IconCircleArrowDown.mjs'

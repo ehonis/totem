@@ -1,6 +1,10 @@
-// The web's ToastHost (components/ToastHost.tsx) on a phone: one solid fill per
-// kind, white text, full width at the bottom of the screen, stacked as T3 Code's
-// deck (newest in front, two peeking above it; tap to spread upward, which holds them).
+// The web's ToastHost (components/ToastHost.tsx) on a phone, for errors only. A
+// "Done" or Undo toast covered the bottom of the screen for seconds after every
+// tap, and each of those changes has its way back where it happened (Completed,
+// the recycle bin, the archive, the Settled sheet), so the phone drops every
+// success and info toast as it arrives; a success still gets its haptic. Errors
+// keep the web's deck: newest in front, one peeking above it; tap to spread
+// upward, which holds them.
 // The deck sits on whatever owns the bottom (toastFloor.ts): an open chat's composer,
 // the floating buttons beside it, and the keyboard when it is up.
 // Reads the same toast store (lib/toast.ts) so ported code that calls
@@ -21,7 +25,7 @@ import { success, tap, warn } from './haptics'
 const ICONS = { error: ExclamationTriangleIcon, success: CheckCircleIcon, info: InformationCircleIcon }
 const FILL = { error: colors.toastError, success: colors.toastSuccess, info: colors.toastInfo }
 
-const SHOWN = 3
+const SHOWN = 2
 const PEEK = 10
 const SHRINK = 0.06
 const GAP = 8
@@ -44,7 +48,7 @@ function Item({ t, index, open, offset, frontHeight, onHeight }: {
   t: Toast; index: number; open: boolean; offset: number; frontHeight: number
   onHeight: (id: number, h: number) => void
 }) {
-  useEffect(() => { if (t.kind === 'error') warn(); else if (t.kind === 'success') success() }, [t.kind, t.count])
+  useEffect(() => { warn() }, [t.count])
   const behind = index > 0 && !open
   const y = useSharedValue(0)
   const scale = useSharedValue(1)
@@ -67,7 +71,7 @@ function Item({ t, index, open, offset, frontHeight, onHeight }: {
       {t.duration > 0 ? <Countdown duration={t.duration} held={open} restart={t.count} /> : null}
       <Animated.View style={[st.row, body]} onLayout={(e) => onHeight(t.id, Math.round(e.nativeEvent.layout.height))}>
         <Hi icon={ICONS[t.kind] || ICONS.error} size={16} color={colors.white} style={{ marginTop: 1 }} />
-        <T size={14} color={colors.white} style={{ flex: 1 }}>
+        <T size={13.5} color={colors.white} numberOfLines={3} style={{ flex: 1 }}>
           {t.text}{t.count > 1 ? <T size={12} weight={600} color={colors.white}>{`  ×${t.count}`}</T> : null}
         </T>
         {t.action ? (
@@ -76,7 +80,7 @@ function Item({ t, index, open, offset, frontHeight, onHeight }: {
             <T size={13} weight={600} color={colors.white}>{t.action.label}</T>
           </Press>
         ) : null}
-        <Press hitSlop={10} onPress={() => dismissToast(t.id)} accessibilityLabel="Dismiss notification">
+        <Press hitSlop={14} onPress={() => dismissToast(t.id)} accessibilityLabel="Dismiss notification">
           <Hi icon={XMarkIcon} size={15} color="rgba(255,255,255,0.75)" />
         </Press>
       </Animated.View>
@@ -85,7 +89,15 @@ function Item({ t, index, open, offset, frontHeight, onHeight }: {
 }
 
 export default function ToastHost() {
-  const toasts = useToasts()
+  const all = useToasts()
+  useEffect(() => {
+    for (const t of all) {
+      if (t.kind === 'error') continue
+      if (t.kind === 'success') success()
+      dismissToast(t.id)
+    }
+  }, [all])
+  const toasts = all.filter((t) => t.kind === 'error')
   const insets = useSafeAreaInsets()
   const floor = useToastFloor()
   const keyboard = useReanimatedKeyboardAnimation()
@@ -127,7 +139,7 @@ const st = StyleSheet.create({
     position: 'absolute', left: 0, right: 0, bottom: 0, transformOrigin: 'bottom',
     borderRadius: 12, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 14, shadowOffset: { width: 0, height: 8 },
   },
-  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingTop: 14, paddingBottom: 12, paddingLeft: 14, paddingRight: 12 },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, paddingTop: 11, paddingBottom: 9, paddingLeft: 12, paddingRight: 12 },
   bar: { position: 'absolute', top: 0, left: 0, right: 0, height: 3, backgroundColor: 'rgba(255,255,255,0.6)', transformOrigin: 'left' },
   action: {
     flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'center',

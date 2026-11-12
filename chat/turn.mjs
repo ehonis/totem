@@ -8,12 +8,13 @@
 //                      resumed session did not see is replayed, never dropped.
 //   renderTranscript — prior turns as plain text, newest-first under a budget.
 //   attachmentBlock  — where each attached file is, plus pasted text inline.
-//   projectBlock     — a project chat's shared instructions, memory and files.
+//   projectBlock     — a project chat's shared instructions, memory path and files.
 //   applyEvent       — fold one stream event into the assistant message. The
 //                      browser has a TypeScript twin (web/src/chat/reduce.ts);
 //                      keep the two in step.
 
 import { foldAgent } from './subagents.mjs'
+import { memoryEditable, memoryRef } from './memory-ref.mjs'
 
 // How the owner's lines are labelled when a transcript is replayed to an agent.
 const OWNER_LABEL = String(process.env.OWNER_NAME || '').trim() || 'Owner'
@@ -135,7 +136,6 @@ export function attachmentBlock(files) {
   return out
 }
 
-const PROJECT_MEMORY_PROMPT_LIMIT = 12_000
 const PROJECT_FILES_LISTED = 80
 
 function fileLines(files) {
@@ -150,27 +150,29 @@ function fileLines(files) {
   return `${lines.join('\n')}${more}`
 }
 
-const clip = (mem) => (mem.length > PROJECT_MEMORY_PROMPT_LIMIT ? `${mem.slice(0, PROJECT_MEMORY_PROMPT_LIMIT)}\n…(truncated; the full file is at the path below)` : mem)
-
 /**
- * What a chat in a project knows about the project: its instructions, its
- * memory (and where to keep it), and every shared file with its path. Sent on
- * every turn, resumed or not, because files and memory change between turns.
- * `files` carry `path` resolved; ones whose upload has gone are left out.
+ * What a chat in a project knows about the project: its instructions, where its
+ * memory is (with a one-line summary, not the text), and every shared file with
+ * its path. Sent on every turn, resumed or not, because files and memory change
+ * between turns; the memory is read on demand, so a long resumed chat does not
+ * carry a copy of it per turn (chat/memory-ref.mjs).
+ * `memory` is memoryFileStats() for the project's memory file. `files` carry
+ * `path` resolved; ones whose upload has gone are left out.
  *
- * A folder's chat (`parent` given) reads the parent project's instructions,
+ * A folder's chat (`parent` given) gets the parent project's instructions,
  * memory and files too, but keeps only the folder's memory: nothing it learns
  * reaches the parent unless the owner moves it there.
  */
-export function projectBlock(project, { memory = '', memoryPath = '', files = [], parent = null } = {}) {
+export function projectBlock(project, { memory = null, files = [], parent = null } = {}) {
   if (!project) return ''
   const out = []
   if (parent?.project) {
     out.push(`PROJECT: This chat is in "${project.name}", a folder inside the owner's project "${parent.project.name}". The folder is a side topic: the other chats in it share its instructions, memory and files; the parent project's are shown for context and are read-only here.`)
     const pi = String(parent.project.instructions || '').trim()
     if (pi) out.push(`Instructions from the parent project "${parent.project.name}" (follow them in this chat):\n${pi}`)
-    const pm = String(parent.memory || '').trim()
-    if (pm) out.push(`Parent project memory (read-only; do not edit that file, and do not copy this folder's notes into it):\n${clip(pm)}`)
+    if (parent.memory?.entries) {
+      out.push(`${memoryRef('Parent project memory', parent.memory, 'decisions, facts or preferences from the parent project')}\nRead-only: never edit that file, and do not copy this folder's notes into it.`)
+    }
     const pf = fileLines(parent.files || [])
     if (pf) out.push(`Parent project files, saved on this machine. Open the ones that matter with your file tools:\n${pf}`)
   } else {
@@ -179,10 +181,10 @@ export function projectBlock(project, { memory = '', memoryPath = '', files = []
   const scope = parent?.project ? 'Folder' : 'Project'
   const instructions = String(project.instructions || '').trim()
   if (instructions) out.push(`${scope} instructions from the owner (follow them in this chat):\n${instructions}`)
-  const mem = String(memory || '').trim()
-  out.push(
-    `${scope} memory (${memoryPath}):\n${clip(mem) || '(empty so far)'}\n` +
-    `Keep that file current with your file tools: when this chat settles a decision, learns a fact or preference the other chats in the ${scope.toLowerCase()} will need, or finishes something worth remembering, add a short dated bullet under a fitting heading, and correct anything that is no longer true. Keep it short; it is notes for the next chat, not a transcript. Do not tell the owner each time you update it.`,
+  const ref = memoryRef(`${scope} memory`, memory, `earlier decisions, facts or preferences from this ${scope.toLowerCase()}'s chats`)
+  out.push(!memoryEditable(memory) ? ref :
+    `${ref}\n` +
+    `Keep that file current with your file tools (read it first): when this chat settles a decision, learns a fact or preference the other chats in the ${scope.toLowerCase()} will need, or finishes something worth remembering, add a short dated bullet under a fitting heading, and correct anything that is no longer true. Keep it short; it is notes for the next chat, not a transcript. Do not tell the owner each time you update it.`,
   )
   const own = fileLines(files)
   if (own) out.push(`${scope} files, saved on this machine. Open the ones that matter to the request with your file tools; do not ask the owner to upload them again:\n${own}`)
@@ -262,6 +264,32 @@ export function applyEvent(msg, event, now = Date.now()) {
       const existing = msg.parts.find((p) => p.type === 'approval' && p.id === a.id)
       if (existing) Object.assign(existing, a)
       else msg.parts.push({ type: 'approval', ...a })
+      break
+    }
+    case 'inbox': {
+      // An inbox proposal this reply staged (chat/inbox-outcome.mjs): added where
+      // it was staged, updated in place when the owner decides it. Unlike a tool
+      // approval it outlives the run, so ending the reply leaves it pending.
+      const c = event.inbox || {}
+      if (!c.id) break
+      const existing = msg.parts.find((p) => p.type === 'inbox' && p.id === c.id)
+      if (existing) Object.assign(existing, c)
+      else msg.parts.push({ type: 'inbox', ...c })
+      break
+    }
+    case 'change': {
+      // The PR card from change_finish (dev/change.mjs), once per id.
+      const c = event.change || {}
+      if (c.type !== 'change-pr' || !c.id || msg.parts.some((p) => p.type === 'change-pr' && p.id === c.id)) break
+      msg.parts.push({ ...c })
+      break
+    }
+    case 'visual': {
+      // A chart the agent rendered inline (chat/visuals.mjs), once per id. The
+      // signed url is for viewers; the saved part keeps the upload id.
+      const v = event.visual || {}
+      if (!v.id || !v.uploadId || msg.parts.some((p) => p.type === 'visual' && p.id === v.id)) break
+      msg.parts.push({ type: 'visual', id: v.id, uploadId: v.uploadId, title: v.title || 'Chart', height: v.height || 320 })
       break
     }
     case 'steer': {

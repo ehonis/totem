@@ -2,7 +2,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { compareVersions, parseVersion, decideUpdate, readInstalledVersion, proposalFor } from './updates.mjs'
-import { DEFAULT_SOURCES } from './feed.mjs'
 
 const claude = {
   id: 'claude-code',
@@ -109,19 +108,4 @@ test('the proposal says what will run and why, in his words not a version number
   assert.match(p.why, /2\.1\.273/)
   // The meta is how the next scan finds this proposal again.
   assert.deepEqual(p.meta, { update: 'claude-code', target: '2.1.275', from: '2.1.273' })
-})
-
-test('the shipped sources declare updates that match how they are installed', async () => {
-  const byId = Object.fromEntries(DEFAULT_SOURCES.map((s) => [s.id, s]))
-  // Claude Code is the native installer here, not a global npm package: `npm i -g`
-  // would leave two copies and a symlink pointing at the old one.
-  assert.equal(byId['claude-code'].update.command, 'claude update')
-  assert.doesNotMatch(byId['claude-code'].update.command, /npm/)
-  // T3 Code has no CLI on PATH, so its version comes from the service's own state.
-  assert.equal(byId['t3-code'].update.installed.kind, 'json')
-  // Both guard the channel, and every declared update explains itself.
-  for (const source of DEFAULT_SOURCES.filter((s) => s.update)) {
-    assert.equal(source.update.channel, 'stable', `${source.id} must declare its channel`)
-    assert.ok(source.update.what.length > 20, `${source.id} must explain what it runs`)
-  }
 })

@@ -122,6 +122,110 @@ export function streakOf(habit: Habit, entries: Entries, today: string): number 
   return n
 }
 
+/**
+ * The longest streak in the loaded history, in the habit's own unit. Never less
+ * than the current streak, so "best" can't read lower than "now".
+ */
+export function bestStreakOf(habit: Habit, entries: Entries, today: string): number {
+  const current = streakOf(habit, entries, today)
+  const logged = Object.keys(entries).filter((d) => d <= today && (entries[d]?.[habit.id]?.count || 0) > 0).sort()
+  if (!logged.length) return current
+  let best = 0
+  let run = 0
+  if (habit.cadence === 'daily') {
+    let prev = ''
+    for (const d of logged) {
+      run = prev && addDays(prev, 1) === d ? run + 1 : 1
+      if (run > best) best = run
+      prev = d
+    }
+    return Math.max(best, current)
+  }
+  const met = (start: string) => periodTotal(habit, entries, start) >= habit.target
+  if (habit.cadence === 'weekly') {
+    const last = weekStartOf(today)
+    for (let ws = weekStartOf(logged[0]); ws <= last; ws = addDays(ws, 7)) {
+      run = met(ws) ? run + 1 : 0
+      if (run > best) best = run
+    }
+    return Math.max(best, current)
+  }
+  const lastYm = today.slice(0, 7)
+  for (let ym = logged[0].slice(0, 7); ym <= lastYm; ym = nextMonthOf(ym)) {
+    run = met(`${ym}-01`) ? run + 1 : 0
+    if (run > best) best = run
+  }
+  return Math.max(best, current)
+}
+
+const nextMonthOf = (ym: string): string => {
+  const [y, m] = ym.split('-').map(Number)
+  const d = new Date(y, m, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** One day in a habit row's week strip. */
+export interface StripDay { date: string; letter: string; level: number; skipped: boolean; noted: boolean }
+
+/** The seven days ending on `end`, oldest first, for the row's at-a-glance strip. */
+export function recentDays(habit: Habit, entries: Entries, end: string, days = 7): StripDay[] {
+  return Array.from({ length: days }, (_, i) => {
+    const date = addDays(end, i - (days - 1))
+    const e = entries[date]?.[habit.id]
+    const count = e?.count || 0
+    return {
+      date,
+      letter: toDate(date).toLocaleDateString([], { weekday: 'narrow' }),
+      // A daily habit's dot fills by its own day; a weekly or monthly one has no
+      // per-day target, so any completion is a full dot.
+      level: habit.cadence === 'daily' ? levelOf(count, habit.target) : count > 0 ? 4 : 0,
+      skipped: !count && e?.skipped === true,
+      noted: Boolean(e?.note),
+    }
+  })
+}
+
+/**
+ * Whether a habit counts as done for the check-in day: a daily one once it meets
+ * its target that day; a weekly or monthly one once its period's quota is met, or
+ * on a day it was logged (a rest day inside an unmet week is still open).
+ */
+export function doneOn(habit: Habit, entries: Entries, date: string): boolean {
+  const count = entries[date]?.[habit.id]?.count || 0
+  if (habit.cadence === 'daily') return count >= Math.max(1, habit.target)
+  return count > 0 || periodTotal(habit, entries, date) >= Math.max(1, habit.target)
+}
+
+export interface DayProgress { done: number; total: number; segments: { id: string; color: string; done: boolean }[] }
+
+/** The Today panel's bar: one segment per habit, in list order. */
+export function dayProgress(habits: Habit[], entries: Entries, date: string): DayProgress {
+  const segments = habits.map((h) => ({ id: h.id, color: h.color, done: doneOn(h, entries, date) }))
+  return { done: segments.filter((s) => s.done).length, total: segments.length, segments }
+}
+
+/**
+ * The entries with not-yet-answered taps folded in, so a check fills the moment
+ * it is pressed. `pending` maps `habitId:date` to the delta still in flight.
+ * Returns the same object when nothing is pending.
+ */
+export function withPending(entries: Entries, pending: Record<string, number>): Entries {
+  const keys = Object.keys(pending).filter((k) => pending[k])
+  if (!keys.length) return entries
+  const next: Entries = { ...entries }
+  for (const key of keys) {
+    const cut = key.lastIndexOf(':')
+    const id = key.slice(0, cut)
+    const date = key.slice(cut + 1)
+    const day = { ...(next[date] || {}) }
+    const prev = day[id] || { count: 0 }
+    const count = Math.max(0, (prev.count || 0) + pending[key])
+    day[id] = { ...prev, count, ...(count > 0 ? { skipped: false } : {}) }
+    next[date] = day
+  }
+  return next
+}
+
 export function totalFor(habit: Habit, entries: Entries): number {
   let total = 0
   for (const day of Object.values(entries)) total += day[habit.id]?.count || 0

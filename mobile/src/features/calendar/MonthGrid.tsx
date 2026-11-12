@@ -6,10 +6,13 @@ import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { FAB_CLEARANCE } from '../../shell/Screen'
 import EventChip from './EventChip'
+import AwaySegment from './AwaySegment'
+import { awayOn, dayKey, type AwaySpan } from '../../lib/away'
 import { addDays, isToday, parseDate, sameDay, startOfMonth, startOfWeek, type CalEvent } from './dates'
 
 interface MonthGridProps {
   anchor: Date
+  away: AwaySpan[]
   events: CalEvent[]
   onPickDay: (d: Date) => void
   onSelectEvent: (ev: CalEvent) => void
@@ -17,7 +20,7 @@ interface MonthGridProps {
   onRefresh: () => void
 }
 
-export default function MonthGrid({ anchor, events, onPickDay, onSelectEvent, refreshing, onRefresh }: MonthGridProps) {
+export default function MonthGrid({ anchor, away, events, onPickDay, onSelectEvent, refreshing, onRefresh }: MonthGridProps) {
   const gridStart = startOfWeek(startOfMonth(anchor))
   const cells = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
   const dows = Array.from({ length: 7 }, (_, i) => addDays(gridStart, i).toLocaleDateString([], { weekday: 'short' }).toUpperCase())
@@ -47,6 +50,7 @@ export default function MonthGrid({ anchor, events, onPickDay, onSelectEvent, re
           <View key={row} style={st.row}>
             {cells.slice(row * 7, row * 7 + 7).map((d, col) => {
               const dayEvents = byDay.get(d.toDateString()) || []
+              const awaySpan = awayOn(away, dayKey(d))
               const off = d.getMonth() !== anchor.getMonth()
               const today = isToday(d)
               const shown = dayEvents.slice(0, 3)
@@ -64,6 +68,7 @@ export default function MonthGrid({ anchor, events, onPickDay, onSelectEvent, re
                       {d.getDate()}
                     </T>
                   </View>
+                  {awaySpan && <AwaySegment span={awaySpan} day={d} labelled={col === 0} bleed={3} />}
                   <View style={{ gap: 2 }}>
                     {shown.map((ev) => <EventChip key={ev.id} ev={ev} compact onPress={() => onSelectEvent(ev)} />)}
                     {dayEvents.length > shown.length && (

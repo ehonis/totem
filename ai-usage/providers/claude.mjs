@@ -180,7 +180,7 @@ async function refreshToken(creds, fileData) {
 const WINDOW_MINUTES = { session: 5 * 60, weekly_all: 7 * 24 * 60, weekly_scoped: 7 * 24 * 60 };
 
 /** Turn the API's `limits[]` entries into UI meters, newest schema first. */
-function metersFromPayload(payload) {
+export function metersFromPayload(payload) {
   const limits = Array.isArray(payload.limits) ? payload.limits : [];
   const meters = [];
 

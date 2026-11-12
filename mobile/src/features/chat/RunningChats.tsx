@@ -4,8 +4,10 @@
 // replies, marks it read, settles or snoozes it. Folded to its pill by default,
 // as on the web, so it never covers the conversation; tapped, it opens into a
 // short list grouped by where each chat lives, with what the drawer offers:
-// open, stop, snooze, settle, mark as read. A reply that finishes elsewhere
-// also raises a toast with Open.
+// open, stop, snooze, settle, mark as read. A reply that fails elsewhere also
+// raises a toast with Open (the phone shows error toasts only, so a finished one
+// is told by the pill alone). A chat whose agent staged an inbox proposal
+// still waiting on him stays too, "Waiting on your approval" (inboxCards.ts).
 //
 // The web mounts it on every screen; here it rides above the chat's composer.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -18,6 +20,7 @@ import { isSnoozed, ago, snoozePresets } from '../../lib/chat/settle'
 import type { ChatThread, Project } from '../../lib/chat/types'
 import { pendingQuestions } from '../../lib/chat/questions'
 import { pendingApproval } from '../../lib/chat/approvals'
+import { pendingInboxCards } from '../../lib/chat/inboxCards'
 import { pushToast } from '../../lib/toast'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
@@ -71,8 +74,10 @@ function Row({ t, run, now, onOpen }: { t: ChatThread; run?: RunState; now: numb
   const when = ago(t.updatedAt, now)
   const asking = pendingQuestions(t)
   const approving = !asking && pendingApproval(t)
+  const proposals = !asking && !approving ? pendingInboxCards(t) : []
   const status = asking ? (asking.part.questions.length === 1 ? 'A question for you' : `${asking.part.questions.length} questions for you`)
     : approving ? 'Waiting for your approval'
+    : proposals.length ? `Waiting on your approval: ${proposals.length === 1 ? proposals[0].title : `${proposals.length} proposals`}`
     : run ? `${elapsed(now - run.startedAt)} · ${run.activity?.split('\n')[0] || 'Working'}`
     : failed ? `Failed ${when !== 'now' ? `${when} ago` : 'just now'}`
       : when !== 'now' ? `Done ${when} ago` : 'Done just now'
@@ -157,7 +162,7 @@ export default function RunningChats({ onOpenChat }: { onOpenChat?: (id: string)
   }, [runs, open])
 
   const candidates = useMemo(() => threads.filter((t) => (
-    !t.totemId && (runs[t.id] || pendingQuestions(t) || t.needsReply) && !onScreen.open.has(t.id)
+    !t.totemId && (runs[t.id] || pendingQuestions(t) || pendingInboxCards(t).length || t.needsReply) && !onScreen.open.has(t.id)
     && !isSnoozed(t, now) && t.settledOverride !== 'settled'
   )), [threads, runs, onScreen, now])
 
@@ -189,8 +194,9 @@ export default function RunningChats({ onOpenChat }: { onOpenChat?: (id: string)
 
   if (!visible.length) return null
   const running = visible.filter((t) => runs[t.id]).length
-  const done = visible.length - running
-  const summary = [running && `${running} running`, done && `${done} unread`].filter(Boolean).join(' · ')
+  const waiting = visible.filter((t) => !runs[t.id] && pendingInboxCards(t).length).length
+  const done = visible.length - running - waiting
+  const summary = [running && `${running} running`, waiting && `${waiting} waiting on you`, done && `${done} unread`].filter(Boolean).join(' · ')
 
   if (collapsed) {
     return (

@@ -1,0 +1,60 @@
+/* The Dev tab's Runs card (RunsCard.tsx). Theme colours only. */
+
+.dev-runs-count { font-size: 12.5px; }
+
+.dev-run { border-top: 1px solid var(--line); padding: 12px 0 10px; }
+.dev-run:first-of-type { margin-top: 10px; }
+.dev-run-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dev-run-name { min-width: 0; display: grid; gap: 2px; }
+.dev-run-name a { color: var(--text); text-decoration: none; }
+.dev-run-name a:hover { text-decoration: underline; }
+.dev-run-name b { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.dev-run-sub { font-size: 12.5px; }
+.dev-run-stale { color: var(--amber); }
+
+.dev-run-waiting {
+  margin-top: 10px; padding: 8px 12px; font-size: 13px;
+  border: 1px solid #e3b34144; border-radius: 8px; background: #e3b3410d;
+}
+.dev-run-waiting b { color: var(--amber); font-weight: 600; }
+.dev-run-waiting ul { margin: 4px 0 0; padding-left: 18px; }
+.dev-run-waiting li { overflow-wrap: anywhere; }
+
+.dev-run-incidents { list-style: none; margin: 8px 0 0; padding: 0; color: var(--red); font-size: 13px; display: grid; gap: 4px; }
+.dev-run-incidents li { display: flex; gap: 6px; align-items: flex-start; overflow-wrap: anywhere; }
+.dev-run-incidents svg { flex: none; margin-top: 2px; }
+
+.dev-run-threads { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+.dev-run-threads th {
+  text-align: left; font-size: 12px; font-weight: 600; color: var(--muted);
+  padding: 0 10px 4px 0; white-space: nowrap;
+}
+.dev-run-threads td { padding: 6px 10px 6px 0; border-top: 1px solid var(--line); vertical-align: top; }
+.dev-run-threads .num { text-align: right; font-variant-numeric: tabular-nums; width: 3.5em; }
+.dev-run-threads a { color: var(--text); text-decoration: none; }
+.dev-run-threads a:hover { text-decoration: underline; }
+.dev-run-thread { overflow-wrap: anywhere; }
+.dev-run-stage, .dev-run-pr { white-space: nowrap; }
+.dev-run-skipped { font-size: 12px; }
+.dev-run-threads tr.is-blocked .dev-run-stage { color: var(--red); }
+
+.dev-runs-finished { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+.dev-runs-finished summary { cursor: pointer; font-size: 13px; font-weight: 600; padding: 2px 0 6px; }
+.dev-runs-finished .dev-row a { color: var(--text); }
+.dev-runs-finished .dev-row a.muted { color: var(--muted); }
+
+/* A phone: each thread is two lines, its name, then stage, PR and scores. */
+@media (max-width: 640px) {
+  .dev-run-threads thead { display: none; }
+  .dev-run-threads, .dev-run-threads tbody { display: block; }
+  .dev-run-threads tr {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px;
+    padding: 8px 0; border-top: 1px solid var(--line);
+  }
+  .dev-run-threads td { display: inline-flex; align-items: center; padding: 0; border: 0; width: auto; }
+  .dev-run-threads td.dev-run-thread { flex-basis: 100%; display: block; }
+  .dev-run-threads td:empty, .dev-run-threads td.is-empty { display: none; }
+  .dev-run-threads td[data-label]::before { content: attr(data-label); color: var(--muted); margin-right: 5px; }
+  .dev-run-threads td.num { text-align: left; width: auto; }
+  .dev-run-head .btn { flex: none; }
+}

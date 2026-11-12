@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import GithubView from './GithubView'
 import ShippedCard from './ShippedCard'
+import IssuesCard, { type IssuesReload } from '../dev/IssuesCard'
+import RunsCard from '../dev/RunsCard'
 import {
   getDevStatus, setDevAiReview, setDevWatch, requestDevReview, AuthError,
   type DevAlert, type DevHealth, type DevPull, type DevRepo, type DevStatus,
@@ -12,7 +14,8 @@ import { Hi, ArrowPathIcon, ClipboardDocumentIcon, WarnIcon } from '../icons'
 import ChatAbout from '../chat/about/ChatAbout'
 import { devRepoContext } from '../chat/about/context'
 
-// The Dev tab: CI on each repo's default branch, its open PRs and whether the AI
+// The Dev tab: orchestrated runs (dev/RunsCard.tsx), PRs per day (ShippedCard), GitHub issues (dev/IssuesCard.tsx),
+// CI on each repo's default branch, its open PRs and whether the AI
 // reviewers ran, its self-hosted runners, and a switch that pauses AI review
 // (the repo variable AI_REVIEW). GitHub is the source of truth; this only reads
 // it, flips that one variable and starts one-off reviews. The watched repos are
@@ -47,6 +50,9 @@ export default function DevView({ onAuthError }: { onAuthError: () => void }) {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The Issues card asks again on the page's Refresh and when the watched repos change.
+  const [issuesReload, setIssuesReload] = useState<IssuesReload>({ n: 0, refresh: false })
+  const reloadIssues = (refresh: boolean) => setIssuesReload((r) => ({ n: r.n + 1, refresh }))
 
   const auth = useCallback((e: unknown) => {
     if (e instanceof AuthError) { onAuthError(); return true }
@@ -83,6 +89,7 @@ export default function DevView({ onAuthError }: { onAuthError: () => void }) {
     try {
       setWatched((await setDevWatch(repo, watch)).watched)
       load(false, true)
+      reloadIssues(false)
     } catch (e: any) {
       setWatched(before)
       if (!auth(e)) pushToast(`Could not ${watch ? 'watch' : 'unwatch'} ${repo}: ${e.message}`)
@@ -112,13 +119,15 @@ export default function DevView({ onAuthError }: { onAuthError: () => void }) {
             {data?.fetchedAt ? `Checked ${ago(data.fetchedAt)}` : 'CI, reviews and runners across your repos'}
           </div>
         </div>
-        <button className="btn" onClick={() => load(true)} disabled={refreshing || loading}>
+        <button className="btn" onClick={() => { load(true); reloadIssues(true) }} disabled={refreshing || loading}>
           <Hi icon={ArrowPathIcon} size={14} className={refreshing ? 'spin' : ''} />
           {refreshing ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
 
+      <RunsCard onAuthError={onAuthError} reload={issuesReload.n} />
       <ShippedCard onAuthError={onAuthError} />
+      <IssuesCard onAuthError={onAuthError} reload={issuesReload} />
 
       {error && <div className="muted inline-warn"><WarnIcon /> {error}</div>}
       {error && !data ? null : !data ? (

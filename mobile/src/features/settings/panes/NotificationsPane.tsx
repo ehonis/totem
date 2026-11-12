@@ -10,12 +10,13 @@ import { Linking, View } from 'react-native'
 import * as Notifications from 'expo-notifications'
 import { api } from '../../../lib/api'
 import { getDedupe, getDevices, saveDedupe, sendTestPush, STORY_MATCH, type DedupeSettings, type DedupeState } from '../../../lib/push'
-import { Hi, BellAlertIcon, CheckCircleIcon, DevicePhoneMobileIcon, WarnIcon } from '../../../lib/icons'
-import { colors, alpha } from '../../../theme'
+import { Hi, BellAlertIcon, DevicePhoneMobileIcon, ArrowPathIcon, ChevronDownIcon } from '../../../lib/icons'
+import { colors } from '../../../theme'
 import { T } from '../../../ui/Text'
-import { Btn } from '../../../ui/kit'
-import { registerForPush, type PushStatus } from '../../../shell/push'
-import { Note, PaneHead, SectionTitle, Select, SettingList, SettingRow } from '../ui'
+import { Btn, Press } from '../../../ui/kit'
+import { confirm } from '../../../ui/menu'
+import { registerForPush, turnOffPush, type PushStatus } from '../../../shell/push'
+import { Notice, Pill, Picker, Row, Section, Switch } from '../ui'
 
 type Device = {
   id: string
@@ -44,16 +45,6 @@ const when = (ts: number | null) => {
   return new Date(ts).toLocaleDateString()
 }
 
-function Callout({ children, tone = 'warn' }: { children: React.ReactNode; tone?: 'warn' | 'error' | 'ok' }) {
-  const c = tone === 'ok' ? colors.green : tone === 'error' ? colors.red : colors.amber
-  return (
-    <View style={{ flexDirection: 'row', gap: 8, padding: 12, marginTop: 10, borderRadius: 10, backgroundColor: alpha(c, 0.08), borderWidth: 1, borderColor: alpha(c, 0.3) }}>
-      {tone === 'ok' ? <Hi icon={CheckCircleIcon} size={15} color={colors.green} /> : <WarnIcon />}
-      <View style={{ flex: 1 }}>{children}</View>
-    </View>
-  )
-}
-
 function describeFailure(test: TestResult): string {
   if (test.reason === 'no-devices') return 'No registered devices to send to yet.'
   if (test.reason === 'not-configured') return 'The server has no push keys.'
@@ -66,10 +57,10 @@ export default function NotificationsPane() {
   const [status, setStatus] = useState<PushStatus | null>(null)
   // null until known. 'old': the bridge predates native push (no `native` in
   // /api/push/key), so it needs updating, not keys. false: no APNs key set.
-  const [native, setNative] = useState<boolean | 'old' | null>(null)
+  // 'unknown': the question itself failed (offline, the server restarting).
+  const [native, setNative] = useState<boolean | 'old' | 'unknown' | null>(null)
   const [devices, setDevices] = useState<Device[]>([])
   const [busy, setBusy] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
   const [test, setTest] = useState<TestResult | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -78,21 +69,39 @@ export default function NotificationsPane() {
     try {
       const key = await api<{ native?: boolean }>('/api/push/key')
       setNative(key.native === undefined ? 'old' : key.native)
-    } catch { setNative(false) }
+    } catch { setNative('unknown') }
     try { setDevices((await getDevices()).devices || []) } catch { /* the list is a nicety */ }
   }, [])
 
   useEffect(() => {
-    // Opening the pane re-registers quietly, so "this phone" is current.
+    // Opening the pane re-registers quietly (unless push is off here), so "this phone" is current.
     void registerForPush().then(setStatus).finally(() => void refresh())
   }, [refresh])
 
   const enable = async () => {
     setBusy(true)
     setError(null)
-    const result = await registerForPush({ prompt: true })
+    const result = await registerForPush({ prompt: true, turnOn: true })
     setStatus(result)
-    if (result === 'failed') setError("This phone couldn't register with the bridge. Pull to retry.")
+    if (result === 'failed') setError("This phone couldn't register with the bridge. Try again in a moment.")
+    await refresh()
+    setBusy(false)
+  }
+
+  const disable = async () => {
+    const ok = await confirm('Turn off notifications on this phone?', {
+      message: 'Totem stops sending to this phone. Your other devices keep theirs.',
+      confirmLabel: 'Turn off',
+    })
+    if (!ok) return
+    setBusy(true)
+    setError(null)
+    try {
+      await turnOffPush()
+      setStatus('off')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
     await refresh()
     setBusy(false)
   }
@@ -115,108 +124,105 @@ export default function NotificationsPane() {
   const registered = status === 'registered'
 
   return (
-    <View>
-      <PaneHead desc="Push notifications from Totem itself: reminders, the daily digest, and anything that breaks. Test it from here." />
-
+    <>
       {native === 'old' ? (
-        <Callout tone="error">
-          <T size={13} lineHeight={19}>
-            The bridge on the server is older than app push. Update Totem on the box to a version with native
-            push support and restart it; until then notifications only reach the web app.
-          </T>
-        </Callout>
+        <Notice tone="error">
+          The bridge on the server is older than app push. Update Totem on the server and restart it; until then notifications only reach the web app.
+        </Notice>
       ) : native === false ? (
-        <Callout tone="error">
-          <T size={13} lineHeight={19}>
-            The bridge can't reach the app yet. It needs an APNs key: set APNS_KEY_FILE, APNS_KEY_ID, APNS_TEAM_ID
-            and APNS_TOPIC in .env on the box and restart it (docs/notifications.md → The native iPhone app).
-          </T>
-        </Callout>
+        <Notice tone="error">
+          The server can’t reach the app yet. It needs an APNs key: set APNS_KEY_FILE, APNS_KEY_ID, APNS_TEAM_ID and APNS_TOPIC in .env on the server and restart Totem (docs/notifications.md → The native iPhone app).
+        </Notice>
+      ) : native === 'unknown' ? (
+        <Notice tone="warn">
+          <T size={13} lineHeight={19}>Totem didn’t answer, so whether it can send to this phone is unknown.</T>
+          <Btn compact title="Try again" onPress={() => void refresh()} style={{ alignSelf: 'flex-start' }} />
+        </Notice>
       ) : null}
 
       {permission === 'denied' ? (
-        <Callout>
+        <Notice tone="warn">
           <T size={13} lineHeight={19}>Notifications are off for Totem in iOS. Turn them on in Settings → Totem → Notifications.</T>
-          <Btn compact title="Open Settings" onPress={() => Linking.openSettings()} style={{ alignSelf: 'flex-start', marginTop: 8 }} />
-        </Callout>
+          <Btn compact title="Open Settings" onPress={() => Linking.openSettings()} style={{ alignSelf: 'flex-start' }} />
+        </Notice>
       ) : null}
 
-      <SectionTitle title="This phone" />
-      <SettingList>
-        <SettingRow
+      <Section
+        id="push"
+        title="This phone"
+        description="Reminders, the daily digest, chats that finish while you are away, and anything that breaks."
+        footer={error ? <T size={12.5} color={colors.red} lineHeight={17}>{error}</T> : undefined}
+      >
+        <Row
+          id="push-toggle"
           title="Push notifications"
-          desc={registered ? 'This phone is registered and will receive notifications.' : 'Ask for permission and register this phone.'}
-        >
-          {registered
-            ? <T size={13} color={colors.green} weight={600}>On</T>
+          description={registered ? 'This phone is registered and gets notifications.'
+            : status === 'off' ? 'Off on this phone. Turn on to register it again.'
+              : 'Asks for permission and registers this phone.'}
+          control={registered
+            ? <Btn compact title="Turn off" disabled={busy} onPress={disable} />
             : <Btn kind="primary" compact title={busy ? 'Working…' : 'Turn on'} disabled={busy || permission === 'denied'} onPress={enable} />}
-        </SettingRow>
-        <SettingRow title="Send a test" desc="Goes through the same path the scheduled digests use, to every registered device.">
-          <Btn compact icon={BellAlertIcon} title="Send test" disabled={busy || active.length === 0} onPress={runTest} />
-        </SettingRow>
-      </SettingList>
+        />
+        <Row
+          id="push-test"
+          title="Send a test"
+          description="Goes the same way the real notifications do, to every registered device."
+          status={test ? (
+            <T size={12.5} lineHeight={17} color={test.ok ? colors.green : colors.red}>
+              {test.ok
+                ? `Sent to ${test.delivered} device${test.delivered === 1 ? '' : 's'}. If nothing shows, check Focus modes.`
+                : describeFailure(test)}
+              {test.results.filter((r) => !r.ok).map((r) => ` ${r.label}: ${r.error || `HTTP ${r.status}`}.`).join('')}
+            </T>
+          ) : undefined}
+          control={<Btn compact icon={BellAlertIcon} title="Send test" disabled={busy || active.length === 0} onPress={runTest} />}
+        />
+      </Section>
 
-      {test ? (
-        <Callout tone={test.ok ? 'ok' : 'error'}>
-          <T size={13} lineHeight={19}>
-            {test.ok
-              ? `Sent to ${test.delivered} device${test.delivered === 1 ? '' : 's'}. If nothing arrives, check Focus modes.`
-              : describeFailure(test)}
-            {test.results.filter((r) => !r.ok).map((r) => ` ${r.label}: ${r.error || `HTTP ${r.status}`}.`).join('')}
-          </T>
-        </Callout>
-      ) : null}
-      {error ? <Callout tone="error"><T size={13} lineHeight={19}>{error}</T></Callout> : null}
-
-      <SectionTitle title="Devices" />
-      <SettingList>
+      <Section
+        id="push-devices"
+        title="Devices"
+        description="Every device that gets Totem’s notifications."
+        action={<Btn compact kind="ghost" icon={ArrowPathIcon} title="Re-check" onPress={() => void refresh()} />}
+      >
         {devices.length === 0 ? (
-          <SettingRow title="No devices yet" desc="Turn push on from the device you want notified." />
+          <Row title="No devices yet" description="Turn push on from the device you want notified. The app registers itself." />
         ) : null}
         {active.map((d) => (
-          <SettingRow
+          <Row
             key={d.id}
+            icon={<Hi icon={DevicePhoneMobileIcon} size={14} color={colors.muted} />}
             title={d.label}
-            desc={`Registered ${when(d.createdAt)} · last notification ${when(d.lastDeliveredAt)}${d.host ? ` · ${d.host}` : ''}`}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Hi icon={DevicePhoneMobileIcon} size={14} color={colors.muted} />
-              <T size={12} color={colors.green} weight={600}>Active</T>
-            </View>
-          </SettingRow>
+            description={`Registered ${when(d.createdAt)} · last notification ${when(d.lastDeliveredAt)}${d.host ? ` · ${d.host}` : ''}`}
+            control={<Pill label="Active" tone="ok" />}
+          />
         ))}
         {expired.map((d) => (
-          <SettingRow
+          <Row
             key={d.id}
             title={d.label}
-            desc={`Gone: the push service rejected it${d.lastError ? ` (${d.lastError})` : ''}. ${d.transport === 'apns' ? 'The app was probably deleted from that phone.' : "Re-add Totem to that device's Home Screen and turn push on again."}`}
-          >
-            <T size={12} color={colors.amber} weight={600}>Expired</T>
-          </SettingRow>
+            description={`Gone: the push service rejected it${d.lastError ? ` (${d.lastError})` : ''}. ${d.transport === 'apns' ? 'The app was probably deleted from that phone.' : 'Add Totem to that device’s Home Screen again and turn push on.'}`}
+            control={<Pill label="Expired" tone="warn" />}
+          />
         ))}
-      </SettingList>
-      <Btn
-        compact
-        kind="ghost"
-        title={refreshing ? 'Checking…' : 'Re-check'}
-        onPress={async () => { setRefreshing(true); await refresh(); setRefreshing(false) }}
-        style={{ alignSelf: 'flex-start', marginTop: 12 }}
-      />
+      </Section>
 
       <Duplicates />
-    </View>
+    </>
   )
 }
 
-// The web pane's Duplicates section (NotificationsSettings.tsx): the dedupe
-// gate's settings and what it held back.
+// The web pane's Duplicates section: the dedupe gate's settings (notify/dedupe.mjs)
+// and what it held back.
 function Duplicates() {
   const [state, setState] = useState<DedupeState | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [open, setOpen] = useState(false)
 
-  useEffect(() => {
-    getDedupe().then(setState).catch((e) => setError(e instanceof Error ? e.message : String(e)))
+  const load = useCallback(async () => {
+    try { setState(await getDedupe()); setError(null) } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }, [])
+  useEffect(() => { void load() }, [load])
 
   const save = async (patch: Partial<DedupeSettings>) => {
     setError(null)
@@ -228,43 +234,78 @@ function Duplicates() {
     }
   }
 
-  if (!state) return <Note text={error || undefined} error />
+  if (!state) return error ? <Notice tone="error">{error}</Notice> : null
   const { settings } = state
-  const onOff = [{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]
   const match = STORY_MATCH.map((m) => ({ value: String(m.value), label: m.label }))
   if (!match.some((m) => m.value === String(settings.sameStoryScore))) {
     match.push({ value: String(settings.sameStoryScore), label: `Custom (${settings.sameStoryScore})` })
   }
+  const windows = [...new Set([12, 24, 48, 72, 168, settings.storyWindowHours])].sort((a, b) => a - b)
+    .map((h) => ({ value: String(h), label: h < 48 ? `${h} hours` : `${h / 24} days` }))
+  const shown = state.items.slice(0, 10)
 
   return (
-    <>
-      <SectionTitle title="Duplicates" />
-      <SettingList>
-        <SettingRow
-          title="Hold back repeats"
-          desc="A quota stays spent until it resets, and a story several feeds report goes out once. Reminders, approvals and chat answers are never held back."
-        >
-          <Select value={settings.enabled ? 'on' : 'off'} options={onOff} onChange={(v) => void save({ enabled: v === 'on' })} />
-        </SettingRow>
-        <SettingRow title="Same story" desc="How alike two headlines must be. The same link, or the same model and version, always counts.">
-          <Select value={String(settings.sameStoryScore)} options={match} disabled={!settings.enabled} onChange={(v) => void save({ sameStoryScore: Number(v) })} />
-        </SettingRow>
-        <SettingRow title="Ask a model about close calls" desc="Only for headlines the overlap could not settle. If it fails, the notification goes out.">
-          <Select value={settings.modelCheck ? 'on' : 'off'} options={onOff} disabled={!settings.enabled} onChange={(v) => void save({ modelCheck: v === 'on' })} />
-        </SettingRow>
-        <SettingRow
-          title={`${state.suppressed} held back in the last ${state.days} days`}
-          desc={state.suppressed ? 'Each is counted on the notification it repeated.' : 'Nothing has been a repeat lately.'}
-        />
-        {state.items.slice(0, 10).map((item) => (
-          <SettingRow
-            key={item.id}
-            title={item.body || item.title}
-            desc={`${item.reason === 'same-story' ? `Same story as “${item.duplicateTitle}”` : 'Already sent'} · ${when(item.at)}`}
+    <Section
+      id="duplicates"
+      title="Duplicates"
+      description="Something already said is not said again: a quota stays spent until it resets, and a story several feeds report goes out once. Reminders, approvals and chat answers are never held back."
+      footer={error ? <T size={12.5} color={colors.red} lineHeight={17}>{error}</T> : undefined}
+    >
+      <Row
+        id="dedupe"
+        title="Hold back repeats"
+        control={<Switch label="Hold back repeats" value={settings.enabled} onChange={(v) => void save({ enabled: v })} />}
+      />
+      {settings.enabled ? (
+        <>
+          <Row
+            id="same-story"
+            title="Same story"
+            description="How alike two headlines must be. The same link always counts; so does the same model name and version."
+            control={<Picker label="Same story" value={String(settings.sameStoryScore)} options={match} onChange={(v) => void save({ sameStoryScore: Number(v) })} />}
           />
-        ))}
-      </SettingList>
-      <Note text={error || undefined} error />
-    </>
+          <Row
+            id="story-window"
+            title="Compare stories over"
+            description="How far back a new headline is checked against what was sent."
+            control={<Picker label="Compare stories over" value={String(settings.storyWindowHours)} options={windows} onChange={(v) => void save({ storyWindowHours: Number(v) })} />}
+          />
+          <Row
+            id="model-check"
+            title="Ask a model about close calls"
+            description="Only for headlines the word and name overlap could not settle, on your default AI account. If it fails or is slow, the notification goes out."
+            control={<Switch label="Ask a model about close calls" value={settings.modelCheck} onChange={(v) => void save({ modelCheck: v })} />}
+          />
+        </>
+      ) : null}
+      <Row
+        id="held-back"
+        title={`${state.suppressed} held back in the last ${state.days} days`}
+        description={state.suppressed ? 'Each is counted on the notification it repeated, in Notification history.' : 'Nothing has been a repeat lately.'}
+        control={<Btn compact kind="ghost" icon={ArrowPathIcon} title="Refresh" onPress={() => void load()} />}
+      >
+        {shown.length ? (
+          <>
+            <Press onPress={() => setOpen(!open)} accessibilityRole="button" accessibilityState={{ expanded: open }} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <T size={13} color={colors.accent} weight={600}>{open ? 'Hide' : `Show the last ${shown.length}`}</T>
+              <View style={{ transform: [{ rotate: open ? '180deg' : '0deg' }] }}><Hi icon={ChevronDownIcon} size={13} color={colors.accent} /></View>
+            </Press>
+            {open ? (
+              <View style={{ gap: 10, marginTop: 10 }}>
+                {shown.map((item) => (
+                  <View key={item.id} style={{ gap: 2 }}>
+                    <T size={13.5} weight={500}>{item.body || item.title}</T>
+                    <T size={12} muted lineHeight={16}>
+                      {item.reason === 'same-story' ? `Same story as “${item.duplicateTitle}”` : 'Already sent'}
+                      {item.why ? ` · ${item.why}` : ''} · {when(item.at)}
+                    </T>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </>
+        ) : null}
+      </Row>
+    </Section>
   )
 }

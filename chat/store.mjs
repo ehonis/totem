@@ -18,6 +18,7 @@ import { normalizeMembers } from '../totems/core.mjs'
 import { logoUrl } from './tools.mjs'
 import { QUEUE_LIMIT } from './queue.mjs'
 import { APPROVAL_DECISIONS, APPROVAL_STATUSES } from './approvals.mjs'
+import { inboxMarker, normalizeInboxPart } from './inbox-outcome.mjs'
 
 export const validThreadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
 
@@ -53,6 +54,12 @@ export function normalizePart(p, i = 0) {
     if (!validThreadId(p.uploadId)) return null
     return { type: 'file', uploadId: p.uploadId, name: str(p.name, 200) || 'file', mime: str(p.mime, 120) || 'application/octet-stream', size: num(p.size), ...(p.path ? { path: str(p.path, 600) } : {}) }
   }
+  // A chart the agent rendered inline (chat/visuals.mjs); the page is the upload.
+  if (p.type === 'visual') {
+    if (!validThreadId(p.uploadId)) return null
+    const height = Math.min(2000, Math.max(80, Math.round(num(p.height) || 320)))
+    return { type: 'visual', id: str(p.id, 64) || p.uploadId, uploadId: p.uploadId, title: str(p.title, 200) || 'Chart', height }
+  }
   // A change to a totem the agent proposed (totems/core.mjs); the owner accepts or dismisses it.
   if (p.type === 'totem-proposal') {
     const totemId = str(p.totemId, 64)
@@ -62,6 +69,19 @@ export function normalizePart(p, i = 0) {
     if (p.instructions) out.instructions = str(p.instructions, 8000)
     if (p.totemName) out.totemName = str(p.totemName, 80)
     return out
+  }
+  // A pull request the change-totem flow opened (dev/change.mjs → prCard).
+  if (p.type === 'change-pr') {
+    const url = str(p.url, 300)
+    if (!/^https:\/\/[^\s/]+\/[^\s]+\/pull\/\d+$/.test(url)) return null
+    const checks = p.checks && typeof p.checks === 'object' ? p.checks : {}
+    return {
+      type: 'change-pr', id: str(p.id, 64) || `c${i}`, url, number: num(p.number), title: str(p.title, 300), branch: str(p.branch, 200),
+      head: str(p.head, 64), files: num(p.files),
+      checks: { state: ['none', 'pending', 'success', 'failure'].includes(checks.state) ? checks.state : 'none', passed: num(checks.passed), failed: num(checks.failed), pending: num(checks.pending) },
+      warnings: (Array.isArray(p.warnings) ? p.warnings : []).filter((w) => typeof w === 'string').map((w) => w.slice(0, 600)).slice(0, 5),
+      createdAt: num(p.createdAt),
+    }
   }
   // Questions the agent asked the owner (chat/questions.mjs).
   if (p.type === 'questions') {
@@ -109,6 +129,8 @@ export function normalizePart(p, i = 0) {
     if (num(p.decidedAt)) out.decidedAt = num(p.decidedAt)
     return out
   }
+  // An inbox proposal this reply staged, and what the owner decided (chat/inbox-outcome.mjs).
+  if (p.type === 'inbox') return normalizeInboxPart(p)
   // Something the owner sent while the reply was running (chat/steer.mjs).
   if (p.type === 'steer') {
     const attachments = (Array.isArray(p.attachments) ? p.attachments : []).map(normalizeAttachment).filter(Boolean).slice(0, 20)
@@ -180,6 +202,9 @@ export function normalizeMessage(m, i = 0) {
   if (m.run && typeof m.run === 'object') out.run = { trigger: str(m.run.trigger, 20), status: str(m.run.status, 20), notified: m.run.notified === true }
   if (m.mode && m.mode !== 'chat') out.mode = str(m.mode, 20)
   if (m.voice) out.voice = true
+  // The owner's decision on, or reply about, an inbox proposal (chat/inbox-outcome.mjs).
+  const inbox = m.role === 'user' && inboxMarker(m.inbox)
+  if (inbox) out.inbox = inbox
   return out
 }
 
@@ -214,6 +239,8 @@ function normalizeQueue(raw) {
     for (const key of ['model', 'effort']) if (str(q[key], 160)) item[key] = str(q[key], 160)
     const ms = normalizeModelSettings(q.modelSettings)
     if (ms) item.modelSettings = ms
+    const inbox = inboxMarker(q.inbox)
+    if (inbox) item.inbox = inbox
     out.push(item)
   }
   return out

@@ -5,7 +5,9 @@ import { ChatsNav } from '../chat/ProjectNav'
 import { setActive } from '../chat/store'
 import { TI } from '../chat/ui'
 import UsageChips from '../chat/UsageChips'
-import { IconBell, IconEdit, IconWaveSine, IconMenu, IconSearch, IconLayoutSidebar, IconLayoutSidebarLeftCollapse, IconX } from '../chat/icons'
+import DesktopUpdate from './DesktopUpdate'
+import ResizeHandle, { CHATS_WIDTH } from './ResizeHandle'
+import { IconBell, IconEdit, IconWaveSine, IconMenu, IconLayoutSidebar, IconLayoutSidebarLeftCollapse, IconX } from '../chat/icons'
 
 // The app shell, after ChatGPT's current layout.
 //
@@ -132,7 +134,8 @@ export function Rail({ tabs, bottom, active, onSelect, panelOpen, onTogglePanel,
         ))}
       </div>
       <div className="sh-rail-foot">
-        {usage && <UsageChips rail />}
+        <DesktopUpdate />
+        {usage && <UsageChips rail onManage={tabs.some((t) => t.id === 'cliproxy') ? () => onSelect('cliproxy') : undefined} />}
         <button type="button" className={`sh-rail-btn ${active === bottom.id ? 'on' : ''}`} onClick={() => onSelect(bottom.id)} title={bottom.label} aria-label={bottom.label}>
           <Hi icon={bottom.icon} size={21} />
           <span className="sh-tip">{bottom.label}</span>
@@ -171,18 +174,15 @@ export function SidePanel({ onOpenChat, onNotifications, unread, onCollapse }: {
   unread: number
   onCollapse: () => void
 }) {
-  const [search, setSearch] = useState(0)
   return (
     <aside className="sh-panel" aria-label="Chats">
+      <ResizeHandle role="chats" {...CHATS_WIDTH} label="Resize the chats panel" />
       <div className="sh-panel-head">
         <Brand />
         <div className="sh-panel-actions">
           <button type="button" className="sh-icon" onClick={onNotifications} aria-label="Notifications" title="Notifications">
             <TI icon={IconBell} size={19} />
             {unread > 0 && <span className="sh-dot" />}
-          </button>
-          <button type="button" className="sh-icon" onClick={() => setSearch((n) => n + 1)} aria-label="Search chats" title="Search chats">
-            <TI icon={IconSearch} size={19} />
           </button>
           <button type="button" className="sh-icon" onClick={onCollapse} aria-label="Hide chats" title="Hide chats">
             <TI icon={IconLayoutSidebarLeftCollapse} size={19} />
@@ -192,7 +192,7 @@ export function SidePanel({ onOpenChat, onNotifications, unread, onCollapse }: {
       <button type="button" className="sh-new" onClick={() => { setActive(null); onOpenChat() }}>
         <TI icon={IconEdit} size={18} />New chat
       </button>
-      <ChatsNav onOpenChat={onOpenChat} searchSignal={search} />
+      <ChatsNav onOpenChat={onOpenChat} />
     </aside>
   )
 }
@@ -240,7 +240,6 @@ export function MobileDrawer({ open, onClose, tabs, bottom, active, onSelect, on
   onNotifications: () => void
   unread: number
 }) {
-  const [search, setSearch] = useState(0)
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -259,7 +258,6 @@ export function MobileDrawer({ open, onClose, tabs, bottom, active, onSelect, on
               <TI icon={IconBell} size={20} />
               {unread > 0 && <span className="sh-dot" />}
             </button>
-            <button type="button" className="sh-icon" onClick={() => setSearch((n) => n + 1)} aria-label="Search chats"><TI icon={IconSearch} size={20} /></button>
             <button type="button" className="sh-icon" onClick={onClose} aria-label="Close"><TI icon={IconX} size={21} /></button>
           </div>
         </div>
@@ -276,10 +274,11 @@ export function MobileDrawer({ open, onClose, tabs, bottom, active, onSelect, on
               </button>
             ))}
           </div>
-          <ChatsNav onOpenChat={() => { onOpenChat(); onClose() }} searchSignal={search} />
+          <ChatsNav onOpenChat={() => { onOpenChat(); onClose() }} />
         </div>
         <div className="sh-drawer-foot">
           <Version inline />
+          <DesktopUpdate />
           <button type="button" className={`sh-icon sh-drawer-bottom ${active === bottom.id ? 'on' : ''}`} onClick={() => go(bottom.id)} aria-label={bottom.label} title={bottom.label} aria-current={active === bottom.id ? 'page' : undefined}>
             <Hi icon={bottom.icon} size={22} />
           </button>

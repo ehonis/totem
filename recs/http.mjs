@@ -1,10 +1,12 @@
 /**
  * The authenticated `/api/recs*` adapter, mounted in bridge.mjs behind the dashboard's
  * auth check. This is the owner's front door, so it is the one place that passes
- * `via: OWNER_VIA` and with it the right to decide. No agent tool reaches it, but the
- * BRIDGE_SECRET bearer does (the iPhone app uses it, and an agent that can read .env
- * could too), so every write is logged as the owner with how it was authenticated in
- * `detail.auth` (`authMethod`).
+ * `via: OWNER_VIA` and with it the right to decide. The BRIDGE_SECRET bearer reaches
+ * it too, and an agent that can read .env holds that, so the bearer alone is not the
+ * owner here: deciding and grading are approval routes (auth/approval-routes.mjs:
+ * a signed-in session or the approval code), and a record is the owner's only when
+ * `ownerProof(req)` says so. Otherwise it is an agent's, and the declined hold applies.
+ * Every write is logged with how it was authenticated in `detail.auth` (`authMethod`).
  */
 import { OWNER_ACTOR } from '../logs/store.mjs';
 import { RecDomainError } from './errors.mjs';
@@ -41,7 +43,7 @@ function filterFrom(params) {
   return filter;
 }
 
-export function createRecHttpHandler({ service, authMethod = () => 'unknown', maxBodyBytes = 200_000 } = {}) {
+export function createRecHttpHandler({ service, authMethod = () => 'unknown', ownerProof = async () => true, maxBodyBytes = 200_000 } = {}) {
   if (!service) throw new TypeError('createRecHttpHandler requires service');
   return async function recHttpHandler(req, res, suppliedUrl) {
     const url = suppliedUrl instanceof URL ? suppliedUrl : new URL(req.url, 'http://localhost');
@@ -58,7 +60,11 @@ export function createRecHttpHandler({ service, authMethod = () => 'unknown', ma
         if (req.method === 'GET') { send(res, 200, await service.list(filterFrom(url.searchParams))); return true; }
         if (req.method === 'POST') {
           const body = await readJson(req, maxBodyBytes);
-          send(res, 200, await service.record({ source: 'owner', ...body }, context));
+          const owner = await ownerProof(req);
+          send(res, 200, await service.record(
+            { source: owner ? 'owner' : 'api', ...body },
+            owner ? context : { actor: 'agent', auth, reason: context.reason },
+          ));
           return true;
         }
       }

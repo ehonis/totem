@@ -452,6 +452,62 @@ test('a job saved under a renamed id and runner carries over with its settings',
   assert.equal(jobs[0].runner, 'new-runner')
 })
 
+test('a saved job under a retired id is dropped, enabled or deleted, and nothing tries to run it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'totem-jobs-retired-'))
+  const file = join(dir, 'jobs.json')
+  await writeFile(file, JSON.stringify({
+    jobs: {
+      'task-sheet-sync': { enabled: true, runner: 'task-sheet-sync', schedule: { type: 'interval', everyMinutes: 15 }, nextRunAt: 1, createdAt: '2026-09-01T00:00:00.000Z' },
+      'older-sheet-sync': { enabled: true, runner: 'older-sheet-sync', schedule: { type: 'interval', everyMinutes: 15 }, createdAt: '2026-09-01T00:00:00.000Z' },
+      'daily-brief': { enabled: false, skillId: 'daily-brief', schedule: { type: 'daily', time: '07:30' }, createdAt: '2026-09-01T00:00:00.000Z' },
+    },
+    deletedSeeds: ['task-sheet-sync', 'whoop-sleep-ingest'],
+  }))
+  const store = createJobStore({
+    file, runsFile: join(dir, 'runs.jsonl'), notificationsFile: join(dir, 'n.json'),
+    seedDefs: SEED_DEFS, runners: RUNNERS, tz: TZ,
+    retiredIds: ['task-sheet-sync', 'older-sheet-sync'],
+  })
+  const jobs = await store.list()
+  assert.deepEqual(jobs.map((j) => j.id).sort(), ['daily-brief'])
+  assert.ok(jobs.every((j) => !j.runnerMissing))
+  assert.equal((await store.reschedule()).some((j) => j.id === 'task-sheet-sync'), false)
+  // The file sheds it with the next write.
+  await store.update('daily-brief', { enabled: true })
+  const saved = JSON.parse(await readFile(file, 'utf8'))
+  assert.deepEqual(Object.keys(saved.jobs).sort(), ['daily-brief'])
+  assert.deepEqual(saved.deletedSeeds, ['whoop-sleep-ingest'], 'only the retired id leaves the deleted list')
+})
+
+test('a job whose code was retired is dropped from a saved store, not run or re-seeded', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'totem-jobs-retired-'))
+  const file = join(dir, 'jobs.json')
+  await writeFile(file, JSON.stringify({
+    jobs: {
+      'github-todos-sync': { enabled: true, runner: 'github-todos-sync', schedule: { type: 'interval', everyMinutes: 15 }, nextRunAt: 1, createdAt: '2026-09-01T00:00:00.000Z' },
+      'kept': { enabled: true, runner: 'kept-runner', schedule: { type: 'interval', everyMinutes: 15 }, createdAt: '2026-09-01T00:00:00.000Z' },
+    },
+    deletedSeeds: ['github-todos-sync'],
+  }))
+  const options = {
+    file, runsFile: join(dir, 'runs.jsonl'), notificationsFile: join(dir, 'n.json'),
+    seedDefs: { kept: { name: 'Kept', runner: 'kept-runner', enabled: false, schedule: { type: 'interval', everyMinutes: 15 } } },
+    runners: { 'kept-runner': { agentless: true } },
+    tz: TZ,
+    retiredIds: ['github-todos-sync'],
+  }
+  const store = createJobStore(options)
+  const jobs = await store.list()
+  assert.deepEqual(jobs.map((j) => j.id), ['kept'])
+  assert.equal(jobs[0].enabled, true, 'the other saved jobs keep their settings')
+  assert.ok(!(await store.reschedule()).some((j) => j.id === 'github-todos-sync'), 'nothing schedules it')
+  const saved = JSON.parse(await readFile(file, 'utf8'))
+  assert.equal(Object.hasOwn(saved.jobs, 'github-todos-sync'), false, 'the stale entry is written out of jobs.json')
+  assert.deepEqual(saved.deletedSeeds, [])
+  // A fresh store over the rewritten file reads it cleanly.
+  assert.deepEqual((await createJobStore(options).list()).map((j) => j.id), ['kept'])
+})
+
 // ---- watch triggers --------------------------------------------------------
 
 const WATCH = { type: 'watch', source: { kind: 'git', repo: 'https://github.com/o/r.git', ref: 'main' }, everyMinutes: 2 }
@@ -550,4 +606,36 @@ test('a job keeps its gitSync hosts across a reload, minus any it cannot use', a
   const again = (await store.list()).find((j) => j.id === 'daily-brief')
   assert.deepEqual(again.gitSync, patched.gitSync)
   assert.equal((await store.update('daily-brief', { gitSync: null })).gitSync, null)
+})
+
+test('a seed may ship an inline prompt (an agent totem), and an edit to it is kept', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'totem-jobs-'))
+  const paths = { file: join(dir, 'jobs.json'), runsFile: join(dir, 'job-runs.jsonl'), notificationsFile: join(dir, 'notifications.json') }
+  const seeds = { ...SEED_DEFS, 'standing-agent': { name: 'Standing agent', schedule: { type: 'weekly', time: '09:00', days: [1, 3] }, enabled: false, prompt: 'Do the thing.' } }
+  const store = createJobStore({ ...paths, seedDefs: seeds, runners: RUNNERS, tz: TZ })
+  const job = (await store.list()).find((j) => j.id === 'standing-agent')
+  assert.deepEqual([job.prompt, job.enabled, job.runner, job.skillId], ['Do the thing.', false, null, null])
+  await store.update('standing-agent', { prompt: 'Do it my way.' })
+  const rebooted = createJobStore({ ...paths, seedDefs: seeds, runners: RUNNERS, tz: TZ })
+  assert.equal((await rebooted.get('standing-agent')).prompt, 'Do it my way.')
+  await store.update('standing-agent', { prompt: '' })
+  assert.equal((await rebooted.get('standing-agent')).prompt, '', 'a cleared prompt stays cleared')
+})
+
+test("a totem's access is kept only as a known mode, and unset stays the standard limits", async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'totem-jobs-'))
+  const paths = { file: join(dir, 'jobs.json'), runsFile: join(dir, 'job-runs.jsonl'), notificationsFile: join(dir, 'notifications.json') }
+  const store = createJobStore({ ...paths, seedDefs: SEED_DEFS, runners: RUNNERS, tz: TZ })
+  const plain = await store.create({ name: 'Watcher', prompt: 'Watch a page.' })
+  assert.equal(plain.access, null, 'a new totem without the setting keeps the standard limits')
+  const odd = await store.create({ name: 'Odd', prompt: 'x', access: 'root' })
+  assert.equal(odd.access, null, 'an unknown mode is dropped, not trusted')
+  const sweeper = await store.create({ name: 'Sweeper', prompt: 'Check the fleet.', access: 'full' })
+  assert.equal(sweeper.access, 'full')
+  assert.equal((await store.update(plain.id, { access: 'full' })).access, 'full')
+  assert.equal((await store.update(sweeper.id, { access: null })).access, null)
+  assert.equal((await store.update(plain.id, { name: 'Watcher 2' })).access, 'full', 'an unrelated edit keeps it')
+  const rebooted = createJobStore({ ...paths, seedDefs: SEED_DEFS, runners: RUNNERS, tz: TZ })
+  assert.equal((await rebooted.get(plain.id)).access, 'full')
+  assert.equal((await rebooted.get(sweeper.id)).access, null)
 })

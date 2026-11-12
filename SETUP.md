@@ -1,6 +1,6 @@
 # Setup
 
-The browser-only quick start (clone, `npm install && npm start`, open the setup link, set up AI
+The browser-only quick start (clone, `pnpm install && pnpm start`, open the setup link, set up AI
 in Settings) is in [README.md](README.md#quick-start) and covers a working install on its own.
 This file is the longer runbook for the parts that happen outside the browser: the phone
 shortcut, Tailscale, MCP servers, and the scheduled jobs.
@@ -238,7 +238,7 @@ everything without sudo (it fetches a portable cmake if the box has none):
 ```bash
 scripts/install-whisper.sh            # builds whisper-cli, downloads ggml-small.en.bin (466 MB)
 scripts/install-whisper.sh base.en    # smaller/faster model, worse on names
-npm install                           # ffmpeg-static is a root dependency now
+pnpm install                          # ffmpeg-static is a root dependency now
 systemctl --user restart assistant-bridge
 ```
 

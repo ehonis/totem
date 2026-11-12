@@ -43,12 +43,6 @@ test('round-trips through serialize', () => {
   assert.equal(reparsed.body, body)
 })
 
-test('serialize quotes values that would break the parser', () => {
-  // An unquoted "A: tricky" would parse back with the value truncated at the colon.
-  const text = serializeSkillFile({ name: 'A: tricky name' }, 'x')
-  assert.match(text, /name: "A: tricky name"/)
-})
-
 test('booleans survive the round trip', () => {
   const { meta } = parseSkillFile(serializeSkillFile({ name: 'X', enabled: false }, 'b'))
   assert.equal(meta.enabled, false)

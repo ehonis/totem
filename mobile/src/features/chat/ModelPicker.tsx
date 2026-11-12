@@ -16,7 +16,7 @@ import { useChat, ensureModels, providerById, toggleFavorite } from '../../lib/c
 import { EFFORT_LABELS, settingsForPick, visibleModels } from '../../lib/chat/models'
 import { handoffNote } from '../../lib/chat/handoff'
 import type { Access, ModelRow, ModelSettings } from '../../lib/chat/types'
-import { colors, fonts } from '../../theme'
+import { activePalette as pal, colors, fonts } from '../../theme'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { tap } from '../../ui/haptics'
@@ -346,25 +346,25 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 8, height: 40, paddingHorizontal: 14, borderRadius: 999,
     borderWidth: 1, borderColor: vc.line, backgroundColor: 'transparent', maxWidth: 220,
   },
-  sourceOn: { backgroundColor: '#262a36', borderColor: '#3a4152' },
+  sourceOn: { backgroundColor: pal ? pal.raised : '#262a36', borderColor: pal ? pal.line : '#3a4152' },
   search: {
     flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 16, marginBottom: 8, height: 42, paddingHorizontal: 12,
-    borderRadius: 12, backgroundColor: '#1d2029',
+    borderRadius: 12, backgroundColor: pal ? pal.panel : '#1d2029',
   },
   searchInput: { flex: 1, color: colors.text, fontSize: 16, fontFamily: fonts[400], paddingVertical: 0 },
   clear: { width: 18, height: 18, borderRadius: 9, backgroundColor: vc.faint, alignItems: 'center', justifyContent: 'center' },
   list: { paddingHorizontal: 8, paddingTop: 2 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 60, paddingVertical: 10, paddingLeft: 4, paddingRight: 6, borderRadius: 14 },
-  rowOn: { backgroundColor: '#1f2330' },
+  rowOn: { backgroundColor: vc.raise },
   rowTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rowSource: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   check: { width: 28, alignItems: 'center' },
   badge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: vc.raise },
   star: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  lock: { marginHorizontal: 16, marginTop: 10, padding: 12, borderRadius: 12, backgroundColor: '#1a1d26', overflow: 'hidden' },
+  lock: { marginHorizontal: 16, marginTop: 10, padding: 12, borderRadius: 12, backgroundColor: vc.menu, overflow: 'hidden' },
   section: { marginTop: 22, paddingHorizontal: 16 },
   sectionTitle: { letterSpacing: 0.4, marginBottom: 8, marginLeft: 4 },
-  group: { borderRadius: 14, backgroundColor: '#1c1f28', overflow: 'hidden' },
+  group: { borderRadius: 14, backgroundColor: pal ? pal.panel : '#1c1f28', overflow: 'hidden' },
   choice: {
     flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56, paddingVertical: 10, paddingHorizontal: 14,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: vc.line,

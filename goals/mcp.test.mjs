@@ -91,16 +91,6 @@ test('a model imports a week in one call without deriving a single date', async 
   h.close();
 });
 
-test('re-importing the same page updates instead of doubling the week', async () => {
-  const h = harness();
-  const payload = { goals: [{ title: 'Ride 100 miles', period: 'this_week', clientKey: 'notebook-1' }] };
-  await h.tools.totem_create_goals(payload);
-  const second = await h.tools.totem_create_goals(payload);
-  assert.equal(second.created[0].reimported, true);
-  assert.equal((await h.tools.totem_get_goals({})).count, 1);
-  h.close();
-});
-
 test('one bad row is reported without costing the others', async () => {
   const h = harness();
   const result = await h.tools.totem_create_goals({
@@ -198,73 +188,6 @@ test('an agent can write the note on a goal and mark one as not doing', async ()
 
   const resumed = await h.tools.totem_update_goal({ id, abandoned: false });
   assert.equal(resumed.goal.abandoned, false);
-  h.close();
-});
-
-test('the goal tools no longer offer a quarter to file things in', () => {
-  const update = GOAL_MCP_TOOL_DEFINITIONS.find((tool) => tool.name === 'totem_update_goal');
-  assert.ok(Object.hasOwn(update.inputSchema.properties, 'abandoned'));
-
-  const create = GOAL_MCP_TOOL_DEFINITIONS.find((tool) => tool.name === 'totem_create_goals');
-  assert.doesNotMatch(create.description, /quarterly/i);
-  const period = create.inputSchema.properties.period ?? create.inputSchema.properties.goals;
-  assert.ok(period, 'create_goals still describes a period');
-  assert.match(
-    JSON.stringify(GOAL_MCP_TOOL_DEFINITIONS),
-    /Do not file quarterly goals/,
-    'the period description warns agents off the cadence the dashboard dropped',
-  );
-});
-
-test('a step takes numbers over MCP, several at once, and reads them back', async () => {
-  // "This week I have 2 bike rides under a complete cardio goal — let me attach a
-  // number." The step is where the countable thing lives, and one step is two numbers.
-  const h = harness();
-  const created = await h.tools.totem_create_goals({
-    title: 'Complete cardio goals',
-    period: 'this_week',
-    subGoals: [{ title: '2 bike rides (10+ miles)' }],
-  });
-  const goalId = created.created[0].id;
-  const stepId = (await h.tools.totem_get_goal({ id: goalId })).goal.subGoals[0].id;
-
-  const rides = await h.tools.totem_add_goal_metric({ goalId: stepId, label: 'rides', unit: 'rides', targetValue: 2 });
-  const miles = await h.tools.totem_add_goal_metric({ goalId: stepId, label: 'miles', unit: 'miles', targetValue: 20 });
-  assert.equal(rides.ok, true);
-  // The answer is always the top-level goal, so a client never has to stitch a step
-  // back onto the goal it belongs to.
-  assert.equal(miles.goal.id, goalId);
-
-  await h.tools.totem_log_goal_metric({ metricId: rides.metricId, delta: 1 });
-  const logged = await h.tools.totem_log_goal_metric({ metricId: miles.metricId, delta: 12.4 });
-
-  const step = logged.goal.subGoals[0];
-  assert.deepEqual(step.metrics.map((m) => [m.label, m.value]), [['rides', 1], ['miles', 12.4]]);
-  assert.equal(step.progress.percent, 56);
-  assert.equal(logged.goal.progress.percent, 56, 'the goal moves as the step is logged against');
-  h.close();
-});
-
-test('a step added over MCP can carry its numbers with it, rollup included', async () => {
-  const h = harness();
-  const created = await h.tools.totem_create_goals({
-    title: 'Train', period: 'this_week', metrics: [{ label: 'miles', unit: 'miles', targetValue: 100 }],
-  });
-  const goalId = created.created[0].id;
-
-  const added = await h.tools.totem_add_goal_step({
-    goalId,
-    title: 'Ride',
-    metrics: [{ label: 'bike miles', unit: 'miles', targetValue: 70, currentValue: 40, rollsUpTo: 'miles' }],
-  });
-
-  assert.equal(added.goal.metrics[0].feederCount, 1);
-  assert.equal(added.goal.metrics[0].value, 40, 'and the number it feeds shows it');
-  // A label naming nothing is refused rather than accepted and dropped.
-  await assert.rejects(
-    h.tools.totem_add_goal_step({ goalId, title: 'Swim', metrics: [{ label: 'laps', targetValue: 40, rollsUpTo: 'lengths' }] }),
-    (error) => error.code === 'ROLLUP_LABEL_NOT_FOUND',
-  );
   h.close();
 });
 

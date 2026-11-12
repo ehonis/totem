@@ -3,14 +3,19 @@ import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } fro
 import { createPortal } from 'react-dom'
 import Markdown from '../components/Markdown'
 import TotemProposal from './TotemProposal'
+import ChangeCard from './ChangeCard'
 import { QuestionsRecord } from './QuestionsPanel'
 import ApprovalRow from './ApprovalRow'
+import InboxCardRow from './InboxCardRow'
+import { outcomeLabel } from './inboxCards'
 import { isAskTool } from './questions'
+import { isRenderTool } from './visuals'
+import VisualFrame from './VisualFrame'
 import WorkLog from './WorkLog'
 import { foldWork } from './workFold'
 import { AgentGroup } from './AgentsPanel'
 import TurnStats from './TurnStats'
-import type { ApprovalPart, Attachment, ChatMessage, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart } from './types'
+import type { ApprovalPart, Attachment, ChangePart, ChatMessage, InboxPart, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart, VisualPart } from './types'
 import { TI, ProviderLogo, formatBytes, formatDuration } from './ui'
 import { IconAlertCircle,
   IconCopy, IconCheck, IconRefresh, IconVolume, IconPencil, IconFileText, IconFileTypePdf, IconClipboardText,
@@ -19,6 +24,7 @@ import { IconAlertCircle,
 import { readMessageAloud, speechSupported } from './speech'
 import { FileCard, ARTIFACT_PREVIEWABLE } from './ArtifactPanel'
 import { openArtifact } from './store'
+import { downloads, downloadUrl } from '../downloads'
 import { useSmoothText } from './smooth'
 import { useTextTicks } from './ticks'
 import { getChatCommands, subscribeChatCommands } from '../studio'
@@ -65,9 +71,10 @@ export function AttachmentChip({ a, onOpen, onRemove, status, progress }: {
 
 export function Lightbox({ src, alt, onClose }: { src: string; alt?: string; onClose: () => void }) {
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // On document, ahead of a side panel's window listener, and marked, so the panel stays open (chat/escape.ts).
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); onClose() } }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
   // On <body>: the chat's scroller is a size container, which makes it the box a
   // `position: fixed` inside it fills, so the image was sized and placed against
@@ -76,6 +83,7 @@ export function Lightbox({ src, alt, onClose }: { src: string; alt?: string; onC
     <div className="vc-lightbox" onClick={onClose} role="dialog" aria-label={alt || 'Image'}>
       <img src={src} alt={alt || ''} onClick={(e) => e.stopPropagation()} />
       <button type="button" className="vc-lightbox-close" onClick={onClose} aria-label="Close"><TI icon={IconX} size={20} /></button>
+      <a className="vc-lightbox-download" href={downloadUrl(src)} download={alt || 'image'} onClick={(e) => e.stopPropagation()}>Download image</a>
     </div>,
     document.body,
   )
@@ -86,7 +94,7 @@ function openAttachment(a: Attachment, setLightbox: (s: { src: string; alt: stri
   if (a.kind === 'image') setLightbox({ src: a.url, alt: a.name })
   // Documents open in the canvas beside the chat, like the ones Totem makes.
   else if (ARTIFACT_PREVIEWABLE.test(a.mime)) openArtifact({ uploadId: a.id, name: a.name, mime: a.mime, url: a.url, size: a.size })
-  else window.open(a.url, '_blank', 'noopener')
+  else downloads.start(a.url, a.name)
 }
 
 // --- user ----------------------------------------------------------------------
@@ -138,6 +146,16 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
     }
   }, [editing])
   const badge = m.mode ? MODE_BADGE[m.mode] : null
+  // His decision on an inbox card, written by the bridge for the agent: a label, and his note if he wrote one.
+  const outcome = outcomeLabel(m)
+  if (outcome) {
+    return (
+      <div className="vc-steer vc-inbox-outcome">
+        <div className="vc-steer-label" title={m.content}><TI icon={IconArrowForwardUp} size={12} />{outcome.label}</div>
+        {outcome.text && <div className="vc-bubble"><MentionText text={outcome.text} /></div>}
+      </div>
+    )
+  }
   return (
     <div className={`vc-row vc-user ${m.unsent ? 'unsent' : ''}`}>
       {!!m.attachments?.length && (
@@ -152,7 +170,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
             value={draft}
             onChange={(e) => { setDraft(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px` }}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') { setEditing(false); setDraft(m.content) }
+              if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setDraft(m.content) }
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (draft.trim()) { setEditing(false); onEdit(draft.trim()) } }
             }}
           />
@@ -195,7 +213,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
 
 // --- assistant -------------------------------------------------------------------
 
-type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'agents'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'steer'; part: SteerPart; key: string } | { kind: 'totem'; answer: TotemAnswer; key: string } | { kind: 'questions'; part: QuestionsPart; key: string } | { kind: 'approval'; part: ApprovalPart; key: string }
+type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'agents'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'change'; part: ChangePart; key: string } | { kind: 'steer'; part: SteerPart; key: string } | { kind: 'totem'; answer: TotemAnswer; key: string } | { kind: 'questions'; part: QuestionsPart; key: string } | { kind: 'approval'; part: ApprovalPart; key: string } | { kind: 'inbox'; part: InboxPart; key: string } | { kind: 'visual'; part: VisualPart; key: string }
 
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
@@ -212,9 +230,14 @@ function blocks(parts: Part[]): Block[] {
     if (answer) out.push({ kind: 'totem', answer, key: `k${i}` })
     // The questions themselves stand for the call that asked them.
     else if (p.type === 'tool' && isAskTool(p.tool)) continue
+    // So does a chart for the call that showed it; a failed call keeps its card.
+    else if (p.type === 'tool' && isRenderTool(p.tool) && p.status !== 'error') continue
+    else if (p.type === 'visual') out.push({ kind: 'visual', part: p, key: `v${i}` })
     else if (p.type === 'questions') out.push({ kind: 'questions', part: p, key: `q${i}` })
     // A tool call waiting on (or decided by) the owner stands on its own, never folded.
     else if (p.type === 'approval') out.push({ kind: 'approval', part: p, key: `ap${i}` })
+    // An inbox proposal it staged: the approval card, on its own (InboxCardRow.tsx).
+    else if (p.type === 'inbox') out.push({ kind: 'inbox', part: p, key: `ib${i}` })
     // A call that started another agent stands on its own, never folded into the
     // steps; agents started back to back share one group.
     else if (p.type === 'tool' && p.agent) {
@@ -229,6 +252,7 @@ function blocks(parts: Part[]): Block[] {
     } else if (p.type === 'image') out.push({ kind: 'image', part: p, key: `i${i}` })
     else if (p.type === 'file') out.push({ kind: 'file', part: p, key: `f${i}` })
     else if (p.type === 'totem-proposal') out.push({ kind: 'proposal', part: p, key: `p${i}` })
+    else if (p.type === 'change-pr') out.push({ kind: 'change', part: p, key: `c${i}` })
     else if (p.type === 'steer') out.push({ kind: 'steer', part: p, key: `s${i}` })
     else if (p.text) {
       const last = out[out.length - 1]
@@ -338,10 +362,13 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
           if (b.kind === 'work') return <WorkLog key={b.key} items={b.items} live={live && i === list.length - 1} />
           if (b.kind === 'agents') return <AgentGroup key={b.key} tools={b.tools} />
           if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
+          if (b.kind === 'change') return <ChangeCard key={b.key} part={b.part} />
           if (b.kind === 'steer') return <SteerNote key={b.key} part={b.part} />
           if (b.kind === 'totem') return <TotemSays key={b.key} answer={b.answer} live={live} />
           if (b.kind === 'questions') return <QuestionsRecord key={b.key} part={b.part} />
           if (b.kind === 'approval') return <ApprovalRow key={b.key} part={b.part} messageId={m.id} live={live} />
+          if (b.kind === 'inbox') return <InboxCardRow key={b.key} part={b.part} messageId={m.id} />
+          if (b.kind === 'visual') return <VisualFrame key={b.key} part={b.part} />
           if (b.kind === 'file') return <FileCard key={b.key} file={b.part} onOpen={() => openArtifact(b.part)} />
           if (b.kind === 'image') {
             const src = b.part.url || `/api/chat/uploads/${b.part.uploadId}`

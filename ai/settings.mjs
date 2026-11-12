@@ -3,10 +3,10 @@
 // createEnvBackedSettings() is the general store: named values entered in the
 // dashboard, kept in a 0600 JSON file, and put into this process's environment
 // unless the real environment already sets them. createAiSettings() is the
-// Settings -> AI instance (agent CLI API keys); Settings -> Integrations uses the
+// Settings -> Providers › API keys (agent CLI API keys); data/integrations.json uses the
 // same store for OAuth client ids and secrets.
 //
-// Settings -> AI: API keys for the agent CLIs.
+// Settings -> Providers: API keys for the agent CLIs.
 // Totem's AI is whichever agent CLI is configured (Codex, Claude Code, OpenCode,
 // Cursor). Each can run on a subscription login, which lives in the CLI's own
 // config, or on an API key read from its environment. This module holds the keys
@@ -34,7 +34,7 @@ export function maskSecret(value) {
   return v.length <= 8 ? '••••' : `••••${v.slice(-4)}`
 }
 
-/** Settings -> AI: the agent CLI API keys. */
+/** Settings -> Providers: the agent CLI API keys. */
 export function createAiSettings(options) {
   return createEnvBackedSettings({ ...options, keys: AI_KEYS.map((k) => ({ ...k, secret: true })) })
 }
@@ -118,12 +118,12 @@ const AUTH_FAILURE = /\b(401|403|unauthori[sz]ed|invalid[_ ]api[_ ]key|incorrect
 
 /**
  * If a CLI's output says its credentials were rejected, a sentence that says so
- * plainly; otherwise null. Used by the Settings -> AI Test button so a bad key
+ * plainly; otherwise null. Used by the Settings -> Providers Test button so a bad key
  * reads as a key problem rather than as "no output".
  */
 export function authFailureMessage(text, { provider = 'This provider', fix = null } = {}) {
   const detail = String(text || '')
   if (!AUTH_FAILURE.test(detail)) return null
   const how = fix ? ` or run \`${fix}\` on the server` : ''
-  return `${provider} rejected its credentials. Check the API key in Settings -> AI${how}.`
+  return `${provider} rejected its credentials. Check the API key in Settings -> Providers${how}.`
 }

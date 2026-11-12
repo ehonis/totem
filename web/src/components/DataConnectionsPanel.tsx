@@ -135,12 +135,12 @@ export default function DataConnectionsPanel({ onAuthError }: DataConnectionsPan
   if (!conns?.length) return null
 
   return (
-    <div className="app-group">
-      <div className="settings-section-title"><span /><strong>Built-in data</strong></div>
-      <p className="app-row-hint">
-        Keyless data sources Totem reads directly — no MCP server, no sign-in. The morning brief uses these.
-      </p>
-      <div className="app-list">
+    <section className="conn-section" id="conn-data">
+      <div className="conn-section-head">
+        <h2>Built-in data</h2>
+        <span className="conn-section-meta">No sign-in · read by the morning brief</span>
+      </div>
+      <div className="conn-list">
         {conns.map((c) => (
           <DataConnectionCard
             key={c.id}
@@ -153,6 +153,6 @@ export default function DataConnectionsPanel({ onAuthError }: DataConnectionsPan
           />
         ))}
       </div>
-    </div>
+    </section>
   )
 }

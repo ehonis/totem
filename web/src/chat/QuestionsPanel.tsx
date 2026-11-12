@@ -14,6 +14,8 @@ import { api } from '../api'
 import { pushError } from '../toast'
 import { patchMessagePart } from './store'
 import { AttachmentChip } from './Message'
+import { ARTIFACT_PREVIEWABLE } from './ArtifactPanel'
+import { downloads } from '../downloads'
 import { allAnswers, allFiles, answerPreview, draftAnswered, pick, type Draft } from './questions'
 import type { Attachment, ChatMessage, QuestionsPart } from './types'
 import { TI } from './ui'
@@ -211,7 +213,10 @@ export function QuestionsRecord({ part }: { part: QuestionsPart }) {
               <div className="vc-q-record-a">{part.status === 'answered' ? (part.answers?.[q.id] || []).join(', ') || (part.attachments?.[q.id]?.length ? '' : '—') : part.status === 'dismissed' ? 'Not answered' : 'Waiting'}</div>
               {!!part.attachments?.[q.id]?.length && (
                 <div className="vc-tray vc-q-files">
-                  {part.attachments[q.id].map((f) => <AttachmentChip key={f.id} a={f} onOpen={f.url ? () => window.open(f.url, '_blank', 'noopener') : undefined} />)}
+                  {part.attachments[q.id].map((f) => <AttachmentChip key={f.id} a={f} onOpen={f.url ? () => {
+                    if (f.kind === 'image' || ARTIFACT_PREVIEWABLE.test(f.mime)) window.open(f.url, '_blank', 'noopener')
+                    else downloads.start(f.url, f.name)
+                  } : undefined} />)}
                 </div>
               )}
             </li>

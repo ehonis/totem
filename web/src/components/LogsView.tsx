@@ -446,7 +446,7 @@ export default function LogsView({ onAuthError }: { onAuthError?: () => void }) 
     <div className="view logs-view">
       <header className="view-head">
         <div>
-          <h1>Logs</h1>
+          <h1>Activity log</h1>
           <p className="muted">
             Every action Totem takes, who asked for it, and whether it worked.
             {summary ? ` ${summary.count} in the last ${hours}h${failures ? `, ${failures} failed` : ''}.` : ''}

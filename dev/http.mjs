@@ -5,8 +5,12 @@
 //   GET /api/dev/shipped?days=14|30|90[&refresh=1]  the owner's merged PRs, any repo
 //   PUT /api/dev/shipped/hidden                     { repo: 'owner/name', hidden: bool }
 //   PUT /api/dev/shipped/groups                     { groups: [{ name, repos: ['owner/name'] }] }
+//   GET /api/dev/issues?state=open|closed|all&scope=mine|watched|all[&repo=owner/name][&refresh=1]
 //   PUT /api/dev/repos/:owner/:repo/ai-review     { enabled: bool }
 //   POST /api/dev/repos/:owner/:repo/pulls/:n/review   one-off review dispatch
+//   GET /api/dev/runs                              orchestrated runs (dev/runs.mjs)
+//   PUT /api/dev/runs/:slug                         { archived: bool }
+// POST /api/dev/runs/:slug is the ORCH's own, matched before the gate (dev/ingest.mjs).
 import { ghErrorMessage } from './github.mjs'
 
 const JSON_TYPE = { 'content-type': 'application/json; charset=utf-8' }
@@ -26,7 +30,7 @@ export async function readJson(req, maxBytes) {
   try { return { body: JSON.parse(Buffer.concat(chunks).toString('utf8')) } } catch { return { invalid: true } }
 }
 
-export function createDevHttpHandler({ service }) {
+export function createDevHttpHandler({ service, runs = null }) {
   if (!service) throw new TypeError('createDevHttpHandler requires service')
   return async function devHttpHandler(req, res, suppliedUrl) {
     const url = suppliedUrl instanceof URL ? suppliedUrl : new URL(req.url, 'http://localhost')
@@ -62,6 +66,16 @@ export function createDevHttpHandler({ service }) {
       return attempt(() => service.shipped({ days: Number(url.searchParams.get('days') || 30), refresh: url.searchParams.has('refresh') }))
     }
 
+    if (req.method === 'GET' && path === '/api/dev/issues') {
+      const q = url.searchParams
+      return attempt(() => service.issues({
+        state: q.get('state') || 'open',
+        scope: q.get('scope') || 'all',
+        repo: q.get('repo') || null,
+        refresh: q.has('refresh'),
+      }))
+    }
+
     if (req.method === 'PUT' && path === '/api/dev/shipped/hidden') {
       const b = await body((x) => typeof x?.repo === 'string' && typeof x?.hidden === 'boolean', 'body must be { "repo": "owner/name", "hidden": true | false }')
       return b ? attempt(() => service.setShippedHidden(b.repo, b.hidden)) : true
@@ -70,6 +84,16 @@ export function createDevHttpHandler({ service }) {
     if (req.method === 'PUT' && path === '/api/dev/shipped/groups') {
       const b = await body((x) => Array.isArray(x?.groups), 'body must be { "groups": [{ "name": "Work", "repos": ["owner/name"] }] }')
       return b ? attempt(() => service.setShippedGroups(b.groups)) : true
+    }
+
+    if (runs && req.method === 'GET' && path === '/api/dev/runs') {
+      return attempt(async () => ({ runs: await runs.list() }))
+    }
+
+    const runPath = /^\/api\/dev\/runs\/([a-z0-9-]{1,64})$/.exec(path)
+    if (runs && runPath && req.method === 'PUT') {
+      const b = await body((x) => typeof x?.archived === 'boolean', 'body must be { "archived": true | false }')
+      return b ? attempt(() => runs.setArchived(runPath[1], b.archived)) : true
     }
 
     const toggle = /^\/api\/dev\/repos\/([^/]+)\/([^/]+)\/ai-review$/.exec(path)

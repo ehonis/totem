@@ -1,15 +1,7 @@
+// Search and sort over the task list (the grouping is lib/todos/board.ts buildList,
+// shared with the web). A task is open or done; the status board's helpers went with Doing.
 import type { Todo, TodoDueFilter, TodoQuery, TodoSort, TodoSortOrder, TodoStatus } from './types'
 import { todoSource } from './types'
-
-export const BOARD_STATUSES: readonly TodoStatus[] = ['todo', 'doing', 'done']
-
-export function groupBoard(todos: readonly Todo[]): Record<TodoStatus, Todo[]> {
-  return {
-    todo: sortTodos(todos.filter(todo => todo.status === 'todo'), 'manual'),
-    doing: sortTodos(todos.filter(todo => todo.status === 'doing'), 'manual'),
-    done: sortTodos(todos.filter(todo => todo.status === 'done'), 'manual'),
-  }
-}
 
 function githubIdentifiers(todo: Todo): string[] {
   return todo.externalLinks.flatMap(link => {
@@ -96,9 +88,4 @@ export function optimisticMove(todos: readonly Todo[], id: string, status: TodoS
 
 export function rollbackMove(_todos: readonly Todo[], rollback: MoveRollback): Todo[] {
   return rollback.before
-}
-
-export function nextMobileStatus(status: TodoStatus, direction: -1 | 1): TodoStatus {
-  const current = BOARD_STATUSES.indexOf(status)
-  return BOARD_STATUSES[Math.max(0, Math.min(BOARD_STATUSES.length - 1, current + direction))]
 }

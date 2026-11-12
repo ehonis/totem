@@ -13,6 +13,8 @@ import * as goalWeekMondayMigration from './migrations/007-goal-week-monday.mjs'
 import * as freeVentureTagsMigration from './migrations/008-free-venture-tags.mjs';
 import * as rolledFromMigration from './migrations/009-rolled-from.mjs';
 import * as recsMigration from './migrations/010-recs.mjs';
+import * as noDoingMigration from './migrations/011-no-doing.mjs';
+import * as retireSheetSyncMigration from './migrations/012-retire-sheet-sync.mjs';
 
 const FORMAT_VERSION = 4;
 // Older formats a restore still accepts. A table added since (`since` on TABLES)
@@ -102,7 +104,7 @@ const DELETE_ORDER = [
 const MIGRATIONS = [
   initialMigration, exhaustedOutboxMigration, goalsMigration, outcomeMigration,
   goalAbandonedMigration, listsMigration, goalWeekMondayMigration, freeVentureTagsMigration,
-  rolledFromMigration, recsMigration,
+  rolledFromMigration, recsMigration, noDoingMigration, retireSheetSyncMigration,
 ];
 
 function enableWal(db) {
@@ -137,7 +139,7 @@ function validateMigrations(migrations) {
   }
 }
 
-function migrateTodoDatabase(db, now, file) {
+function migrateTodoDatabase(db, now, file, actionLog) {
   validateMigrations(MIGRATIONS);
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -172,10 +174,13 @@ function migrateTodoDatabase(db, now, file) {
     // PRAGMA foreign_keys is a no-op inside a transaction, so a table rebuild that
     // must not fire ON DELETE CASCADE turns them off here and checks them itself.
     if (migration.foreignKeysOff) db.exec('PRAGMA foreign_keys = OFF');
+    // A migration may return { actions: [actionLog entries] }: what it did that the
+    // owner should be able to find. They are written only once the migration committed.
+    let outcome = null;
     try {
       withTodoTransaction(db, () => {
         if (applied.get(migration.version)) return;
-        migration.migrate(db);
+        outcome = migration.migrate(db) ?? null;
         if (migration.foreignKeysOff) {
           const broken = db.prepare('PRAGMA foreign_key_check').all();
           if (broken.length) {
@@ -187,16 +192,19 @@ function migrateTodoDatabase(db, now, file) {
     } finally {
       if (migration.foreignKeysOff) db.exec('PRAGMA foreign_keys = ON');
     }
+    if (actionLog && Array.isArray(outcome?.actions)) {
+      for (const entry of outcome.actions) actionLog.record(entry);
+    }
   }
 }
 
-export function openTodoDatabase({ file, now = () => new Date().toISOString() }) {
+export function openTodoDatabase({ file, now = () => new Date().toISOString(), actionLog = null }) {
   mkdirSync(dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON');
     enableWal(db);
-    migrateTodoDatabase(db, now, file);
+    migrateTodoDatabase(db, now, file, actionLog);
     return db;
   } catch (error) {
     db.close();

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { getCalendarRange, updateCalendarEvent, AuthError } from '../api'
+import { getAway, getCalendarRange, updateCalendarEvent, AuthError } from '../api'
+import { awayDaysIn, awayOn, dayKey, type AwaySpan } from '../away'
 import { Hi, XMarkIcon, WarnIcon } from '../icons'
 import { useErrorToast } from '../toast'
 
@@ -127,15 +128,24 @@ function packDay(items: CalEvent[]) {
   return out
 }
 
+// One day's slice of an away span: a band that rounds off at the span's own ends and
+// names it where it starts, or where the visible row picks it up.
+function AwaySegment({ span, day, labelled }: { span: AwaySpan; day: Date; labelled: boolean }) {
+  const key = dayKey(day)
+  const cls = `away-band${key === span.start ? ' start' : ''}${key === span.end ? ' end' : ''}`
+  return <span className={cls} title={`Away: ${span.label}`}>{labelled || key === span.start ? span.label : '\u00a0'}</span>
+}
+
 interface TimeGridProps {
   days: Date[]
+  away: AwaySpan[]
   events: CalEvent[]
   onPickDay?: (d: Date) => void
   onSelectEvent: (ev: CalEvent) => void
 }
 
 // ---------- time-grid (day / week / workweek) ----------
-function TimeGrid({ days, events, onPickDay, onSelectEvent }: TimeGridProps) {
+function TimeGrid({ days, away, events, onPickDay, onSelectEvent }: TimeGridProps) {
   const scroller = useRef<HTMLDivElement>(null)
   useEffect(() => {
     // Scroll to ~7am so the morning is visible without manual scrolling.
@@ -144,19 +154,30 @@ function TimeGrid({ days, events, onPickDay, onSelectEvent }: TimeGridProps) {
 
   const allDayByDay = days.map((d) => events.filter((e) => e.allDay && sameDay(parseDate(e.start), d)))
   const hasAllDay = allDayByDay.some((l) => l.length)
+  const awayByDay = days.map((d) => awayOn(away, dayKey(d)))
   const now = new Date()
 
   return (
     <div className="tg">
       <div className="tg-head">
         <div className="tg-gutter" />
-        {days.map((d) => (
-          <div key={d.getTime()} className={`tg-daycol-h ${isToday(d) ? 'today' : ''}`} onClick={() => onPickDay?.(d)}>
+        {days.map((d, i) => (
+          <div key={d.getTime()} className={`tg-daycol-h ${isToday(d) ? 'today' : ''}${awayByDay[i] ? ' away' : ''}`} onClick={() => onPickDay?.(d)}>
             <span className="tg-dow">{d.toLocaleDateString([], { weekday: 'short' })}</span>
             <span className="tg-dnum">{d.getDate()}</span>
           </div>
         ))}
       </div>
+      {awayByDay.some(Boolean) && (
+        <div className="tg-away">
+          <div className="tg-gutter">away</div>
+          {days.map((d, i) => (
+            <div key={d.getTime()} className="tg-away-col">
+              {awayByDay[i] && <AwaySegment span={awayByDay[i]!} day={d} labelled={i === 0 || awayByDay[i - 1]?.id !== awayByDay[i]!.id} />}
+            </div>
+          ))}
+        </div>
+      )}
       {hasAllDay && (
         <div className="tg-allday">
           <div className="tg-gutter">all day</div>
@@ -227,13 +248,14 @@ function EventChip({ ev, compact, onClick }: { ev: CalEvent; compact?: boolean; 
 
 interface MonthGridProps {
   anchor: Date
+  away: AwaySpan[]
   events: CalEvent[]
   onPickDay: (d: Date) => void
   onSelectEvent: (ev: CalEvent) => void
 }
 
 // ---------- month ----------
-function MonthGrid({ anchor, events, onPickDay, onSelectEvent }: MonthGridProps) {
+function MonthGrid({ anchor, away, events, onPickDay, onSelectEvent }: MonthGridProps) {
   const gridStart = startOfWeek(startOfMonth(anchor))
   const cells = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
   const dows = Array.from({ length: 7 }, (_, i) => addDays(gridStart, i).toLocaleDateString([], { weekday: 'short' }))
@@ -241,15 +263,17 @@ function MonthGrid({ anchor, events, onPickDay, onSelectEvent }: MonthGridProps)
     <div className="month">
       <div className="month-dow">{dows.map((d) => <div key={d}>{d}</div>)}</div>
       <div className="month-grid">
-        {cells.map((d) => {
+        {cells.map((d, i) => {
+          const awaySpan = awayOn(away, dayKey(d))
           const dayEvents = events
             .filter((e) => sameDay(parseDate(e.start), d))
             .sort((a, b) => (a.allDay === b.allDay ? (a.start < b.start ? -1 : 1) : a.allDay ? -1 : 1))
           const off = d.getMonth() !== anchor.getMonth()
           const shown = dayEvents.slice(0, 3)
           return (
-            <div key={d.getTime()} className={`month-cell ${off ? 'off' : ''} ${isToday(d) ? 'today' : ''}`}>
+            <div key={d.getTime()} className={`month-cell ${off ? 'off' : ''} ${isToday(d) ? 'today' : ''}${awaySpan ? ' away' : ''}`}>
               <button className="month-daynum" onClick={() => onPickDay(d)}>{d.getDate()}</button>
+              {awaySpan && <AwaySegment span={awaySpan} day={d} labelled={i % 7 === 0} />}
               <div className="month-events">
                 {shown.map((ev) => <EventChip key={ev.id} ev={ev} compact onClick={() => onSelectEvent(ev)} />)}
                 {dayEvents.length > shown.length && (
@@ -335,24 +359,31 @@ function dayHeading(d: Date) {
 
 interface AgendaProps {
   anchor: Date
+  range: [Date, Date]
+  away: AwaySpan[]
   events: CalEvent[]
   onSelectEvent: (ev: CalEvent) => void
 }
 
-function Agenda({ anchor, events, onSelectEvent }: AgendaProps) {
+function Agenda({ anchor, range, away, events, onSelectEvent }: AgendaProps) {
   const days: Record<string, CalEvent[]> = {}
   for (const ev of events) (days[parseDate(ev.start).toDateString()] ||= []).push(ev)
+  // A trip day with nothing on it still gets its heading: being away is the news.
+  for (const d of awayDaysIn(away, range[0], range[1])) days[d.toDateString()] ||= []
   const keys = Object.keys(days).sort((a, b) => +new Date(a) - +new Date(b))
   if (!keys.length) return <div className="empty">No events in this range.</div>
   return (
     <div className="cal-agenda">
-      {keys.map((k) => (
+      {keys.map((k) => {
+        const awaySpan = awayOn(away, dayKey(new Date(k)))
+        return (
     <div className="cal-day" key={k}>
       <div className="cal-day-h">
         {dayHeading(new Date(k))}
         <span className="date">{new Date(k).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
+        {awaySpan && <span className="away-tag">Away · {awaySpan.label}</span>}
       </div>
-      <div className="card">
+      {days[k].length > 0 && <div className="card">
         {days[k].map((ev) => (
           <button className="event" key={ev.id} onClick={() => onSelectEvent(ev)}>
             <span className={`bar acct-${(ev.accountIndex ?? 0) % 4}`} />
@@ -363,9 +394,10 @@ function Agenda({ anchor, events, onSelectEvent }: AgendaProps) {
             </div>
           </button>
         ))}
-      </div>
+      </div>}
     </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -492,12 +524,16 @@ export default function CalendarView({ onAuthError }: CalendarViewProps) {
   const [error, setError] = useState<string | null>(null)
   useErrorToast(error)
   const [selectedEvent, setSelectedEvent] = useState<CalEvent | null>(null)
+  // Trips and days off, past ones included: the views can page back in time. Small, so
+  // fetched whole with every load, which also picks up a span edited on another device.
+  const [away, setAway] = useState<AwaySpan[]>([])
 
   const [rStart, rEnd] = useMemo(() => fetchRange(view, anchor), [view, anchor])
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    getAway({ all: true }).then((r) => setAway(r.spans || [])).catch((e) => { if (e instanceof AuthError) onAuthError() })
     try {
       const { events, errors } = await getCalendarRange(rStart.toISOString(), rEnd.toISOString())
       setEvents(events)
@@ -560,11 +596,11 @@ export default function CalendarView({ onAuthError }: CalendarViewProps) {
       {errors.map((e) => <div key={e} className="muted inline-warn" style={{ marginBottom: 6 }}><WarnIcon /> {e}</div>)}
 
       {(view === 'day' || view === 'week' || view === 'workweek') && (
-        <TimeGrid days={gridDays} events={events} onPickDay={pickDay} onSelectEvent={setSelectedEvent} />
+        <TimeGrid days={gridDays} away={away} events={events} onPickDay={pickDay} onSelectEvent={setSelectedEvent} />
       )}
-      {view === 'month' && <MonthGrid anchor={anchor} events={events} onPickDay={pickDay} onSelectEvent={setSelectedEvent} />}
+      {view === 'month' && <MonthGrid anchor={anchor} away={away} events={events} onPickDay={pickDay} onSelectEvent={setSelectedEvent} />}
       {view === 'year' && <YearGrid anchor={anchor} events={events} onPickDay={pickDay} onPickMonth={pickMonth} />}
-      {view === 'agenda' && <Agenda anchor={anchor} events={events} onSelectEvent={setSelectedEvent} />}
+      {view === 'agenda' && <Agenda anchor={anchor} range={[rStart, rEnd]} away={away} events={events} onSelectEvent={setSelectedEvent} />}
       {selectedEvent && (
         <EventModal
           event={selectedEvent}

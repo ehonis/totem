@@ -314,10 +314,23 @@ file trims to the newest 8000 entries past ~8MB.
 | `GET /api/logs/summary` | Counts by status/action/actor over `?hours=` (default 24) |
 | `GET /api/outputs` | Recent command outputs, newest first |
 | `GET /api/outputs/:id` | One output in full: stdout, stderr, exit code, cwd |
-| `GET /api/approvals` | Leases including pending activation codes — **this is the owner's view** |
-| `POST /api/approvals/approve` | `{approvalSessionId}` or `{code}` |
+| `GET /api/approvals` | Leases, with pending activation codes only on an install with no approval code set (see below) |
+| `POST /api/approvals/approve` | `{approvalSessionId}`, or `{code}` while one-time codes are on. Needs the owner's approval code once one is set; the bearer secret alone is refused (`auth/approval-routes.mjs`) |
 | `POST /api/approvals/deny` | `{approvalSessionId \| code, reason?}` for a pending lease |
 | `POST /api/approvals/revoke` | `{approvalSessionId, reason?}` for an active lease |
+
+**One-time codes and the approval code.** The 6-digit activation code reaches the owner in a
+notification, and the notification ledger is a file agents can read. So the store takes
+`oneTimeCodes()` (from `auth/approval-code.mjs`): only on an install that predates the
+approval code and has not set one (`legacy`) is the 6-digit code shown, sent and accepted. Everywhere
+else the owner activates a session from Settings → Activity, which needs the approval code. See
+[self-hosting.md](self-hosting.md#the-approval-code).
+
+**Uncertain outcomes.** The action log has a fifth status, `uncertain`: an accepted inbox
+action (or the command run it started) that a bridge restart cut off, or a send that failed
+after the request may already have gone out. Nobody knows how far it got, so it is neither
+`error` nor left open (`logs/approval-inflight.mjs`). Leftovers are settled before the port
+opens, and logged with the `system` actor.
 
 ## MCP tools
 

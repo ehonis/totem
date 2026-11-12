@@ -16,6 +16,7 @@ import type { ChatThread, Project, ProjectFile } from './types'
 import { TI, formatBytes } from './ui'
 import { IconUpload, IconTrash, IconExternalLink, IconPaperclip, IconFolderUp, IconChevronRight, IconWorld, IconX } from './icons'
 import { pushError, pushToast } from '../toast'
+import { downloads } from '../downloads'
 
 // A project's own page: what shows in the chat pane when a project is open and
 // no chat is. The composer on top starts a chat in the project; below it, the
@@ -151,7 +152,7 @@ function FilesTab({ project, maxUploadBytes }: { project: Project; maxUploadByte
 
   function open(f: ProjectFile) {
     if (ARTIFACT_PREVIEWABLE.test(f.mime) || f.kind === 'image') openArtifact({ uploadId: f.id, name: f.name, mime: f.mime, url: f.url, size: f.size })
-    else if (f.url) window.open(f.url, '_blank', 'noopener')
+    else if (f.url) downloads.start(f.url, f.name)
   }
 
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -224,7 +225,7 @@ function FilesTab({ project, maxUploadBytes }: { project: Project; maxUploadByte
               </span>
             </button>
             {f.url && (
-              <a className="vc-icon-btn sm" href={`${f.url}&download`} aria-label={`Download ${f.name}`} title="Download"><TI icon={IconExternalLink} size={15} /></a>
+              <a className="vc-icon-btn sm" href={f.url} download={f.name} aria-label={`Download ${f.name}`} title="Download"><TI icon={IconExternalLink} size={15} /></a>
             )}
             <button type="button" className="vc-icon-btn sm" onClick={() => remove([f.id])} aria-label={`Remove ${f.name}`} title="Remove from project"><TI icon={IconTrash} size={15} /></button>
           </div>
@@ -380,10 +381,11 @@ function PictureField({ project }: { project: Project }) {
 function SettingsTab({ project }: { project: Project }) {
   const [name, setName] = useState(project.name)
   useEffect(() => setName(project.name), [project.name])
-  const choice = threadChoice(null, { provider: project.provider, modelSettings: project.modelSettings })
-  const settings = choice.settings
-
   const parent = useChat((s) => (project.parentId ? s.projects.find((p) => p.id === project.parentId) : undefined))
+  // Its own model, or (none picked) what it follows: the project for a folder, Settings → Providers for a project.
+  const choice = threadChoice(null, { provider: project.provider, modelSettings: project.modelSettings, projectId: project.id })
+  const settings = choice.settings
+  const follows = parent ? `${parent.name}’s model` : 'the default model in Settings → Providers'
   const folderCount = useChat((s) => foldersOf(s.projects, project.id).length)
   const where = parent ? parent.name : 'Home'
   async function remove() {
@@ -419,9 +421,16 @@ function SettingsTab({ project }: { project: Project }) {
       </div>
       <div className="vc-proj-field">
         <span>Default model</span>
-        <p className="vc-proj-hint">New chats in this project start on this. You can still change it in any one chat.</p>
+        <p className="vc-proj-hint">
+          {project.provider
+            ? `New chats in this ${parent ? 'folder' : 'project'} start on this. You can still change it in any one chat.`
+            : `New chats here start on ${follows} until you pick one for this ${parent ? 'folder' : 'project'}.`}
+        </p>
         <div className="vc-proj-model">
           <ModelPicker provider={choice.provider} settings={settings} onChange={(patch) => updateProject(project.id, patch)} />
+          {project.provider && (
+            <button type="button" className="vc-btn sm ghost" onClick={() => updateProject(project.id, { provider: null, modelSettings: null })}>Use {follows}</button>
+          )}
         </div>
       </div>
       <div className="vc-proj-field">

@@ -1,7 +1,7 @@
 // The event detail sheet: the web's EventModal (CalendarView.tsx) in its phone
 // layout, as a form sheet. Same fields and the same payload to updateCalendarEvent;
 // the dates are native pickers instead of <input type="datetime-local">.
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { router } from 'expo-router'
 import * as WebBrowser from 'expo-web-browser'
@@ -17,7 +17,7 @@ import { Field, FieldInput, SheetFrame, actionStyle } from '../productivity/Shee
 import DateField from './DateField'
 import { emitEventSaved, getSelectedEvent } from './eventStore'
 import {
-  allDayEndForApi, allDayEndForInput, fromInput, parseDate, toDateInput, toDateTimeInput, type CalEvent,
+  allDayEndForApi, allDayEndForInput, eventTimeLabel, fromInput, parseDate, toDateInput, toDateTimeInput, type CalEvent,
 } from './dates'
 
 export default function EventSheet() {
@@ -29,15 +29,17 @@ export default function EventSheet() {
 }
 
 function EventForm({ event }: { event: CalEvent }) {
-  const [form, setForm] = useState(() => ({
+  const initial = useMemo(() => ({
     title: event.title === '(no title)' ? '' : event.title,
     location: event.location || '',
     description: event.description || '',
     allDay: Boolean(event.allDay),
     start: event.allDay ? event.start : toDateTimeInput(parseDate(event.start)),
     end: event.allDay ? allDayEndForInput(event.end || event.start) : toDateTimeInput(parseDate(event.end || event.start)),
-  }))
+  }), [event])
+  const [form, setForm] = useState(initial)
   const [saving, setSaving] = useState(false)
+  const dirty = JSON.stringify(form) !== JSON.stringify(initial)
 
   const set = (key: keyof typeof form, value: any) => setForm((f) => ({ ...f, [key]: value }))
   const fmt = (allDay: boolean, d: Date) => (allDay ? toDateInput(d) : toDateTimeInput(d))
@@ -74,10 +76,14 @@ function EventForm({ event }: { event: CalEvent }) {
   }
 
   const close = () => router.back()
+  const when = parseDate(event.start).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
   return (
     <SheetFrame
-      kicker={`${event.account} calendar`}
-      title="Event details"
+      kicker={`${when} · ${eventTimeLabel(event)} · ${event.account}`}
+      title={event.title || 'Event details'}
+      headerAction={dirty ? (
+        <Btn compact kind="primary" title={saving ? 'Saving…' : 'Save'} disabled={saving} onPress={submit} style={{ minHeight: 44, paddingHorizontal: 16 }} />
+      ) : null}
       onClose={close}
       actions={(
         <>
@@ -90,7 +96,7 @@ function EventForm({ event }: { event: CalEvent }) {
             />
           ) : null}
           <Btn title="Cancel" onPress={close} style={actionStyle} />
-          <Btn title={saving ? 'Saving…' : 'Save changes'} kind="primary" disabled={saving} onPress={submit} style={actionStyle} />
+          <Btn title={saving ? 'Saving…' : 'Save changes'} kind="primary" disabled={saving || !dirty} onPress={submit} style={actionStyle} />
         </>
       )}
     >

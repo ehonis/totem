@@ -1,5 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { loadConfig, resolveAccounts, fetchAccount as registryFetchAccount, providerName, PROVIDERS } from './registry.mjs';
+import { annotateAccount, buildPools } from './pools.mjs';
+
+// What a proxy that has never answered is assumed to hold, so a down proxy at
+// boot does not bring the host's own CLI logins back as if they were the pool.
+const PROXY_BACKENDS = ['claude', 'codex'];
+const isProxyId = (id) => typeof id === 'string' && id.includes(':proxy:');
 
 /**
  * Owns the current snapshot and keeps it fresh.
@@ -16,6 +22,12 @@ import { loadConfig, resolveAccounts, fetchAccount as registryFetchAccount, prov
  *      seconds later because vendors often lag the request that spent the quota.
  *   3. `GET /api/ai-usage/stream` subscribers, counted as watchers so opening
  *      the limits UI is what flips the poller into the fast cadence.
+ *
+ * With CLIProxy set up (`proxy`, cliproxy/source.mjs), the proxy's logins replace
+ * the host's own Claude and Codex logins: those are what the agent CLIs actually
+ * spend, and the host's login is only there for claude.ai connectors. Proxy
+ * accounts are never token-refreshed here, and a proxy poll is one local call
+ * (see the source for when it also asks a vendor).
  */
 
 /** How often to hit vendors while at least one dashboard is watching. */
@@ -50,8 +62,14 @@ export class Poller extends EventEmitter {
    * @param {typeof registryFetchAccount} [opts.fetchAccount]  injectable for tests
    * @param {typeof defaultTimers} [opts.timers]               injectable for tests
    */
-  constructor({ fetchAccount = registryFetchAccount, timers = defaultTimers } = {}) {
+  constructor({ fetchAccount = registryFetchAccount, timers = defaultTimers, proxy = null } = {}) {
     super();
+    this.proxy = proxy;
+    this.proxyAccounts = [];
+    this.proxyBackends = null;
+    this.proxyStatus = null;
+    this.proxyInFlight = null;
+    this.proxyAnnotated = [];
     this.config = null;
     this.accounts = [];
     this.snapshot = { updatedAt: null, polling: true, accounts: [] };
@@ -128,10 +146,12 @@ export class Poller extends EventEmitter {
     this.accounts = await resolveAccounts(this.config);
     this.schedule();
 
-    const cached = new Map(this.snapshot.accounts.map((a) => [a.id, a]));
+    await this.refreshProxy();
+    const cached = new Map(this.localAccounts().map((a) => [a.id, a]));
     const kept = [];
     const missing = [];
     for (const account of this.accounts) {
+      if (this.covered(account.backend)) continue;
       const hit = cached.get(`${account.backend}:${account.label}`);
       if (hit) kept.push({ ...hit, displayName: account.displayName || account.label });
       else missing.push(account);
@@ -143,6 +163,46 @@ export class Poller extends EventEmitter {
       updatedAt: fetched.length ? Date.now() : this.snapshot.updatedAt,
     });
     return this.snapshot;
+  }
+
+  /** Does the proxy stand in for this backend's local logins? */
+  covered(backend) {
+    if (!this.proxy?.configured()) return false;
+    return (this.proxyBackends ?? new Set(PROXY_BACKENDS)).has(backend);
+  }
+
+  /** Local results only; the proxy's are kept apart and joined in publish. */
+  localAccounts() {
+    return this.snapshot.accounts.filter((a) => a.source !== 'cliproxy');
+  }
+
+  /**
+   * Re-read the proxy's logins. `force` (true or one proxy id) asks the vendor
+   * for a fresh usage reading too. Concurrent unforced calls share one read.
+   */
+  async refreshProxy({ force = null } = {}) {
+    if (!this.proxy) return;
+    if (!this.proxy.configured()) {
+      this.proxyAccounts = [];
+      this.proxyBackends = null;
+      this.proxyStatus = null;
+      return;
+    }
+    if (this.proxyInFlight && !force) return this.proxyInFlight;
+    const run = (async () => {
+      const { accounts, status, backends } = await this.proxy.read({ watched: this.watchers > 0, force });
+      this.proxyAccounts = accounts;
+      this.proxyStatus = status;
+      if (status?.reachable) this.proxyBackends = backends;
+    })();
+    if (!force) this.proxyInFlight = run;
+    try {
+      await run;
+    } catch (err) {
+      console.error(`[poller] cliproxy read failed: ${err.message}`);
+    } finally {
+      if (this.proxyInFlight === run) this.proxyInFlight = null;
+    }
   }
 
   /** Display names per backend, so the UI titles match what's configured. */
@@ -157,6 +217,22 @@ export class Poller extends EventEmitter {
    * so every emit looks the same.
    */
   publish(accounts, { updatedAt = Date.now() } = {}) {
+    const names = this.config?.accountNames ?? {};
+    const hidden = new Set(this.config?.hidden ?? []);
+    const local = accounts.filter((a) => a.source !== 'cliproxy' && !this.covered(a.backend));
+    // Renames and hiding from Settings → Usage apply to proxy logins by id. Hiding
+    // is display only: a hidden login still serves, so it still counts in its pool.
+    const providerHidden = (backend) => Boolean(this.config?.providers?.[backend]?.hidden);
+    const now = Date.now();
+    // The CLIProxy tab manages every login, hidden or of a hidden service, so it
+    // reads them all here, renamed and annotated like the rest.
+    this.proxyAnnotated = this.orderAccounts(this.proxyAccounts
+      .map((a) => ({ ...a, displayName: (typeof names[a.id] === 'string' && names[a.id].trim()) || a.displayName })))
+      .map((a) => annotateAccount(a, now));
+    const proxied = this.proxyAnnotated.filter((a) => !providerHidden(a.backend));
+    // Every surface reads `accounts`, so hidden logins leave it; `pools` still
+    // counts them, because the proxy still routes to them.
+    const all = this.orderAccounts([...local.map((a) => annotateAccount(a, now)), ...proxied]);
     this.snapshot = {
       updatedAt,
       polling: false,
@@ -164,7 +240,11 @@ export class Poller extends EventEmitter {
       watchPollSeconds: WATCH_POLL_SECONDS,
       watchers: this.watchers,
       providers: this.providerLabels(),
-      accounts: this.orderAccounts(accounts),
+      accounts: all.filter((a) => !hidden.has(a.id)),
+      pools: buildPools(all),
+      proxy: this.proxyStatus
+        ? { configured: true, reachable: this.proxyStatus.reachable, error: this.proxyStatus.error, code: this.proxyStatus.code, checkedAt: this.proxyStatus.checkedAt }
+        : { configured: Boolean(this.proxy?.configured()) },
     };
     this.emit('snapshot', this.snapshot);
     return this.snapshot;
@@ -178,15 +258,23 @@ export class Poller extends EventEmitter {
     if (this.inFlight && !only) return this.inFlight;
 
     const run = (async () => {
-      const targets = only
-        ? this.accounts.filter((a) => `${a.backend}:${a.label}` === only)
-        : this.accounts;
+      // The proxy is read alongside the local logins, so a slow proxy never holds Cursor up.
+      const proxyRead = !only || isProxyId(only) ? this.refreshProxy({ force: isProxyId(only) ? only : null }) : null;
+      if (isProxyId(only)) {
+        await proxyRead;
+        return this.publish(this.localAccounts());
+      }
 
-      const results = await Promise.all(targets.map((a) => this.fetchOne(a)));
+      const targets = (only
+        ? this.accounts.filter((a) => `${a.backend}:${a.label}` === only)
+        : this.accounts
+      ).filter((a) => !this.covered(a.backend));
+
+      const [results] = await Promise.all([Promise.all(targets.map((a) => this.fetchOne(a))), proxyRead]);
 
       let accounts = results;
       if (only) {
-        const byId = new Map(this.snapshot.accounts.map((a) => [a.id, a]));
+        const byId = new Map(this.localAccounts().map((a) => [a.id, a]));
         for (const r of results) byId.set(r.id, r);
         accounts = [...byId.values()];
       }
@@ -215,10 +303,16 @@ export class Poller extends EventEmitter {
     if (inflight) return inflight;
 
     const run = (async () => {
+      // A turn spent on a proxied backend: the proxy already has the headers of
+      // that very request, so a re-read of its list is the fresh number.
+      if (this.covered(backend)) {
+        await this.refreshProxy();
+        return this.publish(this.localAccounts());
+      }
       const targets = this.accounts.filter((a) => a.backend === backend);
       if (!targets.length) return this.snapshot;
       const results = await Promise.all(targets.map((a) => this.fetchOne(a)));
-      const byId = new Map(this.snapshot.accounts.map((a) => [a.id, a]));
+      const byId = new Map(this.localAccounts().map((a) => [a.id, a]));
       for (const r of results) byId.set(r.id, r);
       return this.publish([...byId.values()]);
     })();
@@ -293,17 +387,26 @@ export class Poller extends EventEmitter {
   /** Stable display order: grouped by backend, then by label. */
   orderAccounts(accounts) {
     const rank = { claude: 0, codex: 1, cursor: 2 };
+    const name = (a) => String(a.displayName || a.label || '');
     return [...accounts].sort(
       (a, b) =>
-        (rank[a.backend] ?? 9) - (rank[b.backend] ?? 9) || a.label.localeCompare(b.label),
+        (rank[a.backend] ?? 9) - (rank[b.backend] ?? 9) || name(a).localeCompare(name(b)),
     );
   }
 
   /** Force credential refresh for one account (or all), then re-poll. */
   async refreshCredentials(id = null) {
-    const targets = id
+    // A proxy login's token belongs to the proxy: a refresh here would rotate it
+    // under the proxy's feet. "Refresh" for those is a fresh usage reading.
+    if (isProxyId(id)) {
+      await this.poll(id);
+      return { refreshed: 1, errors: [] };
+    }
+    if (!id) await this.refreshProxy({ force: true });
+    const targets = (id
       ? this.accounts.filter((a) => `${a.backend}:${a.label}` === id)
-      : this.accounts;
+      : this.accounts
+    ).filter((a) => !this.covered(a.backend));
 
     const errors = [];
     await Promise.all(

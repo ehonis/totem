@@ -1,6 +1,9 @@
 // Date and layout helpers for Productivity → Calendar, ported from the top of
 // web/src/components/CalendarView.tsx. Pure: no React, no fetch.
 import { colors } from '../../theme'
+import { addDays, parseDate, sameDay, startOfDay, type CalViewId } from './time'
+
+export { addDays, parseDate, sameDay, startOfDay, type CalViewId }
 
 // Loosely-shaped bridge JSON.
 export type CalEvent = any
@@ -8,19 +11,6 @@ export type CalEvent = any
 export const WEEK_START = 0 // 0 = Sunday (matches Google/Outlook default)
 export const HOUR_PX = 44 // height of one hour row in time-grid views
 
-// Google returns all-day events as a date-only string ("YYYY-MM-DD"). new Date()
-// would read that as UTC midnight, which shifts to the previous day in negative-UTC
-// timezones. Parse date-only values as a LOCAL date so they land on the right day.
-export const parseDate = (s: string | number | Date): Date => {
-  if (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)) {
-    const [y, m, d] = s.split('-').map(Number)
-    return new Date(y, m - 1, d)
-  }
-  return new Date(s)
-}
-
-export const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
-export const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }
 export const addMonths = (d: Date, n: number) => { const x = new Date(d); x.setMonth(x.getMonth() + n); return x }
 export const startOfWeek = (d: Date, ws = WEEK_START) => {
   const x = startOfDay(d)
@@ -28,11 +18,8 @@ export const startOfWeek = (d: Date, ws = WEEK_START) => {
   return x
 }
 export const startOfMonth = (d: Date) => { const x = startOfDay(d); x.setDate(1); return x }
-export const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 export const isToday = (d: Date) => sameDay(d, new Date())
 export const minsOfDay = (d: Date) => d.getHours() * 60 + d.getMinutes()
-
-export type CalViewId = 'day' | 'workweek' | 'week' | 'month' | 'year' | 'agenda'
 
 export const VIEWS: { id: CalViewId; label: string }[] = [
   { id: 'day', label: 'Day' },

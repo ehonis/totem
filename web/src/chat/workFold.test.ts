@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { foldWork, workSources, summarizeWork } from './workFold'
+import { foldWork, workSources, summarizeWork, isCommentary } from './workFold'
 import type { ToolPart } from './types'
 
 const tool = (id: string, extra: Partial<ToolPart> = {}): ToolPart => ({ type: 'tool', id, kind: 'mcp', title: `Did ${id}`, status: 'done', ...extra })
@@ -20,6 +20,25 @@ describe('foldWork', () => {
     expect(out.map((b) => b.kind)).toEqual(['work', 'proposal', 'text'])
   })
 
+  it('keeps an answer given before a last call in sight, with the note after it', () => {
+    const answer = "Yes, that's the plan.\n\n## Plan\n\n1. **Find the motherboard model.**\n2. **Buy the RAM.**"
+    const out = foldWork([text(answer), tools('w1', tool('memory')), text('Noted in memory.')])
+    expect(out.map((b) => b.kind)).toEqual(['text', 'work', 'text'])
+    expect((out[0] as { text: string }).text).toBe(answer)
+  })
+
+  it('splits the fold around a long answer-shaped text, in order', () => {
+    const long = 'x'.repeat(400)
+    const out = foldWork([text('Checking.'), tools('w1', tool('a')), text(long), tools('w2', tool('b')), text('Done.')])
+    expect(out.map((b) => b.kind)).toEqual(['work', 'text', 'work', 'text'])
+    expect((out[0] as Extract<(typeof out)[number], { kind: 'work' }>).items.map((i) => i.key)).toEqual(['Checking.', 'w1'])
+  })
+
+  it('leaves commentary with no calls of its own in place before kept text', () => {
+    const out = foldWork([text('Sure.'), text('- one\n- two'), tools('w1', tool('a')), text('Done.')])
+    expect(out.map((b) => b.kind)).toEqual(['text', 'text', 'work', 'text'])
+  })
+
   it('leaves a reply with no calls alone', () => {
     const list = [text('hi')]
     expect(foldWork(list)).toBe(list)
@@ -37,6 +56,16 @@ describe('foldWork', () => {
   it('folds the lead-in to a sub-agent with the calls before it', () => {
     const out = foldWork([text('Checking.'), tools('w1', tool('a')), text('Handing off.'), { kind: 'agent', key: 'a1' }, text('Result.')])
     expect(out.map((b) => b.kind)).toEqual(['work', 'agent', 'text'])
+  })
+})
+
+describe('isCommentary', () => {
+  it('takes a line or two of narration, not an answer', () => {
+    expect(isCommentary("I'll check your calendar first.")).toBe(true)
+    expect(isCommentary('Para one.\n\nPara two.')).toBe(false)
+    expect(isCommentary('## Plan')).toBe(false)
+    expect(isCommentary('Steps:\n1. Do it')).toBe(false)
+    expect(isCommentary('y'.repeat(300))).toBe(false)
   })
 })
 

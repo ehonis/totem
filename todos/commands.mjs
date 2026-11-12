@@ -1,7 +1,6 @@
-import { TodoDomainError } from './errors.mjs';
+import { assertSyncTarget, issueLinkRouteRequired, TodoDomainError } from './errors.mjs';
 
-const SHEET_SHARED_PATCH_FIELDS = new Set(['title', 'priority', 'dueDate', 'ventureTag', 'tags']);
-const SHEET_SHARED_BULK = new Set(['priority', 'addTag', 'removeTag']);
+export { assertSyncTarget };
 
 function requireDependency(value, name) {
   if (!value) throw new TypeError(`createTodoCommands requires ${name}`);
@@ -9,82 +8,25 @@ function requireDependency(value, name) {
 }
 
 function cleanSyncTarget(input) {
-  const target = input.syncTarget ?? 'local';
-  if (!['local', 'github', 'sheet'].includes(target)) {
-    throw new TodoDomainError('INVALID_SYNC_TARGET', 'syncTarget must be local, github, or sheet.', {
-      details: { syncTarget: target },
-    });
-  }
+  assertSyncTarget(input.syncTarget);
   const { syncTarget: _ignored, ...todo } = input;
-  return { target, todo };
+  return todo;
 }
 
-function sourceLink(todo, connector) {
-  return todo.externalLinks.find(link => link.connector === connector) ?? null;
-}
-
-export function createTodoCommands({ service, github, sheet, maintenance } = {}) {
+export function createTodoCommands({ service, maintenance } = {}) {
   requireDependency(service, 'service');
-  requireDependency(github, 'github');
-  requireDependency(sheet, 'sheet');
   requireDependency(maintenance, 'maintenance');
 
-  async function create(input = {}, context) {
-    const { target, todo } = cleanSyncTarget(input);
-    if (target === 'github') return github.create(todo, context);
-    if (target === 'sheet') return sheet.create(todo, context);
-    return service.create(todo, context);
-  }
-
-  async function update(id, patch = {}, context) {
-    service.validateUpdate(id, patch);
-    const todo = service.get(id);
-    if (sourceLink(todo, 'sheet') && Object.keys(patch).some(field => SHEET_SHARED_PATCH_FIELDS.has(field))) {
-      return sheet.updateLinked(id, patch, context);
-    }
-    if (sourceLink(todo, 'github') && Object.hasOwn(patch, 'title')) {
-      const { title, ...localPatch } = patch;
-      let result = await github.rename(id, title, context);
-      if (Object.keys(localPatch).length) result = service.update(id, localPatch, context);
-      return result;
-    }
-    return service.update(id, patch, context);
-  }
-
-  async function addNote(id, body, context) {
-    const todo = service.get(id);
-    if (!todo) return service.addNote(id, body, context);
-    if (sourceLink(todo, 'sheet')) return sheet.appendNote(id, body, context);
-    return service.addNote(id, body, context);
-  }
-
-  async function bulk(input = {}) {
-    const todos = Array.isArray(input.ids) ? input.ids.map(id => service.get(id)).filter(Boolean) : [];
-    if (SHEET_SHARED_BULK.has(input.operation) && todos.some(todo => sourceLink(todo, 'sheet'))) {
-      return sheet.bulk(input);
-    }
-    return service.bulk(input);
-  }
-
-  async function refresh(id) {
-    const todo = service.get(id);
-    if (!todo) return service.get(id);
-    if (sourceLink(todo, 'github')) return github.refreshTask(id);
-    if (sourceLink(todo, 'sheet')) return sheet.refreshTask(id);
-    return todo;
-  }
-
-  async function share(id, target, context, options = {}) {
-    if (target === 'github') {
-      return github.create({ ...service.get(id), ...(options.github || options), existingTodoId: id }, context);
-    }
-    if (target === 'sheet') return sheet.share(id, context, options.sheet || options);
-    throw new TodoDomainError('INVALID_SYNC_TARGET', 'Share target must be github or sheet.');
-  }
-
   return {
-    create,
-    update,
+    create: async (input = {}, context) => service.create(cleanSyncTarget(input), context),
+    async update(id, patch = {}, context) {
+      // A syncTarget is checked (and refused) before the patch is validated, so it is
+      // named for what it is rather than as an unknown field, and nothing is written.
+      if (patch && typeof patch === 'object' && Object.hasOwn(patch, 'syncTarget')) {
+        return service.update(id, cleanSyncTarget(patch), context);
+      }
+      return service.update(id, patch, context);
+    },
     move: (id, status, context, options) => service.move(id, status, context, options),
     close: (id, context) => service.complete(id, context),
     archive: (id, context) => service.archive(id, context),
@@ -92,26 +34,29 @@ export function createTodoCommands({ service, github, sheet, maintenance } = {})
     softDelete: (id, context) => service.softDelete(id, context),
     restore: (id, context) => service.restore(id, context),
     purge: input => maintenance.purgeDeleted(input),
-    addNote,
+    addNote: async (id, body, context) => service.addNote(id, body, context),
     linkRelated: (leftId, rightId, context) => service.linkRelated(leftId, rightId, context),
     unlinkRelated: (leftId, rightId, context) => service.unlinkRelated(leftId, rightId, context),
     reorder: input => service.reorder(input),
-    bulk,
-    attachExternalLink: (id, link, context) => service.attachExternalLink(id, link, context),
-    detachExternalLink: (id, connector, context) => connector === 'sheet'
-      ? sheet.unshare(id, context)
-      : service.detachExternalLink(id, connector, context),
-    share,
-    refresh,
-    sheetHealth: () => ({ health: sheet.getHealth(), settings: sheet.getSettings() }),
-    sheetRefresh: () => sheet.reconcile(),
-    sheetBootstrap: input => sheet.bootstrapSchema(input),
-    githubHealth: () => ({ health: github.getHealth(), settings: github.getSettings() }),
-    githubSearch: input => github.search(input),
-    githubLink: (input, context) => github.link(input, context),
-    githubRefresh: () => github.reconcile(),
-    githubSettings: input => github.updateSettings(input),
-    githubPublishFirstNote: id => github.publishFirstNote(id),
+    bulk: async input => service.bulk(input),
+    // GitHub links go through setIssueLink, which validates the URL and keeps one per task.
+    attachExternalLink: (id, link, context) => {
+      if (String(link?.connector ?? '').trim().toLowerCase() === 'github') throw issueLinkRouteRequired();
+      return service.attachExternalLink(id, link, context);
+    },
+    // A link left by the retired connectors (or an issue link) is removed locally like any other.
+    detachExternalLink: (id, connector, context) => service.detachExternalLink(id, connector, context),
+    // Sharing is gone. A target that once existed is refused with its own reason
+    // (assertSyncTarget); anything else, `local` included, is not a share target.
+    async share(_id, target) {
+      assertSyncTarget(target);
+      throw new TodoDomainError('INVALID_SYNC_TARGET', 'There is nothing to share a task to: tasks stay in Totem.', {
+        details: { target: target ?? null },
+      });
+    },
+    // Nothing syncs a task any more, so a refresh is a re-read.
+    refresh: async id => service.get(id),
+    setIssueLink: (id, url, context) => service.setIssueLink(id, url, context),
     getPreferences: () => service.getPreferences(),
     listVentureTags: () => service.listVentureTags(),
     saveVentureTags: (tags, context) => service.saveVentureTags(tags, context),

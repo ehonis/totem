@@ -1,16 +1,14 @@
-// Settings → Voice (web VoiceSettings.tsx): the engine voice mode uses, Realtime's
-// model and voice, and what it has cost. The web's "Reading voice" and "Speaking
-// rate" rows pick a browser speech voice, which the app doesn't use, so they are
-// left out.
+// Settings → Voice (web VoiceSettings.tsx). Two engines: Realtime (OpenAI, the
+// ChatGPT-style one, a few cents a conversation) and Local (whisper.cpp on the
+// server, free). "Auto" uses Realtime when an OpenAI key is set. The web's
+// Reading aloud section picks one of the browser's speech voices; the app has no
+// read-aloud, so it is left out.
 import React, { useCallback, useEffect, useState } from 'react'
-import { View } from 'react-native'
-import { api } from '../../../lib/api'
-import { WarnIcon } from '../../../lib/icons'
+import { api, AuthError } from '../../../lib/api'
 import { pushError } from '../../../lib/toast'
-import { colors, alpha } from '../../../theme'
 import { T } from '../../../ui/Text'
-import { Spinner } from '../../../ui/kit'
-import { PaneHead, SectionTitle, Select, SettingList, SettingRow } from '../ui'
+import { openPane } from '../open'
+import { Code, Link, Loading, Notice, Picker, Pill, Row, Section } from '../ui'
 
 interface Status {
   realtime: { configured: boolean; model: string; voice: string; voices: string[]; models: { id: string; name: string; note: string }[] }
@@ -23,60 +21,76 @@ const money = (n: number) => (n < 0.01 && n > 0 ? '<$0.01' : `$${n.toFixed(2)}`)
 
 export default function VoicePane() {
   const [s, setS] = useState<Status | null>(null)
-  const load = useCallback(() => api<Status>('/api/voice/status').then(setS).catch(() => {}), [])
+  const [error, setError] = useState('')
+  const load = useCallback(() => api<Status>('/api/voice/status').then(setS).catch((e) => { if (!(e instanceof AuthError)) setError(e.message) }), [])
   useEffect(() => { void load() }, [load])
+
   async function save(patch: Partial<Status['settings']>) {
     try {
       await api('/api/voice/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
       void load()
     } catch (e: any) { pushError(e.message) }
   }
-  const head = <PaneHead desc="How Totem talks in voice mode. Realtime is the ChatGPT-style one: it hears you, answers in a natural voice, lets you cut in, and uses your apps while you talk." />
-  if (!s) return <>{head}<Spinner /></>
+
+  if (!s) return <Loading error={error} />
   const rt = s.realtime
   return (
     <>
-      {head}
-
       {!rt.configured ? (
-        <View style={{ flexDirection: 'row', gap: 8, padding: 12, marginTop: 10, borderRadius: 10, backgroundColor: alpha(colors.amber, 0.08), borderWidth: 1, borderColor: alpha(colors.amber, 0.3) }}>
-          <WarnIcon />
-          <T size={13} lineHeight={19} style={{ flex: 1 }}>
-            Realtime needs an OpenAI API key (a ChatGPT subscription doesn’t include API use). Create one at
-            platform.openai.com, add OPENAI_API_KEY=… to .env on the box, and restart the bridge.
+        <Notice tone="warn">
+          <T size={13} lineHeight={19}>
+            Realtime needs an OpenAI API key; a ChatGPT subscription does not include API use. Add one under{' '}
+            <Link title="Providers › API keys" onPress={() => openPane('providers', 'api-keys')} />.
             Until then voice mode uses the free local engine.
           </T>
-        </View>
+        </Notice>
       ) : null}
 
-      <SectionTitle title="Engine" />
-      <SettingList>
-        <SettingRow title="Voice engine" desc="Auto uses Realtime when a key is set, and local otherwise.">
-          <Select
-            value={s.settings.engine}
-            onChange={(v) => save({ engine: v as any })}
-            options={[
-              { value: 'auto', label: 'Auto' },
-              { value: 'realtime', label: 'Realtime (OpenAI)', disabled: !rt.configured },
-              { value: 'local', label: 'Local (free)' },
-            ]}
-          />
-        </SettingRow>
-        <SettingRow title="Realtime model" desc={rt.models.find((m) => m.id === rt.model)?.note}>
-          <Select value={rt.model} disabled={!rt.configured} onChange={(v) => save({ model: v })} options={rt.models.map((m) => ({ value: m.id, label: m.name }))} />
-        </SettingRow>
-        <SettingRow title="Realtime voice" desc="Marin and Cedar sound the most natural.">
-          <Select value={rt.voice} disabled={!rt.configured} onChange={(v) => save({ voice: v })} options={rt.voices.map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }))} />
-        </SettingRow>
-        <SettingRow title="Spend" desc="Estimated from each response’s token usage at list prices.">
-          <T size={13} muted align="right">{money(s.spend.today)} today{'\n'}{money(s.spend.month)} this month</T>
-        </SettingRow>
-      </SettingList>
-
-      <SectionTitle title="Local voice" />
-      <SettingList>
-        <SettingRow title="Transcription" desc={`whisper.cpp on the box. ${s.local.ready ? 'Installed.' : 'Not installed: run scripts/install-whisper.sh.'}`} />
-      </SettingList>
+      <Section title="Voice mode" description="How Totem listens and answers when you talk to it.">
+        <Row
+          id="voice-engine"
+          title="Engine"
+          description="Realtime hears you, answers in a natural voice, lets you cut in and uses your apps as you talk. Local is free and runs on your server. Auto picks Realtime when it can."
+          status={rt.configured ? <T size={12.5} muted lineHeight={17}>Realtime spend: {money(s.spend.today)} today · {money(s.spend.month)} this month (estimated at list prices).</T> : undefined}
+          control={
+            <Picker
+              label="Voice engine"
+              value={s.settings.engine}
+              onChange={(v) => save({ engine: v as Status['settings']['engine'] })}
+              options={[
+                { value: 'auto', label: 'Auto' },
+                { value: 'realtime', label: 'Realtime (OpenAI)', disabled: !rt.configured },
+                { value: 'local', label: 'Local (free)' },
+              ]}
+            />
+          }
+        />
+        {rt.configured ? (
+          <>
+            <Row
+              id="realtime-model"
+              title="Realtime model"
+              description={rt.models.find((m) => m.id === rt.model)?.note}
+              control={<Picker label="Realtime model" value={rt.model} onChange={(v) => save({ model: v })} options={rt.models.map((m) => ({ value: m.id, label: m.name }))} />}
+            />
+            <Row
+              id="realtime-voice"
+              title="Realtime voice"
+              description="Marin and Cedar sound the most natural."
+              control={<Picker label="Realtime voice" value={rt.voice} onChange={(v) => save({ voice: v })} options={rt.voices.map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }))} />}
+            />
+          </>
+        ) : null}
+        <Row
+          id="transcription"
+          title="Local transcription"
+          description={s.local.ready
+            ? 'whisper.cpp on the server, for local voice mode and dictation.'
+            : <T size={12.5} muted lineHeight={17}>whisper.cpp on the server, for local voice mode and dictation. Install it with scripts/install-whisper.sh.</T>}
+          control={<Pill label={s.local.ready ? 'Installed' : 'Not installed'} tone={s.local.ready ? 'ok' : 'warn'} />}
+        />
+      </Section>
+      {!s.local.ready ? <Section plain><Code>scripts/install-whisper.sh</Code></Section> : null}
     </>
   )
 }

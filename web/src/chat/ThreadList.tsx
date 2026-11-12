@@ -4,14 +4,14 @@ import { pendingQuestions } from './questions'
 import { pendingApproval } from './approvals'
 import type { ChatThread, Project } from './types'
 import { TI, useDismiss } from './ui'
-import { IconDots, IconPinned, IconPencil, IconTrash, IconSearch, IconX, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconHome, IconChevronLeft, IconMail, IconMailOpened, IconClock, IconAlarmOff, IconArrowBackUp, IconChevronUp, IconChevronDown, IconPlus } from './icons'
+import { IconDots, IconPinned, IconPencil, IconTrash, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconHome, IconChevronLeft, IconMail, IconMailOpened, IconClock, IconAlarmOff, IconArrowBackUp, IconChevronUp, IconChevronDown, IconPlus } from './icons'
 import { dragThreadProps } from './dnd'
 import { useRowOnScreen } from './onScreen'
 import ProjectIcon from './ProjectIcon'
 import { pushToast } from '../toast'
 import ThreadIcon from './ThreadIcon'
 import SnoozeMenu from './SnoozeMenu'
-import { shelve, shelfOf, nextWake, wokeAt, countdown, ago, settledAt, wakeDescription, type Shelf } from './settle'
+import { shelve, nextWake, wokeAt, countdown, ago, settledAt, wakeDescription, type Shelf } from './settle'
 
 function MoveMenu({ t, onBack, onClose }: { t: ChatThread; onBack: () => void; onClose: () => void }) {
   const projects = useChat((s) => s.projects)
@@ -273,13 +273,11 @@ export function ShelvedChats({ threads, scope, activeId, onOpen, children }: {
   )
 }
 
-export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents', searchSignal = 0, projectId = null, before }: {
+export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents', projectId = null, before }: {
   activeId: string | null
   onOpen: (id: string) => void
   limit?: number
   heading?: string
-  /** Bump to open and focus the search box (the panel's magnifier). */
-  searchSignal?: number
   /** Show this project's chats; null shows Home (chats in no project that still exists). */
   projectId?: string | null
   /** Rendered at the top of the scrolling list (Home's project list). */
@@ -294,40 +292,17 @@ export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents
   }, [allThreads, projects, projectId])
   const runs = useChat((s) => s.runs)
   const loaded = useChat((s) => s.loaded)
-  const [q, setQ] = useState('')
-  const [searching, setSearching] = useState(false)
-  React.useEffect(() => { if (searchSignal) setSearching(true) }, [searchSignal])
-
-  const filtered = useMemo(() => {
-    // An empty chat (opened, never sent) is not history.
-    const shown = threads.filter((t) => t.messages.length > 0 || t.id === activeId || runs[t.id])
-    const term = q.trim().toLowerCase()
-    if (!term) return shown
-    return shown.filter((t) => threadTitle(t).toLowerCase().includes(term) || t.messages.some((m) => m.content.toLowerCase().includes(term)))
-  }, [threads, q, activeId, runs])
-  // Searching looks through every chat, parked or not, in one list.
-  const found = useMemo(() => (q ? groupThreads(filtered) : []), [filtered, q])
-  const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
-  const renderGroups = (groups: { label: string; threads: ChatThread[] }[], now = Date.now()) => groups.map((g) => (
+  // An empty chat (opened, never sent) is not history. Finding an older chat is
+  // the Search tab's job; the list itself has no search box.
+  const shown = useMemo(() => threads.filter((t) => t.messages.length > 0 || t.id === activeId || runs[t.id]), [threads, activeId, runs])
+  const renderGroups = (groups: { label: string; threads: ChatThread[] }[], now: number) => groups.map((g) => (
     <div key={g.label} className="vc-thread-group">
       <div className="vc-thread-group-label">{g.label}</div>
-      {g.threads.map((t) => <ThreadItem key={t.id} t={t} now={now} shelf={q ? shelfOf(t, now, autoDays, !!runs[t.id]) : 'active'} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpen} />)}
+      {g.threads.map((t) => <ThreadItem key={t.id} t={t} now={now} shelf="active" active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpen} />)}
     </div>
   ))
 
-  const head = (
-    <>
-      <div className="vc-threads-head">
-        <span>{heading}</span>
-        <button type="button" className="vc-icon-btn sm" onClick={() => { setSearching((s) => !s); setQ('') }} aria-label="Search chats" title="Search chats">
-          <TI icon={searching ? IconX : IconSearch} size={15} />
-        </button>
-      </div>
-      {searching && (
-        <input className="vc-threads-search" autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search chats" aria-label="Search chats" />
-      )}
-    </>
-  )
+  const head = <div className="vc-threads-head"><span>{heading}</span></div>
 
   // With something above the chats (Home's projects), the heading scrolls with
   // the list so it sits between the two rather than above both.
@@ -338,12 +313,9 @@ export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents
         {before}
         {before && head}
         {loaded && !threads.length && <div className="vc-threads-empty">{projectId ? 'Chats in this project will show up here.' : 'Your chats will show up here.'}</div>}
-        {q && !filtered.length && <div className="vc-threads-empty">No chats match “{q}”.</div>}
-        {q ? renderGroups(found) : (
-          <ShelvedChats threads={filtered} scope={projectId || 'home'} activeId={activeId} onOpen={onOpen}>
-            {(active, now) => renderGroups(groupThreads(limit ? active.slice(0, limit) : active), now)}
-          </ShelvedChats>
-        )}
+        <ShelvedChats threads={shown} scope={projectId || 'home'} activeId={activeId} onOpen={onOpen}>
+          {(active, now) => renderGroups(groupThreads(limit ? active.slice(0, limit) : active), now)}
+        </ShelvedChats>
       </div>
     </div>
   )

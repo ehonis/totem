@@ -70,25 +70,6 @@ import {
   PuzzlePieceIcon,
 } from './icons'
 
-// The one localStorage key still worth reading: jobs authored in the very old
-// Workflows tab, which were saved here and scheduled by nothing. JobsView offers
-// to import them as real server-side jobs, then clears the key. Everything else
-// that used to live in this browser (user skills, system-skill toggles, system
-// workflow overrides) is now on the bridge, where the scheduler can actually see it.
-const WORKFLOWS_KEY = 'totem_workflows'
-
-function readLegacy(key: string, fallback: any) {
-  try {
-    const raw = localStorage.getItem(key)
-    return raw ? JSON.parse(raw) : fallback
-  } catch {
-    return fallback
-  }
-}
-
-export const listWorkflows = () => readLegacy(WORKFLOWS_KEY, [])
-export const saveWorkflows = (workflows: any) => localStorage.setItem(WORKFLOWS_KEY, JSON.stringify(workflows))
-
 export const STUDIO_ICONS: Record<string, any> = {
   sparkles: SparklesIcon,
   bolt: BoltIcon,

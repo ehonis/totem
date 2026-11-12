@@ -10,10 +10,13 @@
   --ovx-faint: color-mix(in srgb, var(--text) 40%, transparent);
   /* Glass rather than slabs, so the backdrop's glow comes through the cards.
      Over the dark top of the page these land on the old solid colours. */
-  --ovx-surface: rgb(23 26 34 / .68);
+  --ovx-surface: color-mix(in srgb, var(--surface) 68%, transparent);
   --ovx-raise: rgb(255 255 255 / .06);
   --ovx-line: rgb(255 255 255 / .085);
-  --ovx-glass: blur(18px) saturate(140%);
+  /* Saturation only, no blur: the cards sit over the page's drifting glow, which
+     is already soft, so a blur changes nothing visible, and it would be redone
+     over every card on every frame of the drift. */
+  --ovx-glass: saturate(140%);
   --ovx-bar: color-mix(in srgb, var(--text) 70%, transparent);
   height: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
   color: var(--ovx-text);
@@ -327,3 +330,21 @@
   .ovx-system > :first-child { grid-column: auto; }
   .ovx-sys { border-radius: 16px; }
 }
+
+/* --- away (trips, days off) ---------------------------------------------------- */
+.ovx-away { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.ovx-away-band {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 12px;
+  border: 0; border-radius: 10px; cursor: pointer; text-align: left; font-size: 13.5px;
+  color: var(--ovx-soft); background: color-mix(in srgb, var(--away) 10%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--away) 55%, transparent);
+}
+.ovx-away-band.now { color: var(--text); background: color-mix(in srgb, var(--away) 18%, transparent); border-left-color: var(--away); }
+.ovx-away-band:hover { background: color-mix(in srgb, var(--away) 24%, transparent); }
+.ovx-away-label { font-weight: 550; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ovx-away-when { margin-left: auto; flex: none; font-size: 12.5px; color: var(--ovx-faint); }
+.ovx-away-add {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 4px 0;
+  border: 0; background: none; cursor: pointer; font-size: 12.5px; color: var(--ovx-faint);
+}
+.ovx-away-add:hover { color: var(--accent); }

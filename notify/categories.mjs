@@ -4,6 +4,10 @@
 // decides what is allowed to wake a phone at 11pm, what collapses into a digest,
 // and what can never be learned into silence.
 //
+// `away` says what happens to a queued one on a day the owner is away (away/hold.mjs):
+// 'send' goes out as usual, 'hold' waits. Stated on every row rather than derived from
+// the quiet-hours column, so each new category decides (away/hold.test.mjs checks).
+//
 // `pinned` is the important column. A pinned category ignores learned weights
 // entirely — no amount of feedback stops a birthday or an approval code, because
 // a system that quietly learns to stop telling you things is indistinguishable
@@ -14,6 +18,7 @@ const HOUR = 60
 export const CATEGORIES = {
   'reminder.adhoc': {
     label: 'Reminders you set',
+    away: 'send',
     quietHours: 'override',
     defaultEnabled: true,
     pinned: true,
@@ -22,6 +27,7 @@ export const CATEGORIES = {
   },
   'reminder.task': {
     label: 'Task reminders',
+    away: 'send',
     quietHours: 'defer',
     defaultEnabled: true,
     pinned: true,
@@ -33,6 +39,7 @@ export const CATEGORIES = {
   },
   'task.due': {
     label: 'Tasks due today',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 12 * HOUR,
@@ -41,6 +48,7 @@ export const CATEGORIES = {
   },
   'task.overdue': {
     label: 'Overdue tasks',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 24 * HOUR,
@@ -53,6 +61,7 @@ export const CATEGORIES = {
   // answering him is the exact failure this column exists to prevent.
   'shortcut.received': {
     label: 'Request received',
+    away: 'send',
     quietHours: 'override',
     defaultEnabled: true,
     pinned: true,
@@ -61,6 +70,7 @@ export const CATEGORIES = {
   },
   'shortcut.answered': {
     label: 'Answers to your requests',
+    away: 'send',
     quietHours: 'override',
     defaultEnabled: true,
     pinned: true,
@@ -69,6 +79,7 @@ export const CATEGORIES = {
   },
   'calendar.event': {
     label: 'Before an event',
+    away: 'send',
     quietHours: 'override',
     defaultEnabled: true,
     leadMinutes: 10,
@@ -77,6 +88,7 @@ export const CATEGORIES = {
   },
   'digest.morning': {
     label: 'Morning digest',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 12 * HOUR,
@@ -84,6 +96,7 @@ export const CATEGORIES = {
   },
   'digest.evening': {
     label: 'Evening digest',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 12 * HOUR,
@@ -91,6 +104,7 @@ export const CATEGORIES = {
   },
   'person.birthday': {
     label: 'Birthdays',
+    away: 'send',
     quietHours: 'defer',
     defaultEnabled: true,
     pinned: true,
@@ -101,6 +115,7 @@ export const CATEGORIES = {
   // past notifications and their feedback still have a label.
   'habit.slipping': {
     label: 'Habits slipping',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 24 * HOUR,
@@ -108,6 +123,7 @@ export const CATEGORIES = {
   },
   'goal.nearcomplete': {
     label: 'Nearly there',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 24 * HOUR,
@@ -115,6 +131,7 @@ export const CATEGORIES = {
   },
   'goal.slipping': {
     label: 'Goals slipping',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 7 * 24 * HOUR,
@@ -126,6 +143,7 @@ export const CATEGORIES = {
   // waiting for a plan.
   'news.release': {
     label: 'New releases',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 0,
@@ -133,6 +151,7 @@ export const CATEGORIES = {
   },
   'news.model': {
     label: 'AI models',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 0,
@@ -140,6 +159,7 @@ export const CATEGORIES = {
   },
   'news.creator': {
     label: 'People you follow',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 0,
@@ -147,6 +167,7 @@ export const CATEGORIES = {
   },
   'news.big': {
     label: 'Big news',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 0,
@@ -159,6 +180,7 @@ export const CATEGORIES = {
   // thing here to leave on.
   'news.world': {
     label: 'World news',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     // Bundles carry an explicit dedupe key (one per delivery hour), which always
@@ -172,6 +194,7 @@ export const CATEGORIES = {
   // of a world bundle is a story nobody reads.
   'news.good': {
     label: 'Good news',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 0,
@@ -180,6 +203,7 @@ export const CATEGORIES = {
   // Timex collaboration drops — daily scan, notify only on new headlines; Sunday rollup.
   'news.timex': {
     label: 'Timex collabs',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 0,
@@ -191,6 +215,7 @@ export const CATEGORIES = {
   // quiet hours: at 3am there is nothing to do about it.
   'usage.limit': {
     label: 'AI quota running low',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 12 * HOUR,
@@ -198,6 +223,7 @@ export const CATEGORIES = {
   },
   'usage.blocked': {
     label: 'AI quota spent',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 6 * HOUR,
@@ -207,6 +233,7 @@ export const CATEGORIES = {
   // pay for" is the most reasonable thing here to get tired of hearing.
   'usage.idle': {
     label: 'AI quota going unused',
+    away: 'hold',
     quietHours: 'suppress',
     defaultEnabled: true,
     dedupeWindowMinutes: 24 * HOUR,
@@ -214,6 +241,7 @@ export const CATEGORIES = {
   },
   'job.failed': {
     label: 'Something broke',
+    away: 'send',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 60,
@@ -231,7 +259,20 @@ export const CATEGORIES = {
   // dev/alerts.mjs collapses repeats within the hour before anything gets here.
   'alert.external': {
     label: 'External alerts',
+    away: 'send',
     quietHours: 'override',
+    defaultEnabled: true,
+    dedupeWindowMinutes: 60,
+    slot: null,
+  },
+  // An orchestrated run (POST /api/dev/runs/:slug) that started waiting on the
+  // owner, or reported a new incident. Its own row so it can be muted apart from
+  // outages. Deferred through quiet hours: a merge waiting at 2am waits until 7am.
+  // dev/runs.mjs pushes the same item at most once an hour.
+  'dev.run': {
+    label: 'Orchestrated runs',
+    away: 'send',
+    quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 60,
     slot: null,
@@ -240,6 +281,7 @@ export const CATEGORIES = {
   // return. Deferred through quiet hours: a box down at 2am is still down at 7am.
   'fleet.offline': {
     label: 'Machine offline',
+    away: 'send',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 60,
@@ -247,6 +289,7 @@ export const CATEGORIES = {
   },
   'approval.pending': {
     label: 'Approval codes',
+    away: 'send',
     quietHours: 'override',
     defaultEnabled: true,
     pinned: true,
@@ -255,6 +298,7 @@ export const CATEGORIES = {
   },
   'inbox.proposal': {
     label: 'Queued proposals',
+    away: 'hold',
     quietHours: 'suppress',
     defaultEnabled: true,
     dedupeWindowMinutes: 2 * HOUR,
@@ -266,6 +310,7 @@ export const CATEGORIES = {
   // one thing here he might reasonably learn to silence.
   'journal.ingested': {
     label: 'Journal digested',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 0,
@@ -273,6 +318,7 @@ export const CATEGORIES = {
   },
   'journal.failed': {
     label: 'Journal problems',
+    away: 'send',
     quietHours: 'defer',
     defaultEnabled: true,
     pinned: true,
@@ -284,6 +330,7 @@ export const CATEGORIES = {
   // viewer is attached, so an answer read as it streams never also buzzes.
   'chat.finished': {
     label: 'Chat answers you walked away from',
+    away: 'send',
     quietHours: 'override',
     defaultEnabled: true,
     pinned: true,
@@ -294,6 +341,7 @@ export const CATEGORIES = {
   // while nobody was watching it. The reply waits on the answers.
   'chat.question': {
     label: 'Chats waiting on your answers',
+    away: 'send',
     quietHours: 'override',
     defaultEnabled: true,
     pinned: true,
@@ -304,6 +352,7 @@ export const CATEGORIES = {
   // It waits in the ledger either way, so it can wait for the morning.
   'rec.review': {
     label: 'Recommendations to decide again',
+    away: 'hold',
     quietHours: 'defer',
     defaultEnabled: true,
     dedupeWindowMinutes: 0,

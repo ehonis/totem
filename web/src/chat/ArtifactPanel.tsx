@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Markdown from '../components/Markdown'
-import { useChat, openArtifact, showFiles, type Artifact } from './store'
+import { authHeaders } from '../api'
+import { VISUAL_SANDBOX } from './visuals'
+import { useChat, openArtifact, showFiles, refusalMessage, type Artifact } from './store'
+import { usePanelEscape } from './escape'
 import { TI, useDismiss, formatBytes } from './ui'
+export { downloadUrl } from '../downloads'
+import { downloadUrl } from '../downloads'
 import { IconChevronDown, IconX, IconArrowDown, IconFileText, IconFileTypePdf, IconWorld, IconClipboardText, IconCopy, IconCheck, IconLayoutSidebar, IconFileSpreadsheet, IconFileWord, IconPresentation, IconFileZip, IconFile, IconFolder, IconPhoto } from './icons'
 
 // The canvas beside the chat — ChatGPT's document panel. A file the agent made
@@ -10,6 +15,8 @@ import { IconChevronDown, IconX, IconArrowDown, IconFileText, IconFileTypePdf, I
 //   HTML     → a sandboxed frame. `allow-scripts` without `allow-same-origin`
 //              gives the page an opaque origin, so a generated page can run its
 //              own JavaScript but cannot read Totem's storage or call its API.
+//              A chart page (`frame`) is framed by its URL instead, so the CSP the
+//              bridge serves it under (VISUAL_CSP) still applies.
 //   CSV      → a table;  PDF → the browser's viewer;  SVG/images → as images;
 //   other text → a code block;  Office files, archives → a download.
 
@@ -33,8 +40,6 @@ export function artifactKind(mime: string, name = '') {
 const DOWNLOAD_ONLY = new Set(['sheet', 'doc', 'slides', 'archive', 'binary'])
 const LABEL: Record<string, string> = { markdown: 'Document', html: 'Web page', table: 'Table', pdf: 'PDF', image: 'Image', sheet: 'Spreadsheet', doc: 'Word document', slides: 'Presentation', archive: 'Archive' }
 const ICON: Record<string, any> = { html: IconWorld, pdf: IconFileTypePdf, table: IconClipboardText, sheet: IconFileSpreadsheet, doc: IconFileWord, slides: IconPresentation, archive: IconFileZip, image: IconPhoto, binary: IconFile }
-
-export const downloadUrl = (url = '') => `${url}${url.includes('?') ? '&' : '?'}download=1`
 
 export function artifactLabel(mime: string, name = '') {
   return LABEL[artifactKind(mime, name)] || 'File'
@@ -65,8 +70,33 @@ function parseDelimited(text: string, sep: string) {
 
 const LANG: Record<string, string> = { json: 'json', yml: 'yaml', yaml: 'yaml', xml: 'xml', ics: 'text', txt: 'text' }
 
-function Body({ a, text }: { a: Artifact; text: string | null }) {
+/** Read a file the canvas renders as text. Not a 200 is an error to show, never the page itself. */
+export async function readArtifactText(url: string, fetcher: typeof fetch = fetch): Promise<string> {
+  const sameOrigin = new URL(url, window.location.href).origin === window.location.origin
+  const r = await fetcher(url, { headers: sameOrigin ? authHeaders() : {}, credentials: 'same-origin' })
+  if (r.ok) return r.text()
+  await r.body?.cancel()
+  throw new Error(refusalMessage(r.status))
+}
+
+/**
+ * A page the bridge serves under its own sandbox (a chart), framed by URL. As in
+ * VisualFrame, a page that loads a second time navigated itself, which CSP cannot
+ * stop, so it is closed rather than left showing wherever it went.
+ */
+function ServedPage({ url, title }: { url: string; title: string }) {
+  const loads = useRef(0)
+  const [left, setLeft] = useState(false)
+  if (left) return <div className="vc-art-download"><strong>{title}</strong><span>This page reloaded or tried to open another page, so it was closed.</span></div>
+  return <iframe className="vc-art-frame" src={url} sandbox={VISUAL_SANDBOX} referrerPolicy="no-referrer" title={title} onLoad={() => { if (++loads.current > 1) setLeft(true) }} />
+}
+
+function Body({ a, text, error }: { a: Artifact; text: string | null; error: string | null }) {
   const kind = artifactKind(a.mime, a.name)
+  const problem = a.error || error
+  if (problem) return <div className="vc-art-download"><TI icon={artifactIcon(a.mime, a.name)} size={44} stroke={1.25} /><strong>{a.name}</strong><span>{problem}</span></div>
+  if (!a.url) return <div className="vc-art-loading">Loading…</div>
+  if (a.frame) return <ServedPage key={a.url} url={a.url} title={a.name} />
   if (DOWNLOAD_ONLY.has(kind)) {
     return (
       <div className="vc-art-download">
@@ -115,32 +145,31 @@ export default function ArtifactPanel({ threadId, expanded, onExpand }: { thread
   const a = useChat((s) => s.artifact)
   const files = useThreadArtifacts(threadId)
   const [text, setText] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [menu, setMenu] = useState(false)
   const [copied, setCopied] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   useDismiss(menu, menuRef, useCallback(() => setMenu(false), []))
 
   useEffect(() => {
-    if (!a?.url) return
+    setText(null)
+    setError(null)
+    if (!a?.url || a.frame) return
     const kind = artifactKind(a.mime, a.name)
     if (kind === 'pdf' || kind === 'image' || DOWNLOAD_ONLY.has(kind)) return
     let alive = true
-    setText(null)
-    fetch(a.url).then((r) => r.text()).then((t) => { if (alive) setText(t) }).catch(() => { if (alive) setText('Couldn’t load this file.') })
+    readArtifactText(a.url).then((t) => { if (alive) setText(t) }).catch((e) => { if (alive) setError(e instanceof TypeError ? 'Couldn’t load this file. Check your connection and try again.' : e.message) })
     return () => { alive = false }
-  }, [a?.url, a?.mime, a?.name])
+  }, [a?.url, a?.mime, a?.name, a?.frame])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !menu) openArtifact(null) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [menu])
+  // Its file menu takes the first Escape.
+  usePanelEscape(!menu, () => openArtifact(null))
 
   if (!a) return null
   const kind = artifactKind(a.mime, a.name)
-  const canCopy = text !== null && kind !== 'pdf' && kind !== 'image' && !DOWNLOAD_ONLY.has(kind)
+  const canCopy = text !== null && !a.frame && kind !== 'pdf' && kind !== 'image' && !DOWNLOAD_ONLY.has(kind)
   return (
-    <aside className="vc vc-artifact" aria-label={a.name}>
+    <aside className="vc vc-artifact vc-canvas" aria-label={a.name}>
       <header className="vc-art-head">
         <div className="vc-art-switch" ref={menuRef}>
           <button type="button" className="vc-art-title" onClick={() => setMenu((m) => !m)} aria-haspopup="menu" aria-expanded={menu} title={a.path || a.name}>
@@ -162,23 +191,25 @@ export default function ArtifactPanel({ threadId, expanded, onExpand }: { thread
         </div>
         <div className="vc-art-actions">
           {canCopy && (
-            <button type="button" className="vc-icon-btn" onClick={() => { navigator.clipboard?.writeText(text || ''); setCopied(true); setTimeout(() => setCopied(false), 1200) }} title={copied ? 'Copied' : 'Copy contents'} aria-label="Copy contents">
+            <button type="button" className="vc-icon-btn vc-art-copy" onClick={() => { navigator.clipboard?.writeText(text || ''); setCopied(true); setTimeout(() => setCopied(false), 1200) }} title={copied ? 'Copied' : 'Copy contents'} aria-label="Copy contents">
               <TI icon={copied ? IconCheck : IconCopy} size={18} />
             </button>
           )}
           {a.path && (
-            <button type="button" className="vc-icon-btn" onClick={() => showFiles(true)} title="Show in Files" aria-label="Show in Files"><TI icon={IconFolder} size={18} /></button>
+            <button type="button" className="vc-icon-btn vc-art-reveal" onClick={() => showFiles(true)} title="Show in Files" aria-label="Show in Files"><TI icon={IconFolder} size={18} /></button>
           )}
-          <a className="vc-icon-btn" href={downloadUrl(a.url)} download={a.name} title="Download" aria-label="Download">
-            <TI icon={IconArrowDown} size={18} />
-          </a>
+          {a.url && (
+            <a className="vc-icon-btn" href={downloadUrl(a.url)} download={a.name} title="Download" aria-label="Download">
+              <TI icon={IconArrowDown} size={18} />
+            </a>
+          )}
           <button type="button" className={`vc-icon-btn vc-art-expand ${expanded ? 'on' : ''}`} onClick={() => onExpand(!expanded)} title={expanded ? 'Show the chat' : 'Full width'} aria-label={expanded ? 'Show the chat' : 'Full width'}>
             <TI icon={IconLayoutSidebar} size={18} />
           </button>
           <button type="button" className="vc-icon-btn" onClick={() => openArtifact(null)} title="Close" aria-label="Close"><TI icon={IconX} size={19} /></button>
         </div>
       </header>
-      <div className="vc-art-body"><Body a={a} text={text} /></div>
+      <div className="vc-art-body"><Body a={a} text={text} error={error} /></div>
     </aside>
   )
 }

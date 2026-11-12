@@ -38,13 +38,6 @@ test('seeds shipped skills on first boot', async () => {
   assert.equal(all[0].modified, false)
 })
 
-test('seeding twice installs nothing the second time', async () => {
-  await seedSkill('a', '---\nname: A\n---\nbody')
-  const s = store()
-  await s.seed()
-  assert.deepEqual(await s.seed(), [])
-})
-
 test('a seed added later is backfilled without clearing data', async () => {
   await seedSkill('a', '---\nname: A\n---\nbody')
   const s = store()

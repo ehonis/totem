@@ -9,10 +9,8 @@
 const WEB_TABS = ['overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'fleet', 'inbox', 'logs', 'brain', 'settings']
 /** web/src/router.ts PRODUCTIVITY_APPS. */
 const PRODUCTIVITY = ['todos', 'calendar', 'habits', 'goals', 'lists', 'recs', 'journal']
-/** web/src/router.ts SUB_TABS.settings; each is also a settings pane id in the app. */
-const SETTINGS_PANES = ['general', 'chat', 'ai', 'integrations', 'tasks', 'providers', 'shortcuts', 'notifications', 'voice', 'skills', 'jobs', 'connections', 'logs']
 /** Tabs the app doesn't have: they open on the web dashboard. */
-const WEB_ONLY = ['messages', 'screen', 'dev', 'logs', 'brain']
+const WEB_ONLY = ['messages', 'screen', 'dev', 'brain']
 
 export type Destination =
   | { kind: 'external'; url: string }
@@ -24,8 +22,8 @@ export type Destination =
   | { kind: 'device'; id: string }
   | { kind: 'inbox'; focus: string | null }
   | { kind: 'productivity'; app: string | null }
-  | { kind: 'settings'; pane: string | null }
-  | { kind: 'usage' }
+  /** A Settings section as the link names it; routes.ts resolves retired ones (paneRoutes.ts). */
+  | { kind: 'settings'; pane: string | null; row: string | null }
 
 const decode = (s: string) => {
   try { return decodeURIComponent(s.replace(/\+/g, ' ')) } catch { return s }
@@ -80,7 +78,8 @@ export function notificationDestination(url: string, bridgeOrigins: (string | nu
   if (first) {
     if (!WEB_TABS.includes(first) && !PRODUCTIVITY.includes(first)) return { kind: 'web', path: rest }
     tab = first
-    app = second || null
+    // The app's own old pager link put the tool in the query (/productivity?app=todos).
+    app = second || (first === 'productivity' ? param('app') : null)
     sub = second || null
   } else {
     const legacy = param('tab') || (param('thread') || param('project') ? 'chat' : null)
@@ -96,6 +95,8 @@ export function notificationDestination(url: string, bridgeOrigins: (string | nu
     else return { kind: 'tab', tab: 'totems' }
   }
   if (tab === 'code') tab = 'dev'
+  // The action log was its own tab; it is Settings › Activity now.
+  if (tab === 'logs') { tab = 'settings'; sub = 'logs' }
   if (PRODUCTIVITY.includes(tab)) { app = tab; tab = 'productivity' }
 
   if (WEB_ONLY.includes(tab)) return { kind: 'web', path: rest }
@@ -107,11 +108,7 @@ export function notificationDestination(url: string, bridgeOrigins: (string | nu
     }
     case 'inbox': return { kind: 'inbox', focus: hash }
     case 'productivity': return { kind: 'productivity', app: app && PRODUCTIVITY.includes(app) ? app : null }
-    case 'settings': {
-      // The quota meters are a native sheet; the Providers pane around them is web-only.
-      if (sub === 'providers' && hash === 'usage') return { kind: 'usage' }
-      return { kind: 'settings', pane: sub && SETTINGS_PANES.includes(sub) ? sub : null }
-    }
+    case 'settings': return { kind: 'settings', pane: sub, row: hash }
     // A machine's notification names it in the hash (fleet/store.mjs).
     case 'fleet': return hash ? { kind: 'device', id: hash } : { kind: 'tab', tab }
     case 'overview': case 'search': return { kind: 'tab', tab }

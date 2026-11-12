@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  describeDuration, describeIngestResult, ingestFailure, journalBlock, localDate, localTime, longDate,
+  describeIngestResult, ingestFailure, journalBlock, localDate, localTime, longDate,
   paragraphs, parseIngestResult, previousDate,
 } from './text.mjs'
 
@@ -46,12 +46,6 @@ test('sentence splitting never breaks a dotted word', () => {
   const out = paragraphs({ text }, { maxChars: 40 })
   assert.equal(out.join(' '), text)
   assert.ok(out.every((p) => !/whisper\. cpp|3\. 5/.test(p)), out.join(' | '))
-})
-
-test('describeDuration reads like a person', () => {
-  assert.equal(describeDuration(45), '45 s')
-  assert.equal(describeDuration(250), '4 min')
-  assert.equal(describeDuration(4320), '1 h 12 min')
 })
 
 test('journalBlock has a timestamped heading and the transcript in paragraphs', () => {

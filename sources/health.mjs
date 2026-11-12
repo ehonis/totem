@@ -154,11 +154,15 @@ const KINDS = {
   calendar: { label: 'Google Calendar' },
   gmail: { label: 'Gmail' },
   drive: { label: 'Google Drive' },
-  'github-tasks': { label: 'GitHub task sync' },
-  'sheet-tasks': { label: 'Task sheet sync' },
+  'task-sheet': { label: 'Task sheet', via: 'read through Google Drive' },
+  linkedin: { label: 'LinkedIn', via: "read through Totem's browser" },
+  // The two-way sync's id, retired with it; an old health row keeps a name until pruned.
+  'sheet-tasks': { label: 'Task sheet sync (retired)' },
   feed: { label: 'Feed' },
   mcp: { label: 'MCP server' },
   'mcp-gateway': { label: 'MCP gateway' },
+  // The proxy itself, and one source per login it holds (`cliproxy:<email>`).
+  cliproxy: { label: 'CLIProxy' },
 }
 
 export function describeSourceId(source) {

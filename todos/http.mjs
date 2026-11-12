@@ -99,9 +99,6 @@ export function normalizeTodoInput(input = {}, { update = false } = {}) {
   if (Object.hasOwn(input, 'snoozedUntil')) result.snoozedUntil = input.snoozedUntil;
   if (Object.hasOwn(input, 'position')) result.position = input.position;
   if (Object.hasOwn(input, 'syncTarget')) result.syncTarget = input.syncTarget;
-  // Connector-only creation option. The local service ignores unknown fields,
-  // while the GitHub adapter validates this as owner/repository.
-  if (Object.hasOwn(input, 'repo')) result.repo = input.repo;
   if (!update && !Object.hasOwn(result, 'title')) throw bad('INVALID_TODO_FIELD', 'content or title is required.');
   return result;
 }
@@ -136,7 +133,9 @@ function queryFrom(url) {
   return result;
 }
 
-export function createTodoHttpHandler({ service, commands, now = () => new Date().toISOString(), maxBodyBytes = 1_000_000 } = {}) {
+// `sheetFeed`: the shared task sheet, read-only (connectors/task-sheet-feed.mjs).
+// `issueStates`: the live state of linked GitHub issues (issue-states.mjs).
+export function createTodoHttpHandler({ service, commands, sheetFeed = null, issueStates = null, now = () => new Date().toISOString(), maxBodyBytes = 1_000_000 } = {}) {
   if (!service || !commands) throw new TypeError('createTodoHttpHandler requires service and commands');
   return async function todoHttpHandler(req, res, suppliedUrl) {
     const url = suppliedUrl instanceof URL ? suppliedUrl : new URL(req.url, 'http://localhost');
@@ -162,12 +161,31 @@ export function createTodoHttpHandler({ service, commands, now = () => new Date(
         const todos = service.list({ status: 'done', includeArchived: true })
           .filter(todo => todo.completedAt && todo.completedAt >= cutoff)
           .sort((a, b) => b.completedAt.localeCompare(a.completedAt))
-          .map(todo => ({ ...compatibilityTodo(todo), completed: true, completedAt: todo.completedAt }));
+          // outcome is additive: "done today" counts only completed, never not doing.
+          .map(todo => ({ ...compatibilityTodo(todo), completed: true, completedAt: todo.completedAt, outcome: todo.outcome }));
         send(res, 200, { todos });
         return true;
       }
       if (req.method === 'GET' && path === '/api/todos/board') {
-        send(res, 200, { todos: service.list(queryFrom(url)) });
+        // Counted, not listed, so a client need not download the archive to say how big it is.
+        send(res, 200, { todos: service.list(queryFrom(url)), counts: service.counts() });
+        return true;
+      }
+      if (req.method === 'POST' && path === '/api/todos/board') {
+        const todo = await commands.create(normalizeTodoInput(await readJson(req, maxBodyBytes)), context);
+        send(res, 200, { todo });
+        return true;
+      }
+      if (req.method === 'GET' && path === '/api/todos/issue-states') {
+        if (!issueStates) throw bad('ISSUE_STATES_UNAVAILABLE', 'Issue states are not available.', 503);
+        send(res, 200, await issueStates.get());
+        return true;
+      }
+      // Before /api/todos/:id, which would read "sheet" as a task id.
+      if (req.method === 'GET' && path === '/api/todos/sheet') {
+        send(res, 200, sheetFeed
+          ? await sheetFeed.read({ refresh: url.searchParams.get('refresh') === '1' })
+          : { configured: false, items: [], reason: 'The task sheet is not available on this server.' });
         return true;
       }
       if (req.method === 'GET' && path === '/api/todos/venture-tags') {
@@ -181,22 +199,6 @@ export function createTodoHttpHandler({ service, commands, now = () => new Date(
       }
       if (req.method === 'GET' && path === '/api/todos/preferences') {
         send(res, 200, { preferences: commands.getPreferences() });
-        return true;
-      }
-      if (req.method === 'GET' && path === '/api/todos/connectors/sheet') {
-        send(res, 200, commands.sheetHealth());
-        return true;
-      }
-      if (req.method === 'GET' && path === '/api/todos/connectors/github') {
-        send(res, 200, commands.githubHealth());
-        return true;
-      }
-      if (req.method === 'GET' && path === '/api/todos/connectors/github/search') {
-        send(res, 200, await commands.githubSearch({
-          query: url.searchParams.get('q') ?? '',
-          ...(url.searchParams.has('repo') ? { selectedRepo: url.searchParams.get('repo') } : {}),
-          ...(url.searchParams.get('assigned') === 'true' ? { assigned: true } : {}),
-        }));
         return true;
       }
 
@@ -242,30 +244,14 @@ export function createTodoHttpHandler({ service, commands, now = () => new Date(
         send(res, 200, await commands.purge({ ...(await readJson(req, maxBodyBytes)), context }));
         return true;
       }
-      if (req.method === 'POST' && path === '/api/todos/connectors/sheet/refresh') {
-        send(res, 200, { result: await commands.sheetRefresh() });
-        return true;
-      }
-      if (req.method === 'POST' && path === '/api/todos/connectors/sheet/bootstrap') {
-        send(res, 200, { result: await commands.sheetBootstrap(await readJson(req, maxBodyBytes)) });
-        return true;
-      }
-      if (req.method === 'POST' && path === '/api/todos/connectors/github/link') {
-        send(res, 200, { todo: await commands.githubLink(await readJson(req, maxBodyBytes), context) });
-        return true;
-      }
-      if (req.method === 'POST' && path === '/api/todos/connectors/github/refresh') {
-        send(res, 200, { result: await commands.githubRefresh() });
-        return true;
-      }
-      if (req.method === 'PATCH' && path === '/api/todos/connectors/github/settings') {
-        send(res, 200, { settings: await commands.githubSettings(await readJson(req, maxBodyBytes)) });
-        return true;
-      }
 
-      const publishDescription = /^\/api\/todos\/([^/]+)\/publish-description$/.exec(path);
-      if (req.method === 'POST' && publishDescription) {
-        send(res, 200, { todo: await commands.githubPublishFirstNote(decodePart(publishDescription[1])) });
+      const issueLink = /^\/api\/todos\/([^/]+)\/issue-link$/.exec(path);
+      if (issueLink && req.method === 'PUT') {
+        const body = await readJson(req, maxBodyBytes);
+        if (!body || Array.isArray(body) || typeof body !== 'object' || !Object.hasOwn(body, 'url')) {
+          throw bad('INVALID_ISSUE_LINK', 'Body must be { "url": string | null }.');
+        }
+        send(res, 200, { todo: await commands.setIssueLink(decodePart(issueLink[1]), body.url, context) });
         return true;
       }
 

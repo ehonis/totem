@@ -12,7 +12,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import GoalCard, { BushidoMark } from './GoalCard'
+import GoalCard from './GoalCard'
 import type { Goal, GoalLink } from './types'
 
 const goal = (links: GoalLink[]): Goal => ({
@@ -85,19 +85,6 @@ describe('the Bushido toggle', () => {
     render(<GoalCard {...props} onToggleBushido={() => {}}
       goal={goal([bushido, { ...bushido, id: 'link-2', label: 'Strava', url: 'https://strava.com/x' }])} />)
     expect(screen.getByRole('link', { name: 'Strava' })).toBeVisible()
-  })
-
-  it('wears Bushido\'s own ECG mark, not a stock glyph', () => {
-    // Traced off the app's favicon. Asserted on the path data because that is the
-    // only part that makes it Bushido's mark rather than any heart-shaped stand-in —
-    // and the tail ending above the baseline (8.47 < 12.32) is the trace's point.
-    const { container } = render(
-      <BushidoMark />, { container: document.body.appendChild(document.createElement('div')) })
-    const d = container.querySelector('path')?.getAttribute('d') ?? ''
-    expect(d).toBe('M2.5 12.32 H8.15 L9.82 6.54 L12.13 17.46 L14.05 10.78 H15.85 L17.65 8.47 H21.5')
-
-    const chip = render(<GoalCard {...props} goal={goal([bushido])} onToggleBushido={() => {}} />)
-    expect(chip.container.querySelector('.goal-chip.bushido path')).toHaveAttribute('d', d)
   })
 
   it('offers nothing at all when the caller does not handle it', async () => {

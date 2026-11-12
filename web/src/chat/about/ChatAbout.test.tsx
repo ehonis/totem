@@ -4,10 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthError } from '../../api'
 
 const startChatAbout = vi.fn(async (_ctx: unknown) => {})
+const copyChatAbout = vi.fn(async (_ctx: unknown) => {})
 const chatAboutAuthError = vi.fn()
 vi.mock('./start', () => ({
   startChatAbout: (c: unknown) => startChatAbout(c),
-  copyChatAbout: vi.fn(async () => {}),
+  copyChatAbout: (c: unknown) => copyChatAbout(c),
   chatAboutAuthError: () => chatAboutAuthError(),
 }))
 
@@ -31,16 +32,27 @@ const hold = (el: Element) => {
   act(() => { vi.advanceTimersByTime(600) })
 }
 
-afterEach(() => { cleanup(); startChatAbout.mockReset(); chatAboutAuthError.mockReset(); vi.useRealTimers() })
+const select = (el: Element) => {
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  const sel = window.getSelection()!
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
+
+afterEach(() => {
+  cleanup(); startChatAbout.mockReset(); copyChatAbout.mockReset(); chatAboutAuthError.mockReset()
+  window.getSelection()?.removeAllRanges(); vi.useRealTimers()
+})
 
 describe('ChatAbout', () => {
-  it('the hover button starts the chat with the card\'s context', () => {
+  it('draws nothing on the card', () => {
     render(<Card />)
-    fireEvent.click(screen.getByRole('button', { name: 'Chat about this' }))
-    expect(startChatAbout).toHaveBeenCalledWith(ctx)
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByLabelText('Chat about this')).toBeNull()
   })
 
-  it('right-click opens its menu; shift, links and selected text keep the browser\'s', () => {
+  it('right-click opens its menu; shift and links keep the browser\'s', () => {
     render(<Card />)
     const card = screen.getByTestId('card')
     expect(fireEvent.contextMenu(screen.getByText('link'))).toBe(true)
@@ -53,9 +65,51 @@ describe('ChatAbout', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
+  it('selected text goes with the chat, and the menu can copy it', async () => {
+    const writeText = vi.fn(async (_t: string) => {})
+    Object.assign(navigator, { clipboard: { writeText } })
+    render(<Card />)
+    const title = screen.getByText('Read')
+    select(title)
+    fireEvent.mouseDown(title, { button: 2 })
+    expect(fireEvent.contextMenu(title, { clientX: 5, clientY: 5 })).toBe(false)
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Copy' })) })
+    expect(writeText).toHaveBeenCalledWith('Read')
+
+    select(title)
+    fireEvent.contextMenu(title)
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Chat about the selection' })) })
+    expect(startChatAbout).toHaveBeenCalledWith({ ...ctx, selection: 'Read' })
+
+    select(title)
+    fireEvent.contextMenu(title)
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Copy card as text' })) })
+    expect(copyChatAbout).toHaveBeenCalledWith({ ...ctx, selection: 'Read' })
+  })
+
+  it('a word the right-click itself selected (macOS) is not a selection', async () => {
+    render(<Card />)
+    const title = screen.getByText('Read')
+    fireEvent.mouseDown(title, { button: 2 })
+    select(title) // WebKit selects the word between mousedown and contextmenu
+    fireEvent.contextMenu(title, { clientX: 5, clientY: 5 })
+    expect(screen.queryByRole('menuitem', { name: 'Copy' })).toBeNull()
+    expect(String(window.getSelection())).toBe('')
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Chat about this' })) })
+    expect(startChatAbout).toHaveBeenCalledWith(ctx)
+  })
+
+  it('a selection elsewhere on the page is not this card\'s', async () => {
+    render(<><p>outside</p><Card /></>)
+    select(screen.getByText('outside'))
+    fireEvent.contextMenu(screen.getByText('Read'))
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Chat about this' })) })
+    expect(startChatAbout).toHaveBeenCalledWith(ctx)
+  })
+
   it('only the innermost card answers a right-click', () => {
     const outer = vi.fn(() => ({ ...ctx, title: 'outer' }))
-    render(<section><ChatAbout of={outer} button={false} /><Card /></section>)
+    render(<section><ChatAbout of={outer} /><Card /></section>)
     fireEvent.contextMenu(screen.getByText('Read'))
     expect(screen.getAllByRole('menu')).toHaveLength(1)
     fireEvent.click(screen.getByRole('menuitem', { name: 'Chat about this' }))
@@ -122,7 +176,8 @@ describe('ChatAbout', () => {
   it('a signed-out session goes to sign-in, not to a toast', async () => {
     startChatAbout.mockRejectedValueOnce(new AuthError())
     render(<Card />)
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Chat about this' })) })
+    fireEvent.contextMenu(screen.getByText('Read'))
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Chat about this' })) })
     expect(chatAboutAuthError).toHaveBeenCalledTimes(1)
   })
 })
@@ -132,7 +187,7 @@ describe('a Settings pane', () => {
   it('carries headings, labels and switch states, never fields, code or tool output', async () => {
     render(
       <div className="settings-content">
-        <ChatAbout of={(pane) => settingsContext('ai', settingsOutline(pane))} button={false} />
+        <ChatAbout of={(pane) => settingsContext('providers', settingsOutline(pane))} />
         <h2>AI <code>{TOKEN}</code></h2>
         <div className="setting-row">
           <div className="setting-copy"><strong>Codex API key</strong><span>{`Set as ${TOKEN}`}</span></div>

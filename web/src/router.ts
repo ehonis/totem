@@ -12,6 +12,8 @@
  * them, and App rewrites the URL to the new shape on boot.
  */
 
+import { MOVED_SECTIONS, SETTINGS_SECTIONS } from './components/settings/sections.ts'
+
 export interface Route {
   tab: string
   /** Sub-app inside Productivity (todos | calendar | habits | goals | lists | recs | journal). */
@@ -26,7 +28,7 @@ export interface Route {
 export type NavTarget = string | Partial<Route>
 
 export const TAB_IDS = [
-  'overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'fleet', 'inbox', 'logs', 'brain', 'settings',
+  'overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'fleet', 'cliproxy', 'inbox', 'logs', 'brain', 'settings',
 ]
 
 // Todos/Calendar/Habits are apps *inside* Productivity, but their ids still turn
@@ -34,9 +36,8 @@ export const TAB_IDS = [
 export const PRODUCTIVITY_APPS = ['todos', 'calendar', 'habits', 'goals', 'lists', 'recs', 'journal']
 export const DEFAULT_PRODUCTIVITY_APP = 'calendar'
 
-const SUB_TABS: Record<string, string[]> = {
-  // Keep in step with SUB_TABS in components/SettingsView.tsx.
-  settings: ['general', 'chat', 'ai', 'integrations', 'tasks', 'providers', 'shortcuts', 'notifications', 'voice', 'skills', 'jobs', 'connections', 'logs'],
+const SUB_TABS: Record<string, readonly string[]> = {
+  settings: SETTINGS_SECTIONS,
 }
 
 export const productivityApp = (id?: string | null) =>
@@ -56,6 +57,15 @@ export function toRoute(target: NavTarget): Route {
   }
   // The Code tab folded into Dev, whose last section is the same repo list.
   if (partial.tab === 'code') return toRoute({ ...partial, tab: 'dev' })
+  // The action log is a Settings pane; /logs is its old address.
+  if (partial.tab === 'logs') return toRoute({ tab: 'settings', sub: 'logs', hash: partial.hash })
+  if (partial.tab === 'settings') {
+    const moved = partial.sub ? MOVED_SECTIONS[partial.sub] : undefined
+    if (moved?.tab) return toRoute({ tab: moved.tab })
+    if (moved) return toRoute({ tab: 'settings', sub: moved.sub, hash: moved.hash ?? partial.hash })
+    // Usage was the bottom of Providers; links the bridge sends still say so.
+    if (partial.sub === 'providers' && partial.hash === 'usage') return toRoute({ tab: 'settings', sub: 'usage' })
+  }
   const app = productivityApp(partial.tab) || productivityApp(partial.app)
   const tab = productivityApp(partial.tab) ? 'productivity' : (partial.tab || 'overview')
   return {

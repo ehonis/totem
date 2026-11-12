@@ -89,6 +89,24 @@ function normalizeProject(raw, id) {
 
 const EDITABLE = ['name', 'instructions', 'icon', 'image', 'provider', 'modelSettings']
 
+/**
+ * The account and model a new chat in this project or folder starts on: the
+ * folder's own default, else its parent project's; null when neither has one,
+ * and the chat takes the default in Settings → Providers. A project's default is its
+ * `provider` (with `modelSettings` for that account); `usable` passes over an
+ * account that is no longer enabled. projectDefault in web/src/chat/store.ts
+ * (and the app's copy) is the browser's twin; keep them in step.
+ */
+export function projectModelDefault(projects, projectId, { usable = () => true } = {}) {
+  const own = projectId ? (projects || []).find((p) => p.id === projectId) : null
+  if (!own) return null
+  const parent = own.parentId ? projects.find((p) => p.id === own.parentId) : null
+  for (const p of [own, parent]) {
+    if (p?.provider && usable(p.provider)) return { provider: p.provider, modelSettings: p.modelSettings || null }
+  }
+  return null
+}
+
 // A memory file as entries: each top-level bullet (with its indented lines) or
 // paragraph, under the heading it sits beneath. web/src/chat/memoryEntries.ts is
 // the browser's twin; keep the two in step.

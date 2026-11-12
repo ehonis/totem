@@ -4,46 +4,43 @@ import { useCommand } from '../useShortcuts'
 import { getSkills, AuthError } from '../api'
 import { setChatCommands } from '../studio'
 import {
-  useChat, initChat, send, stop, steer, queueMessage, updateQueue, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
-  threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
+  useChat, initChat, send, stop, steer, queueMessage, updateQueue, setActive, setThreadModel, keepThread, threadChoice, draftFor, type DraftPick,
+  threadTitle, providerById, loadCapabilities, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
   openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead, setMembers,
-  loadFiles, openArtifact, fileArtifact, takePendingFile, respondToApproval,
+  loadFiles, openArtifact, openFile, openResource, takePendingFile, respondToApproval,
 } from '../chat/store'
-import { TotemIcon, TotemRunButton, useTotemDirectory } from '../totems/shared'
+import { useTotemDirectory } from '../totems/shared'
 import { GroupPicker } from './TotemsView'
-import TotemsGlyph from './TotemsIcon'
 import { isSnoozed, settledAt, wakeDescription } from '../chat/settle'
 import ProjectHome from '../chat/ProjectHome'
 import ProjectIcon from '../chat/ProjectIcon'
 import Composer, { type ComposerHandle, type FollowUpPayload } from '../chat/Composer'
 import QueuedMessages from '../chat/QueuedMessages'
 import { pushToast } from '../toast'
-import { UserMessage, AssistantMessage } from '../chat/Message'
+import MessageLog from '../chat/MessageLog'
 import { useQuestionFlow } from '../chat/QuestionsPanel'
 import { pendingQuestions } from '../chat/questions'
 import { DECLINE_PLACEHOLDER, pendingApproval } from '../chat/approvals'
 import ModelPicker from '../chat/ModelPicker'
 import HandoffMark from '../chat/HandoffMark'
-import { providerSwitches } from '../chat/handoff'
-import ComposerTraits, { hintFor } from '../chat/ComposerTraits'
-import { EFFORT_LABELS, visibleModels } from '../chat/models'
 import VoiceMode from '../chat/VoiceMode'
 import ArtifactPanel from '../chat/ArtifactPanel'
-import BrowserPanel, { BrowserChip } from '../chat/BrowserPanel'
-import AgentsPanel, { AgentsChip } from '../chat/AgentsPanel'
-import FilesPanel, { FilesChip } from '../chat/FilesPanel'
-import UsageChips from '../chat/UsageChips'
-import ThreadIcon from '../chat/ThreadIcon'
+import BrowserPanel from '../chat/BrowserPanel'
+import AgentsPanel from '../chat/AgentsPanel'
+import ChatHeader, { MembersPop } from '../chat/ChatHeader'
+import { usePanelItems } from '../chat/HeaderPanels'
+import FilesPanel from '../chat/FilesPanel'
 import { useChatPresence } from '../chat/presence'
 import { useViewing } from '../chat/onScreen'
 import { contextVersion, subscribeContext, takeContext } from '../chat/pendingContext'
 import { TI } from '../chat/ui'
-import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconPaperclip, IconLayoutSidebar, IconSparkles, IconFolder, IconFolderOff, IconSettings, IconUserPlus } from '../chat/icons'
+import { IconArrowDown, IconPaperclip } from '../chat/icons'
 import type { Attachment, ModelSettings, QueuedMessage } from '../chat/types'
 import '../chat/chat.css'
 import { chatGlow } from '../chat/glow'
 import { useSettings } from '../settings'
 import { useOwnerName } from '../useOwnerName'
+import ResizeHandle, { SIDE_PANEL_VAR } from './ResizeHandle'
 
 function greeting(name: string) {
   const h = new Date().getHours()
@@ -84,6 +81,8 @@ function useNarrow() {
 }
 
 interface ChatViewProps {
+  /** Opens the CLIProxy tab from the usage panel; unset when the proxy is not set up. */
+  onManageUsage?: () => void
   onAuthError: () => void
   visible?: boolean
   /** Phone: open the app drawer (tabs + chats). */
@@ -93,7 +92,7 @@ interface ChatViewProps {
   onShowPanel?: () => void
 }
 
-export default function ChatView({ onAuthError, visible = true, onOpenMenu, panelOpen = true, onShowPanel }: ChatViewProps) {
+export default function ChatView({ onAuthError, visible = true, onOpenMenu, panelOpen = true, onShowPanel, onManageUsage }: ChatViewProps) {
   const ownerName = useOwnerName()
   const narrow = useNarrow()
   const threads = useChat((s) => s.threads)
@@ -109,7 +108,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const providers = useChat((s) => s.providers)
   const models = useChat((s) => s.models)
   const [draftKind, setDraftKind] = useState<'regular' | 'temporary'>('regular')
-  const [draftModel, setDraftModel] = useState<{ provider?: string; modelSettings?: ModelSettings }>({})
+  // A model picked for a new chat, for the place (project, folder or Home) it was picked in.
+  const [draftPick, setDraftPick] = useState<DraftPick | null>(null)
   // A new project chat can start without the project's instructions, memory and files.
   const [draftContextOff, setDraftContextOff] = useState(false)
   // The project the panel is showing. A new chat here starts in it, on its default model.
@@ -124,6 +124,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const [atBottom, setAtBottom] = useState(true)
   const [picking, setPicking] = useState(false)
   const totemDir = useTotemDirectory()
+  const panelItems = usePanelItems(activeId)
+  const membersRef = useRef<HTMLButtonElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const composer = useRef<ComposerHandle>(null)
   const dragDepth = useRef(0)
@@ -216,17 +218,20 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
 
   // The chat's saved files, listed on opening it and again when a reply ends.
   useEffect(() => { if (activeId && !busy) loadFiles(activeId) }, [activeId, busy])
-  // A file path in a reply opens in the canvas (Markdown's file links), and so
-  // does one the bridge redirected here (?file=, read at load by the store).
+  // A file path in a reply opens in the canvas (links.ts routes the click), and so
+  // does one the bridge redirected here (?file=, read at load by the store). In the
+  // desktop app, anything else on the Totem server a link points at opens here too.
   useEffect(() => {
     if (!visible) return
-    const onOpen = (e: Event) => { e.preventDefault(); openArtifact(fileArtifact((e as CustomEvent<string>).detail)) }
-    window.addEventListener('totem:open-file', onOpen)
-    return () => window.removeEventListener('totem:open-file', onOpen)
+    const onFile = (e: Event) => { e.preventDefault(); openFile((e as CustomEvent<string>).detail) }
+    const onResource = (e: Event) => { e.preventDefault(); openResource((e as CustomEvent<string>).detail) }
+    window.addEventListener('totem:open-file', onFile)
+    window.addEventListener('totem:open-resource', onResource)
+    return () => { window.removeEventListener('totem:open-file', onFile); window.removeEventListener('totem:open-resource', onResource) }
   }, [visible])
   useEffect(() => {
     const path = visible ? takePendingFile() : null
-    if (path) openArtifact(fileArtifact(path))
+    if (path) openFile(path)
   }, [visible])
 
   const glow = chatGlow(activeId)
@@ -246,14 +251,14 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const contextOff = active ? !!active.projectContextOff : draftContextOff
   const kind = project ? 'regular' : active?.kind || draftKind
   const temporary = kind === 'temporary'
-  // A new project chat starts on the project's model until he picks another.
-  const draft = !active && project && !draftModel.provider && project.provider
-    ? { provider: project.provider, modelSettings: project.modelSettings as ModelSettings | undefined }
-    : draftModel
+  const draftKey = activeId || (project ? `new:project:${project.id}` : `new:${kind}`)
+  // A new chat starts on what was picked for it here, else its folder's or
+  // project's model (threadChoice). A pick never follows him to another place,
+  // and an open chat keeps its own model.
+  const draft = draftFor(draftPick, draftKey, { open: !!active, projectId: project?.id })
   const choice = threadChoice(active, draft)
   const messages = active?.messages || []
   const empty = messages.length === 0
-  const draftKey = activeId || (project ? `new:project:${project.id}` : `new:${kind}`)
   const input = drafts[draftKey] || ''
   useEffect(() => { ensureModels(choice.provider) }, [choice.provider])
 
@@ -265,6 +270,12 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       return next
     })
   }, [draftKey])
+
+  // A discarded unsent message goes back in the composer. Stable, so the message log stays memoized.
+  const onDiscarded = useCallback((text: string) => {
+    setInput(text)
+    requestAnimationFrame(() => composer.current?.focus())
+  }, [setInput])
 
   /** Open a project for a new chat, taking what's already typed along. */
   function startIn(id: string) {
@@ -315,7 +326,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     // Leaving a chat for a new one keeps the panel's project: the new chat is in it.
     setActive(null)
     setDraftKind(k)
-    setDraftModel({})
+    setDraftPick(null)
     setDraftContextOff(false)
     requestAnimationFrame(() => composer.current?.focus())
   }
@@ -340,6 +351,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     const id = send({ threadId: activeId, text, attachments, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff })
     setInput('')
     if (id !== activeId) {
+      setDraftPick(null)
       setDrafts((d) => { const n = { ...d }; delete n[draftKey]; return n })
       setActive(id)
     }
@@ -422,7 +434,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     const access = patch.modelSettings.access ?? choice.settings.access
     if (access) patch = { ...patch, modelSettings: { ...patch.modelSettings, access } }
     if (active) setThreadModel(active.id, patch)
-    else setDraftModel(patch)
+    else setDraftPick({ key: draftKey, ...patch })
   }
 
   // --- drag and drop anywhere on the chat --------------------------------------
@@ -450,36 +462,19 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     sendText: (text, files) => {
       if (!activeId) return
       if (busy) void steer(activeId, text, files.map((f) => f.id))
-      else send({ threadId: activeId, text, attachments: files, kind, provider: draft.provider, modelSettings: draft.modelSettings })
+      else send({ threadId: activeId, text, attachments: files, kind })
     },
     displace: (text) => setInput(input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text),
   })
-
-  // T3 Code's model chip: the model, then its effort and the chat's access in one
-  // menu (the effort on ChatGPT's slider, from the picked model's own levels).
-  const traitsEl = (() => {
-    const st = choice.settings
-    const m = visibleModels(models[choice.provider]).concat(models[choice.provider] || []).find((x) => x.id === st.modelId)
-    return (
-      <ComposerTraits
-        effort={m?.efforts?.length ? {
-          stops: m.efforts.map((e) => ({ value: e, label: EFFORT_LABELS[e] || e, hint: hintFor(e) })),
-          value: st.effort && st.effort !== 'default' ? st.effort : (m.defaultEffort || m.efforts[0]),
-          onChange: (v) => changeModel({ provider: choice.provider, modelSettings: { ...st, effort: v } }),
-        } : undefined}
-        access={st.access}
-        onAccess={(v) => changeModel({ provider: choice.provider, modelSettings: { ...st, access: v } })}
-      />
-    )
-  })()
 
   const composerEl = (
     <Composer
       rightSlot={
         <div className="vc-model-group">
-          <ModelPicker provider={choice.provider} settings={choice.settings} onChange={changeModel} started={!empty} locked={temporary && !empty} align="end" />
-          {/* Answering questions: effort and access make way for the answer buttons. */}
-          {!questionFlow?.answering && traitsEl}
+          {/* T3 Code's chip: the model and its effort as one control, whose picker also
+              holds speed and the chat's access. Answering questions, it names the model
+              only, to leave room for the answer buttons. */}
+          <ModelPicker provider={choice.provider} settings={choice.settings} onChange={changeModel} started={!empty} locked={temporary && !empty} align="end" traits compact={!!questionFlow?.answering} />
         </div>
       }
       ref={composer}
@@ -527,20 +522,19 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
 
   if (!visible) return null
 
-  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-  // The chat moving to another account (chat/handoff.ts): a divider where each
-  // move happened, and a row over the composer once a new account is picked.
-  const switches = providerSwitches(messages)
+  // The chat moving to another account (chat/handoff.ts): a row over the
+  // composer once a new account is picked (MessageLog marks each move).
   const lastProvider = [...messages].reverse().find((m) => m.role === 'assistant' && m.provider)?.provider
   const pendingHandoff = active && !temporary && lastProvider && lastProvider !== choice.provider
     ? <HandoffMark s={{ from: lastProvider, to: choice.provider }} pending />
     : null
-  // A raw id ("gpt-6.1-sol", "composer-2.5[fast=true]") is shown as its catalog name.
-  const modelNameFor = (provider?: string, model?: string) => {
-    if (!provider || !model) return undefined
-    const id = model.split('[')[0]
-    return getState().models[provider]?.find((x) => x.id === id)?.name
-  }
+
+  // The one side panel showing, if any, and its own remembered width.
+  const sidePanel = artifact ? { id: 'canvas', label: 'Resize the canvas' }
+    : agentsShown ? { id: 'agents', label: 'Resize the agents panel' }
+    : filesShown ? { id: 'files', label: 'Resize the files panel' }
+    : browserShown ? { id: 'browser', label: 'Resize the browser panel' }
+    : null
 
   return (
     <div className={`vc-split${artifact || browserShown || agentsShown || filesShown ? ' has-artifact' : ''}${artifact && artifactWide ? ' artifact-wide' : ''}`}>
@@ -548,106 +542,33 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       {/* This chat's own colours; they wobble while the agent is replying. Settings → Chat can turn them off on this device. */}
       {glowOn && <div className={`page-glow${busy ? ' live' : glowSettling ? ' settling' : ''}`} style={{ '--glow-a': glow.a, '--glow-b': glow.b } as React.CSSProperties} aria-hidden />}
       {glowOn && <div className="vc-veil" aria-hidden />}
-      <header className="vc-top">
-        {narrow && (
-          <button type="button" className="vc-icon-btn" onClick={onOpenMenu} aria-label="Menu"><TI icon={IconMenu} size={21} /></button>
-        )}
-        {/* Panel collapsed: the header carries what it held — show chats, new chat. */}
-        {!narrow && !panelOpen && (
-          <>
-            <button type="button" className="vc-icon-btn" onClick={onShowPanel} aria-label="Show chats" title="Show chats"><TI icon={IconLayoutSidebar} size={19} /></button>
-            <button type="button" className="vc-icon-btn" onClick={() => newChat()} aria-label="New chat" title="New chat"><TI icon={IconEdit} size={19} /></button>
-          </>
-        )}
-        <div className="vc-top-title-wrap">
-          {parentProject && (
-            <>
-              <button type="button" className="vc-top-project" onClick={() => openProject(parentProject.id)} title={`Open ${parentProject.name}`}>
-                <ProjectIcon p={parentProject} size={16} />
-                <span>{parentProject.name}</span>
-              </button>
-              <span className="vc-top-sep" aria-hidden>/</span>
-            </>
-          )}
-          {project && (
-            <button type="button" className={`vc-top-project ${contextOff ? 'context-off' : ''}`} onClick={() => openProject(project.id)} title={`Open ${project.name}`}>
-              <ProjectIcon p={project} size={16} />
-              <span>{project.name}</span>
-            </button>
-          )}
-          {project && active && !empty && <span className="vc-top-sep" aria-hidden>/</span>}
-          {(active?.totemId || active?.members?.length) && (
-            <>
-              <button type="button" className="vc-top-project" title="All totems" onClick={() => goTotems()}>
-                <TotemsGlyph width={15} height={15} /><span>Totems</span>
-              </button>
-              <span className="vc-top-sep" aria-hidden>/</span>
-            </>
-          )}
-          {active && !empty && <ThreadIcon t={active} size={17} busy={retitling} />}
-          {(!project || (active && !empty)) && <div className={`vc-top-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{active && !empty ? threadTitle(active) : temporary ? 'Temporary chat' : 'New chat'}</div>}
-          {active && !empty && (
-            <button type="button" className="vc-retitle" onClick={() => regenerateTitle(active.id)} disabled={retitling} aria-label="Regenerate title and icon" title="Regenerate title and icon from the whole chat">
-              <TI icon={IconSparkles} size={15} className={retitling ? 'vc-retitle-spin' : ''} />
-            </button>
-          )}
-        </div>
-        <div className="vc-top-right">
-          {project && (
-            <button
-              type="button"
-              className={`vc-icon-btn ${contextOff ? 'on' : ''}`}
-              onClick={() => (active ? setProjectContext(active.id, contextOff) : setDraftContextOff(!contextOff))}
-              aria-pressed={contextOff}
-              aria-label={contextOff ? 'Project context is off for this chat' : 'Project context is on for this chat'}
-              title={contextOff
-                ? `Project context off: this chat doesn't read ${project.name}'s instructions, memory or files, and adds nothing to them. Click to turn it on.`
-                : `Project context on: this chat reads ${project.name}'s instructions, memory and files. Click to leave them out of this chat.`}
-            >
-              <TI icon={contextOff ? IconFolderOff : IconFolder} size={19} />
-            </button>
-          )}
-          {active?.totemId && <TotemRunButton job={totemDir.get(active.totemId)} />}
-          {active?.totemId && (
-            <button type="button" className="vc-icon-btn" onClick={() => goTotems(active.totemId)} aria-label="Totem settings" title="This totem's settings, memory and runs"><TI icon={IconSettings} size={19} /></button>
-          )}
-          {active && !active.totemId && (
-            <span className="vc-members">
-              {(active.members || []).slice(0, 4).map((id) => (
-                <button key={id} type="button" className="vc-member" title={`${totemDir.get(id)?.name || 'Totem'}: settings, memory and runs`} onClick={() => goTotems(id)}>
-                  <TotemIcon name={totemDir.get(id)?.iconName} size={14} />
-                </button>
-              ))}
-              <button type="button" className="vc-icon-btn" onClick={() => setPicking((v) => !v)} aria-label="Totems in this chat" title={active.members?.length ? 'Add or remove totems in this chat' : 'Bring totems into this chat'}>
-                <TI icon={IconUserPlus} size={19} />
-              </button>
-            </span>
-          )}
-          <FilesChip threadId={activeId} />
-          <AgentsChip threadId={activeId} />
-          <BrowserChip threadId={activeId} />
-          <UsageChips compact={narrow} />
-          {temporary && active && (
-            <button type="button" className="vc-btn sm" onClick={() => keepThread(active.id)} title="Keep this chat after midnight">Keep</button>
-          )}
-          {(!active || empty) && !project && (
-            <button
-              type="button"
-              className={`vc-icon-btn ${temporary ? 'on' : ''}`}
-              onClick={() => newChat(temporary ? 'regular' : 'temporary')}
-              aria-pressed={temporary}
-              title={temporary ? 'Turn off temporary chat' : 'Temporary chat — not kept past midnight'}
-            >
-              <TI icon={IconGhost2} size={19} />
-            </button>
-          )}
-          {narrow && (
-            <button type="button" className="vc-icon-btn" onClick={() => newChat()} aria-label="New chat"><TI icon={IconEdit} size={19} /></button>
-          )}
-        </div>
-      </header>
+      <ChatHeader
+        start={narrow ? 'menu' : !panelOpen ? 'panel' : null}
+        onOpenMenu={onOpenMenu}
+        onShowPanel={onShowPanel}
+        onNewChat={() => newChat()}
+        parentProject={parentProject}
+        project={project}
+        projectIsLast={!(active && !empty)}
+        contextOff={contextOff}
+        onOpenProject={openProject}
+        onToggleContext={project ? () => (active ? setProjectContext(active.id, contextOff) : setDraftContextOff(!contextOff)) : undefined}
+        totemsCrumb={!!(active?.totemId || active?.members?.length)}
+        onTotems={goTotems}
+        thread={active && !empty ? active : undefined}
+        title={!project || (active && !empty) ? (active && !empty ? threadTitle(active) : temporary ? 'Temporary chat' : 'New chat') : undefined}
+        retitling={retitling}
+        onRetitle={active && !empty ? () => regenerateTitle(active.id) : undefined}
+        totem={active?.totemId ? { id: active.totemId, job: totemDir.get(active.totemId) } : undefined}
+        members={active && !active.totemId ? { ids: active.members || [], dir: totemDir, onPick: () => setPicking((v) => !v), ref: membersRef } : undefined}
+        panels={panelItems}
+        onManageUsage={onManageUsage}
+        onKeep={temporary && active ? () => keepThread(active.id) : undefined}
+        temporary={(!active || empty) && !project ? { on: temporary, onToggle: () => newChat(temporary ? 'regular' : 'temporary') } : undefined}
+        newChatAtEnd={narrow}
+      />
       {picking && active && !active.totemId && (
-        <div className="vc-members-pop">
+        <MembersPop anchor={membersRef} onClose={() => setPicking(false)}>
           <GroupPicker
             jobs={[...totemDir.values()]}
             initial={active.members?.length ? active.members : []}
@@ -657,7 +578,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
             onCancel={() => setPicking(false)}
             onDone={(ids) => { setMembers(active.id, ids); setPicking(false) }}
           />
-        </div>
+        </MembersPop>
       )}
 
       <div className="vc-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -696,39 +617,28 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
             )}
           </div>
         ) : (
-          <div className="vc-log">
-            {messages.map((m, i) => (
-              <React.Fragment key={m.id}>
-              {switches.has(m.id) && <HandoffMark s={switches.get(m.id)!} />}
-              {m.role === 'user'
-                ? <UserMessage
-                    key={m.id}
-                    m={m}
-                    canEdit={!busy && !m.id.startsWith('local-')}
-                    onEdit={(text) => active && editAndResend(active.id, m.id, text)}
-                    onRetry={m.unsent && active && !busy ? () => retryUnsent(active.id) : undefined}
-                    onDiscard={m.unsent && active && !busy ? () => { const text = discardUnsent(active.id); if (text) setInput(text); requestAnimationFrame(() => composer.current?.focus()) } : undefined}
-                  />
-                : <AssistantMessage
-                    key={m.id}
-                    m={m}
-                    live={busy && i === messages.length - 1}
-                    activity={run?.activity}
-                    provider={providerById(m.provider || choice.provider) || providers.find((p) => p.driver === m.provider)}
-                    modelName={modelNameFor(m.provider, m.model)}
-                    isLast={m === lastAssistant && i === messages.length - 1}
-                    onRegenerate={!busy && active ? () => regenerate(active.id) : undefined}
-                  />}
-              </React.Fragment>
-            ))}
-          </div>
+          <MessageLog
+            threadId={active?.id ?? null}
+            messages={messages}
+            busy={busy}
+            activity={run?.activity}
+            provider={choice.provider}
+            providers={providers}
+            models={models}
+            onDiscarded={onDiscarded}
+          />
         )}
       </div>
 
-      {!empty && !atBottom && (
-        <button type="button" className="vc-jump" onClick={() => scrollToBottom()} aria-label="Scroll to the latest message"><TI icon={IconArrowDown} size={18} /></button>
+      {(!empty || (narrow && !project)) && (
+        <div className="vc-dock">
+          {!empty && !atBottom && (
+            <button type="button" className="vc-jump" onClick={() => scrollToBottom()} aria-label="Scroll to the latest message"><TI icon={IconArrowDown} size={18} /></button>
+          )}
+          {questionFlow ? questionFlow.panel : <>{parkedEl}{pendingHandoff}</>}
+          {composerEl}
+        </div>
       )}
-      {(!empty || (narrow && !project)) && <div className="vc-dock">{questionFlow ? questionFlow.panel : <>{parkedEl}{pendingHandoff}</>}{composerEl}</div>}
 
       {dragging && (
         <div className="vc-drop">
@@ -745,6 +655,16 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
         />
       )}
     </div>
+    {sidePanel && (
+      <ResizeHandle
+        key={`${sidePanel.id}${artifact && artifactWide ? ':wide' : ''}`}
+        role="side"
+        className="inline"
+        storageKey={`totem.panel.${sidePanel.id}.width`}
+        cssVar={SIDE_PANEL_VAR}
+        label={sidePanel.label}
+      />
+    )}
     {artifact && <ArtifactPanel threadId={activeId} expanded={artifactWide} onExpand={setArtifactWide} />}
     {!artifact && <AgentsPanel threadId={activeId} />}
     {!artifact && <FilesPanel threadId={activeId} />}

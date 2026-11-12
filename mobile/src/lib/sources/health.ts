@@ -78,25 +78,32 @@ export function sourceSummary(s: SourceHealth, now = Date.now()): string {
 }
 
 /**
- * Sources in the order the panel shows them: each goal's sources under that goal,
- * then every other source, failing first. A source feeding two goals is listed
- * under both, since that is the question the panel answers: "is this goal's data
- * actually arriving?".
+ * Sources split the way Settings → Connections shows them: what is wrong first
+ * (failing before erroring), then what has never been set up or read, then what
+ * works, each alphabetical. Only the first list is shown in full; the other two
+ * fold into a count. A source still carries the goals it feeds (`goals`), so a
+ * problem row can say which goal's number has stopped arriving.
  */
-export function groupSources(payload: SourceHealthPayload | null) {
-  if (!payload) return { goals: [], other: [] }
-  const byId = new Map(payload.sources.map((s) => [s.source, s]))
-  const goals = payload.goals.map((g) => ({
-    goal: g,
-    sources: g.sources.map((id) => byId.get(id)).filter((s): s is SourceHealth => Boolean(s)),
-  }))
-  const feeding = new Set(payload.goals.flatMap((g) => g.sources))
-  const rank: Record<SourceState, number> = { failing: 0, degraded: 1, unconfigured: 2, unknown: 3, ok: 4 }
-  const other = payload.sources
-    .filter((s) => !feeding.has(s.source))
-    .sort((a, b) => rank[a.state] - rank[b.state] || a.label.localeCompare(b.label))
-  return { goals, other }
+export function sortSources(payload: SourceHealthPayload | null, { exclude }: { exclude?: (s: SourceHealth) => boolean } = {}) {
+  const shown = (payload?.sources || []).filter((s) => !exclude?.(s))
+  const byLabel = (a: SourceHealth, b: SourceHealth) => a.label.localeCompare(b.label)
+  return {
+    problems: shown.filter((s) => s.state === 'failing' || s.state === 'degraded')
+      .sort((a, b) => Number(a.state !== 'failing') - Number(b.state !== 'failing') || byLabel(a, b)),
+    waiting: shown.filter((s) => s.state === 'unconfigured' || s.state === 'unknown').sort(byLabel),
+    healthy: shown.filter((s) => s.state === 'ok').sort(byLabel),
+  }
 }
+
+/** "2 not set up · 1 not read yet": the folded row's label, one count per state. */
+export function waitingLabel(sources: SourceHealth[]) {
+  const unset = sources.filter((s) => s.state === 'unconfigured').length
+  const unread = sources.length - unset
+  return [unset ? `${unset} not set up` : '', unread ? `${unread} not read yet` : ''].filter(Boolean).join(' · ')
+}
+
+/** MCP servers and the gateway: the web lists these in its own MCP section. */
+export const isMcpSource = (s: SourceHealth) => s.kind === 'mcp' || s.kind === 'mcp-gateway'
 
 /** The failing source a metric of this kind reads, if any. */
 export function failingSourceFor(payload: SourceHealthPayload | null, metricKind: string): SourceHealth | null {

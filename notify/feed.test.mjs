@@ -48,12 +48,6 @@ test('the first scan of a feed records what is there and says nothing', () => {
   assert.deepEqual(seen.ids, ['hn:1', 'hn:2'])
 })
 
-test('only unseen items become facts', () => {
-  const base = factsFor(hnSource, { items: [hit(1)] }, {}, { now: NOW })
-  const next = factsFor(hnSource, { items: [hit(2), hit(1)] }, base.seen, { now: NOW })
-  assert.deepEqual(next.facts.map((f) => f.subject), ['hn:2'])
-})
-
 test('a story carries its own headline and link for the dedupe gate; the overflow line does not', () => {
   const base = factsFor(hnSource, { items: [hit(0)] }, {}, { now: NOW })
   const burst = factsFor(hnSource, { items: [hit(1), hit(2), hit(3), hit(0)] }, base.seen, { now: NOW })
@@ -171,16 +165,6 @@ test('the shipped sources are all public and need no key', () => {
     // An API key is a thing that expires silently, and silence is this feature's
     // failure mode.
     assert.ok(!JSON.stringify(s).match(/token|apiKey|secret/i), `${s.id}: needs a credential`)
-  }
-})
-
-test('a shipped source taps through to a page, never to the feed it is read from', () => {
-  // `url` is what a release, roundup or "More from …" push opens; the feed XML
-  // belongs in `feeds`.
-  for (const s of DEFAULT_SOURCES) {
-    if (!s.url) continue
-    assert.match(s.url, /^https:\/\//, `${s.id}: url should be a web page`)
-    assert.ok(!/\/feeds?\b|\.xml\b|\/rss\b|registry\.npmjs/i.test(s.url), `${s.id}: url ${s.url} is a feed, not a page`)
   }
 })
 

@@ -4,7 +4,7 @@ import React from 'react'
 import { Image, View, type StyleProp, type ViewStyle } from 'react-native'
 import { Hi, type IconType } from '../../lib/icons'
 import { DRIVER_LOGOS } from '../../lib/providers'
-import { textAlpha } from '../../theme'
+import { activePalette, textAlpha } from '../../theme'
 import { T } from '../../ui/Text'
 import {
   IconBrandGithub, IconBrandStrava, IconCalendarEvent, IconChecklist, IconDeviceDesktop, IconFileText, IconListCheck, IconBulb,
@@ -13,15 +13,18 @@ import {
 } from './icons'
 
 /** chat.css `.vc` custom properties. */
+// A background other than Original repaints the chat's surfaces as the web's
+// backgroundVars does (--surface, --raise, --bubble, --line-2).
+const pal = activePalette
 export const vc = {
   text: textAlpha(94),
   soft: textAlpha(62),
   faint: textAlpha(40),
-  bubble: '#232733',
-  surface: '#171a22',
-  raise: '#1f2330',
-  line: '#2a2f3c',
-  menu: '#1a1d26',
+  bubble: pal ? pal.raised : '#232733',
+  surface: pal ? pal.panel : '#171a22',
+  raise: pal ? pal.raised : '#1f2330',
+  line: pal ? pal.line : '#2a2f3c',
+  menu: pal ? pal.panel : '#1a1d26',
   code: '#0b0d12',
 } as const
 

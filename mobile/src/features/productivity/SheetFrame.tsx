@@ -13,13 +13,15 @@ import { T } from '../../ui/Text'
 import { IconBtn } from '../../ui/kit'
 import { XMarkIcon } from '../../lib/icons'
 
-export function SheetFrame({ kicker, title, onClose, children, actions }: {
+export function SheetFrame({ kicker, title, onClose, children, actions, headerAction }: {
   kicker: string
   title: string
   onClose: () => void
   children: React.ReactNode
   /** The .modal-actions buttons; each gets an equal share of the row. */
   actions?: React.ReactNode
+  /** A button beside Close in the head (iOS's Save), in reach without scrolling. */
+  headerAction?: React.ReactNode
 }) {
   const insets = useSafeAreaInsets()
   return (
@@ -29,7 +31,8 @@ export function SheetFrame({ kicker, title, onClose, children, actions }: {
           <T size={11.5} muted numberOfLines={1} style={{ marginBottom: 2 }}>{kicker}</T>
           <T size={18} weight={700} numberOfLines={2}>{title}</T>
         </View>
-        <IconBtn icon={XMarkIcon} size={20} label="Close" onPress={onClose} style={{ marginTop: -6, marginRight: -8 }} />
+        {headerAction ? <View style={{ marginTop: -6 }}>{headerAction}</View> : null}
+        <IconBtn icon={XMarkIcon} size={20} box={44} label="Close" onPress={onClose} style={{ marginTop: -8, marginRight: -10 }} />
       </View>
       <KeyboardAwareScrollView
         style={{ flex: 1 }}
@@ -77,7 +80,7 @@ const st = StyleSheet.create({
   sheet: { flex: 1, backgroundColor: colors.bg2 },
   // Room above for the sheet's grabber.
   head: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 16,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
     paddingTop: 20, paddingBottom: 10, marginHorizontal: 16, borderBottomWidth: 1, borderBottomColor: colors.line,
   },
   body: { paddingHorizontal: 16, paddingTop: 14, gap: 14 },

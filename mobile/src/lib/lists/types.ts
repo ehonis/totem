@@ -11,7 +11,8 @@ export interface ListItem {
 export interface LinkedListTodo {
   id: string
   title: string
-  status: 'todo' | 'doing' | 'done'
+  /** Open or done; the bridge no longer returns 'doing'. */
+  status: 'todo' | 'done'
   dueDate: string | null
   completedAt: string | null
 }

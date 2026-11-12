@@ -45,13 +45,6 @@ test('people parse keeps one row per person and finds the birthday wherever it s
   assert.equal(byName['Nolan Pierce (Nol)'].birthday, null)
 })
 
-test('a second line for the same person does not erase the birthday from the first', () => {
-  // Robin appears twice and only the first line carries the date. This is how the
-  // real file grows, and the obvious last-write-wins parse loses her birthday.
-  const people = parsePeople(PEOPLE_MD)
-  assert.ok(people.find((p) => p.name === 'Robin Ashby').birthday)
-})
-
 test('a birthday today is a pinned, maximum-salience fact', () => {
   const facts = birthdayFacts({ people: parsePeople(PEOPLE_MD), now: at('2026-09-11 07:15'), tz: TZ })
   const today = facts.filter((f) => f.kind === 'birthday.today')

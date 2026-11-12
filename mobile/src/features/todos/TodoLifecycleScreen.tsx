@@ -1,6 +1,8 @@
-// The chips under the board (web/src/todos/TodoLifecyclePanels.tsx, plus the Done
-// column's archive, whose header a phone never shows) as one sheet per panel:
-// snoozed tasks, the recycle bin, the archive by day/week/month/year, retention.
+// The board's lifecycle panels (web/src/todos/TodoLifecyclePanels.tsx, plus the Done
+// column's archive, whose header a phone never shows) as one sheet per panel, opened
+// from the board's "…" menu, its snoozed chip and its archive link: snoozed tasks
+// (soonest back first, each with Wake now), the recycle bin, the archive by
+// day/week/month/year, retention.
 import React, { useEffect, useState } from 'react'
 import { SectionList, StyleSheet, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
@@ -11,12 +13,13 @@ import { Btn, Press, Spinner } from '../../ui/kit'
 import { confirm } from '../../ui/menu'
 import { success } from '../../ui/haptics'
 import { Hi, ClockIcon } from '../../lib/icons'
-import { purgeDeletedTodos, restoreBoardTodo, updateTodoPreferences } from '../../lib/api'
+import { purgeDeletedTodos, updateTodoPreferences } from '../../lib/api'
 import { groupArchive, type ArchivePeriod } from '../../lib/todos/archive'
 import type { TodoPreferences } from '../../lib/todos/types'
 import TodoCard from './TodoCard'
 import { archiveHourLabel } from './format'
-import { loadBoard, showArchive, useBoard } from './store'
+import { loadBoard, restoreTodo, showArchive, useBoard, wakeTodo } from './store'
+import { byWake, wakeLabel } from './board'
 import { DateField, Field, FieldInput, InlineError, InlineNotice, SheetFrame, SheetHead } from './ui'
 import { openTodo } from './nav'
 
@@ -47,9 +50,16 @@ function Panels({ panel }: { panel: Exclude<Panel, 'archive'> }) {
   useEffect(() => { setPrefs(board.preferences) }, [board.preferences])
 
   async function restore(id: string) {
-    try { await restoreBoardTodo(id); success(); void loadBoard() }
+    setError('')
+    try { await restoreTodo(id); success() }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Task could not be restored.') }
   }
+  async function wake(id: string) {
+    setError('')
+    try { await wakeTodo(id); success() }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Task could not be woken.') }
+  }
+  const now = new Date()
   async function purge() {
     const days = prefs.recyclePurgeDays ?? 30
     if (!(await confirm('Purge eligible deleted tasks?', { message: `Tasks in the recycle bin for more than ${days} days are removed for good. The task database is backed up first.`, confirmLabel: 'Purge' }))) return
@@ -69,18 +79,30 @@ function Panels({ panel }: { panel: Exclude<Panel, 'archive'> }) {
   const parseDays = (text: string) => (text.trim() ? Math.max(1, Number(text.replace(/\D/g, '')) || 1) : null)
 
   return (
-    <SheetFrame kicker="Todos" title={TITLES[panel]} onClose={() => router.back()}>
+    <SheetFrame kicker="Tasks" title={TITLES[panel]} onClose={() => router.back()}>
       <InlineError>{error}</InlineError>
       <InlineNotice>{notice}</InlineNotice>
       {panel === 'snoozed' ? (
         board.snoozed.length ? (
           <View style={st.rows}>
-            {board.snoozed.map((todo, index) => (
-              <Press key={todo.id} onPress={() => openTodo(todo)} style={[st.row, index === 0 && st.first]} accessibilityRole="button">
-                <T size={14} lineHeight={19} style={{ flex: 1 }} numberOfLines={2}>{todo.title}</T>
-                <T size={12} muted style={{ flexShrink: 0 }}>{todo.snoozedUntil ? new Date(todo.snoozedUntil).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}</T>
-              </Press>
-            ))}
+            {byWake(board.snoozed).map((todo, index) => {
+              const at = todo.snoozedUntil ? new Date(todo.snoozedUntil) : null
+              return (
+                <View key={todo.id} style={[st.row, index === 0 && st.first]}>
+                  <Press onPress={() => openTodo(todo)} style={{ flex: 1, minHeight: 44, justifyContent: 'center', gap: 2 }} accessibilityRole="button"
+                    accessibilityLabel={`${todo.title}${at ? `, back ${wakeLabel(at, now)}` : ''}`} accessibilityHint="Opens the task">
+                    <T size={14} lineHeight={19} numberOfLines={2}>{todo.title}</T>
+                    {at ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Hi icon={ClockIcon} size={12} color={colors.muted} />
+                        <T size={12} muted>{`Back ${wakeLabel(at, now)}`}</T>
+                      </View>
+                    ) : null}
+                  </Press>
+                  <Btn compact title="Wake now" onPress={() => void wake(todo.id)} style={{ minHeight: 44 }} />
+                </View>
+              )
+            })}
           </View>
         ) : <T size={13} muted>No snoozed tasks.</T>
       ) : null}
@@ -91,7 +113,7 @@ function Panels({ panel }: { panel: Exclude<Panel, 'archive'> }) {
               {board.deleted.map((todo, index) => (
                 <View key={todo.id} style={[st.row, index === 0 && st.first]}>
                   <T size={14} lineHeight={19} style={{ flex: 1 }} numberOfLines={2}>{todo.title}</T>
-                  <Btn compact title="Restore" onPress={() => void restore(todo.id)} />
+                  <Btn compact title="Restore" onPress={() => void restore(todo.id)} style={{ minHeight: 44 }} />
                 </View>
               ))}
             </View>

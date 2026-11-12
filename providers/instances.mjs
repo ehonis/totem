@@ -286,7 +286,7 @@ export function instanceEnvironment(instance, baseEnv = process.env, home = home
     const layout = codexHomeLayout(instance, home)
     if (layout.effectiveHomePath) env.CODEX_HOME = layout.effectiveHomePath
     // `codex exec` authenticates from CODEX_API_KEY; an OPENAI_API_KEY alone (the
-    // name Settings -> AI stores it under, shared with OpenCode, and the voice
+    // name Settings -> Providers stores it under, shared with OpenCode, and the voice
     // mode's key) is not enough for it. Mirror it only for an account with no
     // ChatGPT login: CODEX_API_KEY outranks the login, and on an API key Codex
     // drops its image generation tool.
@@ -477,9 +477,22 @@ export function mergeExecFields(known, entry = {}) {
 // and the environment file. Claude Code takes these as permission deny rules
 // (`Read(//abs/path)`); the other CLIs have no equivalent switch — see AGENTS.md.
 export const AGENT_SECRET_PATHS = Object.freeze([
-  'data/auth.json', 'data/ai-settings.json', 'data/integrations.json',
+  'data/auth.json', 'data/approval-code.json', 'data/ai-settings.json', 'data/integrations.json', 'data/*-tokens.json',
   '.env', 'secrets/**',
 ])
+
+/**
+ * Claude Code permission rules naming `tools` on each path: a file by itself, a
+ * directory with everything under it. Paths are made absolute; `//` is Claude
+ * Code's spelling of an absolute path in a rule.
+ */
+export function claudePathRules(paths, tools) {
+  return paths.filter(Boolean).flatMap((path) => {
+    const abs = `/${resolve(String(path)).replace(/\/+$/, '')}`
+    const target = /\.[a-z0-9]{1,8}$/i.test(abs) ? abs : `${abs}/**`
+    return tools.map((tool) => `${tool}(${target})`)
+  })
+}
 
 /** Claude Code deny rules keeping its file tools away from AGENT_SECRET_PATHS. */
 export function claudeSecretDenyRules(root) {
@@ -495,7 +508,7 @@ const API_KEY_VARS = Object.freeze({
 
 /**
  * The API-key variable this account will run with, if any — from the real
- * environment, a key stored in Settings -> AI (already applied to process.env), or
+ * environment, a key stored in Settings -> Providers (already applied to process.env), or
  * the account's own env list. Null when it relies on a login instead.
  */
 export function effectiveApiKeyVar(instance, baseEnv = process.env, home = homedir()) {

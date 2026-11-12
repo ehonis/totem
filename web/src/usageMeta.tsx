@@ -148,7 +148,7 @@ function useTipPosition(hover: number | null, count: number) {
 // Shared 30-day stacked activity graph. One column per day, each split into the
 // segments that made up that day. Hovering a column reveals a floating tooltip
 // with the day's total and per-segment breakdown. Defaults to the AI-request
-// channel palette (Settings ▸ Usage), but `order`/`meta`/`unit` let the Overview
+// channel palette (Settings › Usage), but `order`/`meta`/`unit` let the Overview
 // reuse the identical chart for productivity activity (todos/habits/events).
 interface ActivityChartProps {
   daily?: any[]

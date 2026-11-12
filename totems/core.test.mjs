@@ -1,7 +1,7 @@
 // node --test totems/core.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { costTier, totemRunPrompt, parseRunReply, totemsRule, parseProposals, appendMemoryNote, builderPrompt, parseBuilderReply, askableTotem, normalizeMembers, totemsChatRule, totemAskPrompt } from './core.mjs'
+import { costTier, totemRunPrompt, totemChatBlock, parseRunReply, totemsRule, parseProposals, appendMemoryNote, builderPrompt, parseBuilderReply, askableTotem, normalizeMembers, totemsChatRule, totemAskPrompt } from './core.mjs'
 
 const catalog = [
   { provider: 'codex', driver: 'codex', name: 'Codex', models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna' }, { id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }] },
@@ -29,6 +29,20 @@ test('a run prompt carries the job, memory path, recent runs and the closing pro
   assert.match(p, /still sold out/)
   assert.match(p, /NOTIFY: <title/)
   assert.match(p, /no browser in this run/)
+  assert.match(p, /ACCESS: .*setting Access to Full/, 'a standard run is told how the owner unblocks a refused command')
+})
+
+test('a run prompt names its files folder, and a Full access run is not told commands may be refused', () => {
+  const base = { totem: { name: 'Sweeper', prompt: 'Check the fleet.' }, memoryPath: '/m.md', filesDir: '/d/chat-outputs/totem-j1' }
+  const standard = totemRunPrompt(base)
+  assert.match(standard, /FILES: .*\/d\/chat-outputs\/totem-j1/)
+  assert.match(standard, /ACCESS:/)
+  const full = totemRunPrompt({ ...base, totem: { ...base.totem, access: 'full' } })
+  assert.match(full, /FILES: /)
+  assert.doesNotMatch(full, /ACCESS:/)
+  const ask = totemAskPrompt({ ...base, message: 'How full is the mini?' })
+  assert.match(ask, /FILES: .*totem-j1/)
+  assert.match(ask, /ACCESS:/)
 })
 
 test('parseRunReply reads NOTIFY and QUIET from the last line, tolerating Markdown', () => {
@@ -90,6 +104,9 @@ test('a builder reply is validated against the catalog and sorted cheapest first
   assert.equal(d.summary, 'Tells you when the jacket is back')
   assert.deepEqual(d.schedule, { type: 'interval', everyMinutes: 15 }, 'never more often than every 15 minutes')
   assert.equal(d.browser, true)
+  assert.equal(d.access, null, 'no access asked for, so none given')
+  assert.equal(parseBuilderReply(reply.replace('"browser":true', '"browser":true,"access":"full"'), { catalog }).access, 'full')
+  assert.equal(parseBuilderReply(reply.replace('"browser":true', '"browser":true,"access":"auto"'), { catalog }).access, null, 'the builder can only propose Full or nothing')
   assert.deepEqual(d.recommendations.map((r) => r.model), ['gpt-6-luna', 'claude-sonnet-5-5'])
   assert.equal(d.recommendations[0].label, 'GPT-6 Luna')
   assert.equal(d.recommendations[0].cost, 1)
@@ -188,4 +205,14 @@ test('an ask prompt carries the job, memory, the chat and the question, without 
   assert.doesNotMatch(p, /Host:\s*$/m)
   assert.match(p, /THE HOST ASKS YOU:\nIs it back in stock\?/)
   assert.match(p, /Do not end with NOTIFY or QUIET/)
+})
+
+test("a totem's chat names its memory file instead of pasting it; its runs still get the text", () => {
+  const totem = { id: 'j1', name: 'Release watch', prompt: 'Watch releases.', scheduleLabel: 'daily at 08:00', enabled: true }
+  const block = totemChatBlock({ totem, memory: { path: '/data/totems/j1/memory.md', bytes: 1500, entries: 6, updated: '2026-11-04' } })
+  assert.match(block, /Its memory: \/data\/totems\/j1\/memory\.md \(1\.5 KB, 6 entries, last updated 2026-11-04\)\. It is not pasted here/)
+  assert.match(block, /write it into that memory file with your file tools \(read it first\)/)
+  assert.match(totemChatBlock({ totem, memory: { path: '/m.md', entries: 0 } }), /Its memory: \/m\.md \(empty so far\)\.\n/)
+  const run = totemRunPrompt({ totem, memory: '- 2026-11-04: last seen v1.2.3', memoryPath: '/data/totems/j1/memory.md' })
+  assert.match(run, /YOUR MEMORY \(\/data\/totems\/j1\/memory\.md\):\n- 2026-11-04: last seen v1\.2\.3/, 'a run is a fresh session and needs its state inline')
 })

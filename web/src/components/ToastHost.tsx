@@ -125,6 +125,7 @@ export default function ToastHost() {
 
   return (
     <div
+      data-toast-host=""
       className="fixed left-[18px] bottom-[18px] z-[1000] w-[min(380px,calc(100vw-36px))] max-[720px]:left-3 max-[720px]:right-3 max-[720px]:w-auto max-[720px]:bottom-auto max-[720px]:top-[calc(58px+env(safe-area-inset-top))] transition-[height] duration-500 ease-[cubic-bezier(.22,1,.36,1)]"
       style={{ height }}
       role="region"

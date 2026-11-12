@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { DEFAULT_TIME_ZONE, todayKey } from '../goals/periods.mjs';
 import { withTodoTransaction } from './db.mjs';
 import { TodoDomainError } from './errors.mjs';
+import { issueLinkFromUrl, parseIssueUrl } from './issue-link.mjs';
 import { nextOccurrence } from './recurrence.mjs';
 
 const AREAS = new Set(['Personal', 'Ventures']);
@@ -11,8 +12,12 @@ const AREAS = new Set(['Personal', 'Ventures']);
 const VENTURE_TAGS_KEY = 'ventureTags';
 const MAX_VENTURE_TAG_LENGTH = 40;
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
-const STATUSES = new Set(['todo', 'doing', 'done']);
-const COMPLETION_OWNERS = new Set(['github', 'sheet']);
+// A task is open (`todo`) or `done`. `doing` is still accepted on every input and
+// stored as `todo`: older app bundles and the phone's cached answers still send it
+// (migration 011 retired the status).
+const STATUSES = new Set(['todo', 'done']);
+const RETIRED_STATUSES = Object.freeze({ doing: 'todo' });
+const ISSUE_LINK_CONNECTOR = 'github';
 const COMPLETION_METADATA_KEY = '__totemCompletion';
 const SOURCE_SNAPSHOT_METADATA_KEY = '__totemSourceSnapshot';
 const UPDATE_FIELDS = new Set([
@@ -104,12 +109,21 @@ function date(value, field) {
 }
 
 function status(value) {
-  if (!STATUSES.has(value)) {
-    throw domainError('INVALID_STATUS', 'status must be todo, doing, or done.', {
+  const current = Object.hasOwn(RETIRED_STATUSES, value) ? RETIRED_STATUSES[value] : value;
+  if (!STATUSES.has(current)) {
+    throw domainError('INVALID_STATUS', 'status must be todo or done.', {
       details: { status: value },
     });
   }
-  return value;
+  return current;
+}
+
+/** A status as a caller names it, `doing` included, as the board stores it. Throws on anything else. */
+export const normalizeStatus = value => status(value);
+
+/** What a stored status reads as. A `doing` row left by a restore is open. */
+function storedStatus(value) {
+  return Object.hasOwn(RETIRED_STATUSES, value) ? RETIRED_STATUSES[value] : value;
 }
 
 /** How a finished task ended: it happened, or it never will. */
@@ -308,7 +322,18 @@ export function createTodoService({
   actionLog,
   // The owner's time zone: "today" for a repeating task's next date is a local day.
   tz = DEFAULT_TIME_ZONE,
+  // Connectors that decide when their tasks are done: none. The GitHub task connector
+  // (migration 011) and the sheet sync (012) were retired, so a GitHub issue link is
+  // only a link and a task still carrying a sheet link completes here like any other.
+  // The rules for an owning connector stay (its tests pass a stand-in).
+  completionOwners = [],
+  // Connectors that still sync, so their queued writes and state say something about a
+  // task: none. Leftovers of a retired one must not keep a task "pending" for ever.
+  // (An empty `IN ()` is valid SQLite, so the queries below still run.)
+  syncingConnectors = [],
 } = {}) {
+  const COMPLETION_OWNERS = new Set(completionOwners);
+  const SYNCING_CONNECTORS = [...syncingConnectors];
   if (!db) throw new Error('createTodoService requires db');
   if (typeof now !== 'function') throw new Error('createTodoService requires now to be a function');
   if (typeof makeId !== 'function') throw new Error('createTodoService requires makeId to be a function');
@@ -355,13 +380,15 @@ export function createTodoService({
     }));
   }
 
-  function syncStateFor(id, links) {
+  function syncStateFor(id, allLinks) {
+    const links = allLinks.filter(link => SYNCING_CONNECTORS.includes(link.connector));
     const outbox = db.prepare(`
       SELECT status, COUNT(*) AS count, MAX(last_error) AS last_error
       FROM sync_outbox
       WHERE todo_id = ? AND status <> 'completed'
+        AND connector IN (${SYNCING_CONNECTORS.map(() => '?').join(', ')})
       GROUP BY status
-    `).all(id);
+    `).all(id, ...SYNCING_CONNECTORS);
     const counts = Object.fromEntries(outbox.map(row => [row.status, Number(row.count)]));
     const pending = (counts.pending ?? 0) + (counts.leased ?? 0) + (counts.retry ?? 0);
     const conflicts = counts.conflict ?? 0;
@@ -417,7 +444,7 @@ export function createTodoService({
     `).all(row.id, row.id, row.id).map(relation => ({
       id: relation.id,
       title: relation.title,
-      status: relation.status,
+      status: storedStatus(relation.status),
       area: relation.area,
       ventureTag: relation.venture_tag,
     }));
@@ -434,7 +461,7 @@ export function createTodoService({
       description: row.description,
       area: row.area,
       ventureTag: row.venture_tag,
-      status: row.status,
+      status: storedStatus(row.status),
       priority: row.priority,
       dueDate: row.due_date,
       recurrence: row.recurrence,
@@ -453,8 +480,19 @@ export function createTodoService({
       relations,
       lists,
       externalLinks: links,
+      // The task's GitHub issue, as a plain link: { connector, repo, number, url }.
+      issueLink: issueLinkFor(links),
       syncState: syncStateFor(row.id, links),
     };
+  }
+
+  function issueLinkFor(links) {
+    for (const link of links) {
+      if (link.connector !== ISSUE_LINK_CONNECTOR) continue;
+      const parsed = issueLinkFromUrl(link.externalUrl);
+      if (parsed) return parsed;
+    }
+    return null;
   }
 
   function get(id) {
@@ -480,10 +518,14 @@ export function createTodoService({
     } else if (query.archived === false || (!query.includeArchived && !deletedOnly)) {
       where.push('todos.archived_at IS NULL');
     }
+    if (query.status !== undefined && query.status !== null && query.status !== '') {
+      // `doing` reads as open; a status that never existed is refused, not matched to nothing.
+      where.push('todos.status = ?');
+      parameters.push(status(query.status));
+    }
     for (const [field, column] of [
       ['area', 'area'],
       ['ventureTag', 'venture_tag'],
-      ['status', 'status'],
       ['outcome', 'outcome'],
       ['priority', 'priority'],
     ]) {
@@ -538,7 +580,7 @@ export function createTodoService({
       parameters.push(pattern, pattern, pattern, pattern, pattern, pattern, githubUrlPattern, pattern);
     }
     const orderBy = {
-      manual: `CASE todos.status WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END,
+      manual: `CASE todos.status WHEN 'done' THEN 1 ELSE 0 END,
         todos.position, todos.id`,
       priority: `todos.priority DESC, todos.position, todos.id`,
       due: `todos.due_date IS NULL, todos.due_date, todos.position, todos.id`,
@@ -794,7 +836,7 @@ export function createTodoService({
     if (!owner || (todo.status !== 'done' && nextStatus !== 'done')) return;
     throw domainError(
       'SOURCE_OWNS_COMPLETION',
-      `Complete this task in ${owner.connector === 'github' ? 'GitHub' : 'the Action Items sheet'}.`,
+      'Complete this task where it came from.',
       { status: 409, details: { source: owner.connector, url: owner.externalUrl } },
     );
   }
@@ -819,7 +861,7 @@ export function createTodoService({
       todo.status === 'done' ||
       !todo.recurrence ||
       !todo.dueDate ||
-      todo.externalLinks.length > 0
+      completionOwner(todo)
     ) return;
 
     // The next date is the first one after today, so a task finished late does not
@@ -1422,7 +1464,7 @@ export function createTodoService({
     } else if (ownsCompletion && firstObservation) {
       const seed = status(observation.initialStatus ?? todo.status);
       if (seed === 'done') {
-        throw domainError('INVALID_INITIAL_STATUS', 'An open external task can seed only todo or doing.');
+        throw domainError('INVALID_INITIAL_STATUS', 'An open external task can only seed an open status.');
       }
       nextStatus = seed;
       nextCompletedAt = null;
@@ -1487,6 +1529,88 @@ export function createTodoService({
     });
   }
 
+  /**
+   * Set or clear the task's GitHub issue link: a plain link, with no sync. `url` is
+   * `https://github.com/<owner>/<repo>/issues/<n>` or null to clear. It replaces any
+   * GitHub link the task had, including one the retired connector left behind.
+   *
+   * The link's external id carries the task id, so two tasks may point at the same
+   * issue (external_links is unique per connector and id).
+   */
+  function setIssueLink(id, url, context) {
+    const parsed = url == null || url === '' ? null : parseIssueUrl(url);
+    const at = currentTimestamp();
+    let todo;
+    return mutate({
+      action: parsed ? 'todo.issue-link.set' : 'todo.issue-link.clear',
+      target: id,
+      context,
+      summary: () => parsed
+        ? `Linked todo "${todo.title}" to ${parsed.repo}#${parsed.number}`
+        : `Removed the issue link from todo "${todo.title}"`,
+      result: parsed ? 'linked' : 'unlinked',
+    }, () => {
+      todo = requireTodo(requiredString(id, 'id'));
+      db.prepare('DELETE FROM external_links WHERE todo_id = ? AND connector = ?')
+        .run(todo.id, ISSUE_LINK_CONNECTOR);
+      if (parsed) {
+        db.prepare(`
+          INSERT INTO external_links (
+            id, todo_id, connector, external_id, external_url, initial_status_seeded,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        `).run(
+          requiredString(makeId(), 'link id'),
+          todo.id,
+          ISSUE_LINK_CONNECTOR,
+          `${parsed.repo}#${parsed.number}@${todo.id}`,
+          parsed.url,
+          at,
+          at,
+        );
+      }
+      db.prepare('UPDATE todos SET updated_at = ? WHERE id = ?').run(at, todo.id);
+      return get(todo.id);
+    });
+  }
+
+  /**
+   * The issues linked from tasks still on the board (not archived, not deleted),
+   * one entry per issue, most recently updated task first, at most `limit`.
+   */
+  function issueLinks({ limit = 50 } = {}) {
+    const rows = db.prepare(`
+      SELECT el.external_url FROM external_links el
+      JOIN todos ON todos.id = el.todo_id
+      WHERE el.connector = ? AND todos.deleted_at IS NULL AND todos.archived_at IS NULL
+      ORDER BY todos.updated_at DESC, todos.id
+    `).all(ISSUE_LINK_CONNECTOR);
+    const seen = new Map();
+    for (const row of rows) {
+      const link = issueLinkFromUrl(row.external_url);
+      if (!link) continue;
+      const key = `${link.repo}#${link.number}`;
+      if (!seen.has(key)) seen.set(key, { key, ...link });
+      if (seen.size >= limit) break;
+    }
+    return [...seen.values()];
+  }
+
+  /** How many tasks sit off the board, counted rather than listed. */
+  function counts() {
+    const at = currentTimestamp();
+    const row = db.prepare(`
+      SELECT
+        COUNT(*) FILTER (WHERE deleted_at IS NULL AND archived_at IS NOT NULL) AS archived,
+        COUNT(*) FILTER (
+          WHERE deleted_at IS NULL AND archived_at IS NULL AND snoozed_until > ?
+        ) AS snoozed,
+        COUNT(*) FILTER (WHERE deleted_at IS NOT NULL) AS deleted
+      FROM todos
+    `).get(at);
+    return { archived: Number(row.archived), snoozed: Number(row.snoozed), deleted: Number(row.deleted) };
+  }
+
   return {
     list,
     get,
@@ -1516,6 +1640,9 @@ export function createTodoService({
     attachExternalLink,
     detachExternalLink,
     applyExternalObservation,
+    setIssueLink,
+    issueLinks,
+    counts,
   };
 }
 

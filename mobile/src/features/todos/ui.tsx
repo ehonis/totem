@@ -21,11 +21,9 @@ export const tone = {
   blue: { color: '#86aaff', borderColor: '#5b8cff45', backgroundColor: '#5b8cff12' },
   grey: { color: '#aeb5c4', borderColor: colors.line, backgroundColor: 'rgba(29, 33, 44, 0.72)' },
   sheet: { color: '#79cf91', borderColor: '#3fb95045', backgroundColor: '#3fb95012' },
-  github: { color: '#cbd2e1', borderColor: '#94a3b845', backgroundColor: '#94a3b812' },
 } as const
 export type Tone = (typeof tone)[keyof typeof tone]
 
-export const STATUS_COLOR = { todo: colors.accent, doing: colors.amber, done: colors.green } as const
 
 /** .field: a muted label over its control. */
 export function Field({ label, children, style }: { label: string; children: React.ReactNode; style?: StyleProp<ViewStyle> }) {

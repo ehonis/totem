@@ -1,16 +1,19 @@
-// Every horizon at once (web/src/goals/GoalsOverview.tsx): this week, this month and
-// this year stacked, each coloured by its period. Read-only on purpose — logging and
-// completing stay on the full card; each column's Open goes to that period.
+// Every horizon at once (web/src/goals/GoalsOverview.tsx): a ring per horizon on
+// top (#180), then this week, this month and this year stacked, each coloured by
+// its period. Read-only on purpose: logging and completing stay on the full card;
+// a ring or a column's Open goes to that period.
 import React, { useCallback, useEffect, useState } from 'react'
 import { StyleSheet, View } from 'react-native'
-import { colors } from '../../theme'
+import { colors, alpha } from '../../theme'
 import { T } from '../../ui/Text'
-import { Btn } from '../../ui/kit'
+import { Btn, Press } from '../../ui/kit'
 import { Hi, ArrowRightIcon, TrophyIcon } from '../../lib/icons'
 import { AuthError, clearSecret, getGoals } from '../../lib/api'
 import { GOAL_DONE_ICON, goalIconFor } from '../../lib/goals/goalIcon'
 import type { Goal, GoalPeriodShortcut } from '../../lib/goals/types'
 import { PERIOD_COLOR } from './GoalCard'
+import Ring from './Ring'
+import { periodSummary } from './summary'
 
 const COLUMNS: { shortcut: GoalPeriodShortcut; type: 'week' | 'month' | 'year'; title: string }[] = [
   { shortcut: 'this_week', type: 'week', title: 'This week' },
@@ -32,7 +35,7 @@ function GoalLine({ goal, color }: { goal: Goal; color: string }) {
         <T size={13} numberOfLines={1} style={[{ flex: 1 }, notDoing && { color: colors.muted, textDecorationLine: 'line-through' }]}>{goal.title}</T>
         <T size={12} color={goal.complete ? colors.green : colors.muted} style={{ fontVariant: ['tabular-nums'] }}>{percent === null ? '—' : `${percent}%`}</T>
       </View>
-      <View style={[s.thin, { marginLeft: 23 }]}><View style={{ width: `${percent ?? 0}%`, height: '100%', backgroundColor: tint }} /></View>
+      <View style={[s.thin, { marginLeft: 23 }]}><View style={{ width: `${goal.complete ? 100 : percent ?? 0}%`, height: '100%', backgroundColor: tint }} /></View>
     </View>
   )
 }
@@ -66,6 +69,30 @@ export default function GoalsOverview({ onOpenPeriod, reloadKey = 0 }: { onOpenP
 
   return (
     <View style={{ gap: 12 }}>
+      <View style={s.rings}>
+        {COLUMNS.map((column) => {
+          const data = columns[column.shortcut]
+          const sum = periodSummary(data?.goals ?? [])
+          const color = sum.counted && sum.achieved === sum.counted ? colors.green : PERIOD_COLOR[column.type]
+          return (
+            <Press
+              key={column.shortcut}
+              haptic
+              onPress={() => onOpenPeriod(column.shortcut)}
+              accessibilityRole="button"
+              accessibilityLabel={`${column.title}: ${data ? `${sum.achieved} of ${sum.counted} achieved` : 'loading'}. Open`}
+              style={s.ringCell}
+            >
+              <Ring percent={sum.counted ? sum.ratio * 100 : 0} color={color} track={alpha(PERIOD_COLOR[column.type], 0.18)} size={64} stroke={6}>
+                <T size={16} weight={700} style={{ fontVariant: ['tabular-nums'] }}>
+                  {data ? sum.achieved : '–'}<T size={11} muted>/{data ? sum.counted : '–'}</T>
+                </T>
+              </Ring>
+              <T size={12.5} weight={600} color={PERIOD_COLOR[column.type]}>{column.title}</T>
+            </Press>
+          )
+        })}
+      </View>
       {COLUMNS.map((column) => {
         const color = PERIOD_COLOR[column.type]
         const data = columns[column.shortcut]
@@ -111,5 +138,10 @@ const s = StyleSheet.create({
     borderRadius: 12, padding: 12, gap: 8,
   },
   thin: { height: 4, borderRadius: 999, backgroundColor: colors.bg3, overflow: 'hidden' },
+  rings: {
+    flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 14,
+    backgroundColor: colors.bg2, borderWidth: 1, borderColor: colors.line, borderRadius: 16,
+  },
+  ringCell: { alignItems: 'center', gap: 8, minWidth: 88, paddingVertical: 4 },
 })
 

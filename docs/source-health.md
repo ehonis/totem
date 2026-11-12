@@ -2,15 +2,34 @@
 
 One place that answers "is this data source actually working?". Every connector writes a row
 to one run log for each operation on the thing it reads; health is folded from that log and
-shown in Settings → Connections › Source health (and Settings → Connections in the iPhone app),
-grouped under the goals each source feeds. A goal metric whose source is failing says so on its
-card, and the owner is told once per outage.
+shown in Settings → Connections › Data sources (and Settings → Connections in the iPhone app).
+A goal metric whose source is failing says so on its card, and the owner is told once per outage.
+
+## In Settings
+
+The list leads with what is wrong and folds the rest (`sortSources` in `web/src/sources/health.ts`,
+ported to the app's `lib/sources/health.ts`):
+
+- **Problems** (failing, then erroring) get a full row: the state, how long, the error, and a tag
+  for each goal the source feeds. Opening one shows its newest runs.
+- **Working** sources fold into one "N working" row naming them; it opens onto compact rows.
+- **Not set up or not read yet** fold the same way.
+
+The web leaves MCP servers and the gateway out of this list (`isMcpSource`): its MCP servers
+section shows each server's state from the same status check, with the server's newest runs
+under "Recent checks" when it is opened (and "failing since" on a server that keeps failing). The
+app has no MCP section, so it keeps them. The page's attention line ("Needs you",
+`attentionItems` in `web/src/connections/state.ts`) counts failing and erroring sources, a source
+log that could not be read or is off, servers that need a sign-in or are not working (built-in tool
+sets included), and Accounts rows that need the owner, and jumps to each section. It says
+everything works only once the gateway and the source log have both answered.
 
 Nothing to switch on: a source appears the first time it is read. What writes nothing until it
 is set up: Strava and WHOOP without `BUSHIDO_URL`/`BUSHIDO_API_TOKEN`, Gmail, Drive and Calendar
 with no account connected, the task sheet without `TASK_SHEET_*`, and MCP servers not in the
 manifest. What runs without setup and so can appear (and fail) on its own: the feed scan (public
-feeds), and the GitHub task sync if its job is on without a working `gh` login.
+feeds). (The GitHub task sync, `github-tasks`, was removed; the bridge forgets its row at every
+boot, `sourceRuns.forget`, so it never shows in Settings → Connections.)
 
 ## The run log
 
@@ -38,23 +57,40 @@ throws.
 
 ## Scrubbing
 
-Errors are scrubbed before they are written (`sources/scrub.mjs`), in layers:
+Errors are scrubbed before they are written (`sources/scrub.mjs`). Only the first 8 KB of a
+message is read, cut back to the last whitespace so no token is left half in; then, in layers:
 
-1. Percent-escapes are decoded first, so `access%5Ftoken%3D…` is seen as `access_token=…`.
-2. URLs lose any `user:password@`. An MCP server's error keeps only each URL's origin, since
-   its path is often the credential (`/s/<secret>/mcp`).
-3. `Authorization`/`Proxy-Authorization` values, scheme included, in a header line, JSON or a
-   JS object, and `Cookie`/`Set-Cookie` lines.
+1. Percent-escapes are decoded, so `access%5Ftoken%3D…` is seen as `access_token=…`.
+2. URLs lose any `user:password@` and the value of any secret-named query or fragment
+   param (`?access_token=…&page=2` keeps `page=2`). An MCP server's error keeps only each URL's
+   origin, since its path is often the credential (`/s/<secret>/mcp`).
+3. PEM blocks (to the end if the message was cut off), `Authorization`/`Proxy-Authorization`
+   values, scheme included, in a header line, JSON or a JS object, and `Cookie`/`Set-Cookie`
+   lines.
 4. Any value whose name contains `token`, `key`, `secret`, `password`, `code`, `sig`, `auth`,
-   `credential`, `session`, `cookie`, `assertion` or `jwt`, after `=` or `:`, with or without
-   spaces and quotes (escaped JSON included): `GITHUB_PERSONAL_ACCESS_TOKEN=`, `PRIVATE-TOKEN:`,
-   `"refreshToken":`, `client_secret =`. A few names are left alone (`error_code`, `grant_type`,
-   `token_type`, …), as is a value of up to four digits (`status code: 429`).
+   `credential`, `session`, `cookie`, `assertion` or `jwt`, or is `pass` or ends in `_pass`:
+   after `=` or `:`, with or without spaces and quotes (escaped JSON included); a quoted value
+   whole, spaces and all (`{"password":"two words"}`); and `<access_token>…</access_token>`.
+   So `GITHUB_PERSONAL_ACCESS_TOKEN=`, `PRIVATE-TOKEN:`, `"refreshToken":`, `client_secret =`,
+   `?pass=`. A few names are left alone (`error_code`, `grant_type`, `token_type`, …), as is a
+   value of up to four digits (`status code: 429`).
 5. `Bearer`/`Basic` values in prose, tokens with a provider's prefix (`ghp_`, `github_pat_`,
-   `glpat-`, `sk-`, `xoxb-`, `ya29.`, `AIza`, `1//0`, `eyJ`, …), Slack webhook paths and Telegram
-   bot tokens.
-6. The fallback: any run of 32 or more characters that mixes letters and digits, which is what
-   an unnamed token looks like (a Strava hex token in an unnamed field).
+   `glpat-`, `sk-`, `xoxb-`, `ya29.`, `AIza`, `1//0`, `eyJ`, AWS `AKIA`/`ASIA`, …), Slack and
+   Discord webhook paths and Telegram bot tokens.
+6. The fallback: any run of 24 or more characters that mixes letters and digits, which is what
+   an unnamed token looks like (a Strava hex token in an unnamed field). A UUID, a commit SHA or
+   a Drive file id in an error goes too; that is the price of catching tokens nothing names.
+   They are not exempted: a Strava token is 40 hex characters, exactly a SHA's shape, and some
+   services issue UUIDs as API keys.
+
+Not caught: a secret with no name and no prefix that contains `/` (an AWS secret access key in
+prose). Treating `/` as part of a token would redact ordinary URL paths.
+
+The scrubber runs on the bridge's main thread on text a remote server chose, so it must stay
+linear: no pattern may backtrack over a run (a name is captured atomically and tested after
+the match, a URL scheme and a quoted value are bounded). `sources/scrub.test.mjs` times 100 KB
+inputs and every pattern's worst case at the cap. An earlier `[\w-]*(?:token|…)[\w-]*` took
+25 s on 100 KB of one letter.
 
 Messages are cut to 500 characters. The notification never carries the error at all (below).
 
@@ -69,8 +105,7 @@ Messages are cut to 500 characters. The notification never carries the error at 
 | `calendar:<account>` | `fetchCalendar` in `bridge.mjs` | one account's event read |
 | `gmail:<account>` | `gmail/index.mjs` | one operation (a search with its message reads, a thread read, a trash), token refresh included |
 | `drive:<account>` | `drive/index.mjs` | one operation (a file read with its export or download, a trash), token refresh included |
-| `github-tasks` | `todos/connectors/github-sync.mjs` | one reconcile's pull |
-| `sheet-tasks` | `todos/connectors/task-sheet-sync.mjs` | one reconcile's pull |
+| `task-sheet` | `todos/connectors/task-sheet-feed.mjs` | one read of the shared task sheet (cache misses only); not set up until `TASK_SHEET_*` and a Drive account are. `sheet-tasks`, the retired two-way sync's id, is marked not set up at boot and pruned with age |
 | `feed:<id>` | `runFeedScan` in `bridge.mjs` | one feed read in a feed scan |
 | `mcp:<server>` | `sources/gateway.mjs`, from the bridge's gateway status check | one server in a check (Connections open) |
 | `mcp-gateway` | the same | the status check itself |
@@ -167,7 +202,7 @@ screen, and the error is in Settings.
 `GOAL_SOURCE_IDS` in `goals/sources.mjs` maps a metric's source kind to the source id it reads
 (`strava_distance` and `strava_gear_odometer` → `strava`). `sourcedGoals()` on the goal service
 lists open goals in a window that covers today whose metrics (or their steps' metrics) read a
-connector, without resolving any metric. The API groups sources under those goals, lists a
+connector, without resolving any metric. The API names those goals on each source (`goals`), lists a
 goal's source that has never run as `unknown`, and hands the mapping to the client, which marks a
 metric whose source is `failing` (`web/src/sources/MetricSourceWarning.tsx`, the app's
 `features/goals/MetricSourceWarning.tsx`). A goal list that cannot be read leaves the sources

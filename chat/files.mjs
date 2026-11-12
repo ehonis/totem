@@ -8,6 +8,17 @@
 // never under a `deny` path (Totem's data and secrets) unless a root sits inside
 // that denied path and the file is under the root: data/ is denied, its
 // chat-outputs/ is a root.
+//
+// A file is opened through a signed link (`link()`): the file's real path, an
+// expiry and an HMAC of both, minted for a caller already signed in. An <iframe>,
+// an <img>, a fetch() without the bearer and the desktop app's native download
+// all carry it, so a browser unlocked with BRIDGE_SECRET (no session cookie)
+// opens a file the same way a signed-in one does, the way chat uploads' `?sig=`
+// works. The signature grants that one path until it expires and nothing more:
+// the roots and the deny list are checked again on every read. The key is random
+// per process, never derived from BRIDGE_SECRET (which may be empty), so a
+// restart retires every link; a deploy reloads open dashboards anyway.
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { readdir, realpath, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
@@ -30,10 +41,31 @@ export const mimeFor = (path) => FILE_MIME[extname(path).slice(1).toLowerCase()]
 // they always download (the panel previews them in a sandboxed frame instead).
 const INLINE = /^(image\/(png|jpeg|gif|webp)|text\/plain|application\/pdf|audio\/|video\/)/
 
+/** How long a signed file link opens its file: long enough for a tab left open over a working day. */
+export const FILE_LINK_TTL_MS = 12 * 60 * 60 * 1000
+const RAW = '/api/chat/files/raw'
+
 const fail = (status, message) => Object.assign(new Error(message), { status })
 const inside = (path, root) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep)
 
-export function createFileAccess({ roots = [], deny = [], maxEntries = 1000 } = {}) {
+export function createFileAccess({ roots = [], deny = [], maxEntries = 1000, key = randomBytes(32), ttlMs = FILE_LINK_TTL_MS, now = Date.now } = {}) {
+  const sign = (path, exp) => createHmac('sha256', key).update(`chat-file:${exp}:${path}`).digest('base64url')
+
+  /** The signed URL that opens `real` (a real path `resolve` returned) until it expires. */
+  function signedUrl(real) {
+    const exp = now() + ttlMs
+    return `${RAW}?path=${encodeURIComponent(real)}&exp=${exp}&sig=${sign(real, exp)}`
+  }
+
+  /** Whether `sig` was minted by `signedUrl` for exactly `path` and has not expired. */
+  function verify(path, exp, sig) {
+    if (typeof path !== 'string' || typeof sig !== 'string' || !/^\d{1,15}$/.test(String(exp ?? ''))) return false
+    const at = Number(exp)
+    if (at <= now() || at > now() + ttlMs) return false
+    const a = Buffer.from(sign(path, at)), b = Buffer.from(sig)
+    return a.length === b.length && timingSafeEqual(a, b)
+  }
+
   let realRoots = null
   async function resolvedRoots() {
     if (realRoots) return realRoots
@@ -86,9 +118,22 @@ export function createFileAccess({ roots = [], deny = [], maxEntries = 1000 } = 
     return { root, entries, truncated }
   }
 
-  /** Stream one file to an HTTP response. */
-  async function serve(res, path, { download = false } = {}) {
+  /** One file, checked and signed: what the dashboard opens it by. */
+  async function link(path) {
     const real = await resolve(path)
+    const st = await stat(real)
+    if (!st.isFile()) throw fail(400, 'not a file')
+    return { path: real, name: basename(real), mime: mimeFor(real), size: st.size, url: signedUrl(real) }
+  }
+
+  /**
+   * Stream one file to an HTTP response. `signed` is a request that came in on a
+   * signature rather than a sign-in: its path must still be its own real path, so
+   * a folder swapped for a symlink after signing does not lead somewhere else.
+   */
+  async function serve(res, path, { download = false, head = false, signed = false } = {}) {
+    const real = await resolve(path)
+    if (signed && real !== path) throw fail(403, 'this link no longer points at its file')
     const st = await stat(real)
     if (!st.isFile()) throw fail(400, 'not a file')
     const mime = mimeFor(real)
@@ -100,16 +145,23 @@ export function createFileAccess({ roots = [], deny = [], maxEntries = 1000 } = 
       'cache-control': 'private, no-cache',
       'content-disposition': `${inline ? 'inline' : 'attachment'}; filename="${name.replace(/[^\x20-\x7e]|"/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`,
       'x-content-type-options': 'nosniff',
+      // Shown on its own (a link opened in a tab), a file never runs as Totem; a PDF
+      // keeps the browser's viewer, which a sandbox would block (chat/uploads.mjs does the same).
+      ...(inline && mime !== 'application/pdf' ? { 'content-security-policy': 'sandbox' } : {}),
     })
+    if (head) return res.end()
     await new Promise((done, failed) => {
       const s = createReadStream(real)
+      const closed = () => { s.destroy(); done() }
+      res.once('close', closed)
+      s.once('close', () => res.off('close', closed))
       s.on('error', failed)
       s.on('end', done)
       s.pipe(res)
     })
   }
 
-  return { resolve, list, serve, roots: resolvedRoots }
+  return { resolve, list, link, serve, verify, roots: resolvedRoots }
 }
 
 /**

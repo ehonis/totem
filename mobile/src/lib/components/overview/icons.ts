@@ -29,3 +29,8 @@ export { default as IconSparkles } from '@tabler/icons-react-native/dist/esm/ico
 export { default as IconClock } from '@tabler/icons-react-native/dist/esm/icons/IconClock.mjs'
 export { default as IconBolt } from '@tabler/icons-react-native/dist/esm/icons/IconBolt.mjs'
 export { default as IconServer2 } from '@tabler/icons-react-native/dist/esm/icons/IconServer2.mjs'
+export { default as IconPlane } from '@tabler/icons-react-native/dist/esm/icons/IconPlane.mjs'
+export { default as IconBeach } from '@tabler/icons-react-native/dist/esm/icons/IconBeach.mjs'
+export { default as IconLuggage } from '@tabler/icons-react-native/dist/esm/icons/IconLuggage.mjs'
+export { default as IconPencil } from '@tabler/icons-react-native/dist/esm/icons/IconPencil.mjs'
+export { default as IconTrash } from '@tabler/icons-react-native/dist/esm/icons/IconTrash.mjs'
