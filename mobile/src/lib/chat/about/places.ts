@@ -60,7 +60,7 @@ export const PLACES = {
   todos: {
     label: 'Tasks',
     route: '/productivity/todos',
-    web: ['web/src/components/TodosView.tsx', 'web/src/todos/TodoBoard.tsx', 'web/src/todos/TodoCard.tsx'],
+    web: ['web/src/components/TodosView.tsx', 'web/src/todos/TaskRow.tsx', 'web/src/todos/TaskPane.tsx'],
     app: ['mobile/src/features/productivity/TodosView.tsx', 'mobile/src/features/todos/TodoCard.tsx'],
     data: ['todos/service.mjs', 'todos/http.mjs'],
   },
@@ -104,15 +104,21 @@ export const PLACES = {
     web: ['web/src/components/ShippedCard.tsx'],
     data: ['dev/service.mjs', 'dev/github.mjs'],
   },
-  'settings.general': { label: 'Settings › General', route: '/settings/general', web: ['web/src/components/SettingsView.tsx'], app: ['mobile/src/features/settings/panes/GeneralPane.tsx'] },
+  'dev.issue': {
+    label: 'Dev › Issues',
+    route: '/dev',
+    web: ['web/src/dev/IssuesCard.tsx', 'web/src/dev/issues.ts'],
+    data: ['dev/issues.mjs', 'dev/github.mjs'],
+  },
+  'settings.general': { label: 'Settings › General', route: '/settings/general', web: ['web/src/components/settings/GeneralPane.tsx', 'web/src/components/IntegrationsSettings.tsx'], app: ['mobile/src/features/settings/panes/GeneralPane.tsx', 'mobile/src/features/settings/integrations.tsx'] },
+  'settings.appearance': { label: 'Settings › Appearance', route: '/settings/appearance', web: ['web/src/components/settings/AppearancePane.tsx', 'web/src/backgrounds.ts'], app: ['mobile/src/features/settings/panes/AppearancePane.tsx', 'mobile/src/lib/backgrounds.ts'] },
   'settings.chat': { label: 'Settings › Chat', route: '/settings/chat', web: ['web/src/components/ChatSettings.tsx'], app: ['mobile/src/features/settings/panes/ChatPane.tsx'] },
-  'settings.ai': { label: 'Settings › AI', route: '/settings/ai', web: ['web/src/components/AiSettings.tsx'], app: ['mobile/src/features/settings/panes/AiPane.tsx'], data: ['ai/settings.mjs'] },
-  'settings.integrations': { label: 'Settings › Integrations', route: '/settings/integrations', web: ['web/src/components/IntegrationsSettings.tsx'], app: ['mobile/src/features/settings/panes/IntegrationsPane.tsx'], data: ['ai/settings.mjs'] },
-  'settings.tasks': { label: 'Settings › Tasks', route: '/settings/tasks', web: ['web/src/components/TaskSettings.tsx'], app: ['mobile/src/features/settings/panes/TasksPane.tsx'], data: ['todos/service.mjs'] },
-  'settings.providers': { label: 'Settings › Providers', route: '/settings/providers', web: ['web/src/components/ProvidersView.tsx', 'web/src/components/AiUsagePanel.tsx'], data: ['providers/instances.mjs'] },
-  'settings.shortcuts': { label: 'Settings › Shortcuts', route: '/settings/shortcuts', web: ['web/src/components/ShortcutsSettings.tsx', 'web/src/shortcuts.ts'] },
-  'settings.notifications': { label: 'Settings › Notifications', route: '/settings/notifications', web: ['web/src/components/NotificationsSettings.tsx'], app: ['mobile/src/features/settings/panes/NotificationsPane.tsx'], data: ['notify/notifier.mjs'] },
   'settings.voice': { label: 'Settings › Voice', route: '/settings/voice', web: ['web/src/components/VoiceSettings.tsx'], app: ['mobile/src/features/settings/panes/VoicePane.tsx'] },
+  'settings.notifications': { label: 'Settings › Notifications', route: '/settings/notifications', web: ['web/src/components/NotificationsSettings.tsx'], app: ['mobile/src/features/settings/panes/NotificationsPane.tsx'], data: ['notify/notifier.mjs'] },
+  'settings.shortcuts': { label: 'Settings › Keyboard', route: '/settings/shortcuts', web: ['web/src/components/ShortcutsSettings.tsx', 'web/src/shortcuts.ts'] },
+  'settings.providers': { label: 'Settings › Providers', route: '/settings/providers', web: ['web/src/components/ProvidersView.tsx'], app: ['mobile/src/features/settings/panes/ProvidersPane.tsx', 'mobile/src/features/settings/providers/AccountScreen.tsx'], data: ['providers/instances.mjs', 'ai/settings.mjs'] },
+  'settings.tasks': { label: 'Settings › Tasks', route: '/settings/tasks', web: ['web/src/components/TaskSettings.tsx'], app: ['mobile/src/features/settings/panes/TasksPane.tsx', 'mobile/src/features/settings/integrations.tsx'], data: ['todos/service.mjs'] },
+  'settings.security': { label: 'Settings › Security', route: '/settings/security', web: ['web/src/components/settings/SecurityPane.tsx'], app: ['mobile/src/features/settings/panes/SecurityPane.tsx'], data: ['auth/approval-code.mjs'] },
 } satisfies Record<string, Place>
 
 export type PlaceId = keyof typeof PLACES

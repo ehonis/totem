@@ -5,6 +5,7 @@
 // mobile/src/lib/chat/about/context.ts is a byte-for-byte copy (places.test.ts checks).
 import { PLACES, type Place, type PlaceId } from './places'
 import { dueDiff } from '../../components/overview/time'
+import { redactTokens } from './redact'
 
 export interface ChatContext {
   place: PlaceId
@@ -14,37 +15,42 @@ export interface ChatContext {
   lines: string[]
   /** A more exact address than the place's own (a machine's /fleet#id). */
   route?: string
+  /** Text the owner had selected on the card when they asked, quoted as they saw it. */
+  selection?: string
 }
 
 const MAX_LINES = 40
 const MAX_CHARS = 3000
 const MAX_LINE = 300
+const MAX_SELECTION = 2000
 
+/**
+ * Every piece of text a card shows goes through here: tokens out first (redact.ts),
+ * then cut to `n`. Redacting after the cut would leave a token's prefix behind once
+ * the cut took it under a pattern's minimum length. The first slice keeps a
+ * megabyte line from being scanned whole, and is wide enough that a token starting
+ * before `n` is still whole enough to match.
+ */
 const clip = (s: string | null | undefined, n = 160) => {
-  // Cut before collapsing whitespace: a megabyte line is never scanned whole.
-  const t = String(s ?? '').slice(0, n * 2 + 64).replace(/\s+/g, ' ').trim()
+  const t = redactTokens(String(s ?? '').slice(0, n * 4 + 256)).replace(/\s+/g, ' ').trim()
   return t.length > n ? `${t.slice(0, n - 1)}…` : t
 }
+/**
+ * A route as the reader sees it. Redacted before decoding, so an encoded `&` inside
+ * a secret (`token=abc%26def`) cannot split it, and again after (clip does that), so
+ * `%3D` cannot hide a `key=` from the patterns.
+ */
+const readable = (route: string) =>
+  // Run by run: a `%` left beside a redaction must not stop the rest decoding.
+  redactTokens(route).replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => { try { return decodeURIComponent(run) } catch { return run } })
 const num = (n: number | null | undefined, digits = 1) =>
   n == null || !Number.isFinite(n) ? '–' : String(Math.round(n * 10 ** digits) / 10 ** digits)
 const pct = (n: number | null | undefined) => (n == null ? '–' : `${Math.round(n)}%`)
 const pad2 = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 
-/**
- * Tokens out of anything a card shows: a key pasted into a task note must not
- * reach the prompt or the saved upload. The bridge's redact() patterns, plus
- * Google's ya29. access tokens and fine-grained GitHub tokens.
- */
-export function redact(text: string): string {
-  return text
-    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [redacted]')
-    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g, '[redacted github token]')
-    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[redacted github token]')
-    .replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, '[redacted api key]')
-    .replace(/\bya29\.[A-Za-z0-9._-]{20,}/g, '[redacted google token]')
-    .replace(/\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASS|KEY|AUTH|COOKIE|SESSION)[A-Z0-9_]*)=([^\s"'`&]+)/gi, '$1=[redacted]')
-}
+/** Known token shapes out of text (redact.ts, shared with the bridge and the app). */
+export const redact = redactTokens
 
 /** The attachment's text: where it came from, then what it shows. */
 export function contextMarkdown(ctx: ChatContext, at = new Date()): string {
@@ -70,21 +76,41 @@ export function contextMarkdown(ctx: ChatContext, at = new Date()): string {
     size += line.length + 1
   }
   if (!body.length) body.push('(nothing on it)')
+  const picked = quoteSelection(ctx.selection)
   const files = (list?: string[]) => (list || []).map((f) => `\`${f}\``).join(', ')
   const foot = [
     '',
     '## Where it lives',
-    `- Page: ${place.label}, ${clip(ctx.route || place.route, 200)}`,
+    `- Page: ${place.label}, ${clip(readable(ctx.route || place.route), 200)}`,
     `- Drawn by: ${files(place.web)}`,
     ...(place.app?.length ? [`- In the iPhone app: ${files(place.app)}`] : []),
     ...(place.data?.length ? [`- Data: ${files(place.data)}`] : []),
   ]
-  return redact([...head, ...body, ...foot].join('\n')) + '\n'
+  return redact([...head, ...picked, ...body, ...foot].join('\n')) + '\n'
+}
+
+/**
+ * What the owner selected, as a quote above the card's facts: it is what they are
+ * asking about. Line breaks are kept (a selection is often a few rows), blank runs
+ * folded, and it is redacted and capped like everything else.
+ */
+function quoteSelection(text: string | undefined): string[] {
+  const raw = redactTokens(String(text ?? '').slice(0, MAX_SELECTION * 4 + 256))
+  const rows = raw.split(/\r?\n/).map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean)
+  if (!rows.length) return []
+  let used = 0
+  const kept: string[] = []
+  for (const row of rows) {
+    if (used + row.length > MAX_SELECTION) { kept.push(`${row.slice(0, Math.max(0, MAX_SELECTION - used - 1))}…`); break }
+    kept.push(row)
+    used += row.length + 1
+  }
+  return ['The owner selected this on the card:', '', ...kept.map((l) => `> ${l}`), '', 'The whole card:', '']
 }
 
 /** A file name for the attachment chip. */
 export function contextFileName(ctx: ChatContext): string {
-  const slug = redact(ctx.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50)
+  const slug = clip(ctx.title, 120).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50)
   return `${slug || ctx.place.replace(/\W+/g, '-')}.md`
 }
 
@@ -312,7 +338,7 @@ export function fleetDeviceContext(d: DeviceLike, now = Date.now()): ChatContext
 interface RepoLike {
   repo: string; defaultBranch?: string; aiReview: string | null; error?: string; runnersError?: string
   ci: { workflow: string; state: string; conclusion: string | null; url: string }[]
-  prs: { number: number; title: string; draft: boolean; checks: string; claude: string; url: string }[]
+  prs: { number: number; title: string; draft: boolean; checks: string; claude: string; url: string; sha?: string }[]
   runners: { name: string; status: string; busy: boolean }[]
 }
 
@@ -326,7 +352,7 @@ export function devRepoContext(r: RepoLike): ChatContext {
       ...(r.error ? [`Error: ${clip(r.error, 200)}`] : []),
       ...r.ci.map((c) => `CI ${c.workflow}: ${c.conclusion || c.state} ${c.url}`),
       ...(r.prs.length ? ['Open pull requests:'] : ['No open pull requests.']),
-      ...r.prs.map((p) => `- #${p.number} ${clip(p.title, 100)}${p.draft ? ' (draft)' : ''}: checks ${p.checks}, AI review ${p.claude} ${p.url}`),
+      ...r.prs.map((p) => `- #${p.number} ${clip(p.title, 100)}${p.draft ? ' (draft)' : ''}: checks ${p.checks}, AI review ${p.claude}${p.sha ? `, head ${clip(p.sha, 40)}` : ''} ${p.url}`),
       ...r.runners.map((x) => `Runner ${x.name}: ${x.status}${x.busy ? ', busy' : ''}`),
       ...(r.runnersError ? [`Runners: ${clip(r.runnersError, 160)}`] : []),
     ],
@@ -347,6 +373,29 @@ export function shippedContext(data: { days: number; pulls: { repo: string; numb
       'Latest:',
       ...[...shown].sort((a, b) => (a.mergedAt < b.mergedAt ? 1 : -1)).slice(0, 15)
         .map((p) => `- ${p.mergedAt.slice(0, 10)} ${p.repo}#${p.number} ${clip(p.title, 90)}`),
+    ],
+  }
+}
+
+interface IssueLike {
+  repo: string; number: number; title: string; state: string; stateReason?: string | null; url: string
+  labels: { name: string }[]; assignees: string[]; author: string | null; comments: number
+  createdAt: string; updatedAt: string; milestone: string | null
+}
+
+/** One row of the Dev tab's Issues list. The body is not loaded, so the agent is told where to read it. */
+export function devIssueContext(i: IssueLike): ChatContext {
+  const closed = i.state === 'closed' ? `closed${i.stateReason === 'not_planned' ? ' as not planned' : ''}` : 'open'
+  return {
+    place: 'dev.issue',
+    title: `Issue: ${i.repo}#${i.number} ${clip(i.title, 90)}`,
+    lines: [
+      `${i.url} (${closed}).`,
+      `Labels: ${i.labels.map((l) => clip(l.name, 40)).join(', ') || 'none'}.`,
+      `Assigned to: ${i.assignees.join(', ') || 'nobody'}. Opened by ${i.author || 'unknown'} on ${i.createdAt.slice(0, 10)}.`,
+      `${i.comments} comment${i.comments === 1 ? '' : 's'}, last updated ${i.updatedAt.slice(0, 10)}.`,
+      ...(i.milestone ? [`Milestone: ${clip(i.milestone, 80)}.`] : []),
+      `Read the body and comments with: gh issue view ${i.number} -R ${i.repo} --comments`,
     ],
   }
 }
@@ -404,11 +453,11 @@ export function systemContext(sys: {
 // Settings
 
 /**
- * The Settings panes "Chat about this" is offered on. Logs, Connections, Skills
- * and Jobs are left out: they show tool output, server addresses, sign-in links
- * and prompts, none of which belongs in a chat by accident.
+ * The Settings panes "Chat about this" is offered on. Activity, Connections,
+ * Skills and Usage are left out: they show tool output, server addresses,
+ * sign-in links and prompts, none of which belongs in a chat by accident.
  */
-export const SETTINGS_ABOUT = ['general', 'chat', 'ai', 'integrations', 'tasks', 'providers', 'shortcuts', 'notifications', 'voice'] as const
+export const SETTINGS_ABOUT = ['general', 'appearance', 'chat', 'voice', 'notifications', 'shortcuts', 'providers', 'tasks', 'security'] as const
 
 /** A pane as its headings and setting labels with their on/off or picked state; never a field's value. */
 export interface SettingsOutline {

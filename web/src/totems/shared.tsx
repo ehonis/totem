@@ -7,7 +7,7 @@ import { THREAD_ICONS } from '../chat/threadIcons.gen'
 import { TI } from '../chat/ui'
 import { IconLoader2, IconPlayerPlay } from '../chat/icons'
 import { syncThreads, setActive } from '../chat/store'
-import { relativeTime } from '../components/JobsView'
+import { relativeTime } from './schedule'
 
 // What the Totems list (components/TotemsView.tsx) and a totem's chat need to
 // describe a totem.
@@ -25,6 +25,8 @@ export function asWatch(w: any): Watch | null {
 export const sourceKey = (s: WatchSource) => (s.kind === 'git' ? `git ${s.repo} ${s.ref}` : `url ${s.url}${s.contains ? ` ${s.contains}` : ''}`)
 export interface Draft {
   name: string; summary?: string; icon: string; taskType: string; instructions: string; schedule: any; trigger: Watch | null; browser: boolean
+  /** 'full' lets its runs use any command and write anywhere, with nobody approving; null keeps the standard limits. */
+  access?: 'full' | null
   notify: string; recommendations: Rec[]; questions: string[]; reply?: string
 }
 /** Which model runs it. `provider: 'default'` is the default account's default model. */
@@ -103,19 +105,26 @@ export async function startTotemRun(job: any) {
   }
 }
 
-/** The play button in a totem's chat: run it now instead of waiting for its schedule or watch. */
-export function TotemRunButton({ job }: { job: any }) {
+/** Whether this totem is running, kept current, and a way to start it (the play button, or its row in the chat header's "…"). */
+export function useTotemRun(job: any): { running: boolean; run: () => void } {
   const [, bump] = React.useState(0)
   React.useEffect(() => {
     const f = () => bump((n) => n + 1)
     runSubs.add(f)
     return () => { runSubs.delete(f) }
   }, [])
+  const running = !!job && (runningHere.has(job.id) || job.lastRun?.status === 'running')
+  return { running, run: () => { if (job && !running) void startTotemRun(job) } }
+}
+
+/** The play button in a totem's chat: run it now instead of waiting for its schedule or watch. */
+export function TotemRunButton({ job, ...rest }: { job: any } & React.HTMLAttributes<HTMLButtonElement>) {
+  const { running, run } = useTotemRun(job)
   if (!job) return null
-  const running = runningHere.has(job.id) || job.lastRun?.status === 'running'
   return (
     <button
-      type="button" className="vc-icon-btn" aria-disabled={running} onClick={() => { if (!running) void startTotemRun(job) }}
+      {...rest}
+      type="button" className="vc-icon-btn" aria-disabled={running} onClick={run}
       aria-label={running ? `${job.name} is running` : `Run ${job.name} now`}
       title={running ? 'Running now. Its report will appear here.' : 'Run now, without waiting for its schedule'}
     >

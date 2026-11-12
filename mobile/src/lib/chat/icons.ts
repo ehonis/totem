@@ -99,3 +99,6 @@ export { default as IconPlaylistAdd } from '@tabler/icons-react-native/dist/esm/
 export { default as IconPlayerPlayFilled } from '@tabler/icons-react-native/dist/esm/icons/IconPlayerPlayFilled.mjs'
 export { default as IconArrowForwardUp } from '@tabler/icons-react-native/dist/esm/icons/IconArrowForwardUp.mjs'
 export { default as IconListNumbers } from '@tabler/icons-react-native/dist/esm/icons/IconListNumbers.mjs'
+export { default as IconGitPullRequest } from '@tabler/icons-react-native/dist/esm/icons/IconGitPullRequest.mjs'
+export { default as IconAlertTriangle } from '@tabler/icons-react-native/dist/esm/icons/IconAlertTriangle.mjs'
+export { default as IconChartBar } from '@tabler/icons-react-native/dist/esm/icons/IconChartBar.mjs'

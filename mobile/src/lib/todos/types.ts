@@ -2,7 +2,9 @@ export type TodoArea = 'Personal' | 'Ventures'
 // Configured per install (Settings -> Tasks); any non-empty name.
 export type VentureTag = string
 export interface VentureTagConfig { name: string; color: string | null }
-export type TodoStatus = 'todo' | 'doing' | 'done'
+// A task is open or done. The bridge still accepts 'doing' on input for old clients
+// and stores it as 'todo'; nothing here names it (board.ts folds a cached one into open).
+export type TodoStatus = 'todo' | 'done'
 /** How a finished task ended: the work happened, or it never will. */
 export type TodoOutcome = 'completed' | 'not_doing'
 export type TodoSource = 'local' | 'github' | 'sheet'
@@ -35,6 +37,27 @@ export interface TodoExternalLink {
   missingAt: string | null
   createdAt: string
   updatedAt: string
+}
+
+/** A task's plain GitHub issue link (PUT /api/todos/:id/issue-link); no sync behind it. */
+export interface TodoIssueLink {
+  connector: 'github'
+  /** owner/repo */
+  repo: string
+  number: number
+  url: string
+}
+
+/** Tasks off the board, counted by GET /api/todos/board rather than listed. */
+export interface TodoBoardCounts { archived: number; snoozed: number; deleted: number }
+
+export interface IssueState { state: 'open' | 'closed'; title: string; url: string }
+/** GET /api/todos/issue-states. On a failed read: the last good states plus `error`. */
+export interface IssueStatesResponse {
+  fetchedAt: string | null
+  /** Keyed "owner/repo#n". */
+  states: Record<string, IssueState>
+  error?: string
 }
 
 export type TodoSyncStatus = 'idle' | 'pending' | 'synced' | 'conflict' | 'missing' | 'error'
@@ -73,6 +96,8 @@ export interface Todo {
   /** Lightweight Lists that reference this task. Checking either side does not mutate the other. */
   lists: Array<{ id: string; title: string }>
   externalLinks: TodoExternalLink[]
+  /** The task's GitHub issue, or null. */
+  issueLink: TodoIssueLink | null
   syncState: TodoSyncState
 }
 
@@ -117,6 +142,50 @@ export interface ConnectorHealth {
   lastError: string | null
   recovery?: string | null
 }
+
+/**
+ * One open row of the owner's shared action-items sheet (GET /api/todos/sheet): read
+ * only, drawn among the tasks with no check circle. Only rows whose Who names one of
+ * the configured assignees and whose Status is not Done arrive.
+ */
+export interface SheetItem {
+  /** "sheet:<sheetGid>:<row>:<8-hex hash of the title>", stable while the row keeps its place and title. */
+  id: string
+  /** The row number in the sheet (data starts below the header row). */
+  row: number
+  title: string
+  who: string
+  /** High 1, Medium 2, Low 3; null when the cell is empty or says something else. Lower is more urgent. */
+  priority: 1 | 2 | 3 | null
+  /** As the sheet says it: "Not Started", "In Progress", never "Done". */
+  status: string
+  /** A "YYYY-MM-DD" day key, or null. */
+  dueDate: string | null
+  notes: string
+  /** The row in the sheet ("…#gid=<gid>&range=B<row>"). */
+  url: string
+}
+
+/** GET /api/todos/sheet. A failed read keeps the last good items, `stale: true`, with a scrubbed `error`. */
+export type SheetFeed =
+  | {
+    configured: true
+    /** Display name: TASK_SHEET_TITLE, else the spreadsheet's own title. Unset until a read succeeds, unless TASK_SHEET_TITLE names it. */
+    title?: string
+    url: string
+    /** When the items were read (the last good read when `stale`); null until a read succeeds. */
+    fetchedAt: string | null
+    stale: boolean
+    error: string | null
+    items: SheetItem[]
+  }
+  | {
+    configured: false
+    /** Always empty. */
+    items: SheetItem[]
+    /** What to set to turn it on. */
+    reason: string
+  }
 
 export interface TodoPreferences {
   autoArchiveDays: number | null

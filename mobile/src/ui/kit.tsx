@@ -174,9 +174,10 @@ export const Input = React.forwardRef<TextInput, TextInputProps & { icon?: IconT
 })
 
 /** The settings switch: the platform's own control, in the accent colour. */
-export function Toggle({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+export function Toggle({ value, onChange, disabled, label }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean; label?: string }) {
   return (
     <Switch
+      accessibilityLabel={label}
       value={value}
       onValueChange={(v) => { tap(); onChange(v) }}
       disabled={disabled}

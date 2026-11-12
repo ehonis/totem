@@ -79,11 +79,6 @@ describe('editing the numbers on an existing goal', () => {
     expect(screen.getByRole('combobox', { name: 'Sport' })).toHaveTextContent('Running')
   })
 
-  it('says a sport counts every workout type in it, which is the whole point of a family', () => {
-    editor()
-    expect(screen.getByText(/across every workout type in that sport/)).toBeVisible()
-  })
-
   it('sends nothing for a metric nobody touched', async () => {
     const user = userEvent.setup()
     const onSave = editor()
@@ -188,15 +183,6 @@ describe('getting to the numbers from the card', () => {
     onToggle={vi.fn()} onToggleStep={vi.fn()} onLog={vi.fn()} onPostpone={vi.fn()}
     onDelete={vi.fn()} onAddStep={vi.fn()} {...handlers}
   />)
-
-  it('opens the editor from the menu', async () => {
-    const user = userEvent.setup()
-    card({ onSaveMetrics: vi.fn() })
-
-    await user.click(screen.getByRole('button', { name: 'More actions for 50 Miles Ran' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Edit the numbers' }))
-    expect(screen.getByRole('dialog', { name: 'Numbers' })).toBeVisible()
-  })
 
   // "Edit a goal" and "edit what it counts" are one intention, and the menu item alone
   // left the edit panel looking like the whole of editing.

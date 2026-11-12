@@ -73,15 +73,52 @@ export function usageFacts({
   // to read on a lock screen. The bridge passes the configured display name.
   nameOf = (account) => account.label || account.backend,
   options = {},
+  // Per backend, from the poller (ai-usage/pools.mjs). With several accounts in a
+  // pool (CLIProxy), one seat spending its five hours is not news while another
+  // can serve: the short window speaks once, for the pool, when every seat is out.
+  pools = [],
+  providerName = (backend) => backend,
 } = {}) {
   const cfg = { ...USAGE_DEFAULTS, ...options }
   const out = []
+  // Only a proxy routes around a spent login; two local logins are two accounts.
+  const pooled = new Map(pools.filter((p) => p.proxied && p.total > 1).map((p) => [p.backend, p]))
+
+  for (const pool of pooled.values()) {
+    if (pool.usable > 0 || !Number.isFinite(pool.nextBackAt) || pool.nextBackAt <= now) continue
+    const who = providerName(pool.backend)
+    const window = windowId(pool.nextBackAt, now, tz)
+    const identity = `usage:pool:${pool.backend}:spent:${window}`
+    const when = resetPhrase(pool.nextBackAt, now, tz)
+    out.push({
+      kind: 'usage.spent',
+      category: 'usage.blocked',
+      salience: 85,
+      slot: 'midday',
+      subject: `pool:${pool.backend}:spent`,
+      title: fitTitle('Quota spent', `every ${who} account`),
+      body: bodyOf(
+        pool.limited === pool.total
+          ? `All ${pool.total} ${who} accounts are at their limit.`
+          : `No ${who} account can serve: ${pool.limited} at their limit, ${pool.total - pool.limited} off or signed out.`,
+        `The first one is back ${when ? when.replace(/^resets /, '') : 'soon'}.`,
+      ),
+      url: '/settings/providers#usage',
+      expiresAt: pool.nextBackAt,
+      revalidate: { collector: 'usage', identity, factKey: `${identity}:${pool.total}` },
+      dedupeKey: identity,
+      dedupeUntil: pool.nextBackAt,
+    })
+  }
 
   for (const account of accounts) {
     // An account that could not be read has no numbers to be low. The Settings
     // panel is where a broken login belongs; a push about one is a push about
     // something he cannot act on from a lock screen.
     if (account.status && account.status !== 'ok') continue
+    // Switched off in the proxy: it serves nothing, so it has nothing to report.
+    if (account.disabled) continue
+    const inPool = pooled.has(account.backend)
     const who = nameOf(account)
     // Spent meters, by the window they refill with. See the header.
     const spent = new Map()
@@ -115,6 +152,8 @@ export function usageFacts({
       //    this is the only thing a five-hour window may say. Gathered per window
       //    and raised once per account below.
       if (used >= cfg.spentPct) {
+        // A pooled seat's short window: the pool fact above covers it.
+        if (inPool && !isSlowWindow(meter)) continue
         if (!spent.has(window)) spent.set(window, { resets, when, meters: [] })
         spent.get(window).meters.push({ key: meter.key, label, used })
         continue

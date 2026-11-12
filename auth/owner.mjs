@@ -16,8 +16,10 @@
 //      safe when nothing can reach the port without passing that proxy.
 //
 // Stored at data/auth.json, mode 0600: the scrypt hash and salt, the HMAC key the
-// session cookies are signed with, and a session version that a password change
-// bumps so every older cookie stops working.
+// session cookies are signed with, a session version that a password change
+// bumps so every older cookie stops working, and the approval-code policy
+// (`approvalCode`: whether this install predates the code, and the latch that
+// keeps it armed once set; see auth/approval-code.mjs).
 
 import { randomBytes, scrypt as scryptCb, timingSafeEqual, createHmac } from 'node:crypto'
 import { readFile, writeFile, rename, mkdir, chmod } from 'node:fs/promises'
@@ -41,19 +43,16 @@ const MAX_TRACKED_CLIENTS = 1000
 const MAX_CONCURRENT_VERIFIES = 2
 const FAILURE_WINDOW_MS = 15 * 60 * 1000
 
-const LOOPBACK = /^(127\.|::1$|::ffff:127\.)/
-
 /**
- * Who is trying to sign in, for throttling. The socket address, unless the request
- * came through a proxy we trust to name the client: with TOTEM_TRUST_PROXY set, or
- * (when it is unset) a proxy on this machine, such as cloudflared or a local nginx.
- * A forwarded header from anyone else is ignored — it is just text they chose.
+ * Who is trying to sign in or approve, for throttling. The socket address, unless
+ * TOTEM_TRUST_PROXY says a proxy in front names the client (cloudflared, nginx).
+ * A forwarded header is otherwise ignored: an agent on this machine reaches the
+ * port from loopback too, so trusting loopback let it pick a fresh client key per
+ * request and spend everyone's failure budget.
  */
 export function clientKey(req, { trustProxy = process.env.TOTEM_TRUST_PROXY } = {}) {
   const peer = String(req?.socket?.remoteAddress || 'unknown')
-  const trusted = trustProxy !== undefined && trustProxy !== ''
-    ? /^(1|true|yes|on)$/i.test(String(trustProxy))
-    : LOOPBACK.test(peer)
+  const trusted = /^(1|true|yes|on)$/i.test(String(trustProxy ?? ''))
   if (!trusted) return peer
   const forwarded = req.headers?.['cf-connecting-ip'] ||
     String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim()
@@ -330,6 +329,8 @@ export function createOwnerAuth({ file, mode = 'password', bridgeSecret = '', no
     await mutate((current) => {
       if (current?.owner?.hash) throw new AuthError('ALREADY_SET_UP', 'The owner account already exists. Sign in instead.', 409)
       return {
+        // Recorded at first boot, before there was an owner; creating one keeps it.
+        ...(current?.approvalCode ? { approvalCode: current.approvalCode } : {}),
         version: 1,
         owner: { ...hashed, createdAt: at, passwordChangedAt: at },
         sessionSecret: randomBytes(32).toString('base64'),
@@ -393,6 +394,35 @@ export function createOwnerAuth({ file, mode = 'password', bridgeSecret = '', no
     return true
   }
 
+  /**
+   * Re-enter the password before a sensitive change (setting the approval code).
+   * Throttled with sign-in, so it is no side door for guessing.
+   */
+  async function confirmPassword(req, password) {
+    await load()
+    if (!hasOwner()) throw new AuthError('SETUP_REQUIRED', 'No owner account yet.', 409)
+    const seen = await checkedPassword(req, password)
+    if (!seen) throw new AuthError('BAD_PASSWORD', 'Wrong password.', 401)
+    return true
+  }
+
+  /**
+   * A signed-in session (or the auth proxy), whatever else the request carries.
+   * Unlike authenticate(), a bearer secret alongside does not hide it: approvals
+   * need this factor and refuse the bearer alone.
+   */
+  function hasSession(req) {
+    return authMode === 'proxy' || sessionOk(req)
+  }
+
+  const approvalPolicy = () => record?.approvalCode || null
+
+  /** Merge into the approval-code policy, through the same write queue as everything else. */
+  async function updateApprovalPolicy(patch) {
+    const next = await mutate((current) => ({ ...(current || {}), approvalCode: { ...(current?.approvalCode || {}), ...patch } }))
+    return next.approvalCode
+  }
+
   function status(req) {
     const result = authenticate(req)
     return {
@@ -416,5 +446,10 @@ export function createOwnerAuth({ file, mode = 'password', bridgeSecret = '', no
     logout,
     clearCookie,
     hasOwner,
+    confirmPassword,
+    hasSession,
+    approvalPolicy,
+    updateApprovalPolicy,
+    load,
   }
 }

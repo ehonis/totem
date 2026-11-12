@@ -10,6 +10,7 @@ import {
   getSkills, createSkill, updateSkill, deleteSkill, resetSkill, previewSkill, AuthError,
 } from '../api'
 import { pushSuccess, pushError } from '../toast'
+import { copyText } from '../clipboard'
 
 // Skills — every prompt Totem runs, and all of them editable.
 //
@@ -395,9 +396,8 @@ export default function SkillsView({ onAuthError }: { onAuthError?: () => void }
         <div>
           <h2>Skills</h2>
           <p>
-            Every prompt Totem runs, including the ones it ships with. Edit any of them — the daily brief,
-            the Plaud ingest, all of it. Each one is a file{payload?.dir ? <> under <code>{payload.dir}</code></> : null},
-            so you can edit them here or in your editor.
+            Every prompt Totem runs, the built-in ones included. Each is a Markdown file on the server, so you can edit it here or in your editor
+            {payload?.dir ? <> (<button type="button" className="s-link" title={payload.dir} onClick={() => copyText(payload.dir).then((ok) => (ok ? pushSuccess('Folder path copied') : pushError(`Could not copy. The folder is ${payload.dir}`)))}>copy the folder path</button>)</> : null}.
           </p>
         </div>
         {!creating && (

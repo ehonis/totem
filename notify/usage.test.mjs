@@ -197,3 +197,47 @@ test('a reset reported a second either side of a whole hour, half past or midnig
   assert.notEqual(windowId(at, NOW, TZ), windowId(at + 5 * 3_600_000, NOW, TZ))
   assert.notEqual(windowId(at, NOW, TZ), windowId(at + 7 * DAY, NOW, TZ))
 })
+
+test('pooled accounts: one seat spending its five hours is quiet; every seat out is one push', () => {
+  const five = (used) => meter({ key: 'session:', label: '5-hour limit', usedPct: used, resetsAt: NOW + 2 * HOUR, windowMinutes: 300 })
+  const a = account({ id: 'claude:proxy:a', meters: [five(100)] })
+  const b = account({ id: 'claude:proxy:b', meters: [five(20)] })
+  const quiet = usageFacts({ accounts: [a, b], now: NOW, tz: TZ, pools: [{ backend: 'claude', proxied: true, total: 2, limited: 1, usable: 1, nextBackAt: NOW + 2 * HOUR }] })
+  assert.deepEqual(quiet.filter((f) => f.kind === 'usage.spent'), [])
+
+  const out = usageFacts({
+    accounts: [a, account({ id: 'claude:proxy:b', meters: [five(100)] })],
+    now: NOW,
+    tz: TZ,
+    providerName: () => 'Claude',
+    pools: [{ backend: 'claude', proxied: true, total: 2, limited: 2, usable: 0, nextBackAt: NOW + 2 * HOUR }],
+  }).filter((f) => f.kind === 'usage.spent')
+  assert.equal(out.length, 1)
+  assert.match(out[0].body, /All 2 Claude accounts/)
+  assert.equal(out[0].dedupeUntil, NOW + 2 * HOUR)
+
+  const disabled = usageFacts({ accounts: [account({ disabled: true, meters: [meter({ usedPct: 100 })] })], now: NOW, tz: TZ })
+  assert.deepEqual(disabled, [])
+})
+
+test('two local logins of one provider are not a pool: each still says when it is spent', () => {
+  const five = meter({ key: 'session:', label: '5-hour limit', usedPct: 100, resetsAt: NOW + 2 * HOUR, windowMinutes: 300 })
+  const out = usageFacts({
+    accounts: [account({ id: 'codex:codex-default', meters: [five] }), account({ id: 'codex:t3-work-codex', meters: [meter({ key: 'session:', usedPct: 10, windowMinutes: 300 })] })],
+    now: NOW,
+    tz: TZ,
+    pools: [{ backend: 'claude', proxied: false, total: 2, limited: 1, usable: 1, nextBackAt: NOW + 2 * HOUR }],
+  }).filter((f) => f.kind === 'usage.spent')
+  assert.equal(out.length, 1)
+})
+
+test('a pool with one seat spent and one switched off does not say all are at their limit', () => {
+  const [fact] = usageFacts({
+    accounts: [],
+    now: NOW,
+    tz: TZ,
+    providerName: () => 'Claude',
+    pools: [{ backend: 'claude', proxied: true, total: 2, limited: 1, usable: 0, nextBackAt: NOW + 2 * HOUR }],
+  })
+  assert.match(fact.body, /No Claude account can serve: 1 at their limit, 1 off or signed out/)
+})

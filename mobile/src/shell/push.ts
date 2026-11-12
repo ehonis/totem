@@ -10,7 +10,7 @@ import { AppState, Platform } from 'react-native'
 import * as Notifications from 'expo-notifications'
 import * as Device from 'expo-device'
 import { api, authHeaders } from '../lib/api'
-import { bridgeFetch } from '../lib/connection'
+import { bridgeFetch, getBaseUrl } from '../lib/connection'
 import { openDashboardUrl } from '../features/notifications/openUrl'
 import { refreshUnread } from '../features/notifications/useUnread'
 import { pushData, sweepStale } from './pushDismiss'
@@ -21,15 +21,28 @@ Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: true }),
 })
 
-export type PushStatus = 'unsupported' | 'undetermined' | 'denied' | 'registered' | 'failed'
+export type PushStatus = 'unsupported' | 'undetermined' | 'denied' | 'registered' | 'failed' | 'off'
+
+// Settings → Notifications › Turn off. Launch registers again on every start, so
+// switching push off on this phone has to be remembered here, not only on the
+// bridge. It holds the server it was turned off for: another Totem still gets
+// this phone registered.
+const OFF_KEY = 'push_off'
+
+export function pushTurnedOff(): boolean {
+  try { return localStorage.getItem(OFF_KEY) === getBaseUrl() } catch { return false }
+}
 
 /**
  * Ask for permission if it hasn't been asked (`prompt`), then register this phone's
  * token with the bridge. Safe to call on every launch: a token can change after a
  * restore or reinstall, and re-registering the same one only refreshes it.
  */
-export async function registerForPush({ prompt = false } = {}): Promise<PushStatus> {
+export async function registerForPush({ prompt = false, turnOn = false } = {}): Promise<PushStatus> {
   if (Platform.OS !== 'ios' || !Device.isDevice) return 'unsupported'
+  if (turnOn) {
+    try { localStorage.removeItem(OFF_KEY) } catch { /* the next launch registers anyway */ }
+  } else if (pushTurnedOff()) return 'off'
   let { status } = await Notifications.getPermissionsAsync()
   if (status === 'undetermined' && prompt) status = (await Notifications.requestPermissionsAsync()).status
   if (status === 'undetermined') return 'undetermined'
@@ -49,6 +62,16 @@ export async function registerForPush({ prompt = false } = {}): Promise<PushStat
   } catch {
     return 'failed'
   }
+}
+
+/**
+ * Stop notifications to this phone: the bridge forgets its token (the web's
+ * unsubscribe, with the native endpoint) and launches stop registering it.
+ */
+export async function turnOffPush(): Promise<void> {
+  const { data: token } = await Notifications.getDevicePushTokenAsync()
+  await api('/api/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint: `apns:${token}` }) })
+  try { localStorage.setItem(OFF_KEY, getBaseUrl()) } catch { /* nothing to remember it in */ }
 }
 
 let lastTapAt = 0

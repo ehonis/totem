@@ -251,7 +251,21 @@ test('Claude deny rules cover the session key, stored keys, .env and secrets as 
   const bridge = readFileSync(new URL('../bridge.mjs', import.meta.url), 'utf8')
   const start = bridge.indexOf('function spawnClaudeStream(')
   // The secret rules go on every run, beside the connector tools the owner switched off.
-  assert.match(bridge.slice(start, start + 1700), /args\.push\('--disallowedTools', \.\.\.\(readOnly \? CLAUDE_WRITE_TOOLS : \[\]\), \.\.\.claudeSecretDenyRules\(HERE\), \.\.\.toolRules\.deny\)/)
+  assert.match(bridge.slice(start, start + 2400), /args\.push\('--disallowedTools', \.\.\.\(readOnly \? CLAUDE_WRITE_TOOLS : \[\]\), \.\.\.claudeSecretDenyRules\(HERE\), \.\.\.toolRules\.deny\)/)
+})
+
+test('Claude path rules: a file by itself, a directory with everything under it, always absolute', async () => {
+  const { claudePathRules } = await import('./instances.mjs')
+  assert.deepEqual(claudePathRules(['/d/chat-projects/p/memory.md', '/d/brain/', '', null], ['Read', 'Edit']), [
+    'Read(//d/chat-projects/p/memory.md)', 'Edit(//d/chat-projects/p/memory.md)', 'Read(//d/brain/**)', 'Edit(//d/brain/**)',
+  ])
+  const { resolve } = await import('node:path')
+  assert.deepEqual(claudePathRules(['data/totems/j/memory.md'], ['Read']), [`Read(/${resolve('data/totems/j/memory.md')})`])
+  const { readFileSync } = await import('node:fs')
+  const bridge = readFileSync(new URL('../bridge.mjs', import.meta.url), 'utf8')
+  // A folder chat's parent memory is readable and never writable; what it may write it may read.
+  assert.match(bridge, /toolRules\.deny\.push\(\.\.\.claudePathRules\(readOnlyPaths, \['Edit', 'Write'\]\)\)/)
+  assert.match(bridge, /const readRules = claudePathRules\(\[\.\.\.allowWrite, \.\.\.readOnlyPaths\], \['Read'\]\)/)
 })
 
 test('a Codex account gets the stored OpenAI key as CODEX_API_KEY too', async () => {
@@ -286,7 +300,7 @@ test('an effective API key counts as signed in, from env, stored settings or the
   const { effectiveApiKeyVar } = await import('./instances.mjs')
   const claude = { driver: 'claude', config: {}, env: [] }
   assert.equal(effectiveApiKeyVar(claude, {}, '/home/x'), null)
-  // process.env carries both real env and keys applied from Settings -> AI.
+  // process.env carries both real env and keys applied from Settings -> Providers.
   assert.equal(effectiveApiKeyVar(claude, { ANTHROPIC_API_KEY: 'sk-ant-x' }, '/home/x'), 'ANTHROPIC_API_KEY')
   assert.equal(effectiveApiKeyVar({ ...claude, env: [{ name: 'ANTHROPIC_API_KEY', value: 'k' }] }, {}, '/home/x'), 'ANTHROPIC_API_KEY')
   assert.equal(effectiveApiKeyVar(claude, { ANTHROPIC_API_KEY: '  ' }, '/home/x'), null)

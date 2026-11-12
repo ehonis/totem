@@ -21,7 +21,7 @@ import IconBulb from '@tabler/icons-react/dist/esm/icons/IconBulb.mjs'
 // provider later is just one more entry (id + label + brand icon + view). An app
 // without brand art gives a `glyph` instead, drawn in its own colour.
 const APPS: Array<{ id: string; label: string; icon?: string; glyph?: { Icon: React.ComponentType<any>; color: string }; render: (p: any) => React.ReactNode }> = [
-  { id: 'todos', label: 'Todos', icon: todosIcon, render: (p: any) => <TodosView {...p} /> },
+  { id: 'todos', label: 'Tasks', icon: todosIcon, render: (p: any) => <TodosView {...p} /> },
   { id: 'habits', label: 'Habits', icon: habitsIcon, render: (p: any) => <HabitsView {...p} /> },
   { id: 'goals', label: 'Goals', icon: goalsIcon, render: (p: any) => <GoalsView {...p} /> },
   { id: 'lists', label: 'Lists', icon: listsIcon, render: (p: any) => <ListsView {...p} /> },
@@ -42,7 +42,7 @@ export default function ProductivityView({ app, onApp, onAuthError }: Productivi
   const active = APPS.find((a) => a.id === app) || APPS[0]
   // The strip scrolls once there are more apps than fit a phone, so landing on one
   // directly (a saved link, `g g`) has to bring its own tab into view - otherwise you
-  // arrive on Goals looking at the Todos tab.
+  // arrive on Goals looking at the Tasks tab.
   const activeTab = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     activeTab.current?.scrollIntoView({ block: 'nearest', inline: 'center' })

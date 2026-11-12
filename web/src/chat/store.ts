@@ -7,7 +7,7 @@
 // (`start` carries the real ids, `done` the settled reply). localStorage is
 // only an instant-paint cache.
 import { useSyncExternalStore } from 'react'
-import { getThreads, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, api } from '../api'
+import { getThreads, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, ApiError, api, authHeaders } from '../api'
 import { pushError, pushToast } from '../toast'
 import { applyEvent } from './reduce'
 import {
@@ -17,6 +17,7 @@ import {
 import type { QueueAction } from './api'
 import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
 import type { ApprovalDecision, Attachment, BrowserFrame, BrowserHandoff, ChatCapabilities, ChatMessage, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
+import type { RawInput } from './browserInput'
 import { activeAt, wokeAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
 
 const CACHE_KEY = 'chat_threads_v2'
@@ -86,7 +87,13 @@ export interface ChatPrefs {
 let pendingFile = new URLSearchParams(window.location.search).get('file')
 export function takePendingFile() { const f = pendingFile; pendingFile = null; return f }
 
-export interface Artifact { uploadId: string; name: string; mime: string; url?: string; size?: number; path?: string }
+export interface Artifact {
+  uploadId: string; name: string; mime: string; url?: string; size?: number; path?: string
+  /** Why it could not be opened, said in the canvas instead of the file. */
+  error?: string
+  /** A page Totem serves inline under its own sandbox (a chart): framed by URL, never as srcdoc. */
+  frame?: boolean
+}
 
 export interface FileEntry { path: string; rel: string; name: string; dir: boolean; size?: number; mtime?: number; mime?: string }
 export interface ChatFiles { root: string; entries: FileEntry[]; truncated: boolean }
@@ -272,19 +279,40 @@ export async function loadCapabilities({ probe = false } = {}) {
   catch (e) { if (!fail(e) && probe) pushError((e as Error).message) }
 }
 
-/** The provider + settings a chat should use, resolving defaults. */
-export function threadChoice(thread: ChatThread | null, draft: { provider?: string; modelSettings?: Partial<ModelSettings> } = {}) {
+/**
+ * The account and model a new chat in this project or folder starts on: the
+ * folder's own default, else its parent project's; null when neither has one
+ * (the default in Settings → Providers). An account that is no longer listed is
+ * passed over. projectModelDefault in chat/projects.mjs is the bridge's twin.
+ */
+function projectDefault(projectId?: string | null): { provider: string; modelSettings?: Partial<ModelSettings> } | null {
+  const own = projectById(projectId)
+  if (!own) return null
+  for (const p of [own, own.parentId ? projectById(own.parentId) : undefined]) {
+    if (p?.provider && providerById(p.provider)) return { provider: p.provider, modelSettings: p.modelSettings }
+  }
+  return null
+}
+
+/**
+ * The provider + settings a chat should use, resolving defaults. Most specific
+ * first: the chat's own choice, then (for a new chat) the model picked in its
+ * draft, then its folder's default, its project's, and Settings → Providers. `draft`
+ * is only read for a new chat (`thread` null): an existing chat's model is its
+ * own, never one picked somewhere else.
+ */
+export function threadChoice(thread: ChatThread | null, draft: { provider?: string; modelSettings?: Partial<ModelSettings>; projectId?: string | null } = {}) {
   // A chat's account is whichever answered it first (stored on the thread);
   // older chats fall back to the last reply's account.
   const lastReply = thread ? [...thread.messages].reverse().find((m) => m.role === 'assistant' && m.provider)?.provider : undefined
   const stored = thread?.provider || lastReply
-  const provider = stored && providerById(stored)
-    ? stored
-    : draft.provider && providerById(draft.provider) ? draft.provider : state.defaultProvider
+  const picked = !thread && draft.provider && providerById(draft.provider) ? draft.provider : undefined
+  const home = projectDefault(thread ? thread.projectId : draft.projectId)
+  const provider = stored && providerById(stored) ? stored : picked || home?.provider || state.defaultProvider
   const row = providerById(provider)
   // Settings saved under the retired Auto/Instant/Thinking presets never named
   // the model, so they count as unset.
-  const saved = thread ? thread.modelSettings : draft.modelSettings
+  const saved = thread ? thread.modelSettings : picked === provider ? draft.modelSettings : undefined
   const own = saved && !fromPreset(saved) ? saved : null
   // A chat that never saved settings (one started through the API, an older
   // chat, or one that ran on a preset) carries on with the model that last
@@ -293,15 +321,30 @@ export function threadChoice(thread: ChatThread | null, draft: { provider?: stri
   const lastModel = thread && !own
     ? [...thread.messages].reverse().find((m) => m.role === 'assistant' && m.provider === provider && m.model)?.model
     : undefined
-  // A brand-new chat starts on the default account's default model.
+  // Then the folder's or project's model, when the chat is on that account.
+  const inherited = home && home.provider === provider && home.modelSettings && !fromPreset(home.modelSettings) ? home.modelSettings : null
+  // A brand-new chat outside any project starts on the default account's default model.
   let settings = normalizeModelSettings(
-    own || (lastModel ? parseModelSpec(lastModel) : null) || defaultSettingsFor(row, state.defaultProvider, state.defaultModel),
+    own || (lastModel ? parseModelSpec(lastModel) : null) || inherited || defaultSettingsFor(row, state.defaultProvider, state.defaultModel),
   )
   if (row?.supportsModelPicker && !settings.modelId) {
     const first = visibleModels(state.models[provider])[0]?.id
     if (first) settings = { ...settings, modelId: first }
   }
   return { provider, row, settings }
+}
+
+/** A model picked in a new chat's composer, for the place it was picked in (`key`). */
+export interface DraftPick { key: string; provider: string; modelSettings: ModelSettings }
+
+/**
+ * What a composer passes threadChoice. A new chat gets the model picked for it
+ * in this place (Home, a project or a folder; `key`) and the project it starts
+ * in. An open chat gets nothing: its model is its own, never a pick made elsewhere.
+ */
+export function draftFor(pick: DraftPick | null, key: string, { open, projectId }: { open: boolean; projectId?: string }): { provider?: string; modelSettings?: ModelSettings; projectId?: string } {
+  if (open) return {}
+  return { ...(pick?.key === key ? { provider: pick.provider, modelSettings: pick.modelSettings } : {}), projectId }
 }
 
 // --- threads ----------------------------------------------------------------
@@ -353,8 +396,8 @@ function takeProject(project: Project) {
   set((s) => ({
     projectDetail: { ...s.projectDetail, [project.id]: project },
     projects: s.projects.some((p) => p.id === project.id)
-      // A removed picture is a missing key, which a spread would not clear.
-      ? s.projects.map((p) => (p.id === project.id ? { ...p, ...summary, image: summary.image, imageUrl: summary.imageUrl } : p))
+      // A removed picture or model is a missing key, which a spread would not clear.
+      ? s.projects.map((p) => (p.id === project.id ? { ...p, ...summary, image: summary.image, imageUrl: summary.imageUrl, provider: summary.provider, modelSettings: summary.modelSettings } : p))
       : [...s.projects, summary as Project].sort((a, b) => a.name.localeCompare(b.name)),
   }))
   return project
@@ -368,20 +411,28 @@ export async function loadProject(id: string) {
 }
 
 export async function createProject(body: { name: string; icon?: string; instructions?: string; parentId?: string }) {
-  // A new project starts on whatever a new chat would use right now.
-  const { provider, settings } = threadChoice(null)
-  const { project } = await createProjectApi({ ...body, provider, modelSettings: settings })
+  // No model of its own until one is picked: a folder follows its project, a
+  // project the default in Settings → Providers (projectDefault).
+  const { project } = await createProjectApi(body)
   takeProject(project)
   openProject(project.id)
   return project
 }
 
-export async function updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'icon' | 'instructions' | 'provider' | 'modelSettings'>> & { image?: string | null }) {
+export async function updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'icon' | 'instructions'>> & {
+  image?: string | null
+  /** null clears the project's own model, so it follows its parent or Settings → Providers. */
+  provider?: string | null
+  modelSettings?: Partial<ModelSettings> | null
+}) {
   const before = state.projectDetail[id]
   if (before) {
     // Clearing the picture shows the icon at once; a new one shows when the bridge has signed it.
-    const { image, ...rest } = patch
-    const next = 'image' in patch ? { ...before, ...rest, image: image || undefined, imageUrl: undefined } : { ...before, ...rest }
+    const { image, provider, modelSettings, ...rest } = patch
+    const next: Project = { ...before, ...rest }
+    if ('image' in patch) { next.image = image || undefined; next.imageUrl = undefined }
+    if ('provider' in patch) next.provider = provider || undefined
+    if ('modelSettings' in patch) next.modelSettings = modelSettings || undefined
     set((s) => ({ projectDetail: { ...s.projectDetail, [id]: next } }))
   }
   try { return takeProject((await patchProjectApi(id, patch)).project) } catch (e: any) {
@@ -614,11 +665,62 @@ export async function loadFiles(threadId: string) {
   } catch (e: any) { if (e instanceof AuthError) fail(e) }
 }
 
-/** A file on the box, by absolute path, as something the canvas can open. */
-export function fileArtifact(path: string, size?: number): Artifact {
+const safeDecode = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
+const stillOpen = (id: string) => state.artifact?.uploadId === id
+
+/** What the canvas says in place of a file the bridge refused (by HTTP status). */
+export function refusalMessage(status: number, what = 'file') {
+  return status === 401 ? `Sign in to Totem again to open this ${what}.`
+    : status === 403 ? `Totem does not share this ${what}: it is outside the folders it may serve.`
+    : status === 404 ? `This ${what} is no longer there. Ask for it again, or refresh the Files panel.`
+    : `Couldn’t open this ${what}${status ? ` (HTTP ${status})` : ''}. Try again in a moment.`
+}
+
+function openFailed(base: Artifact, e: any, what = 'file') {
+  fail(e) // a lapsed sign-in also brings the sign-in screen up
+  if (stillOpen(base.uploadId)) openArtifact({ ...base, error: refusalMessage(e instanceof ApiError ? e.status : 0, what) })
+}
+
+/**
+ * Open a file on the box, by absolute path, in the canvas. Every way in (a reply's
+ * link, the Files panel, a `?file=` redirect) comes here: the bridge checks the
+ * path and hands back a signed link, which the canvas's fetch, frames and images
+ * can all read without the bearer (a dashboard unlocked with BRIDGE_SECRET has no
+ * session cookie, and the bare raw URL answered those 401).
+ */
+export async function openFile(path: string) {
   const name = path.split('/').pop() || path
-  const url = `/api/chat/files/raw?path=${encodeURIComponent(path)}`
-  return { uploadId: `file:${path}`, name, mime: mimeOf(name), url, size, path }
+  const base: Artifact = { uploadId: `file:${path}`, name, mime: mimeOf(name), path }
+  openArtifact(base)
+  try {
+    const link = await api<{ path: string; name: string; mime: string; size: number; url: string }>(`/api/chat/files/link?path=${encodeURIComponent(path)}`)
+    if (stillOpen(base.uploadId)) openArtifact({ ...base, name: link.name || name, mime: link.mime || base.mime, size: link.size, url: link.url, path: link.path || path })
+  } catch (e) { openFailed(base, e) }
+}
+
+/**
+ * Open something else the Totem server serves (an upload, a chart page, an
+ * attachment) in the canvas: the desktop app's links to it, which used to leave
+ * for the system browser. A HEAD says what it is; a chart served inline under its
+ * own sandbox is framed by URL so that sandbox (VISUAL_CSP) still holds.
+ */
+export async function openResource(href: string) {
+  const url = new URL(href, window.location.href)
+  const guess = safeDecode(url.pathname.split('/').filter(Boolean).pop() || 'file')
+  const base: Artifact = { uploadId: `url:${url.pathname}${url.search}`, name: guess, mime: mimeOf(guess) }
+  openArtifact(base)
+  try {
+    const r = await fetch(url.href, { method: 'HEAD', headers: authHeaders(), credentials: 'same-origin' })
+    if (r.status === 401) throw new AuthError()
+    if (!r.ok) throw new ApiError(r.statusText, r.status, 'HTTP_ERROR')
+    const disposition = r.headers.get('content-disposition') || ''
+    const named = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1] || disposition.match(/filename="([^"]*)"/i)?.[1]
+    const name = named ? safeDecode(named) : guess
+    const mime = (r.headers.get('content-type') || '').split(';')[0].trim() || mimeOf(name)
+    const frame = /html/.test(mime) && /^inline/i.test(disposition) && /\bsandbox\b/.test(r.headers.get('content-security-policy') || '')
+    const size = Number(r.headers.get('content-length')) || undefined
+    if (stillOpen(base.uploadId)) openArtifact({ ...base, name, mime, size, url: url.href, frame })
+  } catch (e) { openFailed(base, e, 'link') }
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -633,21 +735,16 @@ export function focusAgent(id: string | null) {
   set({ agentFocus: id })
 }
 
-export type BrowserInput =
-  | { kind: 'click'; x: number; y: number }
-  | { kind: 'type'; text: string }
-  | { kind: 'press'; key: string; modifiers?: string[] }
-  | { kind: 'scroll'; deltaX?: number; deltaY?: number }
-  | { kind: 'look' }
+export type BrowserInput = RawInput | { kind: 'look' }
 
 // The owner's own clicks and keys, sent one at a time so they land in order.
 let browserQueue: Promise<unknown> = Promise.resolve()
 
 /** Drive the chat's browser by hand (sign in, dismiss a banner); shows the frame it leaves. */
-export function browserInput(threadId: string, input: BrowserInput) {
+export function browserInput(threadId: string, input: BrowserInput, owner?: string) {
   browserQueue = browserQueue.then(async () => {
     try {
-      const r = await api<{ frame: BrowserFrame | null }>('/api/chat/browser/input', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, ...input }) })
+      const r = await api<{ frame: BrowserFrame | null }>('/api/chat/browser/input', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, ...(owner ? { owner } : {}), ...input }) })
       if (r.frame) set((s) => ({ browser: { ...s.browser, [threadId]: { ...r.frame!, live: !!s.runs[threadId] } } }))
     } catch (e: any) { if (input.kind !== 'look') fail(e) }
   })
@@ -853,6 +950,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
     case 'steer':
     case 'questions':
     case 'approval':
+    case 'inbox':
+    case 'visual':
     case 'delta':
     case 'tool':
     case 'agent':
@@ -952,7 +1051,7 @@ export function send(input: SendInput): string {
   let thread = state.threads.find((t) => t.id === threadId) || null
   const projectId = thread ? thread.projectId : (input.projectId || undefined)
   const kind = projectId ? 'regular' : thread?.kind || input.kind || 'regular'
-  const { provider, row, settings } = threadChoice(thread, { provider: input.provider, modelSettings: input.modelSettings })
+  const { provider, row, settings } = threadChoice(thread, { provider: input.provider, modelSettings: input.modelSettings, projectId })
   const wire = wireModel(row?.driver || 'cursor', settings)
   const t0 = now()
   const userMessage: ChatMessage = {

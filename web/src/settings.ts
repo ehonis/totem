@@ -2,6 +2,7 @@
 // a tiny external store (so a toggle flipped in Settings updates live everywhere).
 // These are purely client-side - backend feature flags live in the bridge env.
 import { useSyncExternalStore } from 'react'
+import { applyBackground, DEFAULT_BACKGROUND } from './backgrounds'
 
 const KEY = 'app_settings'
 
@@ -10,6 +11,7 @@ export const DEFAULTS = {
   compact: false, // tighter spacing/density
   autoRefresh: true, // background polling on data views (e.g. Usage)
   landingTab: 'overview', // which tab to open on a fresh load
+  background: DEFAULT_BACKGROUND, // backgrounds.ts: the page, sidebar and rail colours
   chatGlow: true, // the chat's moving colour glow; off saves the GPU on this device
   // Overview tile order, set by dragging cards around on desktop. Empty = the
   // built-in order; OverviewView reconciles it against the tiles that exist.
@@ -41,6 +43,8 @@ function load(): Settings {
 }
 
 let cache: Settings = load()
+// Before the first render, so the page never flashes the old colours.
+if (typeof document !== 'undefined') applyBackground(cache.background)
 const subs = new Set<() => void>()
 
 export function getSettings(): Settings {
@@ -50,6 +54,7 @@ export function getSettings(): Settings {
 export function setSetting<K extends keyof Settings>(key: K, value: Settings[K]) {
   cache = { ...cache, [key]: value }
   localStorage.setItem(KEY, JSON.stringify(cache))
+  if (key === 'background') applyBackground(cache.background)
   subs.forEach((fn) => fn())
 }
 

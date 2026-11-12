@@ -1,21 +1,25 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { clearSecret, getTerminalStatus } from './api'
 import { getSettings, useSettings } from './settings'
-import { parseLocation, buildPath, toRoute, resolveTarget, type NavTarget, type Route } from './router'
+import { parseLocation, buildPath, toRoute, resolveTarget, withDefaults, type NavTarget, type Route } from './router'
 import { COMMANDS } from './shortcuts'
 import { installDesktopHooks } from './desktop'
+import { installDownloadLinks } from './downloads'
+import { installLinkRouting } from './links'
+import DownloadActivity from './components/DownloadActivity'
 import { installChatAbout } from './chat/about/start'
 import { useShortcuts, useCommand } from './useShortcuts'
 import { useInboxCount, describeInboxCount } from './useInboxCount'
 import AuthGate from './components/AuthGate'
 import OverviewView from './components/OverviewView'
 import InboxView from './components/InboxView'
-import LogsView from './components/LogsView'
 import ProductivityView from './components/ProductivityView'
 import BrainView from './components/BrainView'
 import SearchView from './components/SearchView'
 import DevView from './components/DevView'
 import FleetView from './fleet/FleetView'
+import CliproxyView from './cliproxy/CliproxyView'
+import { useCliproxyStatus } from './cliproxy/api'
 import ChatView from './components/ChatView'
 import MessagesView from './messages/MessagesView'
 import { useAppleStatus } from './messages/useAppleStatus'
@@ -53,6 +57,7 @@ import {
   EllipsisHorizontalIcon,
   WrenchScrewdriverIcon,
   ServerStackIcon,
+  KeyIcon,
 } from './icons'
 
 interface TabDef {
@@ -89,6 +94,10 @@ const MESSAGES_TAB_DEF: TabDef = { id: 'messages', label: 'Messages', icon: Chat
 // The desktop of the machine Totem runs on (SCREEN_ENABLED). On the desktop rail
 // only, never in the phone drawer; /screen on a phone explains itself.
 const SCREEN_TAB_DEF: TabDef = { id: 'screen', label: 'Screen', icon: ComputerDesktopIcon }
+
+// The logins CLIProxy pools (cliproxy/), on the rail only once the proxy is set up
+// (CLIPROXY_URL and a key); /cliproxy explains itself either way.
+const CLIPROXY_TAB_DEF: TabDef = { id: 'cliproxy', label: 'CLIProxy', icon: KeyIcon }
 
 // Off the nav (see MORE_TABS), but /totems still needs a name in the phone's top bar.
 const TOTEMS_TAB_DEF: TabDef = { id: 'totems', label: 'Totems', icon: TotemsIcon }
@@ -142,7 +151,8 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [panelOpen, setPanelOpen] = usePanelOpen()
   const [drawerOpen, setDrawerOpen] = useState(false)
-  useEdgeSwipe(narrow, drawerOpen, setDrawerOpen)
+  // Not under the Settings dialog: the drawer would open hidden beneath it.
+  useEdgeSwipe(narrow && route.tab !== SETTINGS_TAB, drawerOpen, setDrawerOpen)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
 
   // Normalise the address bar once on boot: a legacy ?tab= link, or a bare "/"
@@ -160,13 +170,36 @@ export default function App() {
   // you were using, Settings on the pane you were in) — the query-string router
   // got that for free by never clearing ?app=/?stab=.
   const lastVisit = useRef<Record<string, Partial<Route>>>({})
+  // Settings is a dialog over the page that opened it (T3 Code's): that page
+  // stays drawn underneath, and closing returns to it. `settingsEntry` says how
+  // the dialog was reached, so closing can step Back rather than stack history.
+  const behind = useRef<Route | null>(null)
+  // The page's own URL (with ?thread= and the like), for closing without a Back.
+  const behindUrl = useRef('')
+  if (!behind.current) behind.current = route.tab === SETTINGS_TAB ? withDefaults(toRoute(getSettings().landingTab || 'overview')) : route
+  // A fresh load of bare /settings is "bare" too: the phone opens on the list.
+  const settingsEntry = useRef<{ pushed: boolean; bare: boolean } | null>(
+    route.tab === SETTINGS_TAB ? { pushed: false, bare: /^\/settings\/?$/.test(window.location.pathname) } : null,
+  )
   // Read inside navigate() so pushState stays out of the setState updater, which
   // React is free to run twice.
   const routeRef = useRef(route)
   useEffect(() => {
     routeRef.current = route
     lastVisit.current[route.tab] = { app: route.app, sub: route.sub }
+    if (route.tab !== SETTINGS_TAB) {
+      behind.current = route
+      behindUrl.current = window.location.pathname + window.location.search + window.location.hash
+      settingsEntry.current = null
+    }
   }, [route])
+
+  /** Settings was reached some way other than navigate(): note how, for closing. */
+  const noteSettingsEntry = useCallback((next: Route, pushed: boolean) => {
+    if (next.tab === SETTINGS_TAB && routeRef.current.tab !== SETTINGS_TAB) {
+      settingsEntry.current = { pushed, bare: /^\/settings\/?$/.test(window.location.pathname) }
+    }
+  }, [])
 
   // Real navigation, so Back/Forward walk the tabs you visited. Re-selecting the
   // tab you're already on replaces rather than stacking another entry.
@@ -180,16 +213,38 @@ export default function App() {
 
     const path = buildPath(next, window.location.search)
     const here = window.location.pathname + window.location.search
-    window.history[path.split('#')[0] === here ? 'replaceState' : 'pushState'](
-      window.history.state, '', path,
-    )
+    // Moving between Settings panes replaces, so Back leaves the dialog in one step.
+    const within = current.tab === SETTINGS_TAB && next.tab === SETTINGS_TAB
+    const method = within || path.split('#')[0] === here ? 'replaceState' : 'pushState'
+    window.history[method](window.history.state, '', path)
+    if (next.tab === SETTINGS_TAB && current.tab !== SETTINGS_TAB) {
+      settingsEntry.current = { pushed: method === 'pushState', bare: !(typeof target === 'object' && target.sub) }
+    }
     routeRef.current = next
     setRoute(next)
   }, [])
 
+  const closeSettings = useCallback(() => {
+    const entry = settingsEntry.current
+    settingsEntry.current = null
+    if (routeRef.current.tab !== SETTINGS_TAB) return
+    if (entry?.pushed) { window.history.back(); return }
+    // Opened from a link or a fresh load: there is no page to step back to.
+    const to = behind.current!
+    window.history.replaceState(window.history.state, '', behindUrl.current || buildPath(to, ''))
+    routeRef.current = to
+    setRoute(to)
+  }, [])
+
   // Back/forward buttons and any external history change.
   useEffect(() => {
-    const onPop = () => setRoute(parseLocation(window.location, getSettings().landingTab))
+    // A Back or Forward into Settings (or a page's own pushState and popstate, as
+    // MetricSourceWarning does) has no page of ours to step back to: close replaces.
+    const onPop = () => {
+      const next = parseLocation(window.location, getSettings().landingTab)
+      noteSettingsEntry(next, false)
+      setRoute(next)
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
@@ -210,9 +265,13 @@ export default function App() {
   }, [notificationsOpen])
 
   const tab = route.tab
+  const settingsOpen = tab === SETTINGS_TAB
+  // What is drawn on the page: the route, or the page under the Settings dialog.
+  const page = settingsOpen ? behind.current! : route
+  const pageTab = page.tab
   const selectTab = navigate
   const selectApp = useCallback((app: string) => navigate({ tab: 'productivity', app }), [navigate])
-  const selectSubTab = useCallback((sub: string) => navigate({ sub }), [navigate])
+  const selectSettings = useCallback((sub: string, hash?: string | null) => navigate({ tab: SETTINGS_TAB, sub, hash: hash || undefined }), [navigate])
 
   const onAuthError = useCallback(() => {
     clearSecret()
@@ -245,6 +304,7 @@ export default function App() {
   // Apple Messages: asked once after sign-in, like the terminal above.
   const { status: appleStatus, refresh: refreshAppleStatus } = useAppleStatus(unlocked, onAuthError)
   const { status: screenStatus, refresh: refreshScreenStatus } = useScreenStatus(unlocked, onAuthError)
+  const { configured: cliproxyConfigured } = useCliproxyStatus(unlocked, onAuthError)
 
   const toggleTerminal = useCallback(() => {
     setTerminalOpen((prev) => {
@@ -277,6 +337,8 @@ export default function App() {
   // including the "return to the pane you left" memory.
   const chord = useShortcuts(navigate)
   useEffect(() => installDesktopHooks(navigate), [navigate])
+  useEffect(() => installDownloadLinks(), [])
+  useEffect(() => installLinkRouting(), [])
   // "Chat about this" on any card opens the chat through the same router.
   useEffect(() => installChatAbout({ navigate, onAuthError }), [navigate, onAuthError])
 
@@ -289,6 +351,16 @@ export default function App() {
     root.classList.toggle('density-compact', settings.compact)
   }, [settings.reduceMotion, settings.compact])
 
+  // Behind the Settings dialog nothing can be reached by keyboard or a screen
+  // reader: the rail, the chats panel, the page and the floating buttons go
+  // inert. Toasts stay live; they sit above the dialog.
+  useEffect(() => {
+    if (!settingsOpen) return
+    const behind = [...document.querySelectorAll('.app > *')].filter((el) => !el.classList.contains('stg-root') && !el.hasAttribute('data-toast-host'))
+    behind.forEach((el) => el.setAttribute('inert', ''))
+    return () => behind.forEach((el) => el.removeAttribute('inert'))
+  }, [settingsOpen])
+
   // The page glows hold still while the window is in the background (glow.css).
   useEffect(() => {
     const root = document.documentElement
@@ -299,16 +371,30 @@ export default function App() {
     return () => { window.removeEventListener('focus', sync); window.removeEventListener('blur', sync) }
   }, [])
 
+  // And while the window is being resized, until it has been still for a moment.
+  useEffect(() => {
+    const root = document.documentElement
+    let timer = 0
+    const onResize = () => {
+      if (!timer) root.classList.add('window-resizing')
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => { timer = 0; root.classList.remove('window-resizing') }, 200)
+    }
+    window.addEventListener('resize', onResize)
+    return () => { window.removeEventListener('resize', onResize); window.clearTimeout(timer); root.classList.remove('window-resizing') }
+  }, [])
+
   // Every tab is on the rail (desktop) or in the drawer (phone); nothing is
   // folded under "More" any more.
   const allTabs = [...PRIMARY_TABS, ...MORE_TABS]
   const railTabs = [
     ...allTabs,
+    ...(cliproxyConfigured ? [CLIPROXY_TAB_DEF] : []),
     ...(screenEnabled(screenStatus) ? [SCREEN_TAB_DEF] : []),
     ...(appleEnabled(appleStatus) ? [MESSAGES_TAB_DEF] : []),
   ]
   const badges = inboxOpen ? { inbox: { count: inboxOpen, title: describeInboxCount(inboxOpen, inboxByKind) } } : {}
-  const tabLabel = [...allTabs, MESSAGES_TAB_DEF, SCREEN_TAB_DEF, TOTEMS_TAB_DEF, SETTINGS_TAB_DEF].find((t) => t.id === tab)?.label || 'Totem'
+  const tabLabel = [...allTabs, CLIPROXY_TAB_DEF, MESSAGES_TAB_DEF, SCREEN_TAB_DEF, TOTEMS_TAB_DEF].find((t) => t.id === pageTab)?.label || 'Totem'
   const openChat = () => selectTab('chat')
   const newChat = () => { setActive(null); selectTab('chat') }
   const showPanel = useCallback(() => { if (!narrow) setPanelOpen(true) }, [narrow, setPanelOpen])
@@ -326,53 +412,56 @@ export default function App() {
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpen(!panelOpen)}
           badges={badges}
-          usage={tab !== 'chat'}
+          usage={pageTab !== 'chat'}
         />
       )}
       {!narrow && panelOpen && (
         <SidePanel onOpenChat={openChat} onNotifications={() => setNotificationsOpen(true)} unread={unreadNotifications} onCollapse={() => setPanelOpen(false)} />
       )}
-      <main className="main" data-glow={GLOW_TABS.has(tab) ? tab : undefined}>
-        {GLOW_TABS.has(tab) && <div className="page-glow" aria-hidden />}
+      <main className="main" data-glow={GLOW_TABS.has(pageTab) ? pageTab : undefined}>
+        {GLOW_TABS.has(pageTab) && <div className="page-glow" aria-hidden />}
         {/* The chat draws its own top bar; every other screen gets ChatGPT's. */}
-        {narrow && tab !== 'chat' && (
+        {narrow && pageTab !== 'chat' && (
           <MobileBar
             title={tabLabel}
             onMenu={() => setDrawerOpen(true)}
             // On Messages the top bar's pencil means "new message", as in the Messages app.
-            onNewChat={tab === 'messages' ? () => window.dispatchEvent(new Event('totem:new-message')) : newChat}
+            onNewChat={pageTab === 'messages' ? () => window.dispatchEvent(new Event('totem:new-message')) : newChat}
           />
         )}
         {/* Keep Chat mounted so its conversation survives tab switches. */}
-        <ChatView visible={tab === 'chat'} onAuthError={onAuthError} onOpenMenu={() => setDrawerOpen(true)} panelOpen={panelOpen} onShowPanel={() => setPanelOpen(true)} />
-        {tab === 'overview' && <OverviewView onNavigate={navigate} onAuthError={onAuthError} />}
+        <ChatView visible={pageTab === 'chat'} onAuthError={onAuthError} onOpenMenu={() => setDrawerOpen(true)} panelOpen={panelOpen} onShowPanel={() => setPanelOpen(true)} onManageUsage={cliproxyConfigured ? () => selectTab('cliproxy') : undefined} />
+        {pageTab === 'overview' && <OverviewView onNavigate={navigate} onAuthError={onAuthError} />}
         {/* `/inbox#P12` is a release notification's "tap to update" link. */}
-        {tab === 'inbox' && <InboxView onAuthError={onAuthError} focusId={route.hash} />}
-        {tab === 'logs' && <LogsView onAuthError={onAuthError} />}
-        {tab === 'productivity' && (
-          <ProductivityView app={route.app || ''} onApp={selectApp} onAuthError={onAuthError} />
+        {pageTab === 'inbox' && <InboxView onAuthError={onAuthError} focusId={page.hash} />}
+        {pageTab === 'productivity' && (
+          <ProductivityView app={page.app || ''} onApp={selectApp} onAuthError={onAuthError} />
         )}
-        {tab === 'search' && <SearchView onAuthError={onAuthError} onNavigate={navigate} />}
-        {tab === 'brain' && <BrainView onAuthError={onAuthError} openPath={route.hash ? safeDecode(route.hash) : undefined} />}
-        {tab === 'dev' && <DevView onAuthError={onAuthError} />}
-        {tab === 'fleet' && (
-          <FleetView onAuthError={onAuthError} deviceId={route.hash ? safeDecode(route.hash) : null} onOpen={(id) => navigate({ tab: 'fleet', hash: id })} />
+        {pageTab === 'search' && <SearchView onAuthError={onAuthError} onNavigate={navigate} />}
+        {pageTab === 'brain' && <BrainView onAuthError={onAuthError} openPath={page.hash ? safeDecode(page.hash) : undefined} />}
+        {pageTab === 'dev' && <DevView onAuthError={onAuthError} />}
+        {pageTab === 'fleet' && (
+          <FleetView onAuthError={onAuthError} deviceId={page.hash ? safeDecode(page.hash) : null} onOpen={(id) => navigate({ tab: 'fleet', hash: id })} />
         )}
-        {tab === 'messages' && (
+        {pageTab === 'cliproxy' && <CliproxyView onAuthError={onAuthError} onNavigate={navigate} />}
+        {pageTab === 'messages' && (
           <MessagesView status={appleStatus} onRefreshStatus={refreshAppleStatus} onAuthError={onAuthError} narrow={narrow} />
         )}
-        {tab === 'screen' && <ScreenView status={screenStatus} onRefreshStatus={refreshScreenStatus} narrow={narrow} />}
-        {tab === 'totems' && <TotemsView onAuthError={onAuthError} onOpenChat={openChat} />}
-        {tab === SETTINGS_TAB && (
-          <SettingsView
-            onAuthError={onAuthError}
-            subTab={route.sub || undefined}
-            onSubTab={selectSubTab}
-            scrollTo={route.hash || undefined}
-          />
-        )}
+        {pageTab === 'screen' && <ScreenView status={screenStatus} onRefreshStatus={refreshScreenStatus} narrow={narrow} />}
+        {pageTab === 'totems' && <TotemsView onAuthError={onAuthError} onOpenChat={openChat} />}
       </main>
-      {narrow && tab !== 'chat' && tab !== 'messages' && <NewChatFab onNewChat={newChat} onVoice={() => { requestVoice(); selectTab('chat') }} />}
+      {settingsOpen && (
+        <SettingsView
+          onAuthError={onAuthError}
+          subTab={route.sub || undefined}
+          onSubTab={selectSettings}
+          scrollTo={route.hash || undefined}
+          onClose={closeSettings}
+          narrow={narrow}
+          startOnList={settingsEntry.current?.bare ?? !route.sub}
+        />
+      )}
+      {narrow && pageTab !== 'chat' && pageTab !== 'messages' && <NewChatFab onNewChat={newChat} onVoice={() => { requestVoice(); selectTab('chat') }} />}
       {narrow && (
         <MobileDrawer
           open={drawerOpen}
@@ -399,7 +488,9 @@ export default function App() {
         onNavigate={(url) => {
           const target = new URL(url, window.location.origin)
           window.history.pushState({}, '', target.pathname + target.search + target.hash)
-          setRoute(parseLocation(window.location, getSettings().landingTab))
+          const next = parseLocation(window.location, getSettings().landingTab)
+          noteSettingsEntry(next, true)
+          setRoute(next)
           setNotificationsOpen(false)
         }}
       />
@@ -416,6 +507,7 @@ export default function App() {
       <RunningChats onOpenChat={openChat} onShowPanel={showPanel} narrow={narrow} />
       <ShortcutOverlay chord={chord} />
       <ToastHost />
+      <DownloadActivity />
       <HabitCheckin onAuthError={onAuthError} />
     </div>
   )

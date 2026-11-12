@@ -273,7 +273,7 @@ function FoldersSection({ root, naming, setNaming, onOpenChat }: { root: Project
  * Everything under "New chat" in the panel and the phone drawer: Home's projects
  * and recents, or one project's header and chats.
  */
-export function ChatsNav({ onOpenChat, searchSignal }: { onOpenChat: () => void; searchSignal: number }) {
+export function ChatsNav({ onOpenChat }: { onOpenChat: () => void }) {
   const activeId = useChat((s) => s.activeId)
   const scoped = useChat((s) => s.projects.find((p) => p.id === s.projectId))
   // A folder shows inside its project's panel.
@@ -305,7 +305,6 @@ export function ChatsNav({ onOpenChat, searchSignal }: { onOpenChat: () => void;
         <ThreadList
           activeId={activeId}
           onOpen={open}
-          searchSignal={searchSignal}
           projectId={project.id}
           heading="Chats"
           before={<FoldersSection root={project} naming={namingFolder} setNaming={setNamingFolder} onOpenChat={open} />}
@@ -319,7 +318,6 @@ export function ChatsNav({ onOpenChat, searchSignal }: { onOpenChat: () => void;
       <ThreadList
         activeId={activeId}
         onOpen={open}
-        searchSignal={searchSignal}
         projectId={null}
         before={<ProjectsSection onOpen={onOpenChat} />}
       />

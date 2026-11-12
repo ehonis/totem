@@ -10,6 +10,7 @@ import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { mapLimit } from './github.mjs'
+import { createIssueFeed } from './issues.mjs'
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const CACHE_MS = 60_000
@@ -91,6 +92,7 @@ export function createDevService({ configFile, github, alerts, fetchImpl = fetch
   let writing = Promise.resolve()
 
   const config = () => loadDevConfig(configFile)
+  const issueFeed = createIssueFeed({ github, config, now })
 
   async function status({ refresh = false } = {}) {
     const cfg = config()
@@ -198,5 +200,5 @@ export function createDevService({ configFile, github, alerts, fetchImpl = fetch
     return { repo, aiReview }
   }
 
-  return { config, status, setAiReview, setWatch, dispatchReview, shipped, setShippedHidden, setShippedGroups }
+  return { config, status, setAiReview, setWatch, dispatchReview, shipped, setShippedHidden, setShippedGroups, issues: issueFeed.issues }
 }

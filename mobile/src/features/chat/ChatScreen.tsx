@@ -10,7 +10,7 @@ import { router, useFocusEffect, useIsFocused, useNavigation } from 'expo-router
 import { MenuView } from '@react-native-menu/menu'
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
 import {
-  useChat, send, stop, steer, queueMessage, updateQueue, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice,
+  useChat, send, stop, steer, queueMessage, updateQueue, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice, draftFor, type DraftPick,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState,
   takeVoiceRequest, openProject, threadProject, projectById, setProjectContext, respondToApproval,
 } from '../../lib/chat/store'
@@ -53,6 +53,7 @@ import { TI, vc } from './ui'
 import { TotemRunButton } from '../totems/shared'
 import { PageGlow } from '../../ui/PageGlow'
 import { chatGlow } from '../../lib/chat/glow'
+import { useSettings } from '../../lib/settings'
 import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconFolder, IconFolderOff, IconSparkles, IconChevronDown, IconSettings, IconUsersGroup, IconUserPlus } from './icons'
 
 function greeting(name: string) {
@@ -76,6 +77,7 @@ function readDrafts(): Record<string, string> {
 }
 
 export default function ChatScreen() {
+  const glowOn = useSettings().chatGlow
   const insets = useSafeAreaInsets()
   const navigation = useNavigation()
   const focused = useIsFocused()
@@ -94,7 +96,8 @@ export default function ChatScreen() {
   const allProjects = useChat((s) => s.projects)
   const startInProjects = useMemo(() => allProjects.filter((p) => !p.parentId).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6), [allProjects])
   const [draftKind, setDraftKind] = useState<'regular' | 'temporary'>('regular')
-  const [draftModel, setDraftModel] = useState<{ provider?: string; modelSettings?: ModelSettings }>({})
+  // A model picked for a new chat, for the place (project, folder or Home) it was picked in.
+  const [draftPick, setDraftPick] = useState<DraftPick | null>(null)
   const [draftContextOff, setDraftContextOff] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>(readDrafts)
   const [atEnd, setAtEnd] = useState(true)
@@ -156,7 +159,7 @@ export default function ChatScreen() {
     if (!why) return
     const t = setTimeout(() => {
       composer.current?.dictate()
-      pushToast(`${why} Dictating instead: talk, then tap ✓.`, 'info', { duration: 5000 })
+      pushToast(`${why} Dictating instead: talk, then tap ✓.`, 'error', { duration: 5000 })
     }, 350)
     return () => clearTimeout(t)
   }, []))
@@ -177,14 +180,14 @@ export default function ChatScreen() {
   const contextOff = active ? !!active.projectContextOff : draftContextOff
   const kind = project ? 'regular' : active?.kind || draftKind
   const temporary = kind === 'temporary'
-  // A new project chat starts on the project's model until he picks another.
-  const draft = !active && project && !draftModel.provider && project.provider
-    ? { provider: project.provider, modelSettings: project.modelSettings as ModelSettings | undefined }
-    : draftModel
+  const draftKey = activeId || (project ? `new:project:${project.id}` : `new:${kind}`)
+  // A new chat starts on what was picked for it here, else its folder's or
+  // project's model (threadChoice). A pick never follows him to another place,
+  // and an open chat keeps its own model.
+  const draft = draftFor(draftPick, draftKey, { open: !!active, projectId: project?.id })
   const choice = threadChoice(active, draft)
   const messages = active?.messages || []
   const empty = messages.length === 0
-  const draftKey = activeId || (project ? `new:project:${project.id}` : `new:${kind}`)
   const input = drafts[draftKey] || ''
   useEffect(() => { ensureModels(choice.provider) }, [choice.provider])
 
@@ -215,7 +218,7 @@ export default function ChatScreen() {
     impact()
     setActive(null)
     setDraftKind(k)
-    setDraftModel({})
+    setDraftPick(null)
     setDraftContextOff(false)
   }
 
@@ -225,6 +228,7 @@ export default function ChatScreen() {
     const id = send({ threadId: activeId, text, attachments, mode, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff })
     setInput('')
     if (id !== activeId) {
+      setDraftPick(null)
       setDrafts((d) => { const n = { ...d }; delete n[draftKey]; return n })
       setActive(id)
     }
@@ -241,7 +245,7 @@ export default function ChatScreen() {
     sendText: (text) => {
       if (!activeId) return
       if (busy) void steer(activeId, text)
-      else send({ threadId: activeId, text, attachments: [], mode: 'chat', kind, provider: draft.provider, modelSettings: draft.modelSettings })
+      else send({ threadId: activeId, text, attachments: [], mode: 'chat', kind })
     },
     displace: (text) => setInput(input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text),
   })
@@ -284,7 +288,7 @@ export default function ChatScreen() {
     const { stash } = queueEdit
     setQueueEdit(null)
     if (!stash.text.trim() && !stash.attachments.length) pushToast('Queued message is no longer queued. Your unsaved edit was kept in the composer.', 'info')
-    else { putBack(stash); pushToast('Queued message is no longer queued. Your unsaved edit was discarded.', 'info') }
+    else { putBack(stash); pushToast('Queued message is no longer queued. Your unsaved edit was discarded.', 'error') }
   }, [editGone]) // eslint-disable-line react-hooks/exhaustive-deps
   // A tool call waiting on his approval (lib/chat/approvals.ts): as in T3 Code, a
   // message declines it and its words tell the agent why. Files go on as a steer.
@@ -320,7 +324,7 @@ export default function ChatScreen() {
     const access = patch.modelSettings.access ?? choice.settings.access
     if (access) patch = { ...patch, modelSettings: { ...patch.modelSettings, access } }
     if (active) setThreadModel(active.id, patch)
-    else setDraftModel(patch)
+    else setDraftPick({ key: draftKey, ...patch })
   }
 
   const providerState = caps?.providers?.[choice.provider]?.state
@@ -449,8 +453,8 @@ export default function ChatScreen() {
 
   return (
     <View style={[st.screen, { paddingTop: insets.top }]}>
-      {/* This chat's own colours; they wobble while the agent is replying. */}
-      <PageGlow colors={chatGlow(activeId)} live={busy} />
+      {/* This chat's own colours; they wobble while the agent is replying. Off per device in Settings → Appearance. */}
+      {glowOn ? <PageGlow colors={chatGlow(activeId)} live={busy} /> : null}
       <View style={st.top}>
         <Press style={st.iconBtn} onPress={() => { tap(); openDrawer(navigation) }} accessibilityLabel="Menu" hitSlop={6}>
           <TI icon={IconMenu} size={22} color={colors.text} />

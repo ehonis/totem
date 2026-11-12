@@ -20,8 +20,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/projects/totem
-# The bridge spawns the agent (cursor-agent/codex) and npx by name; they live in
-# ~/.local/bin and the nvm bin dir, which are NOT on systemd's default PATH.
+# The bridge spawns the agent (cursor-agent/codex), npx and, for self-update, pnpm by
+# name; they live in ~/.local/bin and the nvm bin dir, which are NOT on systemd's default
+# PATH. Self-update refuses to pull when it finds neither pnpm nor corepack here.
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env node --env-file=.env bridge.mjs
 Restart=always

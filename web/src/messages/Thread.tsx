@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AuthError } from '../api'
+import { downloadUrl } from '../downloads'
 import { Hi, ArrowUpIcon, ChevronLeftIcon, DocumentIcon } from '../icons'
 import { attachmentUrl, getThread, sendMessage, type ChatSummary, type Message, type MessageAttachment } from './api'
 import { dividerTime, fileSize, isImage, isVideo, layoutThread, mergeLatest, prependOlder, reactionLabel } from './format'
@@ -179,8 +180,9 @@ function Attachment({ a, onLoad }: { a: MessageAttachment; onLoad: () => void })
   if (isVideo(a)) {
     return <video className="msgs-media msgs-video" src={url} controls preload="metadata" onLoadedMetadata={onLoad} />
   }
+  const inline = /^audio\/|^application\/pdf/.test(a.mime || '')
   return (
-    <a className="msgs-file" href={url} target="_blank" rel="noreferrer">
+    <a className="msgs-file" href={inline ? url : downloadUrl(url)} target={inline ? '_blank' : undefined} rel="noreferrer" download={inline ? undefined : a.name || 'Attachment'}>
       <Hi icon={DocumentIcon} size={18} />
       <span className="msgs-file-name">{a.name || 'Attachment'}</span>
       {a.bytes > 0 && <span className="msgs-file-size">{fileSize(a.bytes)}</span>}

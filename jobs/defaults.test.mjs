@@ -8,9 +8,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { mkdtemp } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { createJobStore } from './store.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 const read = (rel) => readFileSync(join(ROOT, rel), 'utf8')
@@ -39,7 +36,7 @@ test('every shipped job is off unless an env flag or deliberate setup turns it o
     }
     assert.match(
       enabled,
-      /^(isTruthyFlag\([A-Z_.a-z]+\)|GITHUB_APP_CONFIGURED \|\| isTruthyFlag\(process\.env\.GITHUB_TODOS_SYNC_ENABLED\)|TASK_SHEET_CONFIGURED)$/,
+      /^isTruthyFlag\([A-Z_.a-z]+\)$/,
       `${id} must default to off on a fresh install (enabled: ${enabled})`,
     )
   }
@@ -50,20 +47,6 @@ test('.env.example switches no scheduled job on', () => {
   const on = env.split('\n').filter((l) => /^[A-Z_]+_(ENABLED|SYNC_ENABLED)=\s*(true|1|yes)\b/i.test(l))
   // Weather and news are data sources the brief reads, not schedules.
   assert.deepEqual(on.filter((l) => !/^(WEATHER|NEWS)_ENABLED=/.test(l)), [])
-})
-
-test('a fresh job store, given env-off seeds, has nothing enabled but housekeeping', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'totem-jobs-'))
-  const seedDefs = {
-    'daily-brief': { name: 'Daily brief', runner: 'morning-brief', enabled: false, schedule: { type: 'daily', time: '07:30' } },
-    'todo-archive': { name: 'Archive', runner: 'todo-archive', enabled: true, schedule: { type: 'interval', everyMinutes: 15 } },
-  }
-  const store = createJobStore({
-    file: join(dir, 'jobs.json'), runsFile: join(dir, 'runs.jsonl'), notificationsFile: join(dir, 'n.json'),
-    seedDefs, runners: { 'morning-brief': {}, 'todo-archive': { agentless: true } }, tz: 'UTC',
-  })
-  const jobs = await store.list()
-  assert.deepEqual(jobs.filter((j) => j.enabled).map((j) => j.id), ['todo-archive'])
 })
 
 test('shipped skill seeds name no particular person, venture or employer', () => {

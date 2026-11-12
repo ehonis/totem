@@ -6,6 +6,12 @@ import { useSyncExternalStore } from 'react'
 const KEY = 'app_settings'
 
 export const DEFAULTS = {
+  // backgrounds.ts: the page, drawer and raised colours. The web starts on True
+  // black; the app starts on Original, the colours it has always had, so an
+  // update does not repaint a phone nobody asked to change. theme.ts applies it
+  // at launch.
+  background: 'original',
+  chatGlow: true, // the chat's moving colour glow; off saves the GPU on this device
   reduceMotion: false, // disable animations/transitions app-wide
   compact: false, // tighter spacing/density
   autoRefresh: true, // background polling on data views (e.g. Usage)

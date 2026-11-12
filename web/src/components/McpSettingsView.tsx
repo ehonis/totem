@@ -7,12 +7,21 @@ import {
   getGmailAccounts, renameGmailAccount, removeGmailAccount, startGmailAccountAuth,
   getDriveAccounts, renameDriveAccount, removeDriveAccount, startDriveAccountAuth,
 } from '../api'
-import { Hi, ArrowPathIcon, CheckCircleIcon, ExclamationTriangleIcon, TrashIcon, WrenchScrewdriverIcon, ChevronDownIcon, BoltIcon } from '../icons'
+import { Hi, ArrowPathIcon, CheckCircleIcon, ExclamationTriangleIcon, TrashIcon, WrenchScrewdriverIcon, ChevronDownIcon, BoltIcon, CubeIcon, SquaresPlusIcon } from '../icons'
 import DataConnectionsPanel from './DataConnectionsPanel'
-import SourceHealthPanel from '../sources/SourceHealthPanel'
+import SourceHealthPanel, { SourceRuns } from '../sources/SourceHealthPanel'
+import { isMcpSource, since, type SourceHealthPayload } from '../sources/health'
+import { SERVER_STATES, attentionItems, isRemote, serverState, sortServers, type AttentionItem, type ServerState } from '../connections/state'
 import ClaudeToolsPanel from './ClaudeToolsPanel'
-import { WhoopConnectionPanel } from './WhoopConnection'
-import { useErrorToast } from '../toast'
+import { WhoopConnectionRow } from './WhoopConnection'
+import { StravaConnectionRow } from './StravaConnection'
+import { pushError, pushSuccess, useErrorToast } from '../toast'
+import { copyText } from '../clipboard'
+import { CONNECTION_ICON_CHOICES, loadConnectionIcons, resetConnectionIcon, setConnectionFavicon, setConnectionIcon, useConnectionIcon } from '../connections/icons'
+import { THREAD_ICONS } from '../chat/threadIcons.gen'
+import { uploadFile } from '../chat/api'
+import { TI } from '../chat/ui'
+import { IconUpload, IconWorld } from '../chat/icons'
 import {
   siLinear, siNotion, siAsana, siAtlassian, siGithub, siSentry, siVercel,
   siIntercom, siStripe, siPaypal, siAirtable, siHuggingface, siActualbudget, siGmail, siGoogledrive,
@@ -21,8 +30,6 @@ import googleCalendarIcon from '../assets/connection-icons/google-calendar.svg'
 import plaudIcon from '../assets/connection-icons/plaud.png'
 import slackIcon from '../assets/connection-icons/slack.svg'
 import canvaIcon from '../assets/connection-icons/canva.svg'
-
-const PROVIDER_ORDER = ['cursor', 'codex', 'claude', 'opencode']
 
 // Connections with a full-colour bundled logo (multi-tone marks simple-icons
 // doesn't carry, or brands it has dropped on trademark request).
@@ -70,10 +77,6 @@ function authBadge(auth: string) {
   return ''
 }
 
-function isRemote(app: any) {
-  return app.transport === 'remote' || app.transport === 'http'
-}
-
 // A bundled logo wins; otherwise draw the simple-icons glyph in the brand hue.
 // Very light brand colours (e.g. Intercom cyan, Hugging Face yellow) wash out on
 // the white chip, so clamp those to a readable dark ink.
@@ -89,18 +92,26 @@ interface ConnectionIconProps {
   id: string
   name?: string
   size?: number
+  /** Its own logo, ignoring the owner's pick (the picker's first choice). */
+  own?: boolean
 }
 
-function ConnectionIcon({ id, name, size = 34 }: ConnectionIconProps) {
-  const src = CONNECTION_ICONS[id]
-  const glyph = !src ? CONNECTION_GLYPHS[id] : null
+function ConnectionIcon({ id, name, size = 34, own = false }: ConnectionIconProps) {
+  // The owner's pick (Icon, in the row) wins over the brand logo.
+  const pick = useConnectionIcon(id)
+  const picked = own ? undefined : pick
+  const pickedIcon = !picked?.imageUrl && picked?.icon ? THREAD_ICONS[picked.icon] : null
+  const src = picked?.imageUrl || (!pickedIcon ? CONNECTION_ICONS[id] : undefined)
+  const glyph = !src && !pickedIcon ? CONNECTION_GLYPHS[id] : null
   const fallback = !src && !glyph
   return (
     <span
       className={`connection-icon ${fallback ? 'fallback' : ''}`}
-      style={{ width: size, height: size, ...(fallback ? { background: accentFor(id) } : {}) }}
+      style={{ width: size, height: size, ...(fallback ? { background: accentFor(id), color: '#fff' } : {}) }}
     >
-      {src ? (
+      {pickedIcon ? (
+        <TI icon={pickedIcon} size={Math.round(size * 0.6)} />
+      ) : src ? (
         <img src={src} alt="" aria-hidden="true" />
       ) : glyph ? (
         <svg viewBox="0 0 24 24" role="img" aria-hidden="true" fill={glyphColor(glyph.hex)} width={Math.round(size * 0.68)} height={Math.round(size * 0.68)}>
@@ -113,35 +124,55 @@ function ConnectionIcon({ id, name, size = 34 }: ConnectionIconProps) {
   )
 }
 
-// Gateway mode shows a single status per connection - its health *at the gateway*,
-// which is what every provider now sees. ok → live with a tool count; needsAuth →
-// the gateway still needs to sign in; otherwise pending/not yet probed.
-function gatewayHealthClass(health: any) {
-  if (!health) return 'checking'
-  if (health.ok) return 'active'
-  if (health.needsAuth) return 'warn'
-  return 'missing'
-}
+const ICON_CHOICES = CONNECTION_ICON_CHOICES.filter((name) => THREAD_ICONS[name])
 
-interface GatewayConnStatusProps {
-  health: any
-  loading?: boolean
-}
-
-function GatewayConnStatus({ health, loading }: GatewayConnStatusProps) {
-  const cls = gatewayHealthClass(health)
-  let label = loading ? 'Checking…' : 'Pending'
-  if (health?.ok) label = `Live · ${health.toolCount} tool${health.toolCount === 1 ? '' : 's'}`
-  else if (health?.needsAuth) label = 'Needs auth at gateway'
-  else if (health && !health.ok) label = health.error ? `Error: ${health.error}` : 'Not connected'
+// A connection's icon, as a chat folder's: its own logo, one of the chat icons, an
+// uploaded picture, or a website's icon.
+function IconField({ id, name }: { id: string; name: string }) {
+  const picked = useConnectionIcon(id)
+  const [site, setSite] = useState('')
+  const [busy, setBusy] = useState(false)
+  const input = React.useRef<HTMLInputElement>(null)
+  async function run(what: string, fn: () => Promise<void>) {
+    setBusy(true)
+    try { await fn() } catch (e: any) { pushError(`${what}: ${e.message}`) } finally { setBusy(false) }
+  }
+  const upload = (file?: File) => file && run("Couldn't use that picture", async () => {
+    const up = await uploadFile(file, file.name)
+    if (up.kind !== 'image' && !/icon$/.test(up.mime)) throw new Error('that is not a PNG, JPEG, GIF, WebP or ICO image')
+    await setConnectionIcon(id, { image: up.id })
+  })
+  function fetchIcon(e: React.FormEvent) {
+    e.preventDefault()
+    if (!site.trim()) return
+    void run("Couldn't get that site's icon", async () => { await setConnectionFavicon(id, site.trim()); setSite('') })
+  }
+  const own = !picked
   return (
-    <div className={`gateway-conn-status ${cls}`}>
-      <span className="gateway-conn-dot" />
-      <span className="gateway-conn-text">
-        <strong>Totem Gateway</strong>
-        <em>{label}</em>
-      </span>
-      <span className="gateway-conn-note">All providers route through here</span>
+    <div className="conn-icon-field">
+      <span className="server-checks-label">Icon</span>
+      <div className="conn-icon-grid" role="radiogroup" aria-label={`Icon for ${name}`}>
+        <button type="button" role="radio" aria-checked={own} className={own ? 'on' : ''} disabled={busy} onClick={() => !own && run("Couldn't reset the icon", () => resetConnectionIcon(id))} title={`${name}'s own logo`}>
+          <ConnectionIcon id={id} name={name} size={24} own />
+        </button>
+        {ICON_CHOICES.map((icon) => {
+          const on = !picked?.image && picked?.icon === icon
+          return (
+            <button key={icon} type="button" role="radio" aria-checked={on} className={on ? 'on' : ''} disabled={busy} onClick={() => !on && run("Couldn't set the icon", () => setConnectionIcon(id, { icon }))} title={icon}>
+              <TI icon={THREAD_ICONS[icon]} size={18} />
+            </button>
+          )
+        })}
+      </div>
+      <div className="conn-icon-picture">
+        {picked?.imageUrl && <span className="conn-icon-now"><ConnectionIcon id={id} name={name} size={26} />Picture in use</span>}
+        <button type="button" className="btn compact" disabled={busy} onClick={() => input.current?.click()}><TI icon={IconUpload} size={15} />Upload image</button>
+        <input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/x-icon,.ico" hidden onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = '' }} />
+        <form className="gcal-add-form conn-icon-site" onSubmit={fetchIcon}>
+          <input value={site} onChange={(e) => setSite(e.target.value)} placeholder="example.com" aria-label={`Website to take ${name}'s icon from`} disabled={busy} />
+          <button type="submit" className="btn compact" disabled={busy || !site.trim()}><TI icon={IconWorld} size={15} />Use site icon</button>
+        </form>
+      </div>
     </div>
   )
 }
@@ -353,9 +384,13 @@ function GoogleAccountsPanel({ onAuthError, accountsApi = CALENDAR_ACCOUNTS }: G
   )
 }
 
+
 interface GoogleServiceRowProps {
   onAuthError: () => void
-  section: string
+  /** Told whether the row needs the owner (a grant to reconnect, an error). */
+  onProblem: (name: string, problem: boolean) => void
+  /** Changing it reads the accounts again (the page's refresh). */
+  reloadKey?: number
   id: string
   name: string
   summary: string
@@ -366,87 +401,90 @@ interface GoogleServiceRowProps {
 // A Google service the bridge serves itself (Gmail, Drive). Not a manifest server:
 // the bridge holds the grant and serves the tools (gmail__*, drive__* through the
 // gateway), so the row only manages accounts.
-function GoogleServiceRow({ onAuthError, section, id, name, summary, accountsApi, children }: GoogleServiceRowProps) {
+function GoogleServiceRow({ onAuthError, onProblem, reloadKey, id, name, summary, accountsApi, children }: GoogleServiceRowProps) {
   const [expanded, setExpanded] = useState(false)
   const [info, setInfo] = useState<any>(null)
   useEffect(() => {
     accountsApi.list().then(setInfo).catch((e) => { if (e instanceof AuthError) onAuthError(); else setInfo({ error: e.message }) })
-  }, [onAuthError, expanded, accountsApi])
+  }, [onAuthError, expanded, accountsApi, reloadKey])
   const count = info?.accounts?.length || 0
   const broken = info?.accounts?.some((a: any) => a.status === 'error')
-  const chip = !info ? '' : info.error ? 'Error' : !info.configured ? 'Not set up' : !count ? 'Not connected' : broken ? 'Reconnect needed' : `${count} account${count === 1 ? '' : 's'}`
-  const tone = info?.configured && count && !broken ? 'on' : broken || info?.error ? 'bad' : 'warn'
+  const chip = !info ? '' : info.error ? 'Error' : !info.configured ? 'Not set up' : !count ? 'Not signed in' : broken ? 'Reconnect needed' : `${count} account${count === 1 ? '' : 's'}`
+  const tone = info?.configured && count && !broken ? 'on' : broken || info?.error ? 'bad' : ''
+  useEffect(() => { if (info) onProblem(name, tone === 'bad') }, [info, tone, name, onProblem])
   return (
-    <div className="app-group">
-      <div className="settings-section-title"><span /><strong>{section}</strong></div>
-      <div className="app-list">
-        <section className={`app-row ${expanded ? 'open' : ''} ${tone === 'on' ? '' : 'disabled'}`}>
-          <button className="app-row-head" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
-            <ConnectionIcon id={id} name={name} size={30} />
-            <span className="app-row-title">
-              <strong>{name}</strong>
-              <span>{summary}</span>
-            </span>
-            <span className="app-row-status">{chip && <span className={`app-row-chip ${tone}`}>{chip}</span>}</span>
-            <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />
-          </button>
-          {expanded && (
-            <div className="app-row-body">
-              <p className="app-row-desc">{children}</p>
-              {info && !info.configured ? (
-                <p className="app-row-hint">No Google OAuth client yet. Set one up as for Calendar, then come back.</p>
-              ) : (
-                <GoogleAccountsPanel onAuthError={onAuthError} accountsApi={accountsApi} />
-              )}
-            </div>
+    <section className={`app-row ${expanded ? 'open' : ''} ${info && !info.configured ? 'disabled' : ''}`}>
+      <button className="app-row-head" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+        <ConnectionIcon id={id} name={name} size={30} />
+        <span className="app-row-title">
+          <strong>{name}</strong>
+          <span>{summary}</span>
+        </span>
+        <span className="app-row-status">{chip && <span className={`app-row-chip ${tone}`}>{chip}</span>}</span>
+        <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />
+      </button>
+      {expanded && (
+        <div className="app-row-body">
+          <p className="app-row-desc">{children}</p>
+          {info && !info.configured ? (
+            <p className="app-row-hint">No Google OAuth client yet. Set one up as for Calendar, then come back.</p>
+          ) : (
+            <GoogleAccountsPanel onAuthError={onAuthError} accountsApi={accountsApi} />
           )}
-        </section>
-      </div>
-    </div>
+          <IconField id={id} name={name} />
+        </div>
+      )}
+    </section>
   )
 }
 
-// Gmail, under "Mail". Sending is never a tool; see docs/gmail.md.
-function GmailConnectionPanel({ onAuthError }: { onAuthError: () => void }) {
+// Gmail: sending is never a tool; see docs/gmail.md.
+function GmailConnectionRow({ onAuthError, onProblem, reloadKey }: { onAuthError: () => void; onProblem: (name: string, problem: boolean) => void; reloadKey?: number }) {
   return (
     <GoogleServiceRow
-      onAuthError={onAuthError} section="Mail" id="gmail" name="Gmail" accountsApi={GMAIL_ACCOUNTS}
-      summary="Search, read, label, archive, trash and draft. Sending goes through your inbox."
+      onAuthError={onAuthError} onProblem={onProblem} reloadKey={reloadKey} id="gmail" name="Gmail" accountsApi={GMAIL_ACCOUNTS}
+      summary="Search, read, label and draft. Never sends."
     >
-      Agents get <code>gmail__*</code> tools for every account here. They cannot send: an email they write
-      waits in your Inbox, where you send it or save it as a draft. The same sign-in adds the account's
-      Google Calendar too, unless it is already connected. Uses the same Google OAuth client as
-      Calendar, with the Gmail API enabled on its project (<code>docs/gmail.md</code>).
+      Agents get <code>gmail__*</code> tools for every account here. An email they write waits in your Inbox for
+      you to send. The same sign-in adds the account's calendar. Uses Calendar's Google OAuth client with the Gmail
+      API enabled (<code>docs/gmail.md</code>).
     </GoogleServiceRow>
   )
 }
 
-// Google Drive, under "Files": every file the account can open, with Sheets and Docs
-// edited in place. No sharing, no permanent delete; see docs/drive.md.
-function DriveConnectionPanel({ onAuthError }: { onAuthError: () => void }) {
+// Google Drive: no sharing, no permanent delete; see docs/drive.md.
+function DriveConnectionRow({ onAuthError, onProblem, reloadKey }: { onAuthError: () => void; onProblem: (name: string, problem: boolean) => void; reloadKey?: number }) {
   return (
     <GoogleServiceRow
-      onAuthError={onAuthError} section="Files" id="google-drive" name="Google Drive" accountsApi={DRIVE_ACCOUNTS}
-      summary="Find, read, create and organise files. Edit Sheets and Docs in place."
+      onAuthError={onAuthError} onProblem={onProblem} reloadKey={reloadKey} id="google-drive" name="Google Drive" accountsApi={DRIVE_ACCOUNTS}
+      summary="Find, read and organise files. Edit Sheets and Docs."
     >
-      Agents get <code>drive__*</code> tools for every account here: every file the account can open, shared
-      drives included, with cell-level edits to Google Sheets and text edits to Google Docs. They cannot share
-      a file or delete one for good (trash only). Uses the same Google OAuth client as Calendar, with the Drive,
-      Sheets and Docs APIs enabled on its project and the <code>drive</code> scope on its consent
-      screen (<code>docs/drive.md</code>).
+      Agents get <code>drive__*</code> tools for every account here, shared drives included. They cannot share a
+      file or delete one for good. Uses Calendar's Google OAuth client with the Drive, Sheets and Docs APIs enabled
+      and the <code>drive</code> scope (<code>docs/drive.md</code>).
     </GoogleServiceRow>
   )
 }
 
-interface AppRowProps {
+function hostOf(app: any) {
+  if (app.url) {
+    try { return new URL(app.url).host } catch { return app.url }
+  }
+  return [app.command, app.package].filter(Boolean).join(' ') || 'Local command'
+}
+
+interface ServerRowProps {
   app: any
+  state: ServerState
+  health?: any
+  /** "failing since 3h ago" from the run log, for a server that keeps failing. */
+  failingFor?: string | null
+  mcpOn?: boolean
+  gatewayLoading?: boolean
   busy?: boolean
   expanded?: boolean
-  gatewayHealth?: any
-  gatewayLoading?: boolean
   busyAuth?: boolean
   onToggleExpand: () => void
-  onAdd: (app: any, values: any) => void
   onToggle: (app: any, enabled: boolean) => void
   onRemove: (app: any) => void
   onAuthenticate: (id: string) => void
@@ -454,85 +492,247 @@ interface AppRowProps {
   onAuthError: () => void
 }
 
-// One collapsible row per app. Connections are served through the gateway, so the
-// single gateway probe covers every row's health — no per-provider work.
-function AppRow({ app, busy, expanded, gatewayHealth, gatewayLoading, busyAuth, onToggleExpand, onAdd, onToggle, onRemove, onAuthenticate, onDeauth, onAuthError }: AppRowProps) {
-  const installed = app.installed
-  const enabled = installed && app.enabled !== false
-
+// One installed MCP server. Its health is the gateway's (every provider reaches it
+// there), so a sign-in happens once, here, and the button sits on the row itself.
+function ServerRow({ app, state, health, failingFor, mcpOn = true, gatewayLoading, busy, expanded, busyAuth, onToggleExpand, onToggle, onRemove, onAuthenticate, onDeauth, onAuthError }: ServerRowProps) {
+  const remote = isRemote(app)
+  const chip = {
+    signin: 'Needs sign-in',
+    error: 'Not working',
+    checking: gatewayLoading ? 'Checking…' : 'Not checked',
+    live: mcpOn ? 'Live' : 'Ready',
+    off: 'Off',
+  }[state]
+  const chipTone = state === 'live' && !mcpOn ? '' : SERVER_STATES[state].chip
+  const sub = state === 'error' && health?.error && !expanded
+    ? [health.error, failingFor].filter(Boolean).join(' · ')
+    : state === 'live' ? `${health.toolCount} tool${health.toolCount === 1 ? '' : 's'} · ${hostOf(app)}` : hostOf(app)
   return (
-    <section className={`app-row ${expanded ? 'open' : ''} ${installed && !enabled ? 'disabled' : ''}`}>
+    <section className={`app-row server-row ${expanded ? 'open' : ''} ${state === 'off' ? 'disabled' : ''}`}>
+      <div className="app-row-line">
+        <button className="app-row-head" onClick={onToggleExpand} aria-expanded={expanded}>
+          <ConnectionIcon id={app.id} name={app.name} size={30} />
+          <span className="app-row-title">
+            <strong>{app.name}</strong>
+            <span className={state === 'error' && !expanded ? 'bad' : ''}>{sub}</span>
+          </span>
+          {state === 'signin' && remote ? null : (
+            <span className="app-row-status"><span className={`app-row-chip ${chipTone}`}>{chip}</span></span>
+          )}
+          {state === 'signin' && remote ? null : <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />}
+        </button>
+        {state === 'signin' && remote && (
+          <>
+            <button className="btn compact primary row-action" disabled={busyAuth} onClick={() => onAuthenticate(app.id)} aria-label={`Sign in to ${app.name}`}>
+              {busyAuth ? 'Starting…' : 'Sign in'}
+            </button>
+            {/* A larger target for the mouse; the row's head is the toggle for everyone else. */}
+            <span className="row-caret" onClick={onToggleExpand} aria-hidden="true">
+              <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />
+            </span>
+          </>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="app-row-body">
+          {state === 'error' && health?.error && <p className="source-error in-body">{health.error}</p>}
+          <div className="connection-meta">
+            <code>{app.url || `${app.command || ''}${app.package ? ` ${app.package}` : ''}`}</code>
+            {app.envKeys?.length ? <code>Env: {app.envKeys.join(', ')}</code> : null}
+            {app.headerKeys?.length ? <code>Headers: {app.headerKeys.join(', ')}</code> : null}
+          </div>
+          {app.id === 'google-calendar' && <GoogleAccountsPanel onAuthError={onAuthError} />}
+          {state !== 'off' && (
+            <div className="server-checks">
+              <span className="server-checks-label">Recent checks</span>
+              <SourceRuns source={`mcp:${app.id}`} onAuthError={onAuthError} />
+            </div>
+          )}
+          <IconField id={app.id} name={app.name} />
+          <div className="app-row-controls">
+            {remote && state !== 'off' && (state === 'live' ? (
+              <>
+                <button className="btn compact" disabled={busyAuth} onClick={() => onAuthenticate(app.id)} aria-label={`Sign in to ${app.name} again`}>Sign in again</button>
+                <button className="btn compact danger" disabled={busyAuth} onClick={() => onDeauth(app.id)}>Sign out</button>
+              </>
+            ) : state !== 'signin' ? (
+              <button className="btn compact" disabled={busyAuth} onClick={() => onAuthenticate(app.id)} aria-label={`Sign in to ${app.name}`}>
+                {busyAuth ? 'Starting…' : state === 'error' ? 'Sign in again' : 'Sign in'}
+              </button>
+            ) : null)}
+            <span className="server-switch-label">{state === 'off' ? 'Off' : 'On'}</span>
+            <button
+              className={`provider-switch ${app.enabled ? 'on' : ''}`}
+              disabled={busy}
+              onClick={() => onToggle(app, !app.enabled)}
+              title={app.enabled ? 'Switch off for every agent' : 'Switch on for every agent'}
+              role="switch"
+              aria-checked={Boolean(app.enabled)}
+              aria-label={`${app.name} for every agent`}
+            >
+              <span />
+            </button>
+            <button className="icon-btn small danger" disabled={busy} onClick={() => onRemove(app)} title="Remove this server" aria-label={`Remove ${app.name}`}>
+              <Hi icon={TrashIcon} size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+interface CatalogRowProps {
+  app: any
+  busy?: boolean
+  expanded?: boolean
+  onToggleExpand: () => void
+  onAdd: (app: any, values: any) => void
+}
+
+// A catalog app not added yet: its description, and the form that adds it.
+function CatalogRow({ app, busy, expanded, onToggleExpand, onAdd }: CatalogRowProps) {
+  return (
+    <section className={`app-row catalog-row ${expanded ? 'open' : ''}`}>
       <button className="app-row-head" onClick={onToggleExpand} aria-expanded={expanded}>
         <ConnectionIcon id={app.id} name={app.name} size={30} />
         <span className="app-row-title">
           <strong>{app.name}</strong>
-          <span>{app.category}{app.custom ? ' · custom' : ''}</span>
+          {!expanded && <span>{app.description}</span>}
         </span>
-        <span className="app-row-status">
-          {installed
-            ? <span className={`app-row-chip ${gatewayHealth?.ok ? 'on' : (gatewayHealth?.needsAuth ? 'warn' : '')}`}>
-                {!enabled ? 'Disabled' : gatewayHealth?.ok ? `${gatewayHealth.toolCount} tools` : gatewayHealth?.needsAuth ? 'Needs auth' : 'Pending'}
-              </span>
-            : <span className="catalog-badge">{authBadge(app.auth) || 'Add'}</span>}
-        </span>
+        <span className="app-row-status"><span className="catalog-badge">{authBadge(app.auth) || 'Add'}</span></span>
         <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />
       </button>
-
       {expanded && (
         <div className="app-row-body">
-          {installed ? (
-            <>
-              <div className="app-row-controls">
-                <button
-                  className={`provider-switch ${enabled ? 'on' : ''}`}
-                  disabled={busy}
-                  onClick={() => onToggle(app, !enabled)}
-                  title={enabled ? 'Disable everywhere' : 'Enable everywhere'}
-                  aria-label={`${enabled ? 'Disable' : 'Enable'} ${app.name}`}
-                >
-                  <span />
-                </button>
-                <span className="app-row-controls-label">
-                  {enabled ? 'Enabled · served through MCP' : 'Disabled'}
-                </span>
-                <button className="icon-btn small danger" disabled={busy} onClick={() => onRemove(app)} title="Remove connection">
-                  <Hi icon={TrashIcon} size={14} />
-                </button>
-              </div>
-              <div className="connection-meta">
-                <code>{app.url || `${app.command || ''}${app.package ? ` ${app.package}` : ''}`}</code>
-                {app.envKeys?.length ? <code>Env: {app.envKeys.join(', ')}</code> : null}
-                {app.headerKeys?.length ? <code>Headers: {app.headerKeys.join(', ')}</code> : null}
-              </div>
-              {app.id === 'google-calendar' && <GoogleAccountsPanel onAuthError={onAuthError} />}
-              {isRemote(app) && (
-                <p className="app-row-hint">Remote app - sign in once here and the gateway holds the token for every provider. The callback lands on this box, so you can finish from your phone over Tailscale.</p>
-              )}
-              <GatewayConnStatus health={enabled ? gatewayHealth : null} loading={gatewayLoading} />
-              {isRemote(app) && enabled && (
-                <div className="gateway-auth-row">
-                  {gatewayHealth?.ok ? (
-                    <>
-                      <button className="btn compact" disabled={busyAuth} onClick={() => onAuthenticate(app.id)}>Re-authenticate</button>
-                      <button className="btn compact danger" disabled={busyAuth} onClick={() => onDeauth(app.id)}>Sign out</button>
-                    </>
-                  ) : (
-                    <button className="btn compact primary" disabled={busyAuth} onClick={() => onAuthenticate(app.id)}>
-                      {busyAuth ? 'Starting…' : 'Authenticate'}
-                    </button>
-                  )}
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <p className="app-row-desc">{app.description}</p>
-              <ConnectForm app={app} busy={busy} onAdd={onAdd} />
-            </>
-          )}
+          <p className="app-row-desc">{app.description}</p>
+          <ConnectForm app={app} busy={busy} onAdd={onAdd} />
         </div>
       )}
     </section>
+  )
+}
+
+interface CatalogFoldProps {
+  apps: any[]
+  busyAdd: string | null
+  expanded: string | null
+  onExpand: (id: string) => void
+  onAdd: (app: any, values: any) => void
+}
+
+// Every catalog app not yet added, folded into one row until asked for.
+function CatalogFold({ apps, busyAdd, expanded, onExpand, onAdd }: CatalogFoldProps) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const needle = q.trim().toLowerCase()
+  const shown = apps.filter((a) => !needle || `${a.name} ${a.category} ${a.description}`.toLowerCase().includes(needle))
+  const groups: Record<string, any[]> = {}
+  for (const app of shown) (groups[app.category || 'Other'] ||= []).push(app)
+  const categories = Object.keys(groups).sort()
+  if (!apps.length) return null
+  return (
+    <section className={`app-row catalog-fold ${open ? 'open' : ''}`}>
+      <button className="app-row-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="connection-icon fallback catalog-fold-icon" style={{ width: 30, height: 30 }}>
+          <Hi icon={SquaresPlusIcon} size={16} />
+        </span>
+        <span className="app-row-title">
+          <strong>Browse the catalog</strong>
+          <span>{apps.length} apps ready to add: {apps.slice(0, 4).map((a) => a.name).join(', ')}{apps.length > 4 ? '…' : ''}</span>
+        </span>
+        <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${open ? 'up' : ''}`} />
+      </button>
+      {open && (
+        <div className="catalog-fold-body">
+          <input className="claude-tools-search" type="search" placeholder={`Filter ${apps.length} apps`} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Filter the catalog" />
+          {categories.map((cat) => (
+            <div key={cat} className="catalog-fold-group">
+              <div className="conn-list-label">{cat}</div>
+              {groups[cat].map((app) => (
+                <CatalogRow key={app.id} app={app} busy={busyAdd === app.id} expanded={expanded === app.id} onToggleExpand={() => onExpand(app.id)} onAdd={onAdd} />
+              ))}
+            </div>
+          ))}
+          {!shown.length && <p className="app-row-hint">Nothing in the catalog matches. Add it as a custom server below.</p>}
+        </div>
+      )}
+    </section>
+  )
+}
+
+interface BuiltinFoldProps {
+  servers: any[]
+}
+
+// Totem's own tool slices (tasks, goals, …). Always there, so one row, folded.
+function BuiltinFold({ servers }: BuiltinFoldProps) {
+  const [open, setOpen] = useState(false)
+  if (!servers.length) return null
+  const tools = servers.reduce((n, s) => n + (s.toolCount || 0), 0)
+  const down = servers.filter((s) => !s.ok)
+  return (
+    <section className={`app-row ${open ? 'open' : ''}`}>
+      <button className="app-row-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="connection-icon fallback builtin-icon" style={{ width: 30, height: 30 }}>
+          <Hi icon={CubeIcon} size={16} />
+        </span>
+        <span className="app-row-title">
+          <strong>Built into Totem</strong>
+          <span>{servers.length} tool sets · {tools} tools: {servers.slice(0, 5).map((s) => s.id).join(', ')}{servers.length > 5 ? '…' : ''}</span>
+        </span>
+        <span className="app-row-status">
+          <span className={`app-row-chip ${down.length ? 'bad' : 'on'}`}>{down.length ? `${down.length} not working` : 'Live'}</span>
+        </span>
+        <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${open ? 'up' : ''}`} />
+      </button>
+      {open && (
+        <div className="app-row-body">
+          <div className="gateway-grid">{servers.map((s) => <GatewayServerChip key={s.id} server={s} />)}</div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function GatewayServerChip({ server }: { server: any }) {
+  const cls = server.ok ? 'ok' : (server.needsAuth ? 'warn' : 'bad')
+  const label = server.ok ? `${server.toolCount} tool${server.toolCount === 1 ? '' : 's'}` : (server.needsAuth ? 'Needs sign-in' : 'Error')
+  return (
+    <div className={`gw-chip ${cls}`} title={server.error || label}>
+      <span className="gw-chip-text">
+        <strong>{server.id}</strong>
+        <em>{label}</em>
+      </span>
+    </div>
+  )
+}
+
+// The line at the top: what needs the owner, each a jump to its section. Says
+// nothing is wrong only once the gateway and the source log have both answered.
+// One live region stays mounted across states, so a change is announced.
+function AttentionSummary({ items, quiet, checking }: { items: AttentionItem[]; quiet: string; checking: boolean }) {
+  const jump = (id: string) => {
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    document.getElementById(id)?.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
+  }
+  const state = items.length ? 'attention' : checking ? 'checking' : 'ok'
+  const heading = items.length ? 'Needs you' : checking ? 'Checking your connections…' : 'Everything connected is working.'
+  return (
+    <div className={`conn-summary ${state}`}>
+      <span className="sr-only" role="status">{items.length ? `Needs you: ${items.map((it) => it.text).join(', ')}.` : heading}</span>
+      <Hi icon={items.length ? ExclamationTriangleIcon : checking ? ArrowPathIcon : CheckCircleIcon} size={16} className={!items.length && checking ? 'spin' : ''} />
+      <span aria-hidden="true">{heading}</span>
+      {items.length > 0 && (
+        <div className="conn-summary-items">
+          {items.map((it) => (
+            <button key={it.text} className={`conn-summary-item ${it.tone}`} onClick={() => jump(it.target)}>{it.text}</button>
+          ))}
+        </div>
+      )}
+      {quiet && <em>{quiet}</em>}
+    </div>
   )
 }
 
@@ -623,87 +823,6 @@ function CustomConnectionForm({ busy, onAdd }: CustomConnectionFormProps) {
               {busy ? 'Connecting…' : 'Connect'}
             </button>
           </form>
-        </div>
-      )}
-    </section>
-  )
-}
-
-interface GatewayServerChipProps {
-  server: any
-}
-
-// The hub card: the master MCP switch, and (when on) live gateway health - which
-// downstream apps connected and how many tools each contributes to the single
-// aggregated toolset every provider now sees.
-function GatewayServerChip({ server }: GatewayServerChipProps) {
-  const cls = server.ok ? 'ok' : (server.needsAuth ? 'warn' : 'bad')
-  const label = server.ok ? `${server.toolCount} tool${server.toolCount === 1 ? '' : 's'}` : (server.needsAuth ? 'Needs auth' : 'Error')
-  return (
-    <div className={`gw-chip ${cls}`} title={server.error || label}>
-      <ConnectionIcon id={server.id} name={server.id} size={22} />
-      <span className="gw-chip-text">
-        <strong>{server.id}</strong>
-        <em>{label}</em>
-      </span>
-    </div>
-  )
-}
-
-interface GatewayPanelProps {
-  mode?: string
-  status?: any
-  loading?: boolean
-  busy?: boolean
-  onToggle: (mode: string) => void
-  onRefresh: () => void
-}
-
-function GatewayPanel({ mode, status, loading, busy, onToggle, onRefresh }: GatewayPanelProps) {
-  const on = mode === 'gateway'
-  const servers = status?.servers || []
-  const connected = servers.filter((s: any) => s.ok).length
-  return (
-    <section className={`gateway-panel ${on ? 'on' : 'off'}`}>
-      <div className="gateway-head">
-        <span className="gateway-badge"><Hi icon={BoltIcon} size={20} /></span>
-        <div className="gateway-headtext">
-          <strong>MCP</strong>
-          <span>
-            {on
-              ? 'Every provider connects to one aggregator server. Enable an app once and all your models can use it - no per-provider wiring or per-provider sign-in.'
-              : 'MCP is off - no models can reach your connected apps. Turn it on to route every provider through a single connection you manage in one place.'}
-          </span>
-        </div>
-        <button
-          className={`provider-switch big ${on ? 'on' : ''}`}
-          disabled={busy}
-          onClick={() => onToggle(on ? 'off' : 'gateway')}
-          title={on ? 'Turn MCP off everywhere' : 'Turn MCP on for every provider'}
-          aria-label="Toggle MCP"
-        >
-          <span />
-        </button>
-      </div>
-      {on && (
-        <div className="gateway-body">
-          <div className="gateway-stats">
-            <div><strong>{status ? connected : '-'}</strong><span>apps live</span></div>
-            <div><strong>{status?.totalTools ?? '-'}</strong><span>tools exposed</span></div>
-            <div className="gateway-stats-spacer" />
-            <button className="icon-btn small" disabled={loading} onClick={onRefresh} title="Re-probe the gateway">
-              <Hi icon={ArrowPathIcon} size={14} />
-            </button>
-          </div>
-          {loading && !status ? (
-            <div className="app-row-loading">Probing the gateway…</div>
-          ) : (
-            <div className="gateway-grid">
-              {servers.map((s: any) => <GatewayServerChip key={s.id} server={s} />)}
-              {!servers.length && <span className="gw-empty">No connections yet - add one below and it appears here.</span>}
-            </div>
-          )}
-          {status && status.ok === false && <div className="error settings-error">{status.error || 'Gateway probe failed'}</div>}
         </div>
       )}
     </section>
@@ -827,7 +946,7 @@ function GatewayAuthPanel({ session, busy, onCreds, onCancel }: GatewayAuthPanel
             <code className="auth-url">{session.authUrl}</code>
             <div className="mcp-callback-row">
               <button className="btn compact primary" onClick={() => window.open(session.authUrl, '_blank', 'noopener,noreferrer')}>Open auth page</button>
-              <button className="btn compact" onClick={() => navigator.clipboard?.writeText(session.authUrl)}>Copy link</button>
+              <button className="btn compact" onClick={() => copyText(session.authUrl).then((ok) => (ok ? pushSuccess('Link copied') : pushError('Could not copy; select the link above')))}>Copy link</button>
             </div>
             <span className="auth-waiting">Waiting for you to finish - this updates automatically.</span>
           </div>
@@ -846,7 +965,15 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
   const [catalog, setCatalog] = useState<any>(null)
   const [gateway, setGateway] = useState<any>(null)  // live gateway --status report
   const [gatewayLoading, setGatewayLoading] = useState(false)
-  const [expanded, setExpanded] = useState<string | null>(null)
+  // undefined until Data sources first answers, null if it could not be read.
+  const [sources, setSources] = useState<SourceHealthPayload | null | undefined>(undefined)
+  const [sourcesKey, setSourcesKey] = useState(0)    // bumped to make Data sources check again
+  const [expanded, setExpanded] = useState<string | null>(null)        // an installed server
+  const [catalogOpen, setCatalogOpen] = useState<string | null>(null)  // a catalog app's add form
+  const [accountIssues, setAccountIssues] = useState<Record<string, boolean>>({})  // Accounts rows that need the owner
+  const reportAccount = useCallback((name: string, problem: boolean) => {
+    setAccountIssues((m) => (m[name] === problem ? m : { ...m, [name]: problem }))
+  }, [])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [busyMode, setBusyMode] = useState(false)
@@ -864,16 +991,20 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
     setGatewayLoading(true)
     getGatewayStatus({ force })
       .then((g) => setGateway(g))
-      .catch((e) => { if (e instanceof AuthError) onAuthError?.() })
+      .catch((e) => {
+        if (e instanceof AuthError) onAuthError?.()
+        else setGateway((g: any) => ({ servers: [], totalTools: 0, ...g, ok: false, error: e?.message || 'The gateway status check failed.' }))
+      })
       .finally(() => setGatewayLoading(false))
   }, [onAuthError])
 
   // Fast load only - catalog (static) + manifest/providers (no CLI probes). The
-  // gateway is probed up front so every connection row can show its live health,
+  // gateway is probed up front so every server row can show its live health,
   // whether or not MCP is currently switched on.
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
+    void loadConnectionIcons()
     Promise.all([getMcpCatalog(), getMcpSettings({ verify: false })])
       .then(([cat, settings]) => {
         setCatalog(cat)
@@ -885,6 +1016,8 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
   }, [onAuthError, loadGateway])
 
   useEffect(() => { load() }, [load])
+
+  const reloadAll = () => { load(); setSourcesKey((k) => k + 1) }
 
   // While an auth walkthrough is open, re-probe the gateway until the target app
   // reports a live token (the callback completes on the box, out-of-band), then
@@ -913,34 +1046,71 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
 
   const connections = data?.connections || []
   const connById = Object.fromEntries(connections.map((c: any) => [c.id, c]))
-  const providers = (data?.providers || []).slice().sort((a: any, b: any) => PROVIDER_ORDER.indexOf(a.id) - PROVIDER_ORDER.indexOf(b.id))
-  const enabledProviderCount = providers.filter((p: any) => p.enabled).length
   const syncResults = data?.synced || []
-  const gatewayHealthById = Object.fromEntries((gateway?.servers || []).map((s: any) => [s.id, s]))
+  const gatewayServers: any[] = gateway?.servers || []
+  const gatewayHealthById = Object.fromEntries(gatewayServers.map((s: any) => [s.id, s]))
+  const builtins = gatewayServers.filter((s) => s.builtin)
 
-  // Merge the static catalog with the manifest so every app shows as one row.
-  const apps: any[] = []
-  const seen = new Set()
+  // Installed servers (the manifest, catalog entries merged in for their icon and
+  // category) apart from the catalog apps not added yet.
+  const installed: any[] = []
+  const available: any[] = []
   for (const entry of (catalog?.catalog || [])) {
     const conn = connById[entry.id]
-    apps.push({ ...entry, ...(conn || {}), installed: Boolean(conn), enabled: conn ? conn.enabled !== false : false, custom: false })
-    seen.add(entry.id)
+    if (conn) installed.push({ ...entry, ...conn, enabled: conn.enabled !== false, custom: false })
+    else available.push(entry)
   }
+  const catalogIds = new Set((catalog?.catalog || []).map((c: any) => c.id))
   for (const conn of connections) {
-    if (seen.has(conn.id)) continue
-    apps.push({ ...conn, installed: true, enabled: conn.enabled !== false, custom: true, category: conn.category || 'Custom', auth: conn.transport === 'remote' ? 'oauth' : 'apikey' })
+    if (catalogIds.has(conn.id)) continue
+    installed.push({ ...conn, enabled: conn.enabled !== false, custom: true, category: conn.category || 'Custom' })
   }
-  const installedCount = apps.filter((a) => a.installed).length
-
-  // Group by category; installed apps float to the top of each group.
-  const groups: Record<string, any[]> = {}
-  for (const app of apps) (groups[app.category || 'Other'] ||= []).push(app)
-  const categories = Object.keys(groups).sort()
-  for (const c of categories) groups[c].sort((a, b) => (Number(b.installed) - Number(a.installed)) || a.name.localeCompare(b.name))
-
-  function toggleExpand(app: any) {
-    setExpanded(expanded === app.id ? null : app.id)
+  const rows = sortServers(installed.map((app) => ({ app, state: serverState(app, gatewayHealthById[app.id]) })))
+  const count = (state: ServerState) => rows.filter((r) => r.state === state).length
+  const live = count('live')
+  const tools = gateway?.totalTools
+  const failingFor = (id: string) => {
+    const s = sources?.sources.find((x) => x.source === `mcp:${id}`)
+    return s?.state === 'failing' && s.failingSince ? `failing since ${since(s.failingSince)}` : null
   }
+
+  const attention = attentionItems({
+    sources, mcpOn, gateway, states: rows.map((r) => r.state),
+    accounts: Object.keys(accountIssues).filter((k) => accountIssues[k]),
+  })
+  const checking = !gateway || sources === undefined
+  // The MCP section's head carries the server counts; this only says what it cannot.
+  const quiet = !gateway ? 'Checking servers…' : mcpOn ? '' : 'MCP is off'
+
+  // Each section of the list, in order, with a small label row above it.
+  let lastGroup = ''
+  const serverList = rows.map(({ app, state }) => {
+    const group = SERVER_STATES[state].group
+    const label = group !== lastGroup ? <div className="conn-list-label" key={`label-${group}`}>{group} · {count(state)}</div> : null
+    lastGroup = group
+    return (
+      <React.Fragment key={app.id}>
+        {label}
+        <ServerRow
+          app={app}
+          state={state}
+          health={gatewayHealthById[app.id]}
+          failingFor={failingFor(app.id)}
+          mcpOn={mcpOn}
+          gatewayLoading={gatewayLoading}
+          busy={busyAdd === app.id || busyConn === app.id}
+          expanded={expanded === app.id}
+          busyAuth={busyAuth && authSession?.id === app.id}
+          onToggleExpand={() => setExpanded(expanded === app.id ? null : app.id)}
+          onToggle={toggleConnection}
+          onRemove={removeConnection}
+          onAuthenticate={(id) => startAuth(id)}
+          onDeauth={deauth}
+          onAuthError={onAuthError}
+        />
+      </React.Fragment>
+    )
+  })
 
   async function switchMode(mode: string) {
     setBusyMode(true)
@@ -981,7 +1151,7 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
   }
 
   async function deauth(id: string) {
-    if (!window.confirm(`Sign ${id} out of the gateway? Models lose access until you re-authenticate.`)) return
+    if (!window.confirm(`Sign ${id} out of the gateway? Models lose access until you sign in again.`)) return
     setBusyAuth(true)
     setError(null)
     try {
@@ -1003,6 +1173,7 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
       const next = await addMcpConnection({ id: app.id, values })
       setData(next)
       setCatalog(await getMcpCatalog())
+      setCatalogOpen(null)
       setExpanded(app.id)
       loadGateway(true)
     } catch (e: any) {
@@ -1056,6 +1227,8 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
       setCatalog(await getMcpCatalog())
       setExpanded(null)
       loadGateway(true)
+      // The bridge dropped its icon with it.
+      void loadConnectionIcons()
     } catch (e: any) {
       if (e instanceof AuthError) onAuthError?.()
       else setError(e.message || String(e))
@@ -1091,12 +1264,11 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
         <header className="settings-top connections-top">
           <div>
             <h1>Connections</h1>
-            <p>Enable productivity apps once and every model can use them. With MCP on, all providers share a single connection - no app-by-app setup per provider.</p>
+            <p>The apps and data your agents can reach. Anything that needs you comes first.</p>
           </div>
           <div className="settings-actions">
-            <button className="icon-btn small" onClick={load} title="Refresh"><Hi icon={ArrowPathIcon} size={16} /></button>
-            <button className="btn compact primary" disabled={busy === 'sync' || !installedCount} onClick={runSync}>
-              {busy === 'sync' ? 'Syncing...' : 'Re-sync'}
+            <button className="icon-btn small" onClick={reloadAll} title="Check everything again" aria-label="Refresh connections">
+              <Hi icon={ArrowPathIcon} size={16} className={loading ? 'spin' : ''} />
             </button>
           </div>
         </header>
@@ -1105,20 +1277,7 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
           <div className="spinner">Loading...</div>
         ) : (
           <>
-            <GatewayPanel
-              mode={data?.mcpMode}
-              status={gateway}
-              loading={gatewayLoading}
-              busy={busyMode}
-              onToggle={switchMode}
-              onRefresh={() => loadGateway(true)}
-            />
-
-            <div className="connections-overview">
-              <div><strong>{installedCount}</strong><span>connected</span></div>
-              <div><strong>{mcpOn ? (gateway?.totalTools ?? '-') : 'Off'}</strong><span>tools exposed</span></div>
-              <div><strong>{enabledProviderCount}</strong><span>providers enabled</span></div>
-            </div>
+            <AttentionSummary items={attention} quiet={quiet} checking={checking} />
 
             {syncResults.length ? (
               <div className="mcp-sync-strip">{syncResults.map((r: any, i: number) => <SyncResult key={`${r.provider}-${i}`} result={r} />)}</div>
@@ -1139,51 +1298,75 @@ export default function McpSettingsView({ onAuthError }: McpSettingsViewProps) {
               onCancel={() => setAuthSession(null)}
             />
 
-            <SourceHealthPanel onAuthError={onAuthError} />
+            <SourceHealthPanel reloadKey={sourcesKey} onAuthError={onAuthError} exclude={isMcpSource} onLoad={setSources} />
 
-            <WhoopConnectionPanel onAuthError={onAuthError} />
+            <section className="conn-section" id="conn-mcp">
+              <div className="conn-section-head">
+                <h2>MCP servers</h2>
+                <span className="conn-section-meta">
+                  {mcpOn ? `${live} live${tools != null ? ` · ${tools} tools` : ''}` : 'Off'}
+                </span>
+                <div className="conn-section-actions">
+                  <button className="icon-btn small" disabled={gatewayLoading} onClick={() => loadGateway(true)} title="Check every server again" aria-label="Check servers again">
+                    <Hi icon={ArrowPathIcon} size={14} className={gatewayLoading ? 'spin' : ''} />
+                  </button>
+                  <button className="btn compact" disabled={busy === 'sync' || !installed.length} onClick={runSync} title="Write the gateway into every agent's MCP config again">
+                    {busy === 'sync' ? 'Syncing…' : 'Re-sync'}
+                  </button>
+                  <span className="server-switch-label" aria-hidden="true">{mcpOn ? 'On' : 'Off'}</span>
+                  <button
+                    className={`provider-switch ${mcpOn ? 'on' : ''}`}
+                    disabled={busyMode}
+                    onClick={() => switchMode(mcpOn ? 'off' : 'gateway')}
+                    title={mcpOn ? 'Turn MCP off for every agent' : 'Turn MCP on for every agent'}
+                    role="switch"
+                    aria-label="MCP for every agent"
+                    aria-checked={mcpOn}
+                  >
+                    <span />
+                  </button>
+                </div>
+              </div>
+              <p className="conn-section-note">
+                {mcpOn
+                  ? 'Every agent reaches these through one gateway, so each server is added and signed in to once, here.'
+                  : 'MCP is off, so no agent can reach these servers. Switch it on to serve them all through one gateway.'}
+              </p>
+              {gateway && gateway.ok === false && <div className="error settings-error">{gateway.error || 'The gateway did not answer its status check.'}</div>}
+              <div className={`conn-list ${mcpOn ? '' : 'muted'}`}>
+                {serverList}
+                {!installed.length && <p className="app-row-hint conn-list-empty">No servers yet. Add one from the catalog below.</p>}
+                {mcpOn && builtins.length > 0 && <div className="conn-list-label">Built in</div>}
+                {mcpOn && <BuiltinFold servers={builtins} />}
+              </div>
+            </section>
 
-            <GmailConnectionPanel onAuthError={onAuthError} />
-
-            <DriveConnectionPanel onAuthError={onAuthError} />
+            <section className="conn-section" id="conn-accounts">
+              <div className="conn-section-head">
+                <h2>Accounts</h2>
+                <span className="conn-section-meta">Served by Totem itself, not through MCP</span>
+              </div>
+              <div className="conn-list">
+                <GmailConnectionRow onAuthError={onAuthError} onProblem={reportAccount} reloadKey={sourcesKey} />
+                <DriveConnectionRow onAuthError={onAuthError} onProblem={reportAccount} reloadKey={sourcesKey} />
+                <WhoopConnectionRow onProblem={reportAccount} reloadKey={sourcesKey} />
+                <StravaConnectionRow onProblem={reportAccount} reloadKey={sourcesKey} />
+              </div>
+            </section>
 
             <DataConnectionsPanel onAuthError={onAuthError} />
 
-            {categories.map((cat) => (
-              <div className="app-group" key={cat}>
-                <div className="settings-section-title"><span /><strong>{cat}</strong></div>
-                <div className="app-list">
-                  {groups[cat].map((app) => (
-                    <AppRow
-                      key={app.id}
-                      app={app}
-                      busy={busyAdd === app.id || busyConn === app.id}
-                      expanded={expanded === app.id}
-                      gatewayHealth={gatewayHealthById[app.id]}
-                      gatewayLoading={gatewayLoading}
-                      busyAuth={busyAuth && authSession?.id === app.id}
-                      onToggleExpand={() => toggleExpand(app)}
-                      onAdd={addConnection}
-                      onToggle={toggleConnection}
-                      onRemove={removeConnection}
-                      onAuthenticate={(id) => startAuth(id)}
-                      onDeauth={deauth}
-                      onAuthError={onAuthError}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
-
             <ClaudeToolsPanel onAuthError={onAuthError} />
 
-            <div className="app-group">
-              <div className="settings-section-title"><span /><strong>Custom</strong></div>
-              <div className="app-list">
+            <section className="conn-section" id="conn-add">
+              <div className="conn-section-head">
+                <h2>Add a connection</h2>
+              </div>
+              <div className="conn-list">
+                <CatalogFold apps={available} busyAdd={busyAdd} expanded={catalogOpen} onExpand={(id) => setCatalogOpen(catalogOpen === id ? null : id)} onAdd={addConnection} />
                 <CustomConnectionForm busy={busyAdd === 'custom'} onAdd={addCustom} />
               </div>
-            </div>
-
+            </section>
           </>
         )}
       </div>

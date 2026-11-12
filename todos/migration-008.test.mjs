@@ -67,7 +67,9 @@ function seed(db) {
     VALUES (?, ?, ?, ?, ?, 2, ?, ?, ?, ?)
   `)
   todo.run('t-personal', 'Personal task', 'Personal', null, 'todo', AT, AT, null, null)
-  todo.run('t-acme', 'Acme task', 'Ventures', 'Acme', 'doing', AT, AT, null, null)
+  // `todo`, not `doing`: opening the file runs every later migration too, and 011
+  // turns `doing` into `todo` (its own test covers that).
+  todo.run('t-acme', 'Acme task', 'Ventures', 'Acme', 'todo', AT, AT, null, null)
   todo.run('t-globex', 'Globex task', 'Ventures', 'Globex', 'done', AT, AT, AT, 'completed')
   todo.run('t-initech', 'Initech task', 'Ventures', 'Initech', 'done', AT, AT, AT, 'not_doing')
   db.exec(`
@@ -75,10 +77,11 @@ function seed(db) {
     INSERT INTO todo_tags VALUES ('t-personal', 'tag-1', '${AT}'), ('t-initech', 'tag-1', '${AT}');
     INSERT INTO todo_notes VALUES ('n-1', 't-acme', 'a note', '${AT}'), ('n-2', 't-globex', 'another', '${AT}');
     INSERT INTO todo_relations VALUES ('t-acme', 't-initech', '${AT}');
+    -- Connectors no later migration clears (011 archives GitHub-linked tasks, 012 drops the sheet's rows).
     INSERT INTO external_links (id, todo_id, connector, external_id, created_at, updated_at)
-      VALUES ('x-1', 't-acme', 'sheet', 'row-7', '${AT}', '${AT}'), ('x-2', 't-personal', 'github', 'o/r#1', '${AT}', '${AT}');
+      VALUES ('x-1', 't-acme', 'example', 'row-7', '${AT}', '${AT}'), ('x-2', 't-personal', 'other', 'o/r#1', '${AT}', '${AT}');
     INSERT INTO sync_outbox (id, todo_id, connector, operation, payload, idempotency_key, created_at, updated_at)
-      VALUES ('o-1', 't-globex', 'sheet', 'update', '{}', 'k-1', '${AT}', '${AT}');
+      VALUES ('o-1', 't-globex', 'example', 'update', '{}', 'k-1', '${AT}', '${AT}');
     INSERT INTO todo_import_keys VALUES ('todoist', 'a', 't-personal', NULL, '${AT}');
     INSERT INTO goals (id, title, period_type, period_start, period_end, created_at, updated_at)
       VALUES ('g-1', 'Goal', 'week', '2026-09-07', '2026-09-13', '${AT}', '${AT}');

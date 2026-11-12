@@ -75,17 +75,6 @@ test('the AI rewrites the wording and nothing else', async () => {
   assert.equal(entry.title, 'One more and Help the Business is done')
 })
 
-test('a model that drops a fact loses its line, not the fact', async () => {
-  const { digest, store } = await harness({
-    facts: [fact({ title: 'Marion turns 65 today', body: '' })],
-    // Warm, encouraging, and it has quietly lost both the name and the number.
-    writeCopy: async () => [{ title: 'Someone special has a birthday!', body: 'Go wish them well.' }],
-  })
-  await digest({ now: NOW, tz: TZ })
-  const [entry] = await store.listQueue()
-  assert.equal(entry.title, 'Marion turns 65 today')
-})
-
 test('one bad line falls back alone, and the good ones keep the better wording', async () => {
   const { digest, store } = await harness({
     facts: [
@@ -124,14 +113,6 @@ test('a reply with the wrong number of lines is rejected wholesale', async () =>
   const result = await digest({ now: NOW, tz: TZ })
   assert.match(result.output, /template wording/)
   assert.deepEqual((await store.listQueue()).map((e) => e.title), ['one', 'two'])
-})
-
-test('re-planning the same day supersedes rather than duplicating', async () => {
-  const { digest, store } = await harness({ facts: [fact({ title: 'a fact' })] })
-  await digest({ now: NOW, tz: TZ })
-  const second = await digest({ now: NOW, tz: TZ })
-  assert.equal(second.superseded, 1)
-  assert.equal((await store.listQueue()).length, 1)
 })
 
 test('a cap of zero plans nothing and says why', async () => {

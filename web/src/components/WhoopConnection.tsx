@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Hi, ChevronDownIcon, HeartIcon, ArrowPathIcon, ExclamationTriangleIcon, CheckCircleIcon } from '../icons'
 import { getWhoopStatus, AuthError } from '../api'
-import { StravaConnectionRow } from './StravaConnection'
 
 // The WHOOP connection, in one place so every surface tells the same story.
 //
@@ -133,83 +132,75 @@ export function WhoopStatusNote({ status }: { status: WhoopStatus | null }) {
   )
 }
 
+/** Grant states (WHOOP's and Strava's) that need the owner to act, in Bushido. */
+export const GRANT_PROBLEMS = new Set(['needs-reauth', 'unreachable', 'missing-scopes'])
+
 /**
- * The Connections-tab row. WHOOP is neither an MCP app nor a keyless data source,
- * so it gets its own tier — but it was previously in neither, which meant the only
- * place to manage it was a button buried in one habit's chart header.
+ * The Connections-tab row, under Accounts beside Strava. WHOOP is neither an MCP app
+ * nor a keyless data source. "Not set up" is a neutral chip here (WHOOP is optional),
+ * though Habits' note keeps it red: there the sleep sync cannot run.
  */
-export function WhoopConnectionPanel({ onAuthError }: { onAuthError?: () => void }) {
+export function WhoopConnectionRow({ onProblem, reloadKey = 0 }: { onProblem?: (name: string, problem: boolean) => void; reloadKey?: number }) {
   const { status, reload } = useWhoopStatus(true)
   const [expanded, setExpanded] = useState(false)
   const state = stateOf(status)
-  const tone = TONE[state]
+  const tone = state === 'unconfigured' ? '' : TONE[state] === 'ok' ? 'on' : TONE[state]
+  useEffect(() => { if (status) onProblem?.('WHOOP', GRANT_PROBLEMS.has(state)) }, [status, state, onProblem])
+  useEffect(() => { if (reloadKey) reload() }, [reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!status) return null
 
-  // Strava has its own row and its own status; this panel only owns the section
-  // and the WHOOP row. Rendered even before WHOOP's status arrives so the Strava
-  // row is never held hostage to it.
   return (
-    <div className="app-group">
-      <div className="settings-section-title"><span /><strong>Wearables &amp; fitness</strong></div>
-      <p className="app-row-hint">
-        Read from Bushido, which holds the grants. Connect, reconnect or disconnect them there.
-      </p>
-      <div className="app-list">
-        {status && <section className={`app-row ${expanded ? 'open' : ''} ${state === 'ready' ? '' : 'disabled'}`}>
-          <button className="app-row-head" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
-            <span className="connection-icon fallback" style={{ width: 30, height: 30, background: '#d4204c' }}>
-              <Hi icon={HeartIcon} size={17} />
-            </span>
-            <span className="app-row-title">
-              <strong>WHOOP</strong>
-              <span>whoop.com · sleep, workouts, recovery</span>
-            </span>
-            <span className="app-row-status">
-              <span className={`app-row-chip ${tone === 'ok' ? 'on' : tone}`}>{LABEL[state]}</span>
-            </span>
-            <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />
-          </button>
+    <section className={`app-row ${expanded ? 'open' : ''} ${state === 'unconfigured' || state === 'disconnected' ? 'disabled' : ''}`}>
+      <button className="app-row-head" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+        <span className="connection-icon fallback" style={{ width: 30, height: 30, background: '#d4204c' }}>
+          <Hi icon={HeartIcon} size={17} />
+        </span>
+        <span className="app-row-title">
+          <strong>WHOOP</strong>
+          <span>Sleep, workouts and recovery · through Bushido</span>
+        </span>
+        <span className="app-row-status">
+          <span className={`app-row-chip ${tone}`}>{LABEL[state]}</span>
+        </span>
+        <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />
+      </button>
 
-          {expanded && (
-            <div className="app-row-body">
-              <p className="app-row-desc">
-                Fills the sleep habit each morning with last night's performance, stages and recovery. The grant
-                lives in Bushido, which Totem reads it from; connect, reconnect or disconnect it there (profile →
-                Settings). See <code>docs/whoop-sleep-ingest.md</code>.
-              </p>
+      {expanded && (
+        <div className="app-row-body">
+          <p className="app-row-desc">
+            Fills the sleep habit each morning with last night's sleep and recovery. Bushido holds the grant: connect,
+            reconnect or disconnect it there (<code>docs/whoop-sleep-ingest.md</code>).
+          </p>
 
-              <WhoopStatusNote status={status} />
+          <WhoopStatusNote status={status} />
 
-              {status.connectedAt && (
-                <p className="app-row-desc muted">
-                  Grant last written {new Date(status.connectedAt).toLocaleString()}.
-                </p>
-              )}
-
-              {status.scopes?.length ? (
-                <div className="whoop-scopes">
-                  {status.scopes.map((s) => (
-                    <span key={s} className="skill-var-chip used" title="Granted">
-                      <Hi icon={CheckCircleIcon} size={11} /> {s}
-                    </span>
-                  ))}
-                  {status.missingScopes?.map((s) => (
-                    <span key={s} className="skill-var-chip" title="Not granted — reconnect in Bushido to add it">{s}</span>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="app-row-controls">
-                <WhoopBushidoLink status={status} />
-                <button className="btn compact ghost" onClick={reload} title="Ask Bushido for the grant's state again">
-                  <Hi icon={ArrowPathIcon} size={13} /> Refresh status
-                </button>
-              </div>
-
-            </div>
+          {status.connectedAt && (
+            <p className="app-row-desc muted">
+              Grant last written {new Date(status.connectedAt).toLocaleString()}.
+            </p>
           )}
-        </section>}
-        <StravaConnectionRow />
-      </div>
-    </div>
+
+          {status.scopes?.length ? (
+            <div className="whoop-scopes">
+              {status.scopes.map((s) => (
+                <span key={s} className="skill-var-chip used" title="Granted">
+                  <Hi icon={CheckCircleIcon} size={11} /> {s}
+                </span>
+              ))}
+              {status.missingScopes?.map((s) => (
+                <span key={s} className="skill-var-chip" title="Not granted — reconnect in Bushido to add it">{s}</span>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="app-row-controls">
+            <WhoopBushidoLink status={status} />
+            <button className="btn compact ghost" onClick={reload} title="Ask Bushido for the grant's state again">
+              <Hi icon={ArrowPathIcon} size={13} /> Refresh status
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   )
 }

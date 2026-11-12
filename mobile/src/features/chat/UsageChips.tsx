@@ -5,7 +5,7 @@
 // window (or its tightest limit). Amber under 25%, red under 10%. Tapping it
 // opens every account's limits in a sheet, where the web grows a panel.
 import React, { useEffect, useState } from 'react'
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native'
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native'
 import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAiUsageLive } from '../../lib/useAiUsageLive'
@@ -40,13 +40,14 @@ function agoLabel(ts?: number) {
 
 const tone = (left: number) => (left < 10 ? { color: '#ff8fa3', border: '#f0506e66', bar: colors.red } : left < 25 ? { color: '#f0cd72', border: '#e3b34155', bar: colors.amber } : { color: vc.soft, border: vc.line, bar: colors.text })
 
-function useAccounts(): any[] {
+/** The accounts with live meters, from the shared quota stream (the sheet and Settings › Usage). */
+export function useQuotaAccounts(): any[] {
   const live = useAiUsageLive() as any
   return (live?.data?.accounts || []).filter((a: any) => a.status === 'ok' && a.meters?.length)
 }
 
 export default function UsageChips() {
-  const accounts = useAccounts()
+  const accounts = useQuotaAccounts()
   if (!accounts.length) return null
   const tightest = accounts.reduce((a, b) => ((pick(b.meters)?.remainingPct ?? 100) < (pick(a.meters)?.remainingPct ?? 100) ? b : a))
   const m = pick(tightest.meters)
@@ -109,32 +110,37 @@ export function UsageSheet() {
             <T size={14} lineHeight={20} color={vc.soft}>{live?.data ? 'No usage yet. Turn polling on in Settings → Usage.' : 'Loading usage…'}</T>
           </View>
         ) : null}
-        {accounts.map((a) => (
-          <View key={a.id} style={st.card}>
-            <View style={st.cardHead}>
-              <ProviderLogo driver={a.backend} name={a.displayName} size={20} />
-              <T size={15.5} weight={600} style={{ flexShrink: 1 }} numberOfLines={1}>{a.displayName || a.backend}</T>
-              {a.plan ? <View style={st.plan}><T size={11.5} color={vc.soft}>{a.plan}</T></View> : null}
-            </View>
-            {a.meters.filter((m: any) => typeof m.remainingPct === 'number').map((m: any) => {
-              const left = Math.round(m.remainingPct)
-              const t = tone(left)
-              return (
-                <View key={m.key || m.label} style={st.meter} accessibilityLabel={`${m.label}, ${left}% left${m.resetsAt ? `. ${resetLabel(m.resetsAt)}` : ''}`}>
-                  <View style={st.meterTop}>
-                    <T size={14} color={vc.text} numberOfLines={1} style={{ flexShrink: 1 }}>{m.label}</T>
-                    <T size={14} weight={500} color={t.color} style={{ fontVariant: ['tabular-nums'] }}>{left}% left</T>
-                  </View>
-                  <View style={st.bar}><View style={[st.fill, { width: `${Math.max(0, Math.min(100, m.remainingPct))}%`, backgroundColor: t.bar }]} /></View>
-                  <T size={12} color={vc.faint} style={{ fontVariant: ['tabular-nums'] }}>{m.resetsAt ? resetLabel(m.resetsAt) : ' '}</T>
-                </View>
-              )
-            })}
-            <T size={12} color={vc.faint}>{agoLabel(a.fetchedAt)}</T>
-          </View>
-        ))}
+        {accounts.map((a) => <QuotaCard key={a.id} account={a} />)}
       </View>
     </ScrollView>
+  )
+}
+
+/** One account's limits: each window's bar, what's left and when it resets. The sheet and Settings › Usage both draw these. */
+export function QuotaCard({ account: a, style }: { account: any; style?: StyleProp<ViewStyle> }) {
+  return (
+    <View style={[st.card, style]}>
+      <View style={st.cardHead}>
+        <ProviderLogo driver={a.backend} name={a.displayName} size={20} />
+        <T size={15.5} weight={600} style={{ flexShrink: 1 }} numberOfLines={1}>{a.displayName || a.backend}</T>
+        {a.plan ? <View style={st.plan}><T size={11.5} color={vc.soft}>{a.plan}</T></View> : null}
+      </View>
+      {a.meters.filter((m: any) => typeof m.remainingPct === 'number').map((m: any) => {
+        const left = Math.round(m.remainingPct)
+        const t = tone(left)
+        return (
+          <View key={m.key || m.label} style={st.meter} accessibilityLabel={`${m.label}, ${left}% left${m.resetsAt ? `. ${resetLabel(m.resetsAt)}` : ''}`}>
+            <View style={st.meterTop}>
+              <T size={14} color={vc.text} numberOfLines={1} style={{ flexShrink: 1 }}>{m.label}</T>
+              <T size={14} weight={500} color={t.color} style={{ fontVariant: ['tabular-nums'] }}>{left}% left</T>
+            </View>
+            <View style={st.bar}><View style={[st.fill, { width: `${Math.max(0, Math.min(100, m.remainingPct))}%`, backgroundColor: t.bar }]} /></View>
+            <T size={12} color={vc.faint} style={{ fontVariant: ['tabular-nums'] }}>{m.resetsAt ? resetLabel(m.resetsAt) : ' '}</T>
+          </View>
+        )
+      })}
+      <T size={12} color={vc.faint}>{agoLabel(a.fetchedAt)}</T>
+    </View>
   )
 }
 
@@ -143,7 +149,7 @@ const st = StyleSheet.create({
   column: { gap: 12 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 4, marginBottom: 4 },
   refresh: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: vc.line, alignItems: 'center', justifyContent: 'center' },
-  card: { gap: 14, padding: 16, borderRadius: 16, backgroundColor: '#1a1d26', borderWidth: 1, borderColor: vc.line },
+  card: { gap: 14, padding: 16, borderRadius: 16, backgroundColor: vc.menu, borderWidth: 1, borderColor: vc.line },
   cardHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   plan: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: vc.raise },
   meter: { gap: 7 },

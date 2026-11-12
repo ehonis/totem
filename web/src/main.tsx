@@ -5,6 +5,8 @@ import '@fontsource-variable/inter'
 // Display face, used only by the wordmark in the sidebar.
 import '@fontsource-variable/unbounded'
 import App from './App'
+import WindowControls from './components/WindowControls'
+import { installWindowChrome } from './desktop'
 import { registerServiceWorker, reportNotificationOpen } from './push'
 import { watchForNewBuild } from './newBuild'
 import './tailwind.css'
@@ -27,4 +29,7 @@ reportNotificationOpen()
 
 watchForNewBuild()
 
-createRoot(document.getElementById('root')!).render(<App />)
+// The desktop app's frameless window (desktop.ts); nothing in a browser.
+installWindowChrome()
+
+createRoot(document.getElementById('root')!).render(<><App /><WindowControls /></>)

@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useChat, showAgents, focusAgent } from './store'
+import { usePanelEscape } from './escape'
 import type { AgentInfo, AgentStep, ChatThread, ToolPart } from './types'
 import { TI, ProviderLogo, toolApp, toolIcon, formatDuration, agentName } from './ui'
 import { IconX, IconCheck, IconChevronRight, IconChevronDown, IconChevronUp, IconBrain, IconRobot } from './icons'
@@ -64,12 +65,7 @@ export default function AgentsPanel({ threadId }: { threadId: string | null }) {
   const body = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') showAgents(false) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open])
+  usePanelEscape(open, () => showAgents(false))
 
   // Unchosen, the panel opens the agent working now (or the latest one); '' means
   // the owner folded them all.
@@ -282,20 +278,6 @@ function GroupRow({ tool }: { tool: ToolPart }) {
       </span>
       {ms >= 1500 && <span className="vc-agent-time">{formatDuration(ms)}</span>}
       <TI icon={IconChevronRight} size={15} />
-    </button>
-  )
-}
-
-/** The header chip that brings the panel back. */
-export function AgentsChip({ threadId }: { threadId: string | null }) {
-  const agents = useThreadAgents(threadId)
-  const open = useChat((s) => s.agentsOpen)
-  if (!agents.length || open) return null
-  const running = agents.filter((e) => e.agent.status === 'running').length
-  return (
-    <button type="button" className={`vc-agents-chip ${running ? 'live' : ''}`} onClick={() => showAgents(true)} title="Agents this chat started">
-      <TI icon={IconRobot} size={15} />
-      <span>{running ? `${running} working` : `${agents.length} agent${agents.length === 1 ? '' : 's'}`}</span>
     </button>
   )
 }

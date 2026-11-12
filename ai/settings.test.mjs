@@ -69,7 +69,7 @@ test('short values mask fully', () => {
 test('the Test button names a credentials failure plainly', async () => {
   const { authFailureMessage } = await import('./settings.mjs')
   const codex401 = 'codex produced no output — unexpected status 401 Unauthorized: Missing bearer [redacted] in header'
-  assert.match(authFailureMessage(codex401, { provider: 'Codex', fix: 'codex login' }), /Codex rejected its credentials\. Check the API key in Settings -> AI or run `codex login`/)
+  assert.match(authFailureMessage(codex401, { provider: 'Codex', fix: 'codex login' }), /Codex rejected its credentials\. Check the API key in Settings -> Providers or run `codex login`/)
   assert.ok(authFailureMessage('Invalid API key · Please run /login', { provider: 'Claude Code' }))
   assert.equal(authFailureMessage('ok'), null)
   assert.equal(authFailureMessage('rate limited, try later'), null)

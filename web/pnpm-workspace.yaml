@@ -1,0 +1,5 @@
+# Settings only: the dashboard is its own install (see the root pnpm-workspace.yaml).
+nodeLinker: hoisted
+onlyBuiltDependencies:
+  - esbuild
+  - protobufjs

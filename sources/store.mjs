@@ -47,6 +47,7 @@ export function disabledSourceRuns(reason = null) {
     get: () => null,
     runs: () => [],
     prune: () => ({ deleted: 0, forgotten: 0 }),
+    forget: () => 0,
     close: () => {},
   }
 }
@@ -304,11 +305,26 @@ export function createSourceRuns({
     }
   }
 
+  /**
+   * Forget a source whose code is gone (its runs and its health row), so it never
+   * shows as failing or "needs you" again. Returns how many rows went.
+   */
+  function forget(source) {
+    try {
+      const runs = db.prepare('DELETE FROM source_runs WHERE source = ?').run(source).changes
+      const rows = db.prepare('DELETE FROM source_health WHERE source = ?').run(source).changes
+      return Number(runs) + Number(rows)
+    } catch (e) {
+      log(`source forget failed: ${e.message || e}`)
+      return 0
+    }
+  }
+
   prune()
 
   return {
     disabled: false, reason: null,
-    record, track, markUnconfigured, markNotified, health, get, runs, prune,
+    record, track, markUnconfigured, markNotified, health, get, runs, prune, forget,
     close: () => { try { db.close() } catch {} },
   }
 }

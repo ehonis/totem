@@ -79,33 +79,36 @@ export default function ClaudeToolsPanel({ onAuthError }: { onAuthError?: () => 
   const pulls = accounts.map((a) => ({ ...a, ...(data?.accounts[a.id] || { pulledAt: null, error: null, servers: 0 }) }))
   const total = (data?.servers || []).reduce((n, s) => n + s.tools.length, 0)
   const on = (data?.servers || []).reduce((n, s) => n + s.enabledCount, 0)
+  const pulledAt = pulls.map((a) => a.pulledAt).filter(Boolean).sort().pop() || null
+  const pullMeta = !accounts.length ? 'No Claude account'
+    : data?.servers.length ? `${on} of ${total} tools on · pulled ${ago(pulledAt)}`
+    : pulledAt ? `Pulled ${ago(pulledAt)}, nothing found` : 'Not pulled yet'
 
   return (
-    <div className="app-group claude-tools">
-      <div className="settings-section-title"><span /><strong>Claude tools</strong></div>
-      <div className="claude-tools-head">
-        <p className="app-row-hint">
-          The connectors your Claude account brings with it: claude.ai connectors, its own MCP servers and plugins.
-          Anything switched on here runs in chats without a permission prompt. Anything switched off is blocked, whatever the chat's access setting.
-        </p>
-        <div className="claude-tools-actions">
-          <button className="btn compact primary" disabled={pulling || !accounts.length} onClick={pull}>
-            <Hi icon={ArrowPathIcon} size={14} className={pulling ? 'spin' : ''} /> {pulling ? 'Pulling…' : data?.servers.length ? 'Pull again' : 'Pull tools'}
-          </button>
+    <section className="conn-section claude-tools" id="conn-claude">
+      <div className="conn-section-head">
+        <h2>Claude tools</h2>
+        <span className="conn-section-meta">{pullMeta}</span>
+        <div className="conn-section-actions">
           {data?.servers.length ? (
             <>
               <button className="btn compact" disabled={busy || on === total} onClick={() => toggle({ all: true, enabled: true })}>All on</button>
               <button className="btn compact" disabled={busy || on === 0} onClick={() => toggle({ all: true, enabled: false })}>All off</button>
             </>
           ) : null}
+          <button className="btn compact" disabled={pulling || !accounts.length} onClick={pull}>
+            <Hi icon={ArrowPathIcon} size={14} className={pulling ? 'spin' : ''} /> {pulling ? 'Pulling…' : data?.servers.length ? 'Pull again' : 'Pull tools'}
+          </button>
         </div>
       </div>
+      <p className="conn-section-note">
+        The connectors your Claude account brings. On runs in chats without asking; off is always blocked.
+      </p>
 
       {!accounts.length && <p className="app-row-hint">No Claude account is set up. Add one in Settings → Providers.</p>}
-      {pulls.map((a) => (
+      {pulls.filter((a) => a.error || (accounts.length > 1 && !a.pulledAt)).map((a) => (
         <p key={a.id} className={`app-row-hint ${a.error ? 'claude-tools-error' : ''}`}>
-          {accounts.length > 1 ? <strong>{a.name}: </strong> : null}
-          {a.error ? `Pull failed: ${a.error}` : a.pulledAt ? `Pulled ${ago(a.pulledAt)}, ${a.servers} servers.` : 'Not pulled yet.'}
+          {accounts.length > 1 ? <strong>{a.name}: </strong> : null}{a.error ? `Pull failed: ${a.error}` : 'Not pulled yet.'}
         </p>
       ))}
       {error && <p className="app-row-hint claude-tools-error">{error}</p>}
@@ -113,7 +116,7 @@ export default function ClaudeToolsPanel({ onAuthError }: { onAuthError?: () => 
       {data?.servers.length ? (
         <>
           <input className="claude-tools-search" type="search" placeholder={`Filter ${total} tools`} value={q} onChange={(e) => setQ(e.target.value)} />
-          <div className="app-list">
+          <div className="conn-list">
             {servers.map((s) => {
               const expanded = open === s.prefix || !!needle
               return (
@@ -158,6 +161,6 @@ export default function ClaudeToolsPanel({ onAuthError }: { onAuthError?: () => 
           </div>
         </>
       ) : null}
-    </div>
+    </section>
   )
 }

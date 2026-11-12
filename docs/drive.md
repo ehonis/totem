@@ -7,7 +7,7 @@ and they **cannot delete** a file for good: trash is the only delete.
 
 Code: `drive/index.mjs` (client), `google/accounts.mjs` (sign-in and tokens, shared with
 Gmail), the "Google Drive" blocks in `bridge.mjs` (tools, routes, the prompt rule),
-`web/src/components/McpSettingsView.tsx` (Settings → Connections › Files).
+`web/src/components/McpSettingsView.tsx` (Settings → Connections › Accounts).
 
 ## Setup
 
@@ -22,7 +22,7 @@ Gmail), the "Google Drive" blocks in `bridge.mjs` (tools, routes, the prompt rul
    Google address as a test user. Refresh tokens in Testing expire after 7 days, as for
    Calendar and Gmail. Published but unverified, Google shows an "unverified app" warning at
    sign-in, which the owner can click through.
-4. Settings → Connections › Files › Google Drive: type a label (`personal`, `work`) and click
+4. Settings → Connections › Accounts › Google Drive: type a label (`personal`, `work`) and click
    Add account. Finish Google's sign-in in the new tab and tick the Drive box. The callback is
    `http://localhost:<BRIDGE_PORT>/drive-oauth/callback`. From a phone, swap `localhost` for a
    host the phone can reach, as with Calendar.

@@ -9,9 +9,9 @@ requires: [plaud]
 <!--
 Example of a personalised version of the plaud-action-items-ingest seed. It only
 mines meetings about three venture tags (Acme, Globex and Initech, used here as
-illustrations), files accepted items under project: Ventures, and marks every
-proposal sync: sheet so acceptance also writes a row to a shared Action Items
-sheet. It is never installed automatically. To use it, copy this directory to
+illustrations) and files accepted items under project: Ventures, as local
+tasks: the shared action-items sheet is read-only in Totem, so nothing here
+writes to it. It is never installed automatically. To use it, copy this directory to
 data/skills/<id>/ on purpose and replace the venture names and matching rules
 with your own.
 -->
@@ -37,12 +37,12 @@ STEP 3 — extract only action items assigned to the owner. Read get_note and us
 STEP 4 — deduplicate before staging. Read the full {{inboxFile}} first. Do not create a proposal when any open or resolved line already covers the same work. Match on source meeting plus similar title. Allocate new sequential P-ids after the highest existing number.
 
 STEP 5 — stage proposals; do not act. Append one matching `- [ ]` line per new item under a dated section header in {{inboxFile}}:
-- [ ] P<N> | todo | <concise action item> | project: Ventures | venture: Acme | sync: sheet | when: YYYY-MM-DD | src: <meeting title YYYY-MM-DD>
-- [ ] P<N> | todo | <concise action item> | project: Ventures | venture: Globex | sync: sheet | when: YYYY-MM-DD | src: <meeting title YYYY-MM-DD>
-- [ ] P<N> | todo | <concise action item> | project: Ventures | venture: Initech | sync: sheet | when: YYYY-MM-DD | src: <meeting title YYYY-MM-DD>
-Use the one venture actually established by the meeting. `sync: sheet` is the exact explicit sharing marker: it means acceptance creates the Totem task and its Action Items Sheet row. Never infer sharing merely from the Ventures area or venture name. Use an explicit YYYY-MM-DD date when the meeting set a deadline; otherwise write `when: none`. Do not create Totem tasks, Sheet rows, GitHub issues, or Calendar events yourself.
+- [ ] P<N> | todo | <concise action item> | project: Ventures | venture: Acme | when: YYYY-MM-DD | src: <meeting title YYYY-MM-DD>
+- [ ] P<N> | todo | <concise action item> | project: Ventures | venture: Globex | when: YYYY-MM-DD | src: <meeting title YYYY-MM-DD>
+- [ ] P<N> | todo | <concise action item> | project: Ventures | venture: Initech | when: YYYY-MM-DD | src: <meeting title YYYY-MM-DD>
+Use the one venture actually established by the meeting. Add no `sync:` marker: acceptance creates a local Totem task, and the shared sheet is read-only. Use an explicit YYYY-MM-DD date when the meeting set a deadline; otherwise write `when: none`. Do not create Totem tasks, Sheet rows, GitHub issues, or Calendar events yourself.
 
-STEP 6 — verify before finishing. Re-read {{inboxFile}} and confirm every new P-id has exactly one open checklist line, a valid venture, and exactly one `sync: sheet` marker. Fix omissions or duplicates before reporting success.
+STEP 6 — verify before finishing. Re-read {{inboxFile}} and confirm every new P-id has exactly one open checklist line, a valid venture, and no `sync:` marker. Fix omissions or duplicates before reporting success.
 
 STEP 7 — update state. For every meeting examined, even one with zero action items, add or update its Plaud file_id in {{stateFile}} under processedMeetings with `{ name, processedAt: <ISO now>, proposalIds: [<new P-ids or empty>] }`. Set lastRunAt to now. Do not remove prior entries.
 

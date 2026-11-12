@@ -14,6 +14,11 @@ describe('reloading after a deploy', () => {
     expect(shouldReload({ ...base, hidden: true, unsentText: true })).toBe(true)
   })
 
+  it('waits for downloads before reloading even a hidden or idle page', () => {
+    expect(shouldReload({ ...base, hidden: true, downloading: true })).toBe(false)
+    expect(shouldReload({ ...base, idleMs: 180000, downloading: true })).toBe(false)
+  })
+
   it('waits for a quiet spell with nothing half-typed on a visible page', () => {
     expect(shouldReload(base)).toBe(false)
     expect(shouldReload({ ...base, idleMs: 3 * 60_000, unsentText: true })).toBe(false)

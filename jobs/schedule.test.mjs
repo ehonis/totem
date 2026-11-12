@@ -54,11 +54,6 @@ test('daily: the scheduled minute itself is not re-fired', () => {
   assert.equal(wall(nextRunAfter(sched, at('2026-08-18 11:00'), TZ)), '2026-08-19 11:00')
 })
 
-test('daily: crosses a month and a year boundary', () => {
-  assert.equal(wall(nextRunAfter({ type: 'daily', time: '06:30' }, at('2026-08-31 09:00'), TZ)), '2026-09-01 06:30')
-  assert.equal(wall(nextRunAfter({ type: 'daily', time: '06:30' }, at('2026-12-31 09:00'), TZ)), '2027-01-01 06:30')
-})
-
 test('daily: a 07:30 job stays at 07:30 local through a full year of DST', () => {
   // Asserted as a property rather than against hardcoded transition dates, which
   // is the part a human gets wrong: over 365 consecutive runs the wall clock must

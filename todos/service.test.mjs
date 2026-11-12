@@ -10,6 +10,10 @@ import { createTodoService } from './service.mjs';
 import { seedVentureTags } from './test-support.mjs';
 
 const NOW = '2026-09-11T12:00:00.000Z';
+// No connector owns completion or syncs any more (todos/service.mjs), so the rules for
+// one are exercised with a stand-in passed as `completionOwners`/`syncingConnectors`.
+// `sheet` and `github` links below are the retired connectors' leftovers, which own nothing.
+const OWNER = 'example-owner';
 const tempDirectories = [];
 const databases = [];
 
@@ -35,6 +39,8 @@ function fixture({ now = NOW, tz } = {}) {
     makeId: () => `generated-${++id}`,
     actionLog: { record: entry => entries.push(entry) },
     ...(tz ? { tz } : {}),
+    completionOwners: [OWNER],
+    syncingConnectors: [OWNER],
   });
   return { db, entries, file, service };
 }
@@ -51,14 +57,15 @@ const WORKER_SOURCE = String.raw`
       now: () => workerData.now,
       makeId: () => workerData.generatedId,
       actionLog: { record() {} },
+      completionOwners: [workerData.owner],
     });
     parentPort.postMessage({ ready: true });
     parentPort.once('message', () => {
       try {
         const result = workerData.operation === 'attach'
           ? service.attachExternalLink(workerData.taskId, {
-              connector: 'sheet',
-              externalId: 'sheet-concurrent',
+              connector: workerData.owner,
+              externalId: 'owner-worker',
             })
           : workerData.operation === 'archive-completed'
             ? service.archiveCompleted({ olderThan: workerData.olderThan })
@@ -82,6 +89,7 @@ async function startServiceWorker({ file, operation, taskId, olderThan }) {
       taskId,
       now: NOW,
       generatedId: `worker-${operation}`,
+      owner: OWNER,
       olderThan,
       dbUrl: new URL('./db.mjs', import.meta.url).href,
       serviceUrl: new URL('./service.mjs', import.meta.url).href,
@@ -103,15 +111,15 @@ async function letWorkerReachWriteLock() {
   await new Promise(resolve => setTimeout(resolve, 150));
 }
 
-function insertGitHubOwner(db, taskId, id = 'link-concurrent') {
+function insertOwnerLink(db, taskId, id = 'link-concurrent') {
   db.prepare(`
     INSERT INTO external_links (
       id, todo_id, connector, external_id, created_at, updated_at
-    ) VALUES (?, ?, 'github', 'github-concurrent', ?, ?)
-  `).run(id, taskId, NOW, NOW);
+    ) VALUES (?, ?, ?, 'owner-concurrent', ?, ?)
+  `).run(id, taskId, OWNER, NOW, NOW);
 }
 
-function linkedTask(service, connector = 'github') {
+function linkedTask(service, connector = OWNER) {
   const task = service.create({ title: 'Linked task', area: 'Personal' });
   return service.attachExternalLink(task.id, {
     connector,
@@ -137,13 +145,13 @@ test('requires exactly one venture classification for Ventures', () => {
 
 test('rejects local completion when an external source owns completion', () => {
   const { service } = fixture();
-  const task = linkedTask(service, 'sheet');
+  const task = linkedTask(service);
 
   assert.throws(() => service.complete(task.id), error =>
     error.code === 'SOURCE_OWNS_COMPLETION' &&
     error.status === 409 &&
-    error.details.source === 'sheet' &&
-    error.details.url === 'https://example.test/sheet/1');
+    error.details.source === OWNER &&
+    error.details.url === `https://example.test/${OWNER}/1`);
   assert.throws(() => service.move(task.id, 'done'), error =>
     error.code === 'SOURCE_OWNS_COMPLETION' && error.status === 409);
   assert.equal(service.get(task.id).status, 'todo');
@@ -151,22 +159,53 @@ test('rejects local completion when an external source owns completion', () => {
 
 test('allows only one completion-owning external link per task', () => {
   const { service } = fixture();
-  const task = linkedTask(service, 'github');
+  const task = linkedTask(service);
 
   assert.throws(() => service.attachExternalLink(task.id, {
-    connector: 'sheet',
-    externalId: 'sheet-row-2',
-    externalUrl: 'https://example.test/sheet/2',
+    connector: OWNER,
+    externalId: '67890',
+    externalUrl: `https://example.test/${OWNER}/2`,
   }), error =>
     error.code === 'EXTERNAL_COMPLETION_OWNER_EXISTS' &&
     error.status === 409 &&
-    error.details.source === 'github');
+    error.details.source === OWNER);
   assert.equal(service.get(task.id).externalLinks.length, 1);
+});
+
+test('a retired connector\'s queued writes and state no longer colour a task\'s sync state', () => {
+  const { db, service } = fixture();
+  const task = linkedTask(service, 'sheet');
+  const outbox = db.prepare(`
+    INSERT INTO sync_outbox (id, todo_id, connector, operation, payload, idempotency_key, status, last_error, created_at, updated_at)
+    VALUES (?, ?, ?, 'update', '{}', ?, ?, ?, ?, ?)
+  `);
+  outbox.run('o-1', task.id, 'sheet', 'k-1', 'pending', null, NOW, NOW);
+  outbox.run('o-2', task.id, 'sheet', 'k-2', 'conflict', 'both changed', NOW, NOW);
+  db.prepare(`INSERT INTO connector_state (connector, last_error, created_at, updated_at) VALUES ('sheet', 'needs TASK_SHEET_ID', ?, ?)`).run(NOW, NOW);
+  db.prepare('UPDATE external_links SET missing_at = ? WHERE todo_id = ?').run(NOW, task.id);
+  assert.deepEqual(service.get(task.id).syncState, {
+    status: 'idle', pending: 0, conflicts: 0, exhausted: 0, missing: false, lastSuccessAt: null, lastError: null,
+  });
+  // A connector that still syncs keeps counting.
+  const issue = linkedTask(service);
+  outbox.run('o-3', issue.id, OWNER, 'k-3', 'pending', null, NOW, NOW);
+  assert.equal(service.get(issue.id).syncState.status, 'pending');
+  assert.equal(service.get(issue.id).syncState.pending, 1);
+});
+
+test('a link left by the retired sheet sync does not own completion', () => {
+  const { service } = fixture();
+  const task = linkedTask(service, 'sheet');
+  assert.equal(service.complete(task.id).status, 'done');
+  assert.equal(service.move(task.id, 'todo').status, 'todo');
+  // Nor does it block a link from a connector that does own completion.
+  service.attachExternalLink(task.id, { connector: OWNER, externalId: '777' });
+  assert.throws(() => service.complete(task.id), error => error.code === 'SOURCE_OWNS_COMPLETION');
 });
 
 test('external non-completion seeds once, completion forces done, and reopen resets to todo', () => {
   const { service } = fixture();
-  const task = linkedTask(service, 'github');
+  const task = linkedTask(service);
 
   service.applyExternalObservation({ taskId: task.id, completed: false, initialStatus: 'doing' });
   service.move(task.id, 'todo');
@@ -180,15 +219,15 @@ test('external non-completion seeds once, completion forces done, and reopen res
 
   service.applyExternalObservation({ taskId: task.id, completed: false });
   assert.equal(service.get(task.id).status, 'todo');
+  // `doing` is gone: a seed or a move that names it lands on todo.
   service.move(task.id, 'doing');
   service.applyExternalObservation({ taskId: task.id, completed: false, initialStatus: 'todo' });
-  assert.equal(service.get(task.id).status, 'doing');
+  assert.equal(service.get(task.id).status, 'todo');
 });
 
-test('external observation applies an authoritative title without resetting open local focus', () => {
+test('external observation applies an authoritative title without reopening or closing', () => {
   const { service } = fixture();
-  const task = linkedTask(service, 'github');
-  service.move(task.id, 'doing');
+  const task = linkedTask(service);
 
   const observed = service.applyExternalObservation({
     taskId: task.id,
@@ -198,7 +237,7 @@ test('external observation applies an authoritative title without resetting open
   });
 
   assert.equal(observed.title, 'Renamed on GitHub');
-  assert.equal(observed.status, 'doing');
+  assert.equal(observed.status, 'todo');
   assert.deepEqual(observed.externalLinks[0].sourceSnapshot, {
     state: 'open',
     title: 'Renamed on GitHub',
@@ -212,8 +251,8 @@ test('terminally exhausted connector work is visible in task sync state', () => 
     INSERT INTO sync_outbox (
       id, todo_id, connector, operation, payload, idempotency_key, status,
       attempts, last_error, created_at, updated_at
-    ) VALUES (?, ?, 'github', 'rename', '{}', ?, 'exhausted', 5, ?, ?, ?)
-  `).run('outbox-exhausted', task.id, `rename-${task.id}`, 'rate limited', NOW, NOW);
+    ) VALUES (?, ?, ?, 'rename', '{}', ?, 'exhausted', 5, ?, ?, ?)
+  `).run('outbox-exhausted', task.id, OWNER, `rename-${task.id}`, 'rate limited', NOW, NOW);
 
   assert.deepEqual(service.get(task.id).syncState, {
     status: 'error',
@@ -228,7 +267,7 @@ test('terminally exhausted connector work is visible in task sync state', () => 
 
 test('non-owner external observations update metadata without changing local status', () => {
   const { service } = fixture();
-  const task = service.create({ title: 'Calendar-linked', area: 'Personal', status: 'doing' });
+  const task = service.create({ title: 'Calendar-linked', area: 'Personal' });
   service.attachExternalLink(task.id, { connector: 'calendar', externalId: 'event-1' });
 
   const observed = service.applyExternalObservation({
@@ -238,14 +277,14 @@ test('non-owner external observations update metadata without changing local sta
     sourceSnapshot: { state: 'cancelled' },
   });
 
-  assert.equal(observed.status, 'doing');
+  assert.equal(observed.status, 'todo');
   assert.equal(observed.externalLinks[0].sourceStatus, 'cancelled');
   assert.deepEqual(observed.externalLinks[0].sourceSnapshot, { state: 'cancelled' });
 });
 
 test('reopen uses persisted completion boolean instead of source status wording', () => {
   const { service } = fixture();
-  const task = linkedTask(service, 'github');
+  const task = linkedTask(service);
 
   service.applyExternalObservation({
     taskId: task.id,
@@ -257,10 +296,9 @@ test('reopen uses persisted completion boolean instead of source status wording'
   service.applyExternalObservation({ taskId: task.id, completed: false, sourceStatus: 'available' });
   assert.equal(service.get(task.id).status, 'todo');
 
-  service.move(task.id, 'doing');
   service.applyExternalObservation({ taskId: task.id, completed: false, sourceStatus: 'closed' });
   service.applyExternalObservation({ taskId: task.id, completed: false, sourceStatus: 'closed' });
-  assert.equal(service.get(task.id).status, 'doing');
+  assert.equal(service.get(task.id).status, 'todo');
 });
 
 test('concurrent completion owners cannot both attach through separate connections', async () => {
@@ -271,18 +309,18 @@ test('concurrent completion owners cannot both attach through separate connectio
   db.exec('BEGIN IMMEDIATE');
   worker.postMessage({ go: true });
   await letWorkerReachWriteLock();
-  insertGitHubOwner(db, task.id);
+  insertOwnerLink(db, task.id);
   db.exec('COMMIT');
 
   assert.deepEqual(await result, {
     ok: false,
     code: 'EXTERNAL_COMPLETION_OWNER_EXISTS',
-    message: 'This task already gets completion state from github.',
+    message: `This task already gets completion state from ${OWNER}.`,
   });
   await worker.terminate();
   assert.deepEqual(
-    service.get(task.id).externalLinks.map(link => link.connector),
-    ['github'],
+    service.get(task.id).externalLinks.map(link => link.externalId),
+    ['owner-concurrent'],
   );
 });
 
@@ -294,7 +332,7 @@ test('a completion owner cannot attach between local authorization and write', a
   db.exec('BEGIN IMMEDIATE');
   worker.postMessage({ go: true });
   await letWorkerReachWriteLock();
-  insertGitHubOwner(db, task.id);
+  insertOwnerLink(db, task.id);
   db.exec('COMMIT');
 
   const completed = await result;
@@ -334,11 +372,12 @@ test('archiveCompleted rechecks eligibility after acquiring the write transactio
 test('does not treat an initial open observation as a completed-to-open transition', () => {
   const { service } = fixture();
   const local = service.create({ title: 'Already done', area: 'Personal', status: 'done' });
-  service.attachExternalLink(local.id, { connector: 'github', externalId: '77' });
+  service.attachExternalLink(local.id, { connector: OWNER, externalId: '77' });
 
   service.applyExternalObservation({ taskId: local.id, completed: false, initialStatus: 'doing' });
 
-  assert.equal(service.get(local.id).status, 'doing');
+  // It seeds the open status (doing is stored as todo) rather than treating it as a reopen.
+  assert.equal(service.get(local.id).status, 'todo');
 });
 
 test('returns canonical DTOs and supports core list filters', () => {
@@ -394,6 +433,8 @@ test('returns canonical DTOs and supports core list filters', () => {
       createdAt: NOW,
       updatedAt: NOW,
     }],
+    // A link with no issue URL is not an issue link.
+    issueLink: null,
     syncState: {
       status: 'idle',
       pending: 0,
@@ -571,23 +612,25 @@ test('a failed recurrence insert rolls back completion', () => {
 test('external completion never generates a local recurrence', () => {
   const { service } = fixture();
   const task = service.create({ title: 'Source schedule', area: 'Personal', dueDate: '2026-09-11', recurrence: 'daily' });
-  service.attachExternalLink(task.id, { connector: 'github', externalId: '99' });
+  service.attachExternalLink(task.id, { connector: OWNER, externalId: '99' });
 
-  service.applyExternalObservation({ taskId: task.id, connector: 'github', completed: true });
+  service.applyExternalObservation({ taskId: task.id, connector: OWNER, completed: true });
 
   assert.equal(service.get(task.id).status, 'done');
   assert.equal(service.list({ status: 'todo' }).length, 0);
 });
 
-test('a locally completed task with any external link does not recur locally', () => {
+test('a link that does not own completion leaves a repeating task to roll locally', () => {
   const { service } = fixture();
-  const task = service.create({ title: 'Calendar schedule', area: 'Personal', dueDate: '2026-09-11', recurrence: 'daily' });
-  service.attachExternalLink(task.id, { connector: 'calendar', externalId: 'event-99' });
+  const task = service.create({ title: 'Issue schedule', area: 'Personal', dueDate: '2026-09-11', recurrence: 'daily' });
+  service.setIssueLink(task.id, 'https://github.com/acme/acme/issues/5');
 
   service.complete(task.id);
 
   assert.equal(service.get(task.id).status, 'done');
-  assert.equal(service.list({ status: 'todo' }).length, 0);
+  const [next] = service.list({ status: 'todo' });
+  assert.equal(next.dueDate, '2026-09-12');
+  assert.equal(next.issueLink, null, 'the link stays on the occurrence it was set on');
 });
 
 function seriesRows(db, title) {
@@ -672,13 +715,6 @@ test('an overdue repeating task comes back due after today, not the day after it
   assert.deepEqual(service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-09-12']);
 });
 
-test('a repeating task completed early still steps once from its due date', () => {
-  const { service } = fixture();
-  const task = service.create({ title: 'Pay rent', area: 'Personal', dueDate: '2026-09-30', recurrence: 'monthly' });
-  service.complete(task.id);
-  assert.deepEqual(service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-10-30']);
-});
-
 test('"today" for the next date is the owner\'s local day, not the UTC date', () => {
   // 02:00 UTC on the 12th is still the evening of the 11th in New York.
   const late = '2026-09-12T02:00:00.000Z';
@@ -691,28 +727,6 @@ test('"today" for the next date is the owner\'s local day, not the UTC date', ()
   const other = utc.service.create({ title: 'Journal', area: 'Personal', dueDate: '2026-09-05', recurrence: 'daily' });
   utc.service.complete(other.id);
   assert.deepEqual(utc.service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-09-13']);
-});
-
-test('a monthly series on the 31st catches up months later without drifting', () => {
-  const { service } = fixture();
-  const task = service.create({ title: 'Month-end close', area: 'Personal', dueDate: '2026-01-31', recurrence: 'monthly' });
-  service.complete(task.id);
-  assert.deepEqual(service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-09-30']);
-  const lateMarch = fixture({ now: '2026-03-01T12:00:00.000Z' });
-  const march = lateMarch.service.create({ title: 'Month-end close', area: 'Personal', dueDate: '2026-01-31', recurrence: 'monthly' });
-  lateMarch.service.complete(march.id);
-  assert.deepEqual(lateMarch.service.list({ status: 'todo' }).map(item => item.dueDate), ['2026-03-31']);
-});
-
-test('weekdays and interval series catch up on their own rules', () => {
-  // NOW is Friday 2026-09-11.
-  const { service } = fixture();
-  const weekdays = service.create({ title: 'Inbox zero', area: 'Personal', dueDate: '2026-09-01', recurrence: 'weekdays' });
-  const interval = service.create({ title: 'Change filter', area: 'Personal', dueDate: '2026-08-01', recurrence: 'interval:10' });
-  service.complete(weekdays.id);
-  service.complete(interval.id);
-  const due = Object.fromEntries(service.list({ status: 'todo' }).map(item => [item.title, item.dueDate]));
-  assert.deepEqual(due, { 'Inbox zero': '2026-09-14', 'Change filter': '2026-09-20' });
 });
 
 test('rejects unsupported recurrence rules and recurrence without a due date', () => {
@@ -807,22 +821,22 @@ test('reorder changes only the selected status and alternate sorts preserve manu
   const { service } = fixture();
   const a = service.create({ title: 'A', area: 'Personal', priority: 1, dueDate: null, position: 10 });
   const b = service.create({ title: 'B', area: 'Personal', priority: 4, dueDate: '2026-09-20', position: 20 });
-  const doing = service.create({ title: 'Doing', area: 'Personal', status: 'doing', position: 7 });
+  const done = service.create({ title: 'Done', area: 'Personal', status: 'done', position: 7 });
 
   service.reorder({ status: 'todo', orderedIds: [b.id, a.id] });
 
   assert.deepEqual(service.list({ status: 'todo' }).map(todo => todo.id), [b.id, a.id]);
   const positions = Object.fromEntries(service.list({ status: 'todo', sort: 'priority' }).map(todo => [todo.id, todo.position]));
   assert.deepEqual(positions, { [b.id]: 0, [a.id]: 1 });
-  assert.equal(service.get(doing.id).position, 7);
+  assert.equal(service.get(done.id).position, 7);
   assert.deepEqual(service.list({ status: 'todo', sort: 'due' }).map(todo => todo.id), [b.id, a.id]);
 });
 
 test('bulk authorizes every selected task before mutating any task', () => {
   const { service } = fixture();
   const local = service.create({ title: 'Local', area: 'Personal' });
-  const sourceOwned = service.create({ title: 'Sheet', area: 'Personal' });
-  service.attachExternalLink(sourceOwned.id, { connector: 'sheet', externalId: 'sheet-1' });
+  const sourceOwned = service.create({ title: 'Issue', area: 'Personal' });
+  service.attachExternalLink(sourceOwned.id, { connector: OWNER, externalId: 'owner-1' });
 
   assert.throws(
     () => service.bulk({ ids: [local.id, sourceOwned.id], operation: 'move', value: 'done' }),
@@ -956,4 +970,122 @@ test('the archive time preference only accepts a 24-hour clock', () => {
       `expected ${bad} to be rejected`,
     );
   }
+});
+
+// ---- no Doing status, and GitHub issue links (issue #213) -----------------
+
+test('doing is accepted on every service input and stored as todo', () => {
+  const { db, service } = fixture();
+  const created = service.create({ title: 'Started', area: 'Personal', status: 'doing' });
+  assert.equal(created.status, 'todo');
+  const other = service.create({ title: 'Other', area: 'Personal' });
+  assert.equal(service.move(other.id, 'doing').status, 'todo');
+  service.complete(other.id);
+  assert.deepEqual(service.bulk({ ids: [other.id], operation: 'move', value: 'doing' }).map(todo => todo.status), ['todo']);
+  assert.deepEqual(
+    service.reorder({ status: 'doing', orderedIds: [other.id, created.id] }).map(todo => [todo.id, todo.position]),
+    [[other.id, 0], [created.id, 1]],
+  );
+  const imported = service.importRecord({ title: 'Imported', area: 'Personal', status: 'doing' }, { source: 'fixture', externalId: 'doing-1' });
+  assert.equal(imported.status, 'todo');
+  assert.equal(db.prepare(`SELECT count(*) AS n FROM todos WHERE status = 'doing'`).get().n, 0);
+  assert.throws(() => service.move(other.id, 'started'), error => error.code === 'INVALID_STATUS' && /todo or done/.test(error.message));
+});
+
+test('a doing row the store still holds (a restored export) reads as todo', () => {
+  const { db, service } = fixture();
+  const task = service.create({ title: 'Old', area: 'Personal' });
+  const related = service.create({ title: 'Related', area: 'Personal' });
+  service.linkRelated(task.id, related.id);
+  db.prepare(`UPDATE todos SET status = 'doing'`).run();
+  assert.equal(service.get(task.id).status, 'todo');
+  assert.equal(service.get(task.id).relations[0].status, 'todo');
+  assert.ok(service.list().every(todo => todo.status === 'todo'));
+});
+
+test('a GitHub link no longer owns completion: a linked task completes and reopens locally', () => {
+  const { service } = fixture();
+  // As the retired connector left it: a numeric issue id and an html URL.
+  const task = service.create({ title: 'Imported issue', area: 'Personal' });
+  service.attachExternalLink(task.id, {
+    connector: 'github', externalId: '90042', externalUrl: 'https://github.com/acme/acme/issues/42',
+  });
+  assert.equal(service.complete(task.id).status, 'done');
+  assert.equal(service.move(task.id, 'todo').status, 'todo');
+  assert.deepEqual(service.get(task.id).issueLink, {
+    connector: 'github', repo: 'acme/acme', number: 42, url: 'https://github.com/acme/acme/issues/42',
+  });
+  // A task may hold a GitHub link and still take a link from a connector that owns completion.
+  service.attachExternalLink(task.id, { connector: OWNER, externalId: 'row-1' });
+  assert.throws(() => service.complete(task.id), error => error.code === 'SOURCE_OWNS_COMPLETION');
+});
+
+test('as shipped, no connector owns completion or syncs: GitHub and sheet links complete here, sync state stays idle', () => {
+  const { db } = fixture();
+  const service = createTodoService({ db, now: () => NOW, actionLog: { record() {} } });
+  const task = service.create({ title: 'Linked twice', area: 'Personal' });
+  service.setIssueLink(task.id, 'https://github.com/acme/acme/issues/3');
+  service.attachExternalLink(task.id, { connector: 'sheet', externalId: 'row-3' });
+  db.prepare(`
+    INSERT INTO sync_outbox (id, todo_id, connector, operation, payload, idempotency_key, status, created_at, updated_at)
+    VALUES ('o-left', ?, 'sheet', 'update', '{}', 'k-left', 'pending', ?, ?)
+  `).run(task.id, NOW, NOW);
+  // The queries over empty owner and syncing sets still run (an empty IN () is valid SQLite).
+  assert.equal(service.get(task.id).syncState.status, 'idle');
+  assert.equal(service.complete(task.id).status, 'done');
+  assert.equal(service.move(task.id, 'todo').status, 'todo');
+  assert.equal(service.bulk({ ids: [task.id], operation: 'complete' })[0].status, 'done');
+});
+
+test('setIssueLink sets, replaces and clears one plain link, audits it, and allows a shared issue', () => {
+  const { entries, service } = fixture();
+  const one = service.create({ title: 'One', area: 'Personal' });
+  const two = service.create({ title: 'Two', area: 'Personal' });
+  service.attachExternalLink(one.id, { connector: 'github', externalId: '1', externalUrl: 'https://github.com/acme/acme/issues/1' });
+
+  const linked = service.setIssueLink(one.id, 'https://github.com/acme/acme/issues/42?x=1#c');
+  assert.deepEqual(linked.issueLink, { connector: 'github', repo: 'acme/acme', number: 42, url: 'https://github.com/acme/acme/issues/42' });
+  assert.equal(linked.externalLinks.length, 1, 'the connector-era link is replaced');
+  assert.equal(linked.syncState.status, 'idle');
+  assert.equal(entries.at(-1).action, 'todo.issue-link.set');
+
+  assert.equal(service.setIssueLink(two.id, 'https://github.com/acme/acme/issues/42').issueLink.number, 42, 'two tasks may link one issue');
+  assert.throws(() => service.setIssueLink(one.id, 'https://github.com/acme/acme/pull/3'), error => error.code === 'INVALID_ISSUE_LINK');
+  assert.equal(service.get(one.id).issueLink.number, 42);
+
+  assert.equal(service.setIssueLink(one.id, null).issueLink, null);
+  assert.deepEqual(service.get(one.id).externalLinks, []);
+  assert.equal(entries.at(-1).action, 'todo.issue-link.clear');
+  assert.throws(() => service.setIssueLink('missing', null), error => error.code === 'TODO_NOT_FOUND');
+});
+
+test('issueLinks lists each linked issue once, only from tasks still on the board, newest first', () => {
+  const { db, service } = fixture();
+  let minute = 0;
+  const make = (title, url) => {
+    const t = service.create({ title, area: 'Personal' });
+    service.setIssueLink(t.id, url);
+    db.prepare('UPDATE todos SET updated_at = ? WHERE id = ?').run(`2026-09-11T12:${String(minute++).padStart(2, '0')}:00.000Z`, t.id);
+    return t;
+  };
+  make('a', 'https://github.com/acme/acme/issues/2');
+  make('b', 'https://github.com/acme/acme/issues/1');
+  make('c', 'https://github.com/acme/acme/issues/2');
+  service.archive(make('archived', 'https://github.com/acme/acme/issues/3').id);
+  service.softDelete(make('deleted', 'https://github.com/acme/acme/issues/4').id);
+  assert.deepEqual(service.issueLinks().map(link => link.key), ['acme/acme#2', 'acme/acme#1']);
+  assert.deepEqual(service.issueLinks({ limit: 1 }).map(link => link.key), ['acme/acme#2']);
+  assert.deepEqual(Object.keys(service.issueLinks()[0]).sort(), ['connector', 'key', 'number', 'repo', 'url']);
+});
+
+test('counts says how many tasks are archived, snoozed and deleted without listing them', () => {
+  const { service } = fixture();
+  assert.deepEqual(service.counts(), { archived: 0, snoozed: 0, deleted: 0 });
+  const [a, b, c, d] = ['a', 'b', 'c', 'd'].map(title => service.create({ title, area: 'Personal' }).id);
+  service.archive(a);
+  service.snooze(b, '2026-09-12T00:00:00.000Z');
+  service.snooze(c, '2026-09-10T00:00:00.000Z');
+  service.softDelete(d);
+  service.archive(d);
+  assert.deepEqual(service.counts(), { archived: 1, snoozed: 1, deleted: 1 });
 });

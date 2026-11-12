@@ -2,7 +2,7 @@
  * Live AI-quota subscription for the dashboard.
  *
  * One fetch-stream to `GET /api/ai-usage/stream` is shared by every mounted
- * limits surface (Settings ▸ Usage, the Home Providers tile, the G U drawer).
+ * limits surface (Settings › Usage, the Home Providers tile, the G U drawer).
  * Opening it is what tells the bridge poller someone is watching, so vendors
  * get polled every 15s while a subscriber exists and drop back to the idle
  * cadence when the last one unmounts.
@@ -24,6 +24,10 @@ export type AiUsageSnapshot = {
   providers?: Record<string, string>
   polling?: boolean
   type?: string
+  /** Per provider, from ai-usage/pools.mjs. */
+  pools?: any[]
+  /** CLIProxy, when set up: whether it answered the last poll. */
+  proxy?: { configured: boolean; reachable?: boolean | null; error?: string | null; code?: string | null; checkedAt?: number | null }
 }
 
 type LiveState = { data: AiUsageSnapshot | null; err: string | null }

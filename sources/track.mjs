@@ -26,7 +26,13 @@ export function isSourceFault(error) {
 
 const operation = new AsyncLocalStorage()
 
-/** `runs.track`, joined per operation; a pass-through when built without a run log. */
+/**
+ * `runs.track`, joined per operation; a pass-through when built without a run log.
+ * `opts.covers` names other sources this operation answers for: a tracked call for
+ * one of them made inside it joins it and records nothing of its own. The task sheet
+ * feed reads through Drive this way, so a sheet the account cannot open is the
+ * feed's failure, not Drive's.
+ */
 export function tracker(runs) {
   if (typeof runs?.track !== 'function') return (_source, fn) => fn()
   return (source, fn, opts) => {
@@ -34,6 +40,7 @@ export function tracker(runs) {
     if (open?.has(source)) return fn()
     const inside = new Set(open || [])
     inside.add(source)
+    for (const covered of opts?.covers || []) inside.add(covered)
     return runs.track(source, () => operation.run(inside, fn), opts)
   }
 }
@@ -50,8 +57,8 @@ export function unconfiguredMarker(runs) {
 
 // ---- connectors whose work is part local, part remote -------------------------
 //
-// The task syncs reconcile a pull from GitHub or the sheet with the local task
-// database in one block. A local failure (a SQLite error, a domain rule) is the
+// The GitHub task sync reconciles a pull from GitHub with the local task database
+// in one block. (The task sheet is a read-only feed and does not use this.) A local failure (a SQLite error, a domain rule) is the
 // sync's problem, shown in its own health, not the source failing. `remoteClient`
 // tags every error the remote client throws; `remoteFault` counts only those, by
 // the usual rules, and skips the run for anything else (null: not recorded).

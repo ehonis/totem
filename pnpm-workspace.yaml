@@ -1,0 +1,9 @@
+# Settings only: the root is one package, not a workspace. web/ is a separate install
+# with its own lockfile and its own pnpm-workspace.yaml (pnpm reads the nearest one
+# upward from where it runs). mobile/ and desktop/ stay on npm (AGENTS.md says why).
+# Hoisted gives the same flat node_modules npm made, hardlinked from pnpm's store.
+nodeLinker: hoisted
+# The dependencies whose install scripts run; pnpm skips every other one.
+onlyBuiltDependencies:
+  - ffmpeg-static
+  - node-pty

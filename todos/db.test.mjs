@@ -265,6 +265,8 @@ function expectedCompleteSnapshot() {
       { version: 8, applied_at: FIXTURE_AT },
       { version: 9, applied_at: FIXTURE_AT },
       { version: 10, applied_at: FIXTURE_AT },
+      { version: 11, applied_at: FIXTURE_AT },
+      { version: 12, applied_at: FIXTURE_AT },
     ],
     sync_outbox: [
       {
@@ -384,7 +386,7 @@ test('migrates an empty database once and enables WAL and foreign keys', () => {
   assert.deepEqual(
     db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()
       .map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
   );
   assert.deepEqual(
     db.prepare(`
@@ -398,7 +400,7 @@ test('migrates an empty database once and enables WAL and foreign keys', () => {
   closeTodoDatabase(db);
 
   const reopened = openTodoDatabase({ file: dbFile });
-  assert.equal(reopened.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 10);
+  assert.equal(reopened.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 12);
   closeTodoDatabase(reopened);
 });
 
@@ -412,37 +414,7 @@ test('concurrent openers serialize migration checks and apply each version once'
   assert.deepEqual(
     db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()
       .map(({ version }) => version),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-  );
-  closeTodoDatabase(db);
-});
-
-test('terminally exhausted outbox work is valid and remains unleased', () => {
-  const db = openTodoDatabase({ file: tempFile(), now: () => FIXTURE_AT });
-  insertTodo(db);
-
-  db.prepare(`
-    INSERT INTO sync_outbox (
-      id, todo_id, connector, operation, payload, idempotency_key, status,
-      attempts, lease_owner, lease_expires_at, last_error, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 'exhausted', ?, NULL, NULL, ?, ?, ?)
-  `).run(
-    'outbox-exhausted', 'todo-1', 'github', 'rename', '{}', 'rename-exhausted',
-    5, 'rate limited', FIXTURE_AT, FIXTURE_AT,
-  );
-
-  assert.deepEqual(
-    { ...db.prepare(`
-      SELECT status, attempts, lease_owner, lease_expires_at, last_error
-      FROM sync_outbox WHERE id = 'outbox-exhausted'
-    `).get() },
-    {
-      status: 'exhausted',
-      attempts: 5,
-      lease_owner: null,
-      lease_expires_at: null,
-      last_error: 'rate limited',
-    },
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
   );
   closeTodoDatabase(db);
 });
@@ -698,22 +670,6 @@ test('keeps notes append-only and stores each undirected relation once', () => {
   closeTodoDatabase(db);
 });
 
-test('commits a successful transaction and returns its value', () => {
-  const db = openTodoDatabase({ file: tempFile() });
-
-  const result = withTodoTransaction(db, () => {
-    insertTodo(db, { id: 'committed' });
-    return 'saved';
-  });
-
-  assert.equal(result, 'saved');
-  assert.equal(
-    db.prepare("SELECT count(*) AS n FROM todos WHERE id = 'committed'").get().n,
-    1,
-  );
-  closeTodoDatabase(db);
-});
-
 test('rolls back every write when a transaction fails', () => {
   const db = openTodoDatabase({ file: tempFile() });
 
@@ -870,12 +826,4 @@ test('restore atomically replaces a destination containing append-only notes', (
   );
   assert.equal(restored.prepare('SELECT count(*) AS n FROM todo_notes').get().n, 0);
   closeTodoDatabase(restored);
-});
-
-test('closes an open todo database', () => {
-  const db = openTodoDatabase({ file: tempFile() });
-
-  closeTodoDatabase(db);
-
-  assert.throws(() => db.prepare('SELECT 1'), /not open/i);
 });

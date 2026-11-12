@@ -4,15 +4,18 @@
    none of it leaks into the rest of the dashboard.
    ========================================================================== */
 
-.vc {
-  --vc-col: 768px;
+/* The model picker is portalled to <body>, outside .vc, so it shares the colours here. */
+.vc, .vc-picker-pop, .vc-picker-access-menu, .vc-top-menu {
   --vc-text: color-mix(in srgb, var(--text) 94%, transparent);
   --vc-soft: color-mix(in srgb, var(--text) 62%, transparent);
   --vc-faint: color-mix(in srgb, var(--text) 40%, transparent);
-  --vc-bubble: #232733;
-  --vc-surface: #171a22;
-  --vc-raise: #1f2330;
-  --vc-line: #2a2f3c;
+  --vc-raise: var(--raise);
+  --vc-line: var(--line-2);
+}
+.vc {
+  --vc-col: 768px;
+  --vc-bubble: var(--bubble);
+  --vc-surface: var(--surface);
   position: relative; isolation: isolate; /* its .page-glow paints above this background */
   display: flex; flex-direction: column;
   height: 100%; min-height: 0;
@@ -27,7 +30,110 @@
   height: 56px; padding: 0 14px;
   position: relative; z-index: 3;
 }
-.vc-top-right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+/* What folds as the chat column narrows. chat/headerFold.ts measures the header
+   and writes the steps it took into data-fold on .vc-top, in its FOLD_STEPS order;
+   here is one rule set per step. A control marked data-fold-into="<step>" goes into
+   the "…" menu once that step is taken. The right side never shrinks and the
+   title's side is clipped, so the two cannot overlap whatever the header holds;
+   scripts/web-layout.test.mjs renders the real header through ChatHeader.harness.tsx
+   down to a 180px column to check it. */
+.vc-top { container: vc-top / inline-size; } /* also keeps each measuring pass to the header's own layout */
+.vc-top-right { margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px; }
+.vc-top-right > * { flex: none; }
+.vc-top .vc-top-title-wrap { overflow: hidden; }
+.vc-top-crumb { display: contents; }
+.vc-top-project > .ti, .vc-top-project > svg, .vc-top-project > img { flex: none; }
+/* One short word: it keeps its size rather than ellipsize to "T…". */
+.vc-top-project.vc-top-totems { flex: none; max-width: none; }
+/* A project's home: the project's name is the header's title, so it is not capped like a crumb. */
+.vc-top-crumb.last .vc-top-project { max-width: none; }
+.vc-top-right .vc-usage-wrap { margin-right: 0; }
+.vc-top-panels { display: flex; align-items: center; gap: 6px; }
+.vc-hchip {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; max-width: 220px; padding: 0 10px; border-radius: 999px;
+  border: 1px solid var(--vc-line); background: none; color: var(--vc-soft); font-size: 12px; white-space: nowrap;
+}
+.vc-hchip:hover { background: var(--vc-raise); color: var(--text); }
+.vc-hchip.browser { padding-left: 3px; }
+.vc-hchip-shot { display: block; flex: none; width: 30px; height: 20px; object-fit: cover; object-position: top; border-radius: 999px; }
+.vc-hchip .vc-hchip-globe { display: none; }
+.vc-top-menu .ti.vc-hchip-globe { display: none; }
+.vc-hchip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vc-hchip-short { display: none; font-variant-numeric: tabular-nums; }
+.vc-hchip.agents.live { border-color: color-mix(in srgb, #6fa8ff 45%, transparent); color: #b7d2ff; }
+.vc-hchip.browser.live { border-color: color-mix(in srgb, #6fcf97 45%, transparent); color: #a7e3c0; }
+/* Waiting on the owner is amber everywhere (chip, menu row, the dot on "…"), never the agents' blue. */
+.vc-hchip.waiting { border-color: color-mix(in srgb, #f5a524 60%, transparent); color: #f7c96b; }
+.vc-usage-more { display: none; margin-left: -1px; color: var(--vc-faint); font-size: 11px; }
+.vc-members-btn { position: relative; }
+.vc-members-count {
+  display: none; place-items: center; position: absolute; top: 4px; right: 2px; min-width: 15px; height: 15px; padding: 0 4px;
+  border-radius: 8px; background: var(--vc-raise); box-shadow: 0 0 0 2px var(--bg); color: var(--text); font-size: 10px; font-weight: 600; line-height: 1;
+}
+/* .vc-top-* so this beats .vc-icon-btn, which comes later in the file. */
+.vc-top .vc-top-more { display: none; position: relative; }
+.vc-top-more-dot { position: absolute; top: 7px; right: 7px; width: 6px; height: 6px; border-radius: 50%; background: #6fcf97; box-shadow: 0 0 0 2px var(--bg); }
+.vc-top-more-dot.agents { background: #6fa8ff; }
+.vc-top-more-dot.waiting { background: #f5a524; animation: vc-wait-pulse 1.6s ease-in-out infinite; }
+@keyframes vc-wait-pulse { 50% { box-shadow: 0 0 0 2px var(--bg), 0 0 0 5px color-mix(in srgb, #f5a524 35%, transparent); } }
+.reduce-motion .vc-top-more-dot.waiting { animation: none; }
+@media (prefers-reduced-motion: reduce) { .vc-top-more-dot.waiting { animation: none; } }
+
+.vc-top[data-fold~="host"] .vc-hchip-detail { display: none; }
+.vc-top[data-fold~="labels"] {
+  .vc-top-right, .vc-top-panels { gap: 4px; }
+  .vc-hchip, .vc-hchip.browser { gap: 5px; padding: 0 9px 0 8px; }
+  .vc-hchip-long, .vc-hchip .vc-hchip-shot { display: none; }
+  .vc-hchip-short { display: inline; }
+  .vc-hchip .vc-hchip-globe { display: block; }
+  .vc-hchip.browser:not(.waiting) { padding-right: 8px; }
+}
+.vc-top[data-fold~="crumbs"] {
+  .vc-top-crumb:not(.last) .vc-top-project { flex: none; padding: 0 6px; }
+  .vc-top-crumb:not(.last) .vc-top-project > span { display: none; }
+  .vc-member, .vc-retitle { display: none; }
+  .vc-members-count { display: grid; }
+}
+.vc-top[data-fold~="pills"] {
+  .vc-usage-chip:not(.lead) { display: none; }
+  .vc-usage-more { display: inline; }
+}
+.vc-top[data-fold~="plus"] .vc-usage-more { display: none; }
+.vc-top[data-fold~="tight"] { padding-left: 6px; padding-right: 6px; gap: 2px; }
+.vc-top[data-fold~="tight"] .vc-top-right { gap: 2px; }
+.vc-top[data-fold~="menu"] [data-fold-into="menu"],
+.vc-top[data-fold~="start"] [data-fold-into="start"],
+.vc-top[data-fold~="usage"] [data-fold-into="usage"],
+.vc-top[data-fold~="project"] [data-fold-into="project"] { display: none; }
+.vc-top[data-fold~="menu"]:has([data-fold-into="menu"]) .vc-top-more,
+.vc-top[data-fold~="start"]:has([data-fold-into="start"]) .vc-top-more,
+.vc-top[data-fold~="usage"]:has([data-fold-into="usage"]) .vc-top-more,
+.vc-top[data-fold~="project"]:has([data-fold-into="project"]) .vc-top-more { display: inline-grid; }
+
+/* The "…" menu, portalled to <body> (outside .vc; its colours are declared with .vc's). */
+.vc-top-menu {
+  z-index: 75; display: flex; flex-direction: column; gap: 2px; padding: 5px; border-radius: 12px; overflow-y: auto;
+  color: var(--vc-text); background: var(--bg-2); border: 1px solid var(--vc-line);
+  box-shadow: 0 22px 60px #000000a6, 0 2px 8px #0006; animation: vc-pop-down .12s ease-out;
+}
+.vc-top-menu .ti { display: block; flex: none; color: var(--vc-soft); }
+.vc-top-menu-row {
+  display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 6px 10px; border-radius: 8px;
+  background: none; border: 0; color: var(--vc-text); font-size: 13.5px; text-align: left; white-space: nowrap;
+}
+.vc-top-menu-row:hover, .vc-top-menu-row:focus-visible { background: var(--vc-raise); outline: none; }
+.vc-top-menu-row .vc-hchip-shot { width: 26px; height: 18px; margin-left: -4px; }
+.vc-top-menu-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vc-top-menu-glyph { display: inline-grid; place-items: center; flex: none; width: 15px; height: 15px; color: var(--vc-soft); }
+.vc-top-menu-glyph > * { width: 15px; height: 15px; }
+.vc-top-menu-detail { min-width: 0; margin-left: auto; padding-left: 12px; overflow: hidden; text-overflow: ellipsis; color: var(--vc-faint); font-size: 12px; }
+.vc-top-menu-row.agents.live .vc-top-menu-label { color: #b7d2ff; }
+.vc-top-menu-row.browser.live .vc-top-menu-label { color: #a7e3c0; }
+.vc-top-menu-row.waiting .vc-top-menu-label { color: #f7c96b; }
+.vc-top-menu-row:disabled { opacity: .55; cursor: default; }
+.vc-top-menu-row.low .vc-top-menu-detail { color: #f0cd72; }
+.vc-top-menu-row.crit .vc-top-menu-detail { color: #ff8fa3; }
+.vc-top-menu-row.on .vc-top-menu-detail { color: var(--text); }
 
 .vc-icon-btn {
   display: inline-grid; place-items: center; flex: none;
@@ -46,7 +152,7 @@
   background: var(--vc-raise); border: 1px solid var(--vc-line); color: var(--text);
   font-size: 13px; font-weight: 500;
 }
-.vc-btn:hover { background: #262b39; }
+.vc-btn:hover { background: var(--bg-hover); }
 .vc-btn.sm { height: 30px; padding: 0 12px; }
 .vc-btn.ghost { background: none; border-color: transparent; color: var(--vc-soft); }
 .vc-btn.ghost:hover { color: var(--text); background: var(--vc-raise); }
@@ -74,7 +180,7 @@
 .vc-menu {
   position: absolute; z-index: 40;
   min-width: 240px; padding: 6px;
-  background: #1a1d26; border: 1px solid var(--vc-line); border-radius: 16px;
+  background: var(--bg-2); border: 1px solid var(--vc-line); border-radius: 16px;
   box-shadow: 0 16px 48px #00000080, 0 2px 6px #0000004d;
   display: flex; flex-direction: column;
   animation: vc-pop .12s ease-out;
@@ -99,7 +205,7 @@
 .vc-menu-sep { height: 1px; margin: 6px 4px; background: var(--vc-line); }
 .vc-model-menu { top: calc(100% + 6px); left: 0; width: 300px; max-height: min(70vh, 560px); overflow-y: auto; }
 .vc-model-list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
-.vc-seg { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px; margin: 2px 4px 6px; background: #12141b; border-radius: 10px; }
+.vc-seg { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px; margin: 2px 4px 6px; background: var(--bg); border-radius: 10px; }
 .vc-seg button {
   flex: 1 0 auto; height: 28px; border: 0; border-radius: 8px; background: none;
   color: var(--vc-soft); font-size: 12.5px; white-space: nowrap; padding: 0 6px;
@@ -183,7 +289,7 @@
   /* The composer's glass (.vc-box), so the chat has one kind of raised surface. Unlike
      the composer it lands on text, so it blurs what is behind it, but only while open:
      a small blur over the moving glow is cheap, a resting one on every reply is not. */
-  background: color-mix(in srgb, #0e0f13 78%, transparent);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
   border: 1px solid #ffffff14; border-radius: 12px;
   box-shadow: inset 0 1px 0 #ffffff14, 0 18px 48px -20px #00000099, 0 4px 14px -7px #00000066;
   --rest: inset(0 calc(100% - var(--chip-w)) calc(100% - var(--chip-h)) 0 round 7px);
@@ -217,7 +323,18 @@
 
 /* --- assistant reply -------------------------------------------------------- */
 .vc-assistant-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; font-size: 15.5px; line-height: 1.7; }
-.vc-assistant-body > .md { min-width: 0; }
+.vc-assistant-body > .md { min-width: 0; contain-intrinsic-size: auto 240px; }
+/* A reply's text is most of a long chat's layout, and a drag of the chats panel
+   or a side panel, or a window resize, changes the chat column's width every
+   frame, which lays all of it out again. While one runs, text off screen is
+   skipped and holds its height. Only then: at rest it would be skipped too
+   until scrolled near, and WebKit (the macOS app) has no scroll anchoring, so
+   a long chat would jump as each reply swapped its estimate for its real
+   height. `contain-intrinsic-size: auto` above records each reply's real
+   height whenever it is laid out, so the skipped ones keep exactly that. It
+   also clips painting to the text block, so it sits on the text, not the row,
+   whose popovers (reply details, menus) must overflow. */
+body.panel-resizing .vc-assistant-body > .md, :root.window-resizing .vc-assistant-body > .md { content-visibility: auto; }
 
 .vc .md { color: var(--vc-text); overflow-wrap: anywhere; }
 .vc .md > :first-child { margin-top: 0; }
@@ -239,19 +356,19 @@
 .vc .md blockquote { margin: 0 0 14px; padding: 2px 0 2px 16px; border-left: 3px solid var(--vc-line); color: var(--vc-soft); }
 .vc .md :not(pre) > code {
   font: 0.86em/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  background: #262a36; padding: 2px 6px; border-radius: 6px; color: #e9ecf3;
+  background: var(--bg-hover); padding: 2px 6px; border-radius: 6px; color: #e9ecf3;
 }
 .vc .md table { border-collapse: collapse; margin: 0 0 16px; font-size: 14px; display: block; overflow-x: auto; max-width: 100%; }
 /* `overflow-wrap: anywhere` (inherited from .md) lets a column shrink to one
    letter, so "Rank" stacks as "R/an/k". `break-word` still wraps a long URL but
    sizes columns by whole words; a table too wide for the reply scrolls instead. */
 .vc .md th, .vc .md td { border: 1px solid var(--vc-line); padding: 7px 12px; text-align: left; vertical-align: top; overflow-wrap: break-word; }
-.vc .md th { background: #1a1d26; font-weight: 600; color: var(--text); }
+.vc .md th { background: var(--bg-2); font-weight: 600; color: var(--text); }
 .vc .md img { max-width: 100%; border-radius: 12px; }
 .vc .md-code { margin: 0 0 16px; border-radius: 12px; overflow: hidden; background: #0b0d12; border: 1px solid var(--vc-line); }
 .vc .md-code-head {
   display: flex; align-items: center; justify-content: space-between;
-  height: 34px; padding: 0 8px 0 14px; background: #161922;
+  height: 34px; padding: 0 8px 0 14px; background: var(--bg-2);
   font-size: 12px; color: var(--vc-faint);
 }
 .vc .md-code pre { margin: 0; padding: 14px 16px; overflow-x: auto; background: none; border: 0; }
@@ -287,6 +404,20 @@
 
 .vc-shot { padding: 0; border: 1px solid var(--vc-line); border-radius: 12px; overflow: hidden; background: #0b0d12; max-width: 420px; align-self: flex-start; }
 .vc-shot img { display: block; width: 100%; height: auto; }
+
+/* A chart the agent rendered (VisualFrame.tsx): the page sits on the chat's own
+   background, its 8px gutter pulled out so its content lines up with the text. */
+.vc-visual { position: relative; margin: 2px -8px; align-self: stretch; min-width: 0; }
+.vc-visual-frame { display: block; width: 100%; border: 0; background: transparent; color-scheme: dark; }
+.vc-visual-open {
+  position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 28px; height: 28px;
+  border-radius: 8px; border: 1px solid var(--vc-line); background: var(--vc-raise); color: var(--vc-soft);
+  opacity: 0; transition: opacity .15s ease;
+}
+.vc-visual:hover .vc-visual-open, .vc-visual-open:focus-visible { opacity: 1; }
+.vc-visual-open:hover { color: var(--vc-text); }
+@media (hover: none) { .vc-visual-open { opacity: .85; } }
+.vc-visual-left { padding: 10px 0; }
 
 /* --- work log --------------------------------------------------------------- */
 .vc-worklog { display: flex; flex-direction: column; align-self: stretch; }
@@ -371,6 +502,7 @@
   border-radius: 10px; box-shadow: 0 20px 60px #000;
 }
 .vc-lightbox-close { position: absolute; top: calc(14px + env(safe-area-inset-top)); right: 14px; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #ffffff1f; color: #fff; display: grid; place-items: center; }
+.vc-lightbox-download { position: absolute; bottom: calc(24px + env(safe-area-inset-bottom)); padding: 9px 14px; border-radius: 8px; background: var(--bg-2); color: var(--text); border: 1px solid var(--line); font-size: 14px; }
 @keyframes vc-fade { from { opacity: 0; } }
 
 /* --- composer ------------------------------------------------------------------ */
@@ -389,7 +521,7 @@
    changes nothing you can see, and the moving glow made it re-blur every frame. */
 .vc-box {
   display: flex; flex-direction: column;
-  background: color-mix(in srgb, #0e0f13 78%, transparent);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
   border: 1px solid #ffffff14; border-radius: 20px;
   padding: 12px 10px 8px 14px;
   box-shadow:
@@ -429,7 +561,7 @@
 }
 .vc-send:hover:not(:disabled) { background: #fff; }
 .vc-send:active:not(:disabled) { transform: scale(.94); }
-.vc-send:disabled { background: #3a3f4d; color: #8a91a3; cursor: default; }
+.vc-send:disabled { background: var(--line-strong); color: #8a91a3; cursor: default; }
 .vc-send.stop { background: var(--text); }
 .vc-send.voice { background: var(--text); }
 .vc-tray { display: flex; gap: 10px; flex-wrap: wrap; padding: 4px 2px 10px; }
@@ -441,23 +573,23 @@
 
 .vc-cmd-menu {
   position: absolute; left: 8px; right: 8px; bottom: calc(100% + 8px); z-index: 40;
-  padding: 6px; background: #1a1d26; border: 1px solid var(--vc-line); border-radius: 16px;
+  padding: 6px; background: var(--bg-2); border: 1px solid var(--vc-line); border-radius: 16px;
   box-shadow: 0 16px 48px #00000080; max-height: 320px; overflow-y: auto;
 }
 .vc-cmd { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border-radius: 10px; background: none; border: 0; color: var(--text); text-align: left; }
 .vc-cmd.active { background: var(--vc-raise); }
-.vc-cmd-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: #12141b; color: var(--vc-soft); flex: none; }
+.vc-cmd-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--bg); color: var(--vc-soft); flex: none; }
 .vc-cmd-text { display: flex; flex-direction: column; min-width: 0; }
 .vc-cmd-name { font: 13px ui-monospace, "SF Mono", Menlo, monospace; display: flex; align-items: baseline; gap: 8px; }
 .vc-cmd-source { font: 11px/1 system-ui, sans-serif; color: var(--vc-faint); }
 .vc-cmd-desc { font-size: 12.5px; color: var(--vc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .vc-jump {
-  position: absolute; left: 50%; bottom: 128px; z-index: 3; transform: translateX(-50%);
+  position: absolute; left: 50%; bottom: calc(100% + 12px); z-index: 3; transform: translateX(-50%);
   display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%;
-  background: #1f2330; border: 1px solid var(--vc-line); color: var(--text); box-shadow: 0 6px 18px #0007;
+  background: var(--raise); border: 1px solid var(--vc-line); color: var(--text); box-shadow: 0 6px 18px #0007;
 }
-.vc-jump:hover { background: #262b39; }
+.vc-jump:hover { background: var(--bg-hover); }
 
 /* --- empty state --------------------------------------------------------------- */
 .vc-empty {
@@ -485,7 +617,7 @@
 .vc-start-in-chip:hover { color: var(--text); background: var(--vc-surface); }
 
 /* --- drag & drop ---------------------------------------------------------------- */
-.vc-drop { position: absolute; inset: 0; z-index: 50; display: grid; place-items: center; background: #0f1115cc; pointer-events: none; animation: vc-fade .1s; }
+.vc-drop { position: absolute; inset: 0; z-index: 50; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 80%, transparent); pointer-events: none; animation: vc-fade .1s; }
 .vc-drop-inner {
   display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 36px 48px;
   border: 2px dashed #5b8cff80; border-radius: 24px; color: var(--text); font-size: 15px;
@@ -500,19 +632,14 @@
 .vc-new:hover { background: var(--bg-3); }
 .vc-threads { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .vc-threads-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 6px 2px 12px; font-size: 12.5px; color: var(--muted); }
-.vc-threads-search {
-  margin: 6px 6px 4px; height: 34px; padding: 0 10px; border-radius: 9px;
-  background: var(--bg); border: 1px solid var(--line); color: var(--text); font: inherit; font-size: 14px; outline: none;
-}
-.vc-threads-search:focus { border-color: #3a4152; }
-.vc-threads-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0 12px; scrollbar-width: thin; display: flex; flex-direction: column; }
+.vc-threads-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 0 12px; display: flex; flex-direction: column; }
 .vc-threads-list > * { flex-shrink: 0; }
 .vc-threads-empty { padding: 10px 12px; color: var(--muted); font-size: 13px; }
 .vc-thread-group { margin-top: 8px; }
 .vc-thread-group-label { padding: 6px 12px 4px; font-size: 12px; color: color-mix(in srgb, var(--muted) 80%, transparent); }
 .vc-thread { position: relative; display: flex; align-items: center; border-radius: 9px; }
 .vc-thread:hover, .vc-thread.menu-open { background: var(--bg-3); }
-.vc-thread.active { background: #252a37; }
+.vc-thread.active { background: var(--bg-hover); }
 .vc-thread-main {
   display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; height: 34px; padding: 0 4px 0 12px;
   background: none; border: 0; color: color-mix(in srgb, var(--text) 86%, transparent); font-size: 13.5px; text-align: left;
@@ -690,7 +817,6 @@
   .vc-starters { justify-content: flex-start; margin-top: 0; }
   .vc-start-in { justify-content: flex-start; margin: 0 0 14px; }
   .vc-plus-menu { position: fixed; left: 10px; right: 10px; width: auto; bottom: calc(var(--dock-clear) + 92px); }
-  .vc-jump { bottom: calc(var(--dock-clear) + 104px); }
   .vc-orb { width: 170px; height: 170px; }
 }
 
@@ -726,44 +852,51 @@
 .vc-model-chip { max-width: min(220px, 100%); }
 .vc-model-chip { color: var(--vc-text); }
 .vc-picker { position: relative; min-width: 0; }
-/* T3 Code's chip at the composer's right: "<logo> Opus 5.5 Medium", the model in
-   bold and its effort muted, each half opening its own menu. */
+/* T3 Code's chip at the composer's right: "<logo> Opus 5.5 · Medium", the model in
+   bold and its effort muted, one control. A chat off Full access shows its lock. */
 .vc-box-right { flex: 1; justify-content: flex-end; }
 .vc-model-group { display: flex; align-items: center; min-width: 0; margin-right: 2px; }
-.vc-model-group .vc-model-chip { height: 32px; gap: 6px; padding: 0 4px 0 8px; border-radius: 9px; font-weight: 600; color: var(--text); }
+.vc-model-group .vc-model-chip { height: 32px; gap: 6px; max-width: min(300px, 100%); padding: 0 8px; border-radius: 9px; font-weight: 600; color: var(--text); }
 .vc-model-group .vc-chip-caret { display: none; }
-.vc-traits { position: relative; flex: none; }
-.vc-traits-chip {
-  display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 8px 0 4px; border-radius: 9px;
-  background: none; border: 0; color: var(--vc-faint); font-size: 14px; white-space: nowrap;
-}
-/* No hover fill on either half: the text brightening is the whole affordance. */
+.vc-chip-effort { flex: none; margin-left: -1px; font-weight: 400; color: var(--vc-faint); transition: color .15s; }
+.vc-chip-warn { color: #f5a524; }
+/* No hover fill: the text brightening is the whole affordance. */
 .vc-model-group .vc-model-chip:hover, .vc-model-group .vc-model-chip.on { background: none; }
-.vc-traits-chip:hover, .vc-traits-chip.on { color: var(--vc-soft); }
-.vc-traits-warn { color: #f5a524; }
+.vc-model-group .vc-model-chip:hover .vc-chip-effort, .vc-model-group .vc-model-chip.on .vc-chip-effort { color: var(--vc-soft); }
 
 /* --- model picker (after T3 Code) ------------------------------------------------ */
-/* Where it opens (up or down, and how tall) is measured in ModelPicker
-   (usePopoverPlacement); these are the defaults until it is. */
-.vc-picker-pop {
-  position: absolute; left: -46px; bottom: calc(100% + 10px); z-index: 45;
-  display: grid; grid-template-columns: 64px minmax(0, 1fr);
-  width: min(560px, calc(100vw - 24px)); height: min(440px, 60vh);
-  background: #15171e; border: 1px solid var(--vc-line); border-radius: 18px; overflow: hidden;
+/* Portalled to <body> (outside .vc; its colours are declared with .vc's). Where it
+   opens and how tall it is are set inline by usePopoverPlacement. */
+.vc-picker-pop, .vc-picker-access-menu {
+  color: var(--vc-text);
+  background: var(--bg-2); border: 1px solid var(--vc-line);
   box-shadow: 0 22px 60px #000000a6, 0 2px 8px #0006;
   animation: vc-pop .12s ease-out;
 }
-.vc-picker-rail { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 0; border-right: 1px solid var(--vc-line); overflow-y: auto; scrollbar-width: none; }
+.vc-picker-pop .ti, .vc-picker-access-menu .ti { display: block; flex: none; }
+.vc-picker-pop {
+  position: fixed; z-index: 75;
+  display: grid; grid-template-columns: 64px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "rail main";
+  border-radius: 18px; overflow: hidden;
+}
+/* The reasoning column comes only with the footer (both are the composer's). */
+.vc-picker-pop.has-effort { grid-template-columns: 64px minmax(0, 1fr) 210px; }
+.vc-picker-pop.has-foot { grid-template-rows: minmax(0, 1fr) auto; grid-template-areas: "rail main" "foot foot"; }
+.vc-picker-pop.has-effort.has-foot { grid-template-areas: "rail main effort" "foot foot foot"; }
+.vc-picker-pop.down { animation-name: vc-pop-down; }
+@keyframes vc-pop-down { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+.vc-picker-rail { grid-area: rail; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 0; border-right: 1px solid var(--vc-line); overflow-y: auto; scrollbar-width: none; }
 .vc-picker-rail button {
-  position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px;
+  position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; flex: none;
   background: none; border: 0; color: var(--vc-soft);
 }
 .vc-picker-rail button:hover { background: var(--vc-raise); color: var(--text); }
 .vc-picker-rail button.on { background: var(--vc-raise); color: var(--text); }
 .vc-picker-rail button.on::before { content: ''; position: absolute; left: -10px; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
 .vc-picker-rail button.dim { opacity: .45; }
-.vc-picker-rail-sep { width: 28px; height: 1px; background: var(--vc-line); margin: 2px 0; }
-.vc-picker-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 12px 12px 10px; }
+.vc-picker-rail-sep { width: 28px; height: 1px; background: var(--vc-line); margin: 2px 0; flex: none; }
+.vc-picker-main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 12px 12px 10px; }
 .vc-picker-search {
   display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 8px; margin-bottom: 10px; flex: none;
   border-bottom: 2px solid var(--vc-line); color: var(--vc-faint);
@@ -773,17 +906,19 @@
 .vc-picker-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .vc-picker-row, .vc-picker-legacy {
   display: flex; align-items: center; gap: 10px; width: 100%; min-height: 58px; padding: 8px 10px 8px 14px; border-radius: 12px;
-  background: none; border: 0; color: var(--text); text-align: left; cursor: pointer;
+  background: none; border: 0; color: var(--text); text-align: left; cursor: pointer; flex: none;
 }
-.vc-picker-row.active, .vc-picker-legacy:hover { background: #1e212b; }
-.vc-picker-row.current { background: #232734; }
-.vc-picker-legacy { background: #1a1d26; margin-top: 4px; }
+.vc-picker-row.active, .vc-picker-legacy:hover { background: var(--bg-3); }
+.vc-picker-row.current { background: var(--bg-hover); }
+.vc-picker-legacy { background: color-mix(in srgb, var(--bg-2), var(--bg-3)); margin-top: 4px; }
 .vc-picker-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.vc-picker-row-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-picker-row-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 15px; font-weight: 500; white-space: nowrap; }
+.vc-picker-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vc-picker-check { color: var(--vc-soft); }
 .vc-picker-row-source { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--vc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vc-badge { flex: none; padding: 1px 7px; border-radius: 6px; border: 1px solid #5b8cff80; color: #8fb0ff; font-size: 11.5px; font-weight: 600; }
 .vc-kbd {
-  flex: none; padding: 3px 8px; border-radius: 7px; background: #1f2330; color: var(--vc-faint);
+  flex: none; padding: 3px 8px; border-radius: 7px; background: var(--raise); color: var(--vc-faint);
   font: 12.5px ui-monospace, "SF Mono", Menlo, monospace;
 }
 .vc-star { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: none; border: 0; color: var(--vc-faint); }
@@ -791,61 +926,82 @@
 .vc-star.on { color: #f5a524; }
 .vc-picker-empty { padding: 28px 12px; text-align: center; color: var(--vc-faint); font-size: 14px; }
 
-/* --- thinking effort slider (after ChatGPT) --------------------------------------- */
-.vc-effort-track {
-  --knob: 46px;
-  position: relative; height: var(--knob); border-radius: 999px; background: #2f333e; border: 1px solid #3a3f4c;
-  cursor: pointer; touch-action: none; outline: none;
+/* The current model's reasoning levels (T3 Code's "Reasoning" column). */
+.vc-picker-effort { grid-area: effort; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--vc-line); }
+.vc-picker-effort-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: none;
+  height: 44px; margin: 12px 12px 10px; padding: 0 4px; border-bottom: 2px solid var(--vc-line);
+  font-size: 15px; color: var(--vc-soft);
 }
-.vc-effort-track:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
-.vc-effort-fill {
-  position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: #2f80ff;
-  width: calc(var(--knob) + (100% - var(--knob)) * var(--pos));
-  transition: width .15s ease;
+.vc-picker-effort-head small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--vc-faint); }
+.vc-picker-effort-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 0 10px 10px; }
+.vc-picker-effort-list button, .vc-picker-access-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 8px 10px; border-radius: 10px; flex: none;
+  background: none; border: 0; color: var(--text); text-align: left; font-size: 15px;
 }
-.vc-effort-dot {
-  position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
-  left: calc(var(--knob) / 2 + (100% - var(--knob)) * var(--at)); background: #8a8f9c;
-}
-.vc-effort-dot.lit { background: #cfe0ff; }
-.vc-effort-knob {
-  position: absolute; top: 50%; width: calc(var(--knob) + 8px); height: calc(var(--knob) + 8px); margin-top: calc((var(--knob) + 8px) / -2);
-  left: calc((100% - var(--knob)) * var(--pos) - 4px); border-radius: 50%; background: #fff; box-shadow: 0 2px 8px #0008;
-  transition: left .15s ease; pointer-events: none;
-}
+.vc-picker-effort-list button:hover, .vc-picker-access-menu button:hover { background: var(--bg-3); }
+.vc-picker-effort-list button:focus-visible, .vc-picker-access-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.vc-picker-effort-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-picker-effort-list small { flex: none; font-size: 12.5px; color: var(--vc-faint); }
+.vc-picker-effort-check { visibility: hidden; color: var(--vc-soft); }
+.vc-picker-effort-list button.on .vc-picker-effort-check, .vc-picker-access-menu button.on .vc-picker-effort-check { visibility: visible; }
 
-/* --- reasoning and access menu (T3 Code nightly's traits menu) ---------------------- */
-.vc-traits-pop {
-  position: absolute; right: -4px; bottom: calc(100% + 10px); z-index: 45; width: 300px;
-  padding: 6px; border-radius: 14px;
-  background: #15171e; border: 1px solid var(--vc-line); box-shadow: 0 22px 60px #000000a6, 0 2px 8px #0006;
-  animation: vc-pop .12s ease-out;
+/* Speed on the left, the chat's access on the right. */
+.vc-picker-foot {
+  grid-area: foot; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px; border-top: 1px solid var(--vc-line); background: var(--bg);
 }
-.vc-traits-label { padding: 6px 8px 6px; font-size: 12px; font-weight: 500; color: var(--vc-faint); }
-.vc-traits-pop .vc-effort-track { --knob: 30px; margin: 4px 8px 0; }
-.vc-traits-current { display: flex; flex-direction: column; gap: 2px; padding: 8px 8px 6px; font-size: 14px; color: var(--text); }
-.vc-traits-current small { min-height: 32px; font-size: 12px; line-height: 16px; color: var(--vc-faint); }
-.vc-traits-sep { height: 1px; margin: 4px 2px 2px; background: var(--vc-line); }
-.vc-traits-seg { display: flex; gap: 2px; margin: 0 4px; padding: 2px; border-radius: 9px; background: #ffffff0a; }
-.vc-traits-seg button {
-  flex: 1; display: grid; place-items: center; height: 26px; border-radius: 7px;
-  background: none; border: 0; color: var(--vc-faint);
+.vc-picker-speed { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: #ffffff0a; }
+.vc-picker-speed button {
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 11px; border-radius: 7px;
+  background: none; border: 0; color: var(--vc-faint); font-size: 13.5px;
 }
-.vc-traits-seg button:hover { color: var(--text); background: #ffffff0a; }
-.vc-traits-seg button.on { color: var(--text); background: #ffffff1c; }
-.vc-traits-seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.vc-picker-speed button:hover { color: var(--text); }
+.vc-picker-speed button.on { color: var(--text); background: #ffffff1c; }
+.vc-picker-speed button:focus-visible, .vc-picker-access:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.vc-picker-access {
+  display: inline-flex; align-items: center; gap: 7px; height: 32px; min-width: 0; padding: 0 10px; border-radius: 9px;
+  background: #ffffff0a; border: 1px solid var(--vc-line); color: var(--vc-text); font-size: 13.5px; white-space: nowrap;
+}
+.vc-picker-access span { overflow: hidden; text-overflow: ellipsis; }
+.vc-picker-access:hover, .vc-picker-access.on { background: #ffffff14; color: var(--text); }
+.vc-picker-access.restricted > .ti:first-child { color: #f5a524; }
+.vc-picker-access-menu {
+  position: fixed; z-index: 76; display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  border-radius: 14px; overflow-y: auto;
+}
+.vc-picker-access-menu button { align-items: flex-start; font-size: 14px; }
+.vc-picker-access-menu button > .ti { margin-top: 2px; }
+.vc-picker-access-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vc-picker-access-text small { font-size: 12px; line-height: 16px; color: var(--vc-faint); }
 
+/* A phone: the picker is full width; the reasoning levels become a row under the
+   list and the footer stays at the bottom. */
 @media (max-width: 720px) {
-  .vc-traits-pop { position: fixed; left: 50%; right: auto; transform: translateX(-50%); bottom: calc(var(--dock-clear) + 110px); }
+  .vc-picker-pop, .vc-picker-pop.has-effort { grid-template-columns: 56px minmax(0, 1fr); }
+  .vc-picker-pop.has-effort.has-foot { grid-template-rows: minmax(0, 1fr) auto auto; grid-template-areas: "rail main" "effort effort" "foot foot"; }
+  .vc-picker-rail button { width: 40px; height: 40px; }
+  .vc-picker-main { padding: 8px 10px 6px; }
+  .vc-picker-search { height: 40px; margin-bottom: 6px; }
+  .vc-picker-row { min-height: 52px; }
+  .vc-kbd { display: none; }
+  .vc-picker-effort { flex-direction: row; align-items: center; gap: 8px; border-left: 0; border-top: 1px solid var(--vc-line); padding: 6px 10px; }
+  .vc-picker-effort-head { height: auto; margin: 0; padding: 0; border: 0; font-size: 13px; }
+  .vc-picker-effort-head small { display: none; }
+  .vc-picker-effort-list { flex-direction: row; gap: 4px; padding: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .vc-picker-effort-list button { width: auto; min-height: 34px; padding: 0 10px; font-size: 14px; white-space: nowrap; border: 1px solid transparent; }
+  .vc-picker-effort-list button.on { background: #ffffff14; border-color: var(--vc-line); }
+  .vc-picker-effort-list .vc-picker-effort-check { display: none; }
+  .vc-picker-effort-list small { display: none; }
   .vc-chip { max-width: 150px; padding: 0 8px; }
   .vc-model-chip { max-width: min(150px, 100%); }
-  .vc-model-group .vc-model-chip { max-width: min(130px, 100%); }
+  .vc-model-group .vc-model-chip { max-width: min(190px, 100%); padding: 0 6px; }
 }
 
 /* The empty chat's composer sits mid-page inside the scroller: popovers that open
    upward would be clipped by it, so there they open downward, unclipped. */
 .vc-scroll:has(.vc-empty) { overflow: visible; }
-.vc-empty .vc-traits-pop, .vc-empty .vc-plus-menu, .vc-empty .vc-cmd-menu {
+.vc-empty .vc-plus-menu, .vc-empty .vc-cmd-menu {
   bottom: auto; top: calc(100% + 10px);
 }
 .vc-voice-engine { color: var(--vc-faint); font-size: 12px; text-align: center; margin-top: 4px; }
@@ -855,7 +1011,7 @@
   display: flex; align-items: center; gap: 14px; align-self: stretch; max-width: 560px; min-height: 72px; padding: 12px 16px;
   border-radius: 16px; background: var(--vc-surface); border: 1px solid var(--vc-line); color: var(--text); text-align: left;
 }
-.vc-filecard:hover { background: #1c1f29; border-color: #3a4152; }
+.vc-filecard:hover { background: var(--bg-3); border-color: var(--line-strong); }
 .vc-filecard-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; color: #8fb0ff; background: #5b8cff1f; flex: none; }
 .vc-filecard-text { display: flex; flex-direction: column; min-width: 0; }
 .vc-filecard-name { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -863,7 +1019,20 @@
 
 .vc-split { display: flex; height: 100%; min-height: 0; min-width: 0; }
 .vc-split > .vc:first-child { flex: 1 1 0; min-width: 0; }
-.vc-split.has-artifact > .vc:first-child { flex: 0 0 min(46%, 640px); border-right: 1px solid var(--line); }
+/* With a side panel open (canvas, Files, Browser, Agents) the panel is sized by
+   --vc-side-w, its drag-resizable width (components/ResizeHandle.tsx), set on the
+   panel itself and registered non-inherited (any value, no initial one, so the
+   fallback below still applies when it is unset): a drag restyles the panel, not
+   everything inside it or the chat beside it. Unset, the chat takes min(46%, 640px) as it always did. The panel's
+   basis shrinks before the chat drops under its minimum, so a narrower window
+   squeezes the panel and the saved width comes back when there is room. The two
+   minimums (--chat-min, --side-min) are the shell's, which keeps the page column
+   wide enough for both while it can (shell.css). */
+@property --vc-side-w { syntax: '*'; inherits: false; }
+.vc-split.has-artifact > .vc:first-child { flex: 1 1 0; min-width: min(var(--chat-min, 380px), 55%); border-right: 1px solid var(--line); }
+.vc-split.has-artifact > .vc-artifact { flex: 0 1 var(--vc-side-w, calc(100% - min(46%, 640px))); min-width: min(var(--side-min, 320px), 45%); }
+.vc-split.artifact-wide > .vc-artifact { flex: 1 1 0; }
+.vc-split.artifact-wide > .panel-resize { display: none; }
 .vc-split.has-artifact > .vc:first-child .vc-log, .vc-split.has-artifact > .vc:first-child .vc-composer { max-width: 100%; }
 .vc-split.artifact-wide > .vc:first-child { display: none; }
 .vc.vc-artifact { flex: 1 1 0; min-width: 0; background: var(--bg); animation: vc-fade .15s; }
@@ -874,10 +1043,38 @@
   background: var(--vc-surface); border: 1px solid var(--vc-line); color: var(--text); font-size: 14.5px;
 }
 .vc-art-title span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.vc-art-title:hover { background: #1c1f29; }
+.vc-art-title:hover { background: var(--bg-3); }
 .vc-art-menu { top: calc(100% + 6px); left: 0; width: 340px; max-height: 60vh; overflow-y: auto; }
 .vc-art-actions { display: flex; align-items: center; gap: 4px; flex: none; }
 .vc-art-actions .vc-icon-btn { border: 1px solid var(--vc-line); border-radius: 50%; width: 38px; height: 38px; text-decoration: none; }
+/* The canvas header fits its panel down to the side panel's 320px minimum: the
+   file name gives way first, to an ellipsis inside its pill (never narrower than
+   its icon, nothing spilling out), and the buttons keep their spacing. Narrower,
+   the buttons get smaller; below the panel's minimum Show in Files goes, then
+   Copy. On the Windows desktop app the header also leaves room for the window
+   buttons, so those two go sooner (420 and 380px), and below 340px the pill
+   shows its icon alone. These rules come after the
+   base ones above, which they override at equal specificity. The container is
+   the canvas alone: it contains any fixed child, and the phone's file menu is
+   fixed to a full-screen panel, which is the same frame. */
+.vc-canvas { container: vc-canvas / inline-size; }
+.vc-art-switch { min-width: 45px; }
+.vc-art-title { min-width: 45px; overflow: hidden; }
+.vc-art-title > .ti { flex: none; }
+@container vc-canvas (max-width: 520px) {
+  .vc-art-head { gap: 6px; }
+  .vc-art-switch, .vc-art-title { min-width: 37px; }
+  .vc-art-title { padding: 0 10px; gap: 6px; }
+  .vc-art-actions { gap: 2px; }
+  .vc-art-actions .vc-icon-btn { width: 32px; height: 32px; }
+}
+@container vc-canvas (max-width: 300px) { .vc-art-reveal { display: none !important; } }
+@container vc-canvas (max-width: 260px) { .vc-art-copy { display: none !important; } }
+@container vc-canvas (max-width: 420px) { html[data-desktop="windows"] .vc-art-reveal { display: none !important; } }
+@container vc-canvas (max-width: 380px) { html[data-desktop="windows"] .vc-art-copy { display: none !important; } }
+/* Too narrow for even an ellipsis: the icon alone (the pill's title still names the file). */
+@container vc-canvas (max-width: 250px) { .vc-art-title span { display: none; } }
+@container vc-canvas (max-width: 340px) { html[data-desktop="windows"] .vc-art-title span { display: none; } }
 .vc-art-body { flex: 1; min-height: 0; overflow: auto; }
 .vc-art-doc { max-width: 820px; margin: 0 auto; padding: 20px 36px 60px; font-size: 16px; line-height: 1.7; }
 .vc-art-doc .md h1 { font-size: 1.75em; margin-top: 8px; }
@@ -888,7 +1085,7 @@
 .vc-art-table { padding: 16px 20px 40px; overflow: auto; }
 .vc-art-table table { border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
 .vc-art-table th, .vc-art-table td { border: 1px solid var(--vc-line); padding: 6px 10px; text-align: left; white-space: nowrap; }
-.vc-art-table th { position: sticky; top: 0; background: #1a1d26; font-weight: 600; }
+.vc-art-table th { position: sticky; top: 0; background: var(--bg-2); font-weight: 600; }
 
 @media (max-width: 720px) {
   /* A phone shows the file over the chat, full screen, like ChatGPT's app. */
@@ -900,7 +1097,7 @@
 }
 .vc .md li:has(> input[type=checkbox]) { list-style: none; margin-left: -20px; }
 .vc .md li > input[type=checkbox] { margin: 0 8px 0 0; vertical-align: -1px; accent-color: var(--accent); }
-.vc-picker-lock { flex: none; margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: #1a1d26; color: var(--vc-faint); font-size: 12.5px; line-height: 1.45; }
+.vc-picker-lock { flex: none; margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--bg-3); color: var(--vc-faint); font-size: 12.5px; line-height: 1.45; }
 .vc-usage { display: flex; align-items: center; gap: 4px; margin-right: 4px; }
 .vc-usage-chip {
   display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px;
@@ -908,6 +1105,16 @@
 }
 .vc-usage-chip.low { color: #f0cd72; border-color: #e3b34155; }
 .vc-usage-chip.crit { color: #ff8fa3; border-color: #f0506e66; }
+.vc-usage-num { display: inline-flex; align-items: center; gap: 5px; }
+/* One dot per pooled account: green fine, amber low, red spent or signed out,
+   hollow when switched off, so the count reads without colour too. */
+.vc-usage-dots { display: inline-flex; gap: 2px; }
+.vc-usage-dots i { width: 4px; height: 4px; border-radius: 50%; background: #6fcf97; }
+.vc-usage-dots i.s-low { background: #f0cd72; }
+.vc-usage-dots i.s-limited { background: #ff8fa3; }
+.vc-usage-dots i.s-error { background: transparent; box-shadow: inset 0 0 0 1px #ff8fa3; border-radius: 1px; }
+.vc-usage-dots i.s-disabled { background: transparent; box-shadow: inset 0 0 0 1px var(--vc-faint); }
+.vc-usage.stale .vc-usage-chip { opacity: .6; border-style: dashed; }
 /* Realtime voice has no mic meter (no Web Audio during a call, see realtime.ts):
    the orb breathes while it waits and swells while you talk. */
 .phase-listening .vc-orb-core { animation: vc-orb-idle 3.2s ease-in-out infinite; }
@@ -976,19 +1183,20 @@
 .vc-usage-wrap .vc-usage:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
 .vc-usage-logo { display: inline-flex; flex: none; transform-origin: center; }
 .vc-usage-wrap.expanded .vc-usage .vc-usage-logo { opacity: 0; }
-.vc-usage-wrap.expanded .vc-usage-chip > span:last-child { opacity: 0; transition: opacity .12s; }
+.vc-usage-wrap.expanded .vc-usage-chip > .vc-usage-num, .vc-usage-wrap.expanded .vc-usage-more { opacity: 0; transition: opacity .12s; }
 .vc-usage-panel {
   position: absolute; top: -8px; right: -8px; z-index: 40;
-  display: grid; grid-template-columns: repeat(var(--cols), 200px); gap: 0;
+  display: grid; grid-template-columns: repeat(var(--cols), 236px); gap: 0;
   padding: 12px 6px 10px; border-radius: 14px;
-  background: #171a23; border: 1px solid var(--vc-line); box-shadow: 0 18px 50px -12px rgba(0, 0, 0, .65);
+  background: var(--bg-2); border: 1px solid var(--vc-line); box-shadow: 0 18px 50px -12px rgba(0, 0, 0, .65);
 }
 .vc-usage-col { display: flex; flex-direction: column; gap: 10px; padding: 2px 10px; min-width: 0; }
 .vc-usage-col + .vc-usage-col { border-left: 1px solid color-mix(in srgb, var(--vc-line) 70%, transparent); }
 .vc-usage-col header { display: flex; align-items: center; gap: 9px; height: 30px; }
 .vc-usage-name { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
 .vc-usage-name strong { font-size: 13px; font-weight: 600; color: var(--text); }
-.vc-usage-name small { font-size: 11.5px; color: var(--vc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-usage-name small { font-size: 11.5px; color: var(--vc-faint); line-height: 1.3; }
+.vc-usage-col header { min-height: 30px; height: auto; }
 .vc-usage-meter { display: flex; flex-direction: column; gap: 5px; animation: vc-usage-rise .32s var(--d, 0ms) both cubic-bezier(.2, .8, .2, 1); }
 .vc-usage-meter-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--vc-soft); }
 .vc-usage-meter-top > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1004,7 +1212,36 @@
 .vc-usage-meter.crit .vc-usage-pct { color: #ff8fa3; }
 .vc-usage-reset { font-size: 11.5px; color: var(--vc-faint); }
 .vc-usage-col footer { margin-top: auto; padding-top: 2px; font-size: 11.5px; color: var(--vc-faint); }
-.vc-usage-wrap.closing .vc-usage-meter, .vc-usage-wrap.closing .vc-usage-col footer, .vc-usage-wrap.closing .vc-usage-name { opacity: 0; transition: opacity .15s; }
+/* One row per account: name and state, then the short and weekly windows side by side. */
+.vc-usage-acct { display: flex; flex-direction: column; gap: 5px; animation: vc-usage-rise .32s var(--d, 0ms) both cubic-bezier(.2, .8, .2, 1); }
+.vc-usage-acct + .vc-usage-acct { padding-top: 8px; border-top: 1px solid color-mix(in srgb, var(--vc-line) 55%, transparent); }
+.vc-usage-acct-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.vc-usage-acct-name { min-width: 0; display: inline-flex; align-items: center; gap: 6px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-usage-acct-state { flex: none; font-size: 11.5px; color: var(--vc-faint); }
+.vc-usage-acct.low .vc-usage-acct-state { color: #f0cd72; }
+.vc-usage-acct.crit .vc-usage-acct-state { color: #ff8fa3; }
+.vc-usage-acct.off { opacity: .55; }
+.vc-usage-acct.stale { opacity: .7; }
+.vc-usage-live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #6fcf97; box-shadow: 0 0 0 3px #6fcf9722; }
+/* One window per line, each bar the section's full width. Each mini is a subgrid
+   of the three tracks, so every bar starts where the one above it does. */
+.vc-usage-minis { display: grid; grid-template-columns: auto 1fr auto; column-gap: 8px; row-gap: 6px; }
+.vc-usage-mini { display: grid; grid-column: 1 / -1; grid-template-columns: auto 1fr auto; grid-template-columns: subgrid; align-items: center; gap: 8px; font-size: 11px; color: var(--vc-faint); font-variant-numeric: tabular-nums; }
+.vc-usage-mini-k { min-width: 28px; }
+.vc-usage-mini .vc-usage-bar { height: 4px; }
+.vc-usage-mini-v { color: var(--vc-soft); min-width: 28px; text-align: right; }
+.vc-usage-mini.low .vc-usage-bar i { background: #f0cd72; }
+.vc-usage-mini.low .vc-usage-mini-v { color: #f0cd72; }
+.vc-usage-mini.crit .vc-usage-bar i { background: #ff8fa3; }
+.vc-usage-mini.crit .vc-usage-mini-v { color: #ff8fa3; }
+.vc-usage-banner, .vc-usage-manage { grid-column: 1 / -1; margin: 0 10px; }
+.vc-usage-banner { margin-bottom: 10px; padding: 7px 10px; border-radius: 8px; font-size: 12px; color: #f0cd72; background: #e3b3411a; }
+.vc-usage-manage {
+  margin-top: 10px; padding: 7px 0 0; border: 0; border-top: 1px solid color-mix(in srgb, var(--vc-line) 70%, transparent);
+  background: none; color: var(--vc-soft); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.vc-usage-manage:hover, .vc-usage-manage:focus-visible { color: var(--text); }
+.vc-usage-wrap.closing .vc-usage-meter, .vc-usage-wrap.closing .vc-usage-acct, .vc-usage-wrap.closing .vc-usage-col footer, .vc-usage-wrap.closing .vc-usage-name { opacity: 0; transition: opacity .15s; }
 @keyframes vc-usage-fill { from { transform: scaleX(0); } }
 @keyframes vc-usage-rise { from { opacity: 0; transform: translateY(4px); } }
 /* In the rail (Shell.tsx) the pills stack, logo over number, and the panel
@@ -1013,7 +1250,7 @@
 .vc-usage-wrap {
   --vc-soft: color-mix(in srgb, var(--text) 62%, transparent);
   --vc-faint: color-mix(in srgb, var(--text) 40%, transparent);
-  --vc-line: #2a2f3c;
+  --vc-line: var(--line-2);
 }
 .vc-usage-wrap.rail { margin-right: 0; }
 .vc-usage-wrap.rail .vc-usage { flex-direction: column; gap: 4px; margin-right: 0; border-radius: 12px; }
@@ -1021,11 +1258,21 @@
   flex-direction: column; justify-content: center; gap: 3px; width: 44px; height: 42px; padding: 0;
   border-radius: 12px; font-size: 11px; cursor: pointer;
 }
+.vc-usage-wrap.rail .vc-usage-num { flex-direction: column; gap: 3px; }
+.vc-usage-wrap.rail .vc-usage-chip.pooled { height: 48px; }
 .vc-usage-wrap.rail .vc-usage-panel { top: auto; right: auto; bottom: -8px; left: -8px; z-index: 55; }
-/* A phone shows one pill; the panel stacks its accounts in rows instead. */
+/* A phone, or a chat column too narrow for the grid (UsageChips sets .stacked and
+   --usage-room, the column's width left of the pills): one provider under another. */
+.vc-usage-panel.stacked {
+  grid-template-columns: 1fr; width: min(300px, var(--usage-room, 300px)); padding: 10px 4px;
+  max-height: calc(100dvh - 84px); overflow-y: auto; overscroll-behavior: contain;
+  .vc-usage-col { gap: 7px; }
+  .vc-usage-col footer { padding-top: 0; }
+  .vc-usage-col + .vc-usage-col { border-left: 0; border-top: 1px solid color-mix(in srgb, var(--vc-line) 70%, transparent); padding-top: 10px; margin-top: 8px; }
+}
 @media (max-width: 720px) {
   .vc-usage-panel {
-    grid-template-columns: 1fr; width: min(300px, calc(100vw - 24px)); padding: 10px 4px;
+    grid-template-columns: 1fr; width: min(300px, calc(100vw - 24px), var(--usage-room, 300px)); padding: 10px 4px;
     max-height: calc(100dvh - 84px); overflow-y: auto; overscroll-behavior: contain;
   }
   .vc-usage-col { gap: 7px; }
@@ -1033,7 +1280,7 @@
   .vc-usage-col + .vc-usage-col { border-left: 0; border-top: 1px solid color-mix(in srgb, var(--vc-line) 70%, transparent); padding-top: 10px; margin-top: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .vc-usage-meter, .vc-usage-bar i { animation: none; }
+  .vc-usage-meter, .vc-usage-acct, .vc-usage-bar i { animation: none; }
 }
 
 /* The chat's browser (BrowserPanel): the page the agent has open, beside the
@@ -1048,15 +1295,17 @@
 .vc-browser-live i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: vc-breathe 1.4s ease-in-out infinite; }
 .vc-browser-body { display: flex; padding: 4px 16px 20px; }
 .vc-browser-frame { margin: 0 auto; width: 100%; max-width: 1100px; display: flex; flex-direction: column; gap: 8px; }
-.vc-browser-frame img {
+.vc-browser-screen { position: relative; touch-action: none; }
+.vc-browser-screen > img, .vc-browser-screen > canvas {
   display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--vc-line); background: #fff;
   box-shadow: 0 10px 30px -14px rgba(0, 0, 0, .6); transition: box-shadow .3s;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
-.vc-browser-frame.live img { box-shadow: 0 0 0 1px color-mix(in srgb, #6fcf97 45%, transparent), 0 10px 30px -14px rgba(0, 0, 0, .6); }
+.vc-browser-screen > [hidden] { display: none; }
+.vc-browser-frame.live .vc-browser-screen > * { box-shadow: 0 0 0 1px color-mix(in srgb, #6fcf97 45%, transparent), 0 10px 30px -14px rgba(0, 0, 0, .6); }
 .vc-browser-frame { position: relative; }
-.vc-browser-frame img { user-select: none; -webkit-user-select: none; }
-.vc-browser-frame.yours img { cursor: default; }
-.vc-browser-frame:not(.yours) img { cursor: not-allowed; }
+.vc-browser-frame.yours .vc-browser-screen { cursor: default; }
+.vc-browser-frame:not(.yours) .vc-browser-screen { cursor: not-allowed; touch-action: auto; }
 .vc-browser-body { flex-direction: column; gap: 12px; }
 .vc-browser-handoff {
   margin: 0 auto; width: 100%; max-width: 1100px; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px;
@@ -1067,22 +1316,11 @@
 .vc-browser-handoff button { height: 30px; padding: 0 14px; border-radius: 999px; font-size: 13px; cursor: pointer; flex: none; }
 .vc-browser-handoff-skip { border: 1px solid var(--vc-line); background: none; color: var(--vc-soft); }
 .vc-browser-handoff-done { border: 0; background: #7aa2ff; color: #0b1020; font-weight: 600; }
-.vc-browser-chip.waiting { border-color: color-mix(in srgb, #7aa2ff 55%, transparent); color: #b9ccff; }
-.vc-browser-frame.typing img { box-shadow: 0 0 0 2px color-mix(in srgb, #7aa2ff 60%, transparent), 0 10px 30px -14px rgba(0, 0, 0, .6); }
+.vc-browser-frame.typing .vc-browser-screen > * { box-shadow: 0 0 0 2px color-mix(in srgb, #7aa2ff 60%, transparent), 0 10px 30px -14px rgba(0, 0, 0, .6); }
 /* Catches the owner's keys for the page; off-screen but focusable, 16px so iOS does not zoom. */
 .vc-browser-keys { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; font-size: 16px; pointer-events: none; }
 .vc-browser-frame figcaption { font-size: 12.5px; color: var(--vc-faint); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.vc-browser-chip {
-  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px 0 3px; margin-right: 4px; border-radius: 999px;
-  border: 1px solid var(--vc-line); background: none; color: var(--vc-soft); font-size: 12px; max-width: 220px;
-}
-.vc-browser-chip:hover { background: var(--vc-raise); color: var(--text); }
-.vc-browser-chip img { width: 30px; height: 20px; object-fit: cover; object-position: top; border-radius: 999px; flex: none; }
-.vc-browser-chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.vc-browser-chip.live { border-color: color-mix(in srgb, #6fcf97 45%, transparent); color: #a7e3c0; }
 @media (max-width: 720px) {
-  .vc-browser-chip { padding: 0 3px; }
-  .vc-browser-chip span { display: none; }
   .vc-browser-body { padding: 4px 10px calc(20px + env(safe-area-inset-bottom)); }
 }
 /* Files (FilesPanel): the chat's folder on the box as a tree, T3 Code style. */
@@ -1188,21 +1426,13 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-agent-row-state { flex: none; font-size: 11.5px; color: var(--vc-faint); }
 .vc-agent-row.error .vc-agent-row-state { color: #ff7a8f; }
 .vc-agent-row-now { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; color: var(--vc-soft); }
-.vc-agents-chip {
-  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; margin-right: 4px; border-radius: 999px;
-  border: 1px solid var(--vc-line); background: none; color: var(--vc-soft); font-size: 12px;
-}
-.vc-agents-chip:hover { background: var(--vc-raise); color: var(--text); }
-.vc-agents-chip.live { border-color: color-mix(in srgb, #6fa8ff 45%, transparent); color: #b7d2ff; }
 @media (max-width: 720px) {
-  .vc-agents-chip span { display: none; }
-  .vc-agents-chip { padding: 0 7px; }
   .vc-agents-body { padding: 4px 10px calc(24px + env(safe-area-inset-bottom)); }
   .vc-agent-log { padding-left: 12px; }
 }
 /* Images in replies (shared screenshots): fit the column, framed like the browser's. */
 .vc .md img { display: block; max-width: 100%; height: auto; margin: 10px 0; border-radius: 10px; border: 1px solid var(--vc-line); }
-.vc .md img[data-pending] { width: 100%; aspect-ratio: 16 / 10; background: linear-gradient(100deg, #1a1d26 30%, #222634 50%, #1a1d26 70%) 0 0 / 200% 100%; animation: vc-pending-shot 1.4s linear infinite; }
+.vc .md img[data-pending] { width: 100%; aspect-ratio: 16 / 10; background: linear-gradient(100deg, var(--bg-2) 30%, var(--bg-3) 50%, var(--bg-2) 70%) 0 0 / 200% 100%; animation: vc-pending-shot 1.4s linear infinite; }
 @keyframes vc-pending-shot { to { background-position: -200% 0; } }
 /* A row of found pictures (Markdown.tsx › layoutImages): cards that wrap to the
    column's width, three or four across on a desktop, two on a phone. */
@@ -1312,7 +1542,7 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 }
 .vc-proj-drop strong { color: var(--text); font-weight: 500; font-size: 14.5px; }
 .vc-proj-drop span { max-width: 440px; }
-.vc-proj-drop:hover { border-color: #3a4152; color: var(--text); }
+.vc-proj-drop:hover { border-color: var(--line-strong); color: var(--text); }
 .vc-proj-dropping {
   position: absolute; inset: 0; display: grid; place-items: center; border-radius: 14px;
   background: color-mix(in srgb, var(--bg) 82%, transparent); border: 2px dashed var(--vc-soft); color: var(--text); font-size: 15px; pointer-events: none;
@@ -1323,7 +1553,7 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
   width: 100%; box-sizing: border-box; padding: 12px 14px; border-radius: 12px; resize: vertical;
   background: var(--vc-surface); border: 1px solid var(--vc-line); color: var(--text); font: inherit; font-size: 14px; line-height: 1.55; outline: none;
 }
-.vc-proj-text textarea:focus, .vc-proj-field input:focus { border-color: #3a4152; }
+.vc-proj-text textarea:focus, .vc-proj-field input:focus { border-color: var(--line-strong); }
 .vc-proj-text-bar { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 
 .vc-proj-settings { display: flex; flex-direction: column; gap: 22px; padding-top: 4px; }
@@ -1340,7 +1570,7 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-proj-picture-now { display: inline-flex; align-items: center; gap: 6px; }
 .vc-proj-favicon { display: inline-flex; gap: 6px; }
 .vc-proj-favicon input { width: 180px; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--vc-line); background: none; color: var(--text); font: inherit; font-size: 13px; }
-.vc-proj-model { display: flex; }
+.vc-proj-model { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .vc-proj-model .vc-model-trigger { border: 1px solid var(--vc-line); }
 
 @media (max-width: 720px) {
@@ -1363,7 +1593,8 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-members { display: inline-flex; align-items: center; gap: 2px; }
 .vc-member { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: var(--bg-3); color: color-mix(in srgb, var(--text) 80%, transparent); border: 0; cursor: pointer; }
 .vc-member:hover { color: var(--text); }
-.vc-members-pop { position: absolute; top: 46px; right: 12px; z-index: 30; width: min(420px, calc(100vw - 24px)); }
+/* Sized by the chat column, not the window: beside a side panel the column can be far narrower. */
+.vc-members-pop { position: absolute; top: 46px; right: 12px; z-index: 30; width: min(420px, calc(100% - 24px)); }
 .vc-totem-prop { margin: 10px 0 4px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--vc-line); background: var(--vc-surface); max-width: 560px; }
 .vc-totem-prop-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--vc-soft); }
 .vc-totem-prop-summary { margin-top: 4px; font-size: 14.5px; color: var(--text); line-height: 1.45; }
@@ -1373,6 +1604,15 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-totem-prop-actions { display: flex; gap: 6px; margin-top: 10px; }
 .vc-totem-prop-done { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 12.5px; color: var(--vc-faint); }
 .vc-totem-prop.accepted { border-color: color-mix(in srgb, #4fd18b 30%, var(--vc-line)); }
+/* The PR card from the change-totem flow (ChangeCard.tsx). */
+.vc-change .vc-totem-prop-actions a { display: inline-flex; align-items: center; gap: 4px; text-decoration: none; }
+.vc-change .vc-totem-prop-detail code { font-size: 12px; }
+.vc-change-ci.success { color: #4fd18b; }
+.vc-change-ci.failure { color: var(--red); }
+.vc-change-warn { display: flex; align-items: flex-start; gap: 6px; color: #e8b04b; }
+.vc-change-warn svg { flex: none; margin-top: 2px; }
+.vc-change.success { border-color: color-mix(in srgb, #4fd18b 30%, var(--vc-line)); }
+.vc-change.failure { border-color: color-mix(in srgb, var(--red) 35%, var(--vc-line)); }
 
 /* --- folders (projects inside a project) ------------------------------------- */
 .vc-folder { border-radius: 9px; }
@@ -1406,10 +1646,10 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-runs, .vc-runs-pill {
   --vc-soft: color-mix(in srgb, var(--text) 62%, transparent);
   --vc-faint: color-mix(in srgb, var(--text) 40%, transparent);
-  --vc-raise: #1f2330;
-  --vc-line: #2a2f3c;
+  --vc-raise: var(--raise);
+  --vc-line: var(--line-2);
   position: fixed; right: 22px; bottom: 76px; z-index: 47;
-  background: #171a22; border: 1px solid var(--vc-line); color: var(--text);
+  background: var(--surface); border: 1px solid var(--vc-line); color: var(--text);
   box-shadow: 0 18px 50px #0000008c;
   transition: right .16s ease;
 }
@@ -1615,4 +1855,11 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-approval-outcome { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vc-approval.settled.approved .vc-approval-icon { color: var(--green); }
 .vc-approval.settled.declined .vc-approval-icon, .vc-approval.settled.cancelled .vc-approval-icon { color: var(--red); }
-@media (max-width: 640px) { .vc-approval-detail, .vc-approval-reason, .vc-approval-actions { margin-left: 0; } }
+/* An inbox proposal the agent staged (InboxCardRow.tsx): the approval box, with the Inbox's details and a note. */
+.vc-inbox-warn { color: var(--red); }
+.vc-inbox-disclose { display: inline-flex; align-items: center; gap: 4px; margin: 6px 0 0 23px; padding: 0; border: 0; background: none; color: var(--vc-soft); font: inherit; font-size: 12.5px; cursor: pointer; }
+.vc-inbox-disclose svg { transition: transform .15s; }
+.vc-inbox-disclose.open svg { transform: rotate(90deg); }
+.vc-inbox-details { margin: 6px 0 0 23px; }
+.vc-inbox-note { display: block; box-sizing: border-box; width: calc(100% - 23px); margin: 8px 0 0 23px; min-height: 30px; padding: 6px 8px; resize: vertical; border-radius: 8px; border: 1px solid var(--vc-line); background: transparent; color: var(--text); font: inherit; font-size: 12.5px; }
+@media (max-width: 640px) { .vc-approval-detail, .vc-approval-reason, .vc-approval-actions, .vc-inbox-disclose, .vc-inbox-details { margin-left: 0; } .vc-inbox-note { margin-left: 0; width: 100%; } }

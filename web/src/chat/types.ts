@@ -90,6 +90,20 @@ export interface TotemProposalPart {
   instructions?: string
   status: 'pending' | 'accepted' | 'dismissed'
 }
+/** A pull request the change-totem flow opened (dev/change.mjs → prCard). The owner merges it on GitHub. */
+export interface ChangePart {
+  type: 'change-pr'
+  id: string
+  url: string
+  number: number
+  title: string
+  branch: string
+  head: string
+  files: number
+  checks: { state: 'none' | 'pending' | 'success' | 'failure'; passed: number; failed: number; pending: number }
+  warnings: string[]
+  createdAt: number
+}
 /** Something the owner sent while the reply was still running. `live`: taken into the running turn; `restart`: the agent was interrupted and resumed with it. */
 export interface SteerPart { type: 'steer'; id: string; text: string; via: 'live' | 'restart'; createdAt: number; attachments?: Attachment[] }
 
@@ -152,7 +166,30 @@ export interface ApprovalPart {
   askedAt?: number
   decidedAt?: number
 }
-export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | SteerPart | QuestionsPart | ApprovalPart
+/**
+ * An inbox proposal this reply staged (chat/inbox-outcome.mjs on the bridge): the
+ * approval card. It outlives the run; the owner decides it here or in the Inbox,
+ * and the outcome comes back to the chat as his message (`ChatMessage.inbox`).
+ */
+export type InboxCardStatus = 'pending' | 'accepted' | 'denied' | 'draft' | 'uncertain'
+export interface InboxPart {
+  type: 'inbox'
+  id: string
+  kind: string
+  title: string
+  status: InboxCardStatus
+  note?: string
+  result?: string
+  stagedAt?: number
+  decidedAt?: number
+}
+/**
+ * A page the agent rendered inline with `html_render` (chat/visuals.mjs on the
+ * bridge): a chart or visual saved as an upload. `url` is the signed address the
+ * bridge adds on the way out; it serves the page sandboxed.
+ */
+export interface VisualPart { type: 'visual'; id: string; uploadId: string; title: string; height: number; url?: string }
+export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | ChangePart | SteerPart | QuestionsPart | ApprovalPart | InboxPart | VisualPart
 
 export interface ChatMessage {
   id: string
@@ -180,6 +217,8 @@ export interface ChatMessage {
   stats?: TurnStatsData
   /** A totem's scheduled run, posted to its chat. */
   run?: { trigger: string; status: string; notified: boolean }
+  /** The owner's decision on, or reply about, an inbox proposal (the bridge wrote this message). */
+  inbox?: { id: string; status: InboxCardStatus }
   /** A message the bridge never received (offline, dropped connection). Kept locally with Retry. */
   unsent?: boolean
   sendError?: string
@@ -204,7 +243,7 @@ export interface ModelSettings {
   context: string
   /** Set only on settings saved under the retired Auto/Instant/Thinking presets (see `fromPreset`). */
   preset?: string
-  /** What the agent may do without asking (chat/ComposerTraits.tsx). Unset = Full access. */
+  /** What the agent may do without asking (chat/traits.ts, set in the composer's model picker). Unset = Full access. */
   access?: Access
 }
 
@@ -351,6 +390,8 @@ export type StreamEvent =
   | { type: 'steer'; steer: Omit<SteerPart, 'type'>; seq: number }
   | { type: 'questions'; questions: Partial<QuestionsPart> & { id: string }; seq: number }
   | { type: 'approval'; approval: Partial<ApprovalPart> & { id: string }; seq: number }
+  | { type: 'inbox'; inbox: Partial<InboxPart> & { id: string }; seq: number }
+  | { type: 'visual'; visual: { id: string; uploadId: string; title: string; height: number; url?: string }; seq: number }
   | { type: 'activity'; text: string; seq: number }
   | { type: 'title'; title: string; icon?: string; seq: number }
   | { type: 'done'; message: ChatMessage; seq: number }

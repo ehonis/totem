@@ -45,8 +45,9 @@ test('the dashboard decides as the owner; the rest maps onto the service', async
   assert.equal(id, 'r1');
   assert.deepEqual(input, { decision: 'accepted' });
   assert.equal(context.via, OWNER_VIA);
-  // Whoever holds the bridge secret can decide. The log files it under the owner (a
-  // known actor, not `unknown`) and keeps how it was authenticated beside it.
+  // Past the approval gate (auth/approval-routes.mjs, which refuses the bearer alone)
+  // the decision is the owner's. The log files it under the owner (a known actor, not
+  // `unknown`) and keeps how it was authenticated beside it.
   assert.deepEqual([context.actor, context.auth], [OWNER_ACTOR, 'bearer']);
   assert.equal(normalizeActor(context.actor), OWNER_ACTOR);
 
@@ -60,4 +61,24 @@ test('the dashboard decides as the owner; the rest maps onto the service', async
   assert.equal(res.body.error.code, 'REC_NOT_ACCEPTED');
 
   assert.equal(await handle(request('GET', '/api/lists'), response()), false);
+});
+
+test('a record is the owner\'s only with ownerProof; the bearer alone records as an agent, so the declined hold applies', async () => {
+  const seen = [];
+  const service = {
+    async record(input, context) { seen.push([input, context]); return { rec: { id: 'r1' }, declinedSimilar: [] }; },
+  };
+  let proof = false;
+  const handle = createRecHttpHandler({ service, authMethod: () => 'bearer', ownerProof: async () => proof });
+  await handle(request('POST', '/api/recs', { title: 'Buy the standing desk' }), response());
+  const [agentInput, agentContext] = seen.pop();
+  assert.equal(agentInput.source, 'api');
+  assert.equal(agentContext.via, undefined);
+  assert.equal(agentContext.actor, 'agent');
+  assert.equal(agentContext.auth, 'bearer');
+  proof = true;
+  await handle(request('POST', '/api/recs', { title: 'Buy the standing desk' }), response());
+  const [ownerInput, ownerContext] = seen.pop();
+  assert.equal(ownerInput.source, 'owner');
+  assert.equal(ownerContext.via, OWNER_VIA);
 });

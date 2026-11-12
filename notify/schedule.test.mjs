@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { localParts, zonedToUtc } from '../jobs/schedule.mjs'
 import {
   normalizeQuietHours, normalizePlanSettings, inQuietHours, nextAllowedTime, applyQuietHours,
-  spaceOut, deliveryState, lateSuffix, resolveTimeOn, dedupeKey, dayKey, DEFAULT_SLOTS,
+  spaceOut, deliveryState, resolveTimeOn, dedupeKey, dayKey, DEFAULT_SLOTS,
   DEFAULT_PLAN_SETTINGS,
 } from './schedule.mjs'
 
@@ -135,12 +135,6 @@ test('deliveryState distinguishes pending, due, and too stale to bother', () => 
   assert.equal(deliveryState(due, due + grace, grace), 'due')
   assert.equal(deliveryState(due, due + grace + 1, grace), 'missed')
   assert.equal(deliveryState(NaN, due, grace), 'unscheduled')
-})
-
-test('a late delivery says when it was for, and a prompt one does not', () => {
-  const due = at('2026-09-11 15:00')
-  assert.equal(lateSuffix(due, due + 60_000, TZ), '')
-  assert.equal(lateSuffix(due, due + 20 * 60_000, TZ), 'was due 3:00 PM')
 })
 
 test('plan settings clamp rather than reject', () => {

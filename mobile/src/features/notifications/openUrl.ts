@@ -47,8 +47,7 @@ function go(dest: Destination) {
       router.navigate({ pathname: '/inbox', params: dest.focus ? { focus: dest.focus } : {} })
       return
     case 'productivity': return navigateTo({ tab: 'productivity', app: dest.app })
-    case 'settings': return navigateTo({ tab: 'settings', sub: dest.pane })
-    case 'usage': return navigateTo({ tab: 'settings', sub: 'providers', hash: 'usage' })
+    case 'settings': return navigateTo({ tab: 'settings', sub: dest.pane, hash: dest.row })
   }
 }
 

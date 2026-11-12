@@ -9,47 +9,6 @@ function read(path) {
   return readFileSync(join(ROOT, path), 'utf8');
 }
 
-test('active agent and shipped skill prompts use Totem tasks rather than Todoist', () => {
-  const bridge = read('bridge.mjs');
-  const activeForbidden = [
-    'Use Todoist for future commitments',
-    'create Todoist tasks for todo-type items',
-    'When creating a Todoist task',
-    'todoist__add-tasks',
-    'todoist__find-tasks',
-    'Create one or more Todoist tasks from this request',
-    'Creates a Todoist task in',
-    'confirmed ${today} → Todoist',
-    "todo: 'Todoist'",
-  ];
-  for (const phrase of activeForbidden) {
-    assert.equal(bridge.includes(phrase), false, `bridge still contains active Todoist task instruction: ${phrase}`);
-  }
-  assert.match(bridge, /tasks__create_task/);
-  assert.match(bridge, /syncTarget/);
-
-  for (const path of [
-    'skills/seeds/daily-brief/SKILL.md',
-    'skills/seeds/journal-ingest/SKILL.md',
-    'skills/seeds/plaud-action-items-ingest/SKILL.md',
-    'skills/seeds/todays-tasks/SKILL.md',
-  ]) {
-    const contents = read(path);
-    assert.doesNotMatch(contents, /Todoist|todoist__/i, `${path} still instructs Todoist use`);
-  }
-});
-
-test('Plaud proposal prompts no longer route future Work tasks', () => {
-  const contents = read('skills/seeds/plaud-action-items-ingest/SKILL.md');
-  assert.doesNotMatch(contents, /project:\s*Work/i);
-  assert.match(contents, /Personal/);
-  // The shipped seed is generic; venture routing lives in an opt-in example.
-  assert.doesNotMatch(contents, /venture:\s*[A-Z]/);
-  const example = read('examples/skills/plaud-action-items-ingest-ventures/SKILL.md');
-  assert.doesNotMatch(example, /project:\s*Work/i);
-  assert.match(example, /Acme/);
-});
-
 test('inbox task acceptance crosses the shared command boundary', () => {
   const bridge = read('bridge.mjs');
   const start = bridge.indexOf('async function actionInboxItem');
@@ -59,6 +18,12 @@ test('inbox task acceptance crosses the shared command boundary', () => {
   const body = bridge.slice(start, end);
   assert.match(body, /todoCommands\.create/);
   assert.doesNotMatch(body, /\bcreateTodo\s*\(|\bghIssueCreate\s*\(/);
+  // An accepted github proposal files its issue and makes no task: the connector that
+  // turned issues into tasks is gone.
+  const github = body.slice(body.indexOf('if (isGithubKind(item.kind))'));
+  const branch = github.slice(0, github.indexOf('\n  }\n'));
+  assert.match(branch, /assertIssueRepo\(issue\.repo\)\s*\n\s*dispatching\(\)\s*\n\s*const filed = await inboxIssueFiler\.file\(issue\)/, 'the repo is checked before dispatching');
+  assert.doesNotMatch(github.slice(0, github.indexOf('\n  }\n')), /todoCommands|todoCommandFromInboxProposal/);
   const mutationMap = bridge.slice(
     bridge.indexOf('const MCP_MUTATION_ACTIONS'),
     bridge.indexOf('function logMcpMutation'),
@@ -66,22 +31,38 @@ test('inbox task acceptance crosses the shared command boundary', () => {
   assert.doesNotMatch(mutationMap, /totem_(?:create|update)_task/);
 });
 
-test('bridge wires the real GitHub task connector and a 15-minute sync job', () => {
+test('the GitHub task connector is gone and its job id is retired, not left to fail', () => {
   const bridge = read('bridge.mjs');
-  assert.match(bridge, /createGitHubClient/);
-  assert.match(bridge, /createGitHubConnector/);
-  assert.match(bridge, /github:\s*githubTodoConnector/);
-  assert.match(bridge, /'github-todos-sync'[\s\S]*?everyMinutes:\s*15/);
-  assert.match(bridge, /'github-todos-sync':\s*async[\s\S]*?githubTodoConnector\.reconcile/);
+  assert.doesNotMatch(bridge, /createGitHubConnector|createGitHubAppClient|githubTodoConnector|GITHUB_APP_/);
+  const seeds = bridge.slice(bridge.indexOf('const JOB_RUNNER_DEFS = {'), bridge.indexOf('const todoDatabase'));
+  assert.doesNotMatch(seeds, /'github-todos-sync'/, 'no seed or runner definition');
+  const runners = bridge.slice(bridge.indexOf('const JOB_RUNNERS = {'));
+  assert.doesNotMatch(runners.slice(0, runners.indexOf('\n}\n')), /'github-todos-sync'/, 'no runner code');
+  assert.match(bridge, /retiredIds:\s*\[[^\]]*'github-todos-sync'/);
+  for (const file of ['todos/connectors/github-sync.mjs', 'todos/connectors/github-client.mjs', 'todos/connectors/github-app-client.mjs', 'todos/connectors/github-policy.mjs']) {
+    assert.throws(() => read(file), /ENOENT/, `${file} should be removed`);
+  }
 });
 
-test('bridge wires the credential-gated Action Items connector and 15-minute sync job', () => {
+test('no agent-facing text offers to sync a task to GitHub', () => {
+  for (const file of ['bridge.mjs', 'mcp-gateway.mjs', 'todos/mcp.mjs']) {
+    const text = read(file);
+    assert.doesNotMatch(text, /syncTarget[^.]{0,40}\bgithub\b|sync: github/i, file);
+  }
+});
+
+test('bridge serves the task sheet read-only, with no sync connector or job', () => {
   const bridge = read('bridge.mjs');
-  assert.match(bridge, /createGoogleSheetsClient/);
-  assert.match(bridge, /createTaskSheetConnector/);
-  assert.match(bridge, /sheet:\s*sheetTodoConnector/);
-  assert.match(bridge, /'task-sheet-sync'[\s\S]*?everyMinutes:\s*15/);
-  assert.match(bridge, /'task-sheet-sync':\s*async[\s\S]*?sheetTodoConnector\.reconcile/);
+  assert.doesNotMatch(bridge, /createGoogleSheetsClient|createTaskSheetConnector|sheetTodoConnector|GOOGLE_SHEETS_CREDENTIALS_FILE/);
+  assert.doesNotMatch(bridge, /runner: 'task-sheet-sync'|'task-sheet-sync': async/);
+  assert.match(bridge, /retiredIds: \[[^\]]*'task-sheet-sync'/);
+  // The feed is handed Drive's reads and nothing else.
+  const start = bridge.indexOf('const taskSheetFeed = createTaskSheetFeed({');
+  const block = bridge.slice(start, bridge.indexOf('\n})', start));
+  assert.ok(start > 0);
+  assert.deepEqual([...block.matchAll(/^    (\w+):/gm)].map(m => m[1]), ['configured', 'accountLabels', 'requireAccount', 'sheetInfo', 'sheetRead']);
+  // GET /api/todos/sheet is the task routes' (todos/http.mjs), handed the feed.
+  assert.match(bridge, /createTodoHttpHandler\(\{ service: todoService, commands: todoCommands, sheetFeed: taskSheetFeed[,} ]/);
 });
 
 test('runtime exposes no Todoist path and schedules local task maintenance daily', () => {

@@ -14,6 +14,11 @@ const CODEX_LOGIN = 'chatgpt-codex-connector'
 const DAY_MS = 86_400_000
 const SLICE_DAYS = 14
 const FAILED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required'])
+// Issues are read newest-updated first, 100 a page, through GraphQL, which
+// lists issues only (REST's issue listings mix PRs in, and a PR-heavy repo spent
+// every page on them). A source stops at this many and says so.
+export const ISSUE_CAP = 1000
+const ISSUE_PAGE = 100
 
 /** One word for a run or check: success, failure, pending, cancelled or neutral. */
 export function runState(status, conclusion) {
@@ -33,7 +38,8 @@ export function reviewState(status, conclusion) {
   return 'none'
 }
 
-const isNotFound = (e) => /HTTP 404|Not Found/i.test(String(e?.message || e))
+// GraphQL says a missing repo in words, not with a 404.
+const isNotFound = (e) => /HTTP 404|Not Found|Could not resolve to a Repository/i.test(String(e?.message || e))
 
 /** A `gh` failure in words the owner can act on, rather than a stack. */
 export function ghErrorMessage(e) {
@@ -56,6 +62,75 @@ export async function mapLimit(items, limit, fn) {
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
   return out
+}
+
+const ISSUE_FIELDS = `__typename number title state stateReason url createdAt updatedAt
+  comments { totalCount } author { login } assignees(first: 10) { nodes { login } }
+  labels(first: 100) { nodes { name color } } milestone { title } repository { nameWithOwner }`
+
+// `states` is spliced in from this table only, never from a request.
+const GRAPH_STATES = { open: '[OPEN]', closed: '[CLOSED]', all: '[OPEN, CLOSED]' }
+const repoIssuesQuery = (state) => `query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: ${ISSUE_PAGE}, after: $cursor, states: ${GRAPH_STATES[state]}, orderBy: { field: UPDATED_AT, direction: DESC }) {
+      totalCount pageInfo { hasNextPage endCursor } nodes { ${ISSUE_FIELDS} }
+    }
+  }
+}`
+const SEARCH_QUERY = `query($q: String!, $cursor: String) {
+  search(type: ISSUE, query: $q, first: ${ISSUE_PAGE}, after: $cursor) {
+    issueCount pageInfo { hasNextPage endCursor } nodes { ... on Issue { ${ISSUE_FIELDS} } }
+  }
+}`
+const SEARCH_STATE = { open: ' is:open', closed: ' is:closed', all: '' }
+
+/**
+ * One GraphQL issue node as the Issues list shows it; null for anything else: a
+ * PR in a search comes back as `{}` (the fields sit in `... on Issue`), and a
+ * node GitHub could not show us (an org that blocks the token) as null.
+ */
+export function issueRow(node, fallbackRepo = null) {
+  if (!node || node.__typename !== 'Issue' || !Number.isInteger(node.number) || !node.url) return null
+  const repo = node.repository?.nameWithOwner || fallbackRepo
+  if (!repo) return null
+  return {
+    repo,
+    number: node.number,
+    title: String(node.title || ''),
+    state: node.state === 'CLOSED' ? 'closed' : 'open',
+    stateReason: node.stateReason ? String(node.stateReason).toLowerCase() : null,
+    url: node.url,
+    labels: (node.labels?.nodes || [])
+      .map((l) => ({ name: String(l?.name || ''), color: /^[0-9a-f]{6}$/i.test(l?.color || '') ? l.color.toLowerCase() : '' }))
+      .filter((l) => l.name),
+    assignees: (node.assignees?.nodes || []).map((a) => a?.login).filter(Boolean),
+    author: node.author?.login || null,
+    comments: Number(node.comments?.totalCount) || 0,
+    createdAt: node.createdAt,
+    updatedAt: node.updatedAt,
+    milestone: node.milestone?.title || null,
+  }
+}
+
+/** Whether a gh failure means gh is missing or signed out, rather than GitHub having a bad moment. */
+export const ghSignedOut = (e) => /ENOENT|auth login|not logged in|GH_TOKEN|HTTP 401/i.test(String(e?.message || e || ''))
+
+/**
+ * A PR body's opening sentence ("Adds X so Y can Z"), or null. Orchestrated PRs
+ * start with one; older bodies start with a heading, a list, a table, a quote,
+ * a comment or a picture, which are not a one-liner and give null. The search
+ * results already carry `body`, so this costs no call.
+ */
+export function prSummary(body) {
+  const first = String(body || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean)
+  if (!first || /^(#|[-*+]\s|\d+[.)]\s|>|\||<|!\[|```|~~~|---|===)/.test(first)) return null
+  const plain = first
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__|`)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (plain.length < 8) return null
+  return plain.length > 240 ? `${plain.slice(0, 239)}…` : plain
 }
 
 export function createDevGithub({ run }) {
@@ -261,9 +336,78 @@ export function createDevGithub({ run }) {
     for (const item of slices.flat()) {
       const repo = String(item.repository_url || '').split('/repos/')[1]
       const mergedAt = item.pull_request?.merged_at || item.closed_at
-      if (repo && mergedAt) byUrl.set(item.html_url, { repo, number: item.number, title: item.title, url: item.html_url, mergedAt })
+      if (repo && mergedAt) byUrl.set(item.html_url, { repo, number: item.number, title: item.title, url: item.html_url, mergedAt, summary: prSummary(item.body) })
     }
     return [...byUrl.values()].sort((a, b) => a.mergedAt.localeCompare(b.mergedAt))
+  }
+
+  // One GraphQL call. GitHub may answer with data and `errors` both (one issue
+  // in an org that blocks the token), and gh then exits 1: the data is kept and
+  // the errors become warnings. A call with no data at all still throws.
+  async function graph(args) {
+    let text
+    let failure = null
+    try {
+      text = await run(args)
+    } catch (e) {
+      failure = e
+      text = e?.stdout
+    }
+    let answer = null
+    try { answer = text ? JSON.parse(text) : null } catch { /* not JSON: the failure stands */ }
+    if (!answer?.data) {
+      if (failure) throw failure
+      throw new Error(String(answer?.errors?.[0]?.message || 'GitHub answered without data'))
+    }
+    return answer
+  }
+
+  // Every page of one issue connection, newest-updated first, up to ISSUE_CAP.
+  // `capped` when there is more than was read: pages left at the cap, or a
+  // total above what came back (search stops at 1,000 results with no next page).
+  async function issuePages(args, pick, fallbackRepo) {
+    const issues = []
+    const warnings = new Set()
+    let cursor = null
+    let total = 0
+    let returned = 0
+    let more = false
+    for (let page = 0; page < ISSUE_CAP / ISSUE_PAGE; page++) {
+      const answer = await graph([...args, ...(cursor ? ['-f', `cursor=${cursor}`] : [])])
+      for (const e of answer.errors || []) warnings.add(ghErrorMessage(e?.message || e))
+      const conn = pick(answer.data)
+      if (!conn) throw new Error(String(answer.errors?.[0]?.message || 'GitHub answered without an issue list'))
+      total = Number(conn.totalCount ?? conn.issueCount) || 0
+      returned += (conn.nodes || []).length
+      for (const node of conn.nodes || []) {
+        const row = issueRow(node, fallbackRepo)
+        if (row) issues.push(row)
+      }
+      more = Boolean(conn.pageInfo?.hasNextPage && conn.pageInfo.endCursor)
+      if (!more) break
+      cursor = conn.pageInfo.endCursor
+    }
+    return { issues, total, capped: more || total > returned, warnings: [...warnings].slice(0, 3) }
+  }
+
+  /** One repo's issues (never PRs), newest-updated first. `state` is open, closed or all. */
+  function repoIssues(repo, state) {
+    const [owner, name] = repo.split('/')
+    return issuePages(['api', 'graphql', '-f', `query=${repoIssuesQuery(state)}`, '-f', `owner=${owner}`, '-f', `name=${name}`],
+      (data) => data?.repository?.issues, repo)
+  }
+
+  /** Issues assigned to the gh login, in every repo it can see. */
+  function assignedIssues(state) {
+    const q = `is:issue assignee:@me archived:false sort:updated-desc${SEARCH_STATE[state]}`
+    return issuePages(['api', 'graphql', '-f', `query=${SEARCH_QUERY}`, '-f', `q=${q}`], (data) => data?.search)
+  }
+
+  /** The gh login's name; throws when gh is not signed in. */
+  async function viewerLogin() {
+    const login = (await get('user'))?.login
+    if (!login) throw new Error('gh answered without a login')
+    return String(login)
   }
 
   /** The cheaper subset the background watcher needs: CI on main and runners. */
@@ -273,5 +417,5 @@ export function createDevGithub({ run }) {
     return { repo, defaultBranch: branch, ci, ...runnerInfo }
   }
 
-  return { repoStatus, watchStatus, setAiReview, aiReview, repoVisible, dispatchReview, mergedPulls }
+  return { repoStatus, watchStatus, setAiReview, aiReview, repoVisible, dispatchReview, mergedPulls, repoIssues, assignedIssues, viewerLogin }
 }

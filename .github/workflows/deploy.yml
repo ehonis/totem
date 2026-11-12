@@ -72,8 +72,9 @@ jobs:
           echo "go=true" >> "$GITHUB_OUTPUT"
           changed=$(git diff --name-only "$before" "$after")
           # Install when the dependencies changed, or when the live folder has lost its
-          # install (npm ci always writes node_modules/.package-lock.json).
-          if printf '%s\n' "$changed" | grep -qE '(^|/)package(-lock)?\.json$' || [ ! -f node_modules/.package-lock.json ]; then
+          # install (pnpm always writes node_modules/.modules.yaml; npm's leftover
+          # .package-lock.json does not count, so the first pnpm deploy installs).
+          if printf '%s\n' "$changed" | grep -qE '(^|/)(package(-lock)?\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$' || [ ! -f node_modules/.modules.yaml ]; then
             echo "deps=true" >> "$GITHUB_OUTPUT"
           fi
           # What the iPhone app is built from: its own folder.
@@ -81,16 +82,23 @@ jobs:
           echo "Deploying $(git log --oneline -1) (was ${before:0:7})"
           git log --oneline "$before..$after"
 
+      # pnpm can be a Corepack link inside the node install (Homebrew's node@24 keeps it in
+      # its versioned Cellar folder), which a node upgrade removes. Corepack ships with
+      # node and puts it back.
+      - name: pnpm is on PATH
+        if: steps.pull.outputs.go == 'true'
+        run: command -v pnpm >/dev/null || corepack enable pnpm
+
       - name: Install dependencies
         if: steps.pull.outputs.deps == 'true'
         run: |
-          npm ci --no-audit --no-fund
+          pnpm install --frozen-lockfile
           # node-pty ships its macOS helper without the execute bit.
           chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true
 
       - name: Build
         if: steps.pull.outputs.go == 'true'
-        run: npm run build
+        run: pnpm run build
 
       # A restart kills every chat reply and job in flight, so wait until no agent CLI is
       # running under the bridge (checked every 15 s, for up to 30 minutes), as the
@@ -141,10 +149,17 @@ jobs:
           set -uo pipefail
           echo "::warning::Rolling back to ${{ steps.pull.outputs.before }}"
           git reset --hard --quiet "${{ steps.pull.outputs.before }}"
-          npm ci --no-audit --no-fund
+          # A commit from before the move to pnpm has only npm's lockfile.
+          if [ -f pnpm-lock.yaml ]; then
+            command -v pnpm >/dev/null || corepack enable pnpm
+            pnpm install --frozen-lockfile
+            pnpm run build
+          else
+            npm ci --no-audit --no-fund
+            npm run build
+          fi
           # node-pty ships its macOS helper without the execute bit.
           chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true
-          npm run build
           if [ "$(uname)" = Darwin ]; then
             launchctl kickstart -k "gui/$(id -u)/$DEPLOY_SERVICE"
           else
@@ -158,7 +173,8 @@ jobs:
     needs: server
     if: needs.server.outputs.mobile == 'true' && vars.EAS_PROJECT_ID != ''
     runs-on: ${{ github.event.repository.private && 'box' || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    # An App Store build is waited for (about 10 minutes, more in a queue), then submitted.
+    timeout-minutes: 75
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     defaults:
@@ -195,8 +211,32 @@ jobs:
       - name: Publish the update
         run: npx eas-cli update --channel production --platform ios --environment production --non-interactive --message "$(git log -1 --format=%s)"
 
-      - name: Start an App Store build
+      # Submitting needs the App Store app id and an App Store Connect API key, which are
+      # the install's own (repository variables and a secret). eas.json is part of the
+      # runtime fingerprint, so they are written into it only after the build is uploaded:
+      # written earlier, the build's runtime would differ from the update's and no
+      # installed app would ever take an update again.
+      - name: Build for the App Store and submit to TestFlight
         if: steps.native.outputs.build == 'true'
+        env:
+          ASC_APP_ID: ${{ vars.IOS_ASC_APP_ID }}
+          ASC_API_KEY_ID: ${{ vars.ASC_API_KEY_ID }}
+          ASC_API_KEY_ISSUER_ID: ${{ vars.ASC_API_KEY_ISSUER_ID }}
+          ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
         run: |
-          npx eas-cli build --platform ios --profile production --auto-submit --non-interactive --no-wait --message "$(git log -1 --format=%s)"
-          echo "::notice::Native code changed, so a new App Store build was started and will be submitted to TestFlight. The update above reaches only that build."
+          set -euo pipefail
+          build=$(npx eas-cli build --platform ios --profile production --non-interactive --wait --json --message "$(git log -1 --format=%s)" | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8"))[0].id')
+          echo "::notice::Native code changed, so App Store build $build was made. The update above reaches only that build, so nothing new reaches a phone until it is installed from TestFlight."
+          if [ -z "$ASC_APP_ID" ] || [ -z "$ASC_API_KEY_ID" ] || [ -z "$ASC_API_KEY" ]; then
+            echo "::error::Build $build was not submitted to TestFlight: set the IOS_ASC_APP_ID, ASC_API_KEY_ID and ASC_API_KEY_ISSUER_ID variables and the ASC_API_KEY secret (docs/self-hosting.md), or submit it by hand: npx eas-cli submit -p ios --id $build"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/asc-api-key.p8"
+          printf '%s\n' "$ASC_API_KEY" > "$key"
+          chmod 600 "$key"
+          KEY="$key" node -e '
+            const fs = require("fs"); const j = JSON.parse(fs.readFileSync("eas.json", "utf8"));
+            j.submit.production = { ios: { ascAppId: process.env.ASC_APP_ID, ascApiKeyPath: process.env.KEY, ascApiKeyId: process.env.ASC_API_KEY_ID, ascApiKeyIssuerId: process.env.ASC_API_KEY_ISSUER_ID || undefined } };
+            fs.writeFileSync("eas.json", JSON.stringify(j, null, 2))'
+          npx eas-cli submit --platform ios --profile production --id "$build" --non-interactive --wait
+          rm -f "$key"

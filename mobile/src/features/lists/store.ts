@@ -21,6 +21,9 @@ export function setLists(patch: Partial<ListsState> | ((current: ListsState) => 
   for (const listener of listeners) listener()
 }
 
+/** The state now, for code that runs outside a render (after a reload, say). */
+export const getListsState = (): ListsState => state
+
 export function useLists(): ListsState {
   return useSyncExternalStore(
     (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },

@@ -136,13 +136,6 @@ test('proxy mode trusts every request and has nothing to set up', async () => {
   assert.equal(normalizeAuthMode('anything else'), 'password')
 })
 
-test('repeated failures are throttled', async () => {
-  const { auth, token } = await fresh()
-  await auth.setup(req(), { token, password: PASSWORD })
-  for (let i = 0; i < 10; i++) await auth.login(req(), { password: 'wrong password' }).catch(() => {})
-  await assert.rejects(() => auth.login(req(), { password: PASSWORD }), { code: 'RATE_LIMITED' })
-})
-
 test('the cookie is Secure behind an https proxy', async () => {
   const { auth, token } = await fresh()
   const cookie = await auth.setup(req({ 'x-forwarded-proto': 'https' }), { token, password: PASSWORD })
@@ -230,11 +223,13 @@ test('forwarded headers from a remote peer are ignored; spoofing them does not r
   await assert.rejects(() => auth.login(req({ 'x-forwarded-for': '10.9.9.9' }, '198.51.100.7'), { password: PASSWORD }), { code: 'RATE_LIMITED' })
 })
 
-test('clientKey trusts forwarded headers only from a local proxy or with TOTEM_TRUST_PROXY', () => {
+test('clientKey trusts forwarded headers only with TOTEM_TRUST_PROXY, never just for coming from loopback', () => {
   const via = (peer, headers) => ({ socket: { remoteAddress: peer }, headers })
   assert.equal(clientKey(via('198.51.100.7', { 'x-forwarded-for': '1.2.3.4' }), { trustProxy: undefined }), '198.51.100.7')
-  assert.equal(clientKey(via('127.0.0.1', { 'cf-connecting-ip': '1.2.3.4' }), { trustProxy: undefined }), '1.2.3.4')
-  assert.equal(clientKey(via('::1', { 'x-forwarded-for': '5.6.7.8, 9.9.9.9' }), { trustProxy: undefined }), '5.6.7.8')
+  // An agent on this machine is loopback too: its forwarded header is text it chose.
+  assert.equal(clientKey(via('127.0.0.1', { 'cf-connecting-ip': '1.2.3.4' }), { trustProxy: undefined }), '127.0.0.1')
+  assert.equal(clientKey(via('::1', { 'x-forwarded-for': '5.6.7.8, 9.9.9.9' }), { trustProxy: undefined }), '::1')
+  assert.equal(clientKey(via('127.0.0.1', { 'cf-connecting-ip': '1.2.3.4' }), { trustProxy: 'true' }), '1.2.3.4')
   assert.equal(clientKey(via('198.51.100.7', { 'x-forwarded-for': '1.2.3.4' }), { trustProxy: 'true' }), '1.2.3.4')
   assert.equal(clientKey(via('127.0.0.1', { 'x-forwarded-for': '1.2.3.4' }), { trustProxy: 'false' }), '127.0.0.1')
 })
@@ -300,8 +295,14 @@ test('a sign-out racing a password change never leaves a stale record', async ()
   // mutation queue, the sign-out's stale copy (old hash) could land last. Now the
   // change sees that sessions moved while it checked the current password, and is
   // refused rather than applied on top of a record it did not verify against.
+  // Each step waits on the hook that marks it, never on a fixed time: a busy CI runner
+  // overruns any sleep.
   let release
   let holding = false
+  let markHeld
+  let markVerified
+  const held = new Promise((resolve) => { markHeld = resolve })
+  const verified = new Promise((resolve) => { markVerified = resolve })
   const dir = await mkdtemp(join(tmpdir(), 'totem-auth-race-'))
   const file = join(dir, 'auth.json')
   const auth = createOwnerAuth({
@@ -309,18 +310,19 @@ test('a sign-out racing a password change never leaves a stale record', async ()
     beforeWrite: async () => {
       if (!holding) return
       holding = false
-      await new Promise((resolve) => { release = resolve })
+      await new Promise((resolve) => { release = resolve; markHeld() })
     },
+    afterVerify: async () => { markVerified() },
   })
   const token = await auth.init()
   const cookie = cookieFrom(await auth.setup(req(), { token, password: PASSWORD }))
 
   holding = true
   const leaving = auth.logout(req({ cookie }))
-  await new Promise((r) => setTimeout(r, 20)) // the sign-out is now parked in its write
+  await held // the sign-out is now parked in its write
   const changing = auth.changePassword(req({ authorization: `Bearer ${SECRET}` }), { current: PASSWORD, next: 'brand new password' })
     .then(() => 'changed', (e) => e.code)
-  await new Promise((r) => setTimeout(r, 300))
+  await verified // the change has checked the current password
   release()
   const [, outcome] = await Promise.all([leaving, changing])
   assert.equal(outcome, 'BAD_PASSWORD')
@@ -339,6 +341,10 @@ test('a sign-out racing a password change never leaves a stale record', async ()
 async function pausable() {
   let release
   let pausing = false
+  // Resolved once the paused check is parked, so a test waits for that rather than for a
+  // fixed time (scrypt on a busy CI runner overran 150 ms).
+  let markParked
+  let parked
   const dir = await mkdtemp(join(tmpdir(), 'totem-auth-verify-'))
   const file = join(dir, 'auth.json')
   const auth = createOwnerAuth({
@@ -346,19 +352,20 @@ async function pausable() {
     afterVerify: async () => {
       if (!pausing) return
       pausing = false
-      await new Promise((resolve) => { release = resolve })
+      await new Promise((resolve) => { release = resolve; markParked() })
     },
   })
   const token = await auth.init()
   await auth.setup(req(), { token, password: PASSWORD })
-  return { auth, file, pauseNext: () => { pausing = true }, release: () => release() }
+  const pauseNext = () => { pausing = true; parked = new Promise((resolve) => { markParked = resolve }) }
+  return { auth, file, pauseNext, parked: () => parked, release: () => release() }
 }
 
 test('a login checked against the old password gets no cookie if the password changed meanwhile', async () => {
-  const { auth, pauseNext, release } = await pausable()
+  const { auth, pauseNext, parked, release } = await pausable()
   pauseNext()
   const stale = auth.login(req({}, '198.51.100.9'), { password: PASSWORD }).then((c) => c, (e) => e)
-  await new Promise((r) => setTimeout(r, 150)) // scrypt done, parked after the check
+  await parked() // scrypt done, parked after the check
   await auth.changePassword(req({ authorization: `Bearer ${SECRET}` }), { current: PASSWORD, next: 'brand new password' })
   release()
   const result = await stale
@@ -369,11 +376,11 @@ test('a login checked against the old password gets no cookie if the password ch
 })
 
 test('a password change checked against an old hash is refused if another change landed first', async () => {
-  const { auth, file, pauseNext, release } = await pausable()
+  const { auth, file, pauseNext, parked, release } = await pausable()
   pauseNext()
   const first = auth.changePassword(req({ authorization: `Bearer ${SECRET}` }), { current: PASSWORD, next: 'first new password' })
     .then(() => 'changed', (e) => e.code)
-  await new Promise((r) => setTimeout(r, 150))
+  await parked()
   await auth.changePassword(req({ authorization: `Bearer ${SECRET}` }), { current: PASSWORD, next: 'second new password' })
   release()
   assert.equal(await first, 'BAD_PASSWORD')

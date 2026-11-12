@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { Hi, ChevronDownIcon, MapIcon, ArrowPathIcon, ExclamationTriangleIcon, CheckCircleIcon } from '../icons'
 import { getStravaStatus, syncStrava, getStravaStats, getStravaGear, AuthError } from '../api'
 import { pushError, pushSuccess } from '../toast'
+import { GRANT_PROBLEMS } from './WhoopConnection'
 
-// The Strava connection, alongside WHOOP under "Wearables & fitness".
+// The Strava connection, alongside WHOOP under Accounts.
 //
 // Same rules as the WHOOP card, learned there the hard way: `connected` means a
 // refresh token is on disk and nothing more, so the link to Bushido is always offered; the
@@ -110,8 +111,8 @@ function Gear({ gear }: { gear: any }) {
   )
 }
 
-/** The Connections-tab row for Strava. Renders inside the WHOOP panel's list. */
-export function StravaConnectionRow() {
+/** The Connections-tab row for Strava, under Accounts. */
+export function StravaConnectionRow({ onProblem, reloadKey = 0 }: { onProblem?: (name: string, problem: boolean) => void; reloadKey?: number }) {
   const { status, reload } = useStravaStatus(true)
   const [expanded, setExpanded] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -119,6 +120,8 @@ export function StravaConnectionRow() {
   const [gear, setGear] = useState<any>(null)
   const state = stateOf(status)
   const tone = TONE[state]
+  useEffect(() => { if (status) onProblem?.('Strava', GRANT_PROBLEMS.has(state)) }, [status, state, onProblem])
+  useEffect(() => { if (reloadKey) reload() }, [reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Totals and gear are two live API reads, so they are fetched only when the
   // row is open and the grant is healthy — not on every Connections load.
@@ -145,17 +148,17 @@ export function StravaConnectionRow() {
   const rl = status.rateLimit?.read || status.rateLimit?.overall
 
   return (
-    <section className={`app-row ${expanded ? 'open' : ''} ${state === 'ready' ? '' : 'disabled'}`}>
+    <section className={`app-row ${expanded ? 'open' : ''} ${state === 'unconfigured' || state === 'disconnected' ? 'disabled' : ''}`}>
       <button className="app-row-head" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
         <span className="connection-icon fallback" style={{ width: 30, height: 30, background: '#fc4c02' }}>
           <Hi icon={MapIcon} size={17} />
         </span>
         <span className="app-row-title">
           <strong>Strava</strong>
-          <span>strava.com · rides, runs, mileage, gear{status.athlete?.name ? ` · ${status.athlete.name}` : ''}</span>
+          <span>Rides, runs, mileage and gear · through Bushido{status.athlete?.name ? ` · ${status.athlete.name}` : ''}</span>
         </span>
         <span className="app-row-status">
-          <span className={`app-row-chip ${tone === 'ok' ? 'on' : tone}`}>{LABEL[state]}</span>
+          <span className={`app-row-chip ${state === 'unconfigured' ? '' : tone === 'ok' ? 'on' : tone}`}>{LABEL[state]}</span>
         </span>
         <Hi icon={ChevronDownIcon} size={16} className={`app-row-caret ${expanded ? 'up' : ''}`} />
       </button>
@@ -163,14 +166,12 @@ export function StravaConnectionRow() {
       {expanded && (
         <div className="app-row-body">
           <p className="app-row-desc">
-            Every ride, run and walk with distance, speed, elevation, heart rate and power, plus each bike's odometer.
-            Agents read it through <code>strava/cli.mjs</code> and the gateway's <code>strava__*</code> tools; ChatGPT and
-            Claude through the <code>totem_strava_*</code> MCP tools. The grant lives in Bushido, which Totem reads it from;
-            connect, reconnect or disconnect it there (profile → Settings). See <code>docs/strava.md</code>.
+            Every ride, run and walk, plus each bike's odometer, for agents (<code>strava__*</code>) and goals. Bushido
+            holds the grant: connect, reconnect or disconnect it there (<code>docs/strava.md</code>).
           </p>
 
           {state !== 'ready' && (
-            <div className={`whoop-note ${tone}`}>
+            <div className={`whoop-note ${state === 'unconfigured' ? '' : tone}`}>
               <Hi icon={ExclamationTriangleIcon} size={13} />
               <span>
                 {status.detail || LABEL[state]}

@@ -11,17 +11,20 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && if [ -n "$AGENT_CLIS" ]; then npm install -g $AGENT_CLIS && npm cache clean --force; fi
 
+# pnpm, at the version package.json pins, from Corepack.
+RUN corepack enable pnpm
+
 WORKDIR /app
-COPY package.json package-lock.json ./
-COPY web/package.json web/package-lock.json ./web/
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./web/
 # node-pty (the optional web terminal) needs a compiler toolchain; it is left out
 # here and the terminal stays off. ffmpeg-static fetches its binary in a script.
-RUN npm ci --omit=optional --ignore-scripts --no-audit --no-fund \
-  && (npm rebuild ffmpeg-static || true) \
-  && npm --prefix web ci --no-audit --no-fund
+RUN pnpm install --frozen-lockfile --no-optional --ignore-scripts \
+  && (pnpm rebuild ffmpeg-static || true) \
+  && pnpm --dir web install --frozen-lockfile
 
 COPY . .
-RUN npm --prefix web run build && rm -rf web/node_modules \
+RUN pnpm --dir web run build && rm -rf web/node_modules \
   && mkdir -p data secrets && chown -R node:node /app
 
 ENV NODE_ENV=production BRIDGE_PORT=8787

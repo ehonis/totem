@@ -1,4 +1,4 @@
-import { TodoDomainError } from './errors.mjs';
+import { assertSyncTarget, sheetSharingRemoved, TodoDomainError } from './errors.mjs';
 
 function fail(code, message, details = {}) {
   throw new TodoDomainError(code, message, { details });
@@ -32,12 +32,8 @@ function explicitSyncTarget(item) {
   if (markers.length > 1) {
     fail('AMBIGUOUS_SYNC_TARGET', 'A proposal may contain exactly one sync marker.', { count: markers.length });
   }
-  const value = String(item.meta?.sync || '').trim().toLowerCase();
-  if (!value) return 'local';
-  if (!['local', 'github', 'sheet'].includes(value)) {
-    fail('INVALID_SYNC_TARGET', 'Proposal sync must be local, github, or sheet.', { sync: value });
-  }
-  return value;
+  // Refused like any other syncTarget: a retired one (github, sheet) with its reason.
+  return assertSyncTarget(String(item.meta?.sync || '').trim().toLowerCase());
 }
 
 function dueDate(when) {
@@ -47,29 +43,24 @@ function dueDate(when) {
   return { dueDate: match[1] };
 }
 
-export function todoCommandFromInboxProposal(item, { github } = {}) {
-  if (!item || !['todo', 'sheet', 'github', 'agent'].includes(item.kind)) {
-    fail('INVALID_PROPOSAL_KIND', 'Only todo, sheet, and github proposals create tasks.');
+/**
+ * The task command an accepted `todo` proposal runs: always a local task. A `sheet`
+ * proposal (which shared to the sheet) is refused, as a `sync:` marker naming a retired
+ * target is. A `github` proposal files an issue and makes no task (bridge.mjs), so it
+ * is not one of these.
+ */
+export function todoCommandFromInboxProposal(item) {
+  if (!item || !['todo', 'sheet'].includes(item.kind)) {
+    fail('INVALID_PROPOSAL_KIND', 'Only todo proposals create tasks.');
   }
-  const githubKind = item.kind === 'github' || item.kind === 'agent';
-  const sheetKind = item.kind === 'sheet';
-  const requestedTarget = explicitSyncTarget(item);
-  const impliedTarget = githubKind ? 'github' : sheetKind ? 'sheet' : 'local';
-  if (requestedTarget !== 'local' && impliedTarget !== 'local' && requestedTarget !== impliedTarget) {
-    fail('AMBIGUOUS_SYNC_TARGET', 'Proposal kind and sync marker disagree.');
-  }
-  const syncTarget = requestedTarget === 'local' ? impliedTarget : requestedTarget;
+  explicitSyncTarget(item);
+  if (item.kind === 'sheet') throw sheetSharingRemoved();
   const classified = classification(item.meta);
-  const description = githubKind
-    ? String(github?.body || '').trim()
-    : item.src ? `From inbox ${item.id} (src: ${item.src})` : '';
+  const description = item.src ? `From inbox ${item.id} (src: ${item.src})` : '';
   return {
     title: item.title,
     ...classified,
     ...dueDate(item.when),
     ...(description ? { description } : {}),
-    syncTarget,
-    // The GitHub connector reads the repo at the top level, as the HTTP adapter sends it.
-    ...(githubKind ? { repo: github?.repo, ...(github?.labels?.length ? { labels: [...github.labels] } : {}) } : {}),
   };
 }

@@ -24,6 +24,20 @@ const tmp = (name) => mkdtempSync(join(tmpdir(), `source-runs-${name}-`))
 // A Bushido that answers every call; used to show a connector still works on a broken log.
 const okFetch = async () => ({ ok: true, status: 200, json: async () => ({ result: [{ id: 1 }, { id: 2 }] }) })
 
+test('a retired source is forgotten whole: no runs, no health row, nothing failing', async () => {
+  const c = clock()
+  const runs = openSourceRuns({ file: join(tmp('forget'), 'source-runs.db'), now: c.now })
+  for (let i = 0; i < 3; i++) await assert.rejects(runs.track('github-tasks', async () => { throw Object.assign(new Error('HTTP 401'), { status: 401 }) }, { isFault: () => true }))
+  await runs.track('strava', async () => [1])
+  assert.ok(runs.get('github-tasks'))
+  assert.ok(runs.forget('github-tasks') > 0)
+  assert.equal(runs.get('github-tasks'), null)
+  assert.deepEqual(runs.runs('github-tasks'), [])
+  assert.deepEqual(runs.health().map((h) => h.source), ['strava'])
+  assert.equal(runs.forget('github-tasks'), 0, 'twice is harmless')
+  runs.close()
+})
+
 // ---- opening ------------------------------------------------------------------
 
 test('a corrupt run log is moved aside and a fresh one made', async () => {

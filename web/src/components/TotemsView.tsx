@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, AuthError, getJobs, updateJob, deleteJob, getSkills, updateSkill, resetSkill, previewSkill } from '../api'
+import { api, AuthError, getJobs, updateJob, deleteJob, restoreJob, getSkills, updateSkill, resetSkill, previewSkill } from '../api'
 import { pushError, pushToast } from '../toast'
 import { TI } from '../chat/ui'
 import { useChat, loadProviders, ensureModels, syncThreads, setActive, adoptThread, threadTitle } from '../chat/store'
@@ -9,7 +9,8 @@ import type { ChatThread } from '../chat/types'
 import { normalizeModelSettings, modelLabel } from '../chat/models'
 import ModelPicker from '../chat/ModelPicker'
 import { IconArrowLeft, IconArrowUp, IconMessage, IconPlus, IconSparkles, IconLoader2, IconTrash, IconRefresh, IconSettings, IconUsersGroup } from '../chat/icons'
-import { ScheduleBuilder, RunHistory, Switch, NOTIFY_CHOICES, relativeTime } from './JobsView'
+import IconPicker from './IconPicker'
+import { ScheduleBuilder, RunHistory, Switch, NOTIFY_CHOICES, relativeTime, TimezoneContext } from '../totems/schedule'
 import { TotemIcon, TYPE_LABEL, kindOf, statusLine, openTotemChat, runTotemNow, asWatch, sourceKey, type Rec, type Watch, type WatchSource, type Draft, type Choice, type Msg, type DraftRecord } from '../totems/shared'
 import './totems.css'
 
@@ -406,6 +407,11 @@ function Builder({ initial, onClose, onCreated, onDiscarded }: { initial: DraftR
               <span className="tm-switch-row"><Switch checked={draft.browser} onChange={(v: boolean) => patch({ browser: v })} label="Browser" />Use the browser for pages that need JavaScript</span>
               <span className="muted tm-hint">Off: web search and plain page fetches only.</span>
             </div>
+            <div className="field">
+              <span>Full access</span>
+              <span className="tm-switch-row"><Switch checked={draft.access === 'full'} onChange={(v: boolean) => patch({ access: v ? 'full' : null })} label="Full access" />Run any command (ssh included) and write anywhere, with nobody approving</span>
+              <span className="muted tm-hint">Off: reads, the web, and its own memory and files.</span>
+            </div>
           </section>
           <div className="tm-actions">
             <button type="button" className="btn primary" disabled={locked || !draft.name.trim() || !draft.instructions.trim() || !watchReady(asWatch(draft.trigger))} onClick={create}>
@@ -535,11 +541,29 @@ function SettingsTab({ job, onChanged, onDeleted }: { job: any; onChanged: (job:
     catch (e: any) { pushError(e.message) } finally { setRecommending(false) }
   }
   async function remove() {
-    if (!window.confirm(`Delete ${job.name}? Its memory and chat are deleted too.${job.kind === 'seeded' ? ' It shipped with Totem; you can restore it from Settings → Jobs.' : ''}`)) return
+    if (!window.confirm(`Delete ${job.name}? Its memory and chat are deleted too.${job.kind === 'seeded' ? ' It shipped with Totem; you can restore it from the bottom of the Totems page.' : ''}`)) return
     try { await deleteJob(job.id); pushToast(`Deleted ${job.name}`, 'info'); onDeleted() } catch (e: any) { pushError(e.message) }
   }
   return (
     <div className="tm-settings">
+      <section className="tm-section tm-row-fields">
+        <div className="field">
+          <span>Icon</span>
+          <IconPicker value={job.iconName || ''} fallback="sparkles" label={`Icon for ${job.name}`} onChange={(iconName) => save({ iconName })} />
+        </div>
+        <label className="field">
+          <span>Name</span>
+          <input key={`name-${job.id}`} className="tm-input" defaultValue={job.name} maxLength={80}
+            onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== job.name) save({ name: v }) }}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+        </label>
+        <label className="field">
+          <span>Description</span>
+          <input key={`desc-${job.id}`} className="tm-input" defaultValue={job.description || ''} maxLength={200} placeholder="One line about what it does"
+            onBlur={(e) => { const v = e.target.value.trim(); if (v !== (job.description || '')) save({ description: v }) }}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }} />
+        </label>
+      </section>
       {agent ? (
         <section className="tm-section">
           <h2>Instructions</h2>
@@ -599,6 +623,12 @@ function SettingsTab({ job, onChanged, onDeleted }: { job: any; onChanged: (job:
           <div className="field">
             <span>Browser</span>
             <span className="tm-switch-row"><Switch checked={!!job.browser} onChange={(v: boolean) => save({ browser: v })} label="Browser" />Use the browser for pages that need JavaScript</span>
+          </div>
+        )}
+        {agent && (
+          <div className="field">
+            <span>Full access</span>
+            <span className="tm-switch-row"><Switch checked={job.access === 'full'} onChange={(v: boolean) => save({ access: v ? 'full' : null })} label="Full access" />Run any command (ssh included) and write anywhere, with nobody approving</span>
           </div>
         )}
       </section>
@@ -766,6 +796,9 @@ export async function startGroupChat(ids: string[], title: string, onOpenChat: (
 
 export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: () => void; onOpenChat: () => void }) {
   const [jobs, setJobs] = useState<any[] | null>(null)
+  // Built-in totems the owner deleted, which can be brought back.
+  const [restorable, setRestorable] = useState<{ id: string; name: string; description?: string }[]>([])
+  const [timezone, setTimezone] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<DraftRecord[]>([])
   const [open, setOpen] = useState<string | null>(() => new URLSearchParams(window.location.search).get('totem'))
   // false: the list; null: a new totem; a record: continuing that draft.
@@ -792,7 +825,7 @@ export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: (
     api<{ drafts: DraftRecord[] }>('/api/totems/drafts').then((r) => setDrafts(r.drafts || [])).catch(() => {})
   }, [])
   const load = useCallback(() => {
-    getJobs().then((p: any) => setJobs(p.jobs || [])).catch((e) => { if (e instanceof AuthError) onAuthError(); else pushError(e.message) })
+    getJobs().then((p: any) => { setJobs(p.jobs || []); setRestorable(p.restorable || []); setTimezone(p.timezone || null) }).catch((e) => { if (e instanceof AuthError) onAuthError(); else pushError(e.message) })
     loadDrafts()
   }, [onAuthError, loadDrafts])
   useEffect(() => {
@@ -833,7 +866,7 @@ export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: (
       </div>
     )
   }
-  if (job) return <div className="view tm-view"><Detail job={job} onBack={() => openSettings(null)} onChanged={replace} onDeleted={() => { openSettings(null); load() }} onOpenChat={onOpenChat} /></div>
+  if (job) return <TimezoneContext.Provider value={timezone}><div className="view tm-view"><Detail job={job} onBack={() => openSettings(null)} onChanged={replace} onDeleted={() => { openSettings(null); load() }} onOpenChat={onOpenChat} /></div></TimezoneContext.Provider>
 
   return (
     <div className="view tm-view">
@@ -906,6 +939,28 @@ export default function TotemsView({ onAuthError, onOpenChat }: { onAuthError: (
                   onSettings={() => openSettings(j.id)}
                   onToggle={(v) => toggle(j, v)}
                 />
+              ))}
+            </div>
+          </section>
+        )}
+        {restorable.length > 0 && (
+          <section className="tm-drafts">
+            <h2>Built-ins you deleted</h2>
+            <div className="tm-list">
+              {restorable.map((r) => (
+                <div key={r.id} className="tm-row draft">
+                  <div className="tm-row-main">
+                    <span className="tm-row-text">
+                      <span className="tm-row-top"><span className="tm-row-name">{r.name}</span><span className="tm-kind">Built-in</span></span>
+                      {r.description && <span className="tm-row-last">{r.description}</span>}
+                    </span>
+                  </div>
+                  <div className="tm-card-side">
+                    <button type="button" className="btn compact" onClick={async () => {
+                      try { await restoreJob(r.id); pushToast(`${r.name} restored`, 'info'); load() } catch (e: any) { pushError(e.message) }
+                    }}>Restore</button>
+                  </div>
+                </div>
               ))}
             </div>
           </section>

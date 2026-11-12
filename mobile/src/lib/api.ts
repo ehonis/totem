@@ -2,8 +2,8 @@
 // with the BRIDGE_SECRET the user pastes once (kept in localStorage).
 
 import type {
-  ConnectorHealth, Todo, TodoExternalLink, TodoOutcome, TodoPatch, TodoPreferences,
-  TodoQuery, TodoStatus,
+  IssueStatesResponse, SheetFeed, Todo, TodoBoardCounts, TodoExternalLink, TodoOutcome, TodoPatch,
+  TodoPreferences, TodoQuery, TodoStatus,
 } from './todos/types'
 import type {
   Goal, GoalMetricPatch, GoalOptions, GoalPeriod, GoalPeriodQuery, GoalPeriodShortcut, GoalReview, NewGoalInput, NewMetricInput,
@@ -11,11 +11,13 @@ import type {
 import type { AgentProvider, JournalEntry, JournalPayload, JournalSettings } from './journal/types'
 import type { TotemList } from './lists/types'
 import type { Rec, RecDecision, RecLedger, RecOutcome } from './recs/types'
+import type { AwaySpan } from './away'
 import nacl from 'tweetnacl'
 import { bridgeFetch, bridgeUrl, clearSecretStored, getConnection, getStoredSecret, subscribeConnection, withAccess } from './connection'
 import { isAccessResponse } from './cfAccess'
 import { AccountChangedError, createHttpCache } from './httpCache'
 import { cacheStorage } from './httpCacheStorage'
+import { approvalHeaders, type ApprovalCodeStatus } from './approvalCode'
 
 // The app keeps the secret in the keychain (connection.ts); these keep the web's names.
 export const getSecret = () => getStoredSecret()
@@ -54,7 +56,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     extra['content-type'] = 'application/json'
   }
   const mark = httpCache.begin()
-  const response = await bridgeFetch(path, { ...init, headers: authHeaders(extra) })
+  // The approval routes also carry this phone's approval code (approvalCode.ts).
+  const response = await bridgeFetch(path, { ...init, headers: authHeaders({ ...extra, ...approvalHeaders(path, init.method || 'GET') }) })
   // A write the bridge took means it is reachable: no longer "Offline".
   httpCache.reached(mark, response)
   return readResponse<T>(response)
@@ -249,7 +252,13 @@ export const getInbox = () => getJSON('/api/inbox') // { items: [...] }
 export const getInboxCount = () => getJSON('/api/inbox/count')
 export const peekInboxCount = () => peekJSON('/api/inbox/count')
 // action is 'accept' (creates the task/event) or 'deny' (skips it).
-export const resolveInboxItem = (id: string, action: string) => sendJSON('/api/inbox/resolve', 'POST', { id, action })
+// `digest` is the one the inbox listed: the bridge refuses a proposal that changed since.
+// `note`: the owner's word to the chat that staged it, sent with the outcome (chat/inbox-outcome.mjs).
+export const resolveInboxItem = (id: string, action: string, digest?: string, note?: string) => sendJSON('/api/inbox/resolve', 'POST', { id, action, digest, ...(note ? { note } : {}) })
+// The approval card's Reply: words to that chat; the proposal stays open.
+export const replyInboxItem = (id: string, text: string) => sendJSON('/api/inbox/reply', 'POST', { id, text })
+// A proposal held because he denied the same one this week: show it anyway.
+export const releaseInboxItem = (id: string) => sendJSON('/api/inbox/release', 'POST', { id })
 
 // ---- Audit trail, captured output, pending approvals ------------------------
 // The Logs tab is the answer to "did that actually happen, and who asked for it".
@@ -439,13 +448,15 @@ function todoQueryString(query: TodoQuery = {}) {
 }
 
 export const getTodoBoard = (query: TodoQuery = {}) =>
-  getJSON<{ todos: Todo[] }>(`/api/todos/board${todoQueryString(query)}`)
+  getJSON<{ todos: Todo[]; counts: TodoBoardCounts }>(`/api/todos/board${todoQueryString(query)}`)
 export const peekTodoBoard = (query: TodoQuery = {}) =>
-  peekJSON<{ todos: Todo[] }>(`/api/todos/board${todoQueryString(query)}`)
+  peekJSON<{ todos: Todo[]; counts: TodoBoardCounts }>(`/api/todos/board${todoQueryString(query)}`)
 export const getTodo = (id: string) =>
   getJSON<{ todo: Todo }>(`/api/todos/${encodeURIComponent(id)}`)
-export const createBoardTodo = (fields: TodoPatch & { title: string; syncTarget?: 'local' | 'github' | 'sheet'; repo?: string }) =>
-  sendJSON('/api/todos', 'POST', fields) as Promise<{ todo: Todo }>
+// The canonical create: answers the same record GET /api/todos/board lists. Tasks stay
+// local: nothing shares one out since GitHub and sheet sharing were retired.
+export const createBoardTodo = (fields: TodoPatch & { title: string }) =>
+  sendJSON('/api/todos/board', 'POST', fields) as Promise<{ todo: Todo }>
 export const updateBoardTodo = (id: string, fields: TodoPatch) =>
   sendJSON(`/api/todos/${encodeURIComponent(id)}`, 'PATCH', fields) as Promise<{ todo: Todo }>
 export const moveBoardTodo = (id: string, status: TodoStatus, outcome?: TodoOutcome) =>
@@ -469,32 +480,20 @@ export const attachTodoExternalLink = (id: string, link: Partial<TodoExternalLin
   sendJSON(`/api/todos/${encodeURIComponent(id)}/external-links`, 'POST', link) as Promise<{ todo: Todo }>
 export const detachTodoExternalLink = (id: string, connector: 'github' | 'sheet') =>
   api<{ todo: Todo }>(`/api/todos/${encodeURIComponent(id)}/external-links/${encodeURIComponent(connector)}`, { method: 'DELETE' })
-export const shareBoardTodo = (id: string, target: 'github' | 'sheet', options: Record<string, unknown> = {}) =>
-  sendJSON(`/api/todos/${encodeURIComponent(id)}/share`, 'POST', { target, ...options }) as Promise<{ todo: Todo }>
 export const getTodoPreferences = () => getJSON<{ preferences: TodoPreferences }>('/api/todos/preferences')
 export const peekTodoPreferences = () => peekJSON<{ preferences: TodoPreferences }>('/api/todos/preferences')
 export const updateTodoPreferences = (patch: Partial<TodoPreferences>) =>
   sendJSON('/api/todos/preferences', 'PATCH', patch) as Promise<{ preferences: TodoPreferences }>
 export const purgeDeletedTodos = (olderThan: string) => sendJSON('/api/todos/purge', 'POST', { olderThan }) as Promise<{ purged: number; backup: string }>
-export const getSheetTodoConnector = () =>
-  getJSON<{ health: ConnectorHealth; settings: Record<string, unknown> }>('/api/todos/connectors/sheet')
-export const refreshSheetTodoConnector = () =>
-  sendJSON('/api/todos/connectors/sheet/refresh', 'POST', {}) as Promise<{ result: unknown }>
-export const bootstrapSheetTodoConnector = (confirmSheetId: string) =>
-  sendJSON('/api/todos/connectors/sheet/bootstrap', 'POST', { confirmSheetId }) as Promise<{ result: unknown }>
-export interface GithubTodoIssue { id: string; title: string; identifier?: string; repo?: string; number?: number; url?: string; state?: string }
-export const getGithubTodoConnector = () =>
-  getJSON<{ health: Record<string, unknown>; settings: { trackAssigned: boolean; watchedRepos: string[]; watermark: string | null } }>('/api/todos/connectors/github')
-export const searchGithubTodoIssues = (query: string, selectedRepo = '') =>
-  getJSON<{ issues: GithubTodoIssue[] }>(`/api/todos/connectors/github/search?q=${encodeURIComponent(query)}${selectedRepo ? `&repo=${encodeURIComponent(selectedRepo)}` : ''}`)
-export const linkGithubTodoIssue = (issueId: string) =>
-  sendJSON('/api/todos/connectors/github/link', 'POST', { issueId }) as Promise<{ todo: Todo }>
-export const refreshGithubTodoConnector = () =>
-  sendJSON('/api/todos/connectors/github/refresh', 'POST', {}) as Promise<{ result: unknown }>
-export const updateGithubTodoSettings = (patch: { trackAssigned?: boolean; watchedRepos?: string[] }) =>
-  sendJSON('/api/todos/connectors/github/settings', 'PATCH', patch) as Promise<{ settings: Record<string, unknown> }>
-export const publishTodoFirstNote = (id: string) =>
-  sendJSON(`/api/todos/${encodeURIComponent(id)}/publish-description`, 'POST', {}) as Promise<{ todo: Todo }>
+// The shared task sheet, read-only (GET /api/todos/sheet, docs/task-sheet.md).
+/** Cached on the server for two minutes; `refresh` reads the sheet again (at most once per 10 s). */
+export const getSheetFeed = ({ refresh = false }: { refresh?: boolean } = {}) =>
+  getJSON<SheetFeed>(`/api/todos/sheet${refresh ? '?refresh=1' : ''}`)
+/** Set a task's GitHub issue link (https://github.com/<owner>/<repo>/issues/<n>), or clear it with null. */
+export const setIssueLink = (id: string, url: string | null) =>
+  sendJSON(`/api/todos/${encodeURIComponent(id)}/issue-link`, 'PUT', { url }) as Promise<{ todo: Todo }>
+/** Live open/closed state of the issues tasks link to, keyed "owner/repo#n". */
+export const getIssueStates = () => getJSON<IssueStatesResponse>('/api/todos/issue-states')
 
 function todoAction(id: string, action: string) {
   return sendJSON(`/api/todos/${encodeURIComponent(id)}/${action}`, 'POST', {}) as Promise<{ todo: Todo }>
@@ -648,6 +647,17 @@ export const linkListTodo = (listId: string, todoId: string) =>
 export const unlinkListTodo = (listId: string, todoId: string) =>
   api<{ list: TotemList }>(`/api/lists/${encodeURIComponent(listId)}/todos/${encodeURIComponent(todoId)}`, { method: 'DELETE' })
 
+// ---- Away spans (away/http.mjs) ---------------------------------------------
+// Trips and days off. Without `from`, spans that already ended are left out.
+export const getAway = (opts: { from?: string; all?: boolean } = {}) =>
+  getJSON<{ today: string; spans: AwaySpan[] }>(`/api/away${opts.all ? '?all=1' : opts.from ? `?from=${encodeURIComponent(opts.from)}` : ''}`)
+export const createAway = (input: Omit<AwaySpan, 'id' | 'source'>) =>
+  sendJSON('/api/away', 'POST', input) as Promise<{ span: AwaySpan }>
+export const updateAway = (id: string, patch: Partial<Omit<AwaySpan, 'id' | 'source'>>) =>
+  sendJSON(`/api/away/${encodeURIComponent(id)}`, 'PATCH', patch) as Promise<{ span: AwaySpan }>
+export const deleteAway = (id: string) =>
+  sendJSON(`/api/away/${encodeURIComponent(id)}`, 'DELETE', {}) as Promise<{ deleted: boolean }>
+
 // ---- Voice journal (Productivity → Journal) ---------------------------------
 // A recording is posted as its own bytes with the facts in the query string; the
 // bridge transcribes it and, after the grace period, digests it into the brain.
@@ -710,6 +720,11 @@ export const login = (password: string) =>
 export const logout = () => api<{ ok: true }>('/api/auth/logout', { method: 'POST' })
 export const changePassword = (current: string, next: string) =>
   api<{ ok: true }>('/api/auth/password', { method: 'POST', body: JSON.stringify({ current, next }) })
+// The approval code (auth/approval-code.mjs): its state, and a new one for the
+// password. The new code is in that one response; the bridge keeps only a hash.
+export const getApprovalCodeStatus = () => api<ApprovalCodeStatus>('/api/auth/approval-code')
+export const createApprovalCode = (password: string) =>
+  api<{ ok: true; code: string; setAt: string }>('/api/auth/approval-code', { method: 'POST', body: JSON.stringify({ password }) })
 
 // ---- Install-level settings --------------------------------------------------
 
@@ -725,7 +740,7 @@ export function getAppConfig(): Promise<AppConfig> {
   return appConfigPromise
 }
 
-// ---- Settings -> AI ------------------------------------------------------------
+// ---- Settings -> Providers ------------------------------------------------------------
 
 export interface AiKeyState {
   name: string
@@ -762,7 +777,7 @@ export const saveAiSettings = (patch: { defaultProvider?: string; defaultModel?:
 export const testAi = (provider?: string) =>
   api<{ ok: boolean; provider: string; ms: number; reply?: string; error?: string }>('/api/ai/test', { method: 'POST', body: JSON.stringify({ provider }) })
 
-// ---- Settings -> Integrations -------------------------------------------------
+// ---- data/integrations.json (Settings -> General, Tasks, Providers) -----------
 
 export interface IntegrationField {
   name: string
@@ -773,13 +788,13 @@ export interface IntegrationField {
   masked: string | null
 }
 export interface IntegrationInfo {
-  id: 'sheet'
+  id: 'sheet' | 'cliproxy'
   label: string
   configured: boolean
-  console: string
+  /** One line about the integration. */
+  blurb?: string
   restartRequired?: boolean
   docs?: string
-  credentialsFile?: { name: string; state: 'unset' | 'found' | 'missing' }
   fields: IntegrationField[]
 }
 export interface IntegrationsPayload {

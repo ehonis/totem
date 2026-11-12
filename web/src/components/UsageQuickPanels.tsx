@@ -25,6 +25,7 @@ import {
   UsageChip,
 } from '../usageMeta'
 import { QuotaMeter } from './AiUsagePanel'
+import { mainMeters, poolSubtitle, providerGroups, shortName, stateLabel } from '../usagePools'
 import {
   Hi,
   ArrowPathIcon,
@@ -40,7 +41,7 @@ import {
   WarnIcon,
 } from '../icons'
 
-const USAGE_SECTION = { tab: 'settings', sub: 'providers', hash: 'usage' }
+const USAGE_SECTION = { tab: 'settings', sub: 'usage' }
 
 interface UsageQuickPanelsProps {
   onNavigate: (target: NavTarget) => void
@@ -333,35 +334,48 @@ export default function UsageQuickPanels({
                     <div className="inline-warn"><WarnIcon /> {limits.ai?.error || 'AI usage is unavailable.'}</div>
                     <button className="btn compact" onClick={() => loadLimits(true)}>Retry</button>
                   </div>
-                ) : !(limits.ai.accounts || []).length ? (
+                ) : !providerGroups(limits.ai).length ? (
                   <div className="ov-empty">No AI accounts discovered. Configure tracked accounts from Usage settings.</div>
                 ) : (
                   <>
                     <div className="insight-summary">
-                      <div><b>{(limits.ai.accounts || []).length}</b><small>accounts</small></div>
-                      <div><b>{fmtUsd(monthly)}</b><small>per month</small></div>
+                      <div><b>{(limits.ai.accounts || []).filter((a: any) => !a.hidden).length}</b><small>accounts</small></div>
+                      {/* A price per service undercounts two seats of one provider. */}
+                      {!(limits.ai.pools || []).some((p: any) => p.total > 1) && <div><b>{fmtUsd(monthly)}</b><small>per month</small></div>}
                       <span>Updated {relTime(limits.ai.updatedAt) || 'just now'}</span>
                     </div>
+                    {limits.ai.proxy?.configured && limits.ai.proxy.reachable === false && (
+                      <div className="inline-warn"><WarnIcon /> CLIProxy is not answering. These are its last readings.</div>
+                    )}
                     <div className="ov-quota-list">
-                      {(limits.ai.accounts || []).map((account: any) => {
-                        const tightest = [...(account.meters || [])]
-                          .filter((meter: any) => meter.remainingPct != null)
-                          .sort((a: any, b: any) => a.remainingPct - b.remainingPct)[0]
-                        return (
-                          <div className="prov-block" key={account.id}>
-                            <div className="prov-head">
-                              <span className="usage-name">
-                                <ProductIcon id={account.backend} title={account.backend} />
-                                {account.displayName || account.label}
-                              </span>
-                              {account.plan && <span className="pill usage-plan">{account.plan}</span>}
-                            </div>
-                            {tightest
-                              ? <QuotaMeter meter={tightest} compact />
-                              : <div className="muted prov-note">{account.status === 'ok' ? 'No windows reported.' : account.error || account.status}</div>}
+                      {providerGroups(limits.ai).map((group) => (
+                        <div className="prov-block" key={group.backend}>
+                          <div className="prov-head">
+                            <span className="usage-name">
+                              <ProductIcon id={group.backend} title={group.name} />
+                              {group.name}
+                            </span>
+                            {poolSubtitle(group) && <span className="pill usage-plan">{poolSubtitle(group)}</span>}
                           </div>
-                        )
-                      })}
+                          {group.accounts.map((account) => {
+                            const tightest = mainMeters(account).sort((a, b) => (a.remainingPct as number) - (b.remainingPct as number))[0]
+                            const state = stateLabel(account)
+                            return (
+                              <div key={account.id} className={`prov-acct s-${account.state || 'ok'}`}>
+                                {group.accounts.length > 1 && (
+                                  <div className="prov-acct-head">
+                                    <span title={account.email || undefined}>{shortName(account, group.accounts)}</span>
+                                    <span className="muted">{state || account.plan || ''}</span>
+                                  </div>
+                                )}
+                                {account.state === 'disabled' ? null
+                                  : tightest ? <QuotaMeter meter={tightest} compact />
+                                    : <div className="muted prov-note">{account.state === 'error' ? (account.error || 'Could not be read') : 'No windows reported.'}</div>}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ))}
                     </div>
                   </>
                 )

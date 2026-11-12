@@ -7,6 +7,7 @@
 // costs nothing: while hidden, or after a quiet spell with no half-typed text.
 // Chat runs live on the server and unsent messages sit in the outbox, so a reload
 // loses nothing else.
+import { downloadActive, downloads } from './downloads'
 
 const CHECK_MS = 5 * 60_000
 const IDLE_MS = 2 * 60_000
@@ -27,7 +28,8 @@ export function hasUnsentText(doc: Document = document): boolean {
   return Array.from(doc.querySelectorAll<HTMLElement>('[contenteditable="true"]')).some((el) => !!el.textContent?.trim())
 }
 
-export function shouldReload(o: { running: string | null; served: string | null; hidden: boolean; idleMs: number; unsentText: boolean }): boolean {
+export function shouldReload(o: { running: string | null; served: string | null; hidden: boolean; idleMs: number; unsentText: boolean; downloading?: boolean }): boolean {
+  if (o.downloading) return false
   if (!o.running || !o.served || o.running === o.served) return false
   if (o.hidden) return true
   return o.idleMs >= IDLE_MS && !o.unsentText
@@ -43,7 +45,7 @@ export function watchForNewBuild(): void {
 
   const decide = () => {
     if (reloading) return
-    if (shouldReload({ running, served, hidden: document.visibilityState === 'hidden', idleMs: Date.now() - lastInput, unsentText: hasUnsentText() })) {
+    if (shouldReload({ running, served, hidden: document.visibilityState === 'hidden', idleMs: Date.now() - lastInput, unsentText: hasUnsentText(), downloading: downloads.getSnapshot().some(downloadActive) })) {
       reloading = true
       location.reload()
     }

@@ -151,6 +151,13 @@ export default function TotemBuilderScreen() {
               </View>
               <T size={12} muted>Off: web search and plain page fetches only.</T>
             </Section>
+            <Section title="Full access">
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Toggle value={draft.access === 'full'} onChange={(v) => patch({ access: v ? 'full' : null })} />
+                <T size={13.5} color={textAlpha(80)} style={{ flex: 1 }}>Run any command (ssh included) and write anywhere, with nobody approving</T>
+              </View>
+              <T size={12} muted>Off: reads, the web, and its own memory and files.</T>
+            </Section>
             <View style={st.actions}>
               <Btn kind="primary" title={busy === 'create' ? 'Creating…' : 'Create totem'} disabled={!!busy || !draft.name.trim() || !draft.instructions.trim() || !watchReady(asWatch(draft.trigger))} onPress={create} />
               <Btn title="Back" disabled={!!busy} onPress={() => setDraft(null)} />

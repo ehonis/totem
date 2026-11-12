@@ -28,8 +28,10 @@ const ETAG_PATHS = new Set([
   '/api/threads',
 ])
 // One record by id: /api/todos/<id>, /api/goals/<id>, /api/lists/<id>. Not
-// /api/goals/search, whose query would land on disk.
-const ETAG_RECORD = /^\/api\/(todos|goals|lists)\/(?!search$)[^/]+$/
+// /api/goals/search, whose query would land on disk, nor /api/todos/sheet, a feed
+// read from a sheet someone else edits, nor /api/todos/issue-states, which is live
+// GitHub state and changes without any write here.
+const ETAG_RECORD = /^\/api\/(todos|goals|lists)\/(?!(?:search|sheet|issue-states)$)[^/]+$/
 
 // Keep it, but ask the bridge before every use; never in a shared cache.
 const CACHE_CONTROL = 'private, no-cache'

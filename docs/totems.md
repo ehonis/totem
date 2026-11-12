@@ -20,7 +20,7 @@ Settings.
 | **Agent totem** (an inline `prompt`, which is what the builder makes) | `runAgentTotem` in `bridge.mjs` | Memory, the NOTIFY/QUIET protocol, runs posted to its chat, model recommendations, optional browser. |
 | **Built-in** (a `runner`) or **skill** job | Exactly what it ran before | A chat (runs that did something are posted to it) and the Totems UI. When it runs a skill (`skillId`), its instructions are edited in the totem's own settings (the skill's body, with preview, reset to the shipped version, and a note naming other totems that share it); a runner with no skill says there is nothing to edit. Nothing sends the owner to Settings → Skills. |
 
-Extra job fields: `taskType`, `browser`, `effort`, `threadId`, `recommendations`.
+Extra job fields: `taskType`, `browser`, `access`, `effort`, `threadId`, `recommendations`.
 `notify` gains `agent`: the totem notifies when its run ends with `NOTIFY:` (and on
 errors).
 
@@ -37,8 +37,13 @@ errors).
 ## A run
 
 `totemRunPrompt` sends the instructions, the memory text and its path, the last five
-runs' previews, and the closing rule. The agent maintains its own memory with its file
-tools (Claude gets `--allowedTools Edit/Write` for exactly that file; Codex gets
+runs' previews, and the closing rule. The memory stays inline here (and in
+`totemAskPrompt`), unlike in chats, where it is only named: a run is a fresh session,
+never resumed, so it is sent once per run rather than once per turn, and it is the
+totem's state (last values seen, what it already notified), which every run needs to
+tell what changed and not notify twice. It is capped at 40,000 characters
+(`TOTEM_MEMORY_MAX`). The agent maintains its own memory with its file
+tools (Claude gets `--allowedTools Read/Edit/Write` for exactly that file; Codex gets
 `sandbox_workspace_write.network_access=true` so a watcher can fetch pages). The reply
 ends with one line:
 
@@ -54,6 +59,33 @@ open the totem's settings (`/totems?totem=<id>`) instead.
 
 The browser is per totem (`browser: true`), off by default. A run gets a fresh grant
 for the totem's thread and the session is closed when it ends.
+
+## Access
+
+A run is unattended, so nothing can approve a command while it runs: whatever its
+permissions refuse stays refused. By default (`access: null`) a run keeps the standard
+job limits: Claude Code in its account's own default permission mode with Edit/Write allowed only on
+the totem's memory and files folder (so `ssh`, system stats and reads outside
+`AGENT_CWD` are refused), Codex on `AGENT_SANDBOX` with network, Cursor with `--force`
+as before. **Full access** (`access: 'full'`, the switch beside Browser in the totem's
+settings and the builder's draft) runs it the way a Full access chat runs:
+`--permission-mode bypassPermissions` for Claude, `danger-full-access` for Codex. Claude's
+secret deny rules still hold. The store also accepts the chat's other modes
+(`supervised`, `edits`, `auto`; `normalizeTotemAccess` in `jobs/store.mjs`), but the UI
+offers only Full or nothing, because "ask" means "refuse" in a run. The builder may
+propose Full (`access` in its draft) only for jobs that ssh, read system state or write
+outside the totem's folders; the owner sees the switch before creating it. A run that is
+not on Full is told which setting would unblock it (`totemReachLines` in
+`totems/core.mjs`), so a refused command ends as one notification naming the fix. Asks
+from a chat (`totems__ask`) run with the same access.
+
+Each run and ask may write its files folder, the totem chat's outputs folder
+(`CHAT_OUTPUTS_DIR/totem-<id>`, `totemFilesDir`), so a script or report it makes shows in
+that chat's Files panel.
+
+An agent holding `BRIDGE_SECRET` can set Full access through `PATCH /api/jobs`. That is
+not a new way out: it could already create a job with any prompt on Cursor, which always
+runs with `--force` (`docs/self-hosting.md` → What remains open).
 
 ## Waking on a change
 
@@ -175,7 +207,9 @@ chat stays one-to-one and takes no members.
 
 - **Its own chat** (`POST /api/totems/:id/thread` makes it): every turn carries
   `totemChatBlock`, so the agent answers as the totem from its memory and recent runs,
-  and may write that memory ("also ignore Ollama stories").
+  and may write that memory ("also ignore Ollama stories"). The block names the memory
+  file with a one-line summary and the agent reads it when the question depends on it;
+  it is not pasted into every turn of the resumed chat (`chat/memory-ref.mjs`).
 - **Any chat** carries `totemsRule` (the totem list) when totems exist. The agent may
   end a reply with a fenced `totem-proposal` block; the bridge strips it into a
   `totem-proposal` part (`memoryNote` and/or new `instructions`). Nothing changes until

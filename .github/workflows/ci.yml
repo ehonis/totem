@@ -19,29 +19,33 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
       # build runs tsc --noEmit first, so this is the typecheck too.
-      - run: npm run build
-      - run: npm test
+      - run: pnpm run build
+      - run: pnpm test
 
   bridge:
     runs-on: ${{ github.event.repository.private && 'box' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       # --ignore-scripts: skip the web postinstall (the job above covers web) and
       # the optional node-pty build; no bridge test needs either.
-      - run: npm ci --ignore-scripts
-      - run: npm test
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm test
 
   mobile:
     runs-on: ${{ github.event.repository.private && 'box' || 'ubuntu-latest' }}

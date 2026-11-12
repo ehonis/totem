@@ -67,7 +67,7 @@ export default function AuthGate({ onUnlock }: AuthGateProps) {
 
 function Shell({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="grid place-items-center h-full p-5">
+    <div className="auth-shell grid place-items-center h-full p-5">
       <div className={card}>
         <h2 className="mt-0 mb-1.5">{title}</h2>
         {children}

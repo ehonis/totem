@@ -5,9 +5,15 @@ import {
   addProviderInstance,
   removeProviderInstance,
   getChatModels,
+  getAiSettings,
+  testAi,
+  ApiError,
   AuthError,
 } from '../api'
+import type { AiSettings as AiSettingsData } from '../api'
 import { useErrorToast } from '../toast'
+import { copyText } from '../clipboard'
+import { plainError } from '../sources/plainError'
 import {
   Hi,
   ArrowPathIcon,
@@ -23,12 +29,12 @@ import {
   TrashIcon,
   LockClosedIcon,
 } from '../icons'
-import UsageView from './UsageView'
+import { IntegrationSection } from './IntegrationsSettings'
+import { SettingsNote, SettingsPage, SettingsRow as Row, SettingsSection } from './settings/ui'
+import ApiKeys from './settings/ApiKeysSection'
+import ProviderDefaults, { FALLBACK_PROVIDER } from './settings/ProviderDefaults'
 import { driverLogo, driverAccent, providerInitial } from '../providers'
 
-// The free platform default. Paid providers fall back to it on usage limits
-// (mirrors FALLBACK_PROVIDER in bridge.mjs).
-const FALLBACK_PROVIDER = 'opencode'
 
 // Loosely-shaped bridge JSON.
 type Model = any
@@ -120,12 +126,13 @@ function RailItem({ provider, active, busy, onSelect, onToggle }: {
  * until blur (or Enter) so a save isn't fired per keystroke against a file the
  * bridge re-reads on every request.
  */
-function SettingRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function SettingRow({ label, hint, status, children }: { label: string; hint?: string; status?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="provider-setting-row">
       <div className="provider-setting-label">
         <strong>{label}</strong>
         {hint && <span>{hint}</span>}
+        {status && <span className="provider-setting-status">{status}</span>}
       </div>
       <div className="provider-setting-control">{children}</div>
     </div>
@@ -168,11 +175,11 @@ function CopyButton({ text, title = 'Copy' }: { text: string; title?: string }) 
       title={title}
       aria-label={title}
       onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text)
+        // The text is on screen anyway if the copy is refused.
+        if (await copyText(text)) {
           setDone(true)
           setTimeout(() => setDone(false), 1400)
-        } catch { /* clipboard blocked — the text is on screen anyway */ }
+        }
       }}
     >
       <Hi icon={done ? CheckIcon : ClipboardIcon} size={15} />
@@ -451,31 +458,6 @@ function ProviderModels({ driver, models, saving, onFavorite, onMove, onHide, on
   )
 }
 
-// The default-model picker for the default account. defaultModel may carry param
-// brackets (e.g. composer-2.5[fast=true]) so the dropdown matches on the bare id.
-function DefaultModelPicker({ defaultModel, models, saving, onChange }: {
-  defaultModel?: string
-  models: Model[]
-  saving: string | null
-  onChange: (model: string) => void
-}) {
-  const baseId = (defaultModel || '').split('[')[0]
-  return (
-    <select
-      className="model-select"
-      value={baseId}
-      disabled={saving === 'defaultModel'}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {!models.some((m) => m.id === baseId) && baseId && <option value={baseId}>{baseId}</option>}
-      {!baseId && <option value="">Provider default</option>}
-      {models.map((m) => (
-        <option key={m.id} value={m.id}>{m.name}{m.recommended ? ' (recommended)' : ''}</option>
-      ))}
-    </select>
-  )
-}
-
 // ---------------------------------------------------------------------------
 // One account's detail pane
 // ---------------------------------------------------------------------------
@@ -485,8 +467,6 @@ interface DetailProps {
   saving: string | null
   models?: Model[]
   modelHandlers: ModelHandlers
-  defaultModel?: string
-  onChangeDefaultModel: (model: string) => void
   onPatchInstance: (patch: any) => void
   onMakeDefault: () => void
   onToggleStreaming: () => void
@@ -494,9 +474,16 @@ interface DetailProps {
 }
 
 function ProviderDetail({
-  provider, saving, models, modelHandlers, defaultModel,
-  onChangeDefaultModel, onPatchInstance, onMakeDefault, onToggleStreaming, onRemove,
+  provider, saving, models, modelHandlers,
+  onPatchInstance, onMakeDefault, onToggleStreaming, onRemove,
 }: DetailProps) {
+  const [test, setTest] = useState<{ ok: boolean; ms: number; reply?: string; error?: string } | 'running' | null>(null)
+  useEffect(() => setTest(null), [provider.id])
+  async function runTest() {
+    setTest('running')
+    try { setTest(await testAi(provider.id)) }
+    catch (e: any) { setTest({ ok: false, ms: 0, error: e instanceof ApiError ? e.message : String(e?.message || e) }) }
+  }
   const busy = saving === provider.id
   const isCodex = provider.driver === 'codex'
   const homeLabel = isCodex ? 'CODEX_HOME path' : 'CLAUDE_CONFIG_DIR path'
@@ -528,7 +515,7 @@ function ProviderDetail({
       </header>
 
       <section className="provider-card">
-        <SettingRow label="Display name" hint="What this account is called in chats, jobs and the Usage tab.">
+        <SettingRow label="Display name" hint="What this account is called in chats, totems and on the Usage page.">
           <DraftInput
             value={provider.name}
             placeholder={provider.cli}
@@ -543,15 +530,66 @@ function ProviderDetail({
         {/* Signing in has to happen in a terminal on this box — the CLI opens a
             browser and writes its own credentials. The command carries the home
             override; without it you would sign the *default* account in twice. */}
-        <SettingRow label="Sign-in command" hint={provider.authenticated === false ? 'Run this on this machine, then re-check.' : 'Run this to sign this account in again.'}>
+        <SettingRow
+          label="Sign-in"
+          hint={provider.authenticated === false
+            ? 'Run this in a terminal on the server, then Test.'
+            : 'Run this on the server to sign in again. Test sends one tiny prompt to see that it reaches its model.'}
+          status={test && test !== 'running'
+            ? <span className={test.ok ? 's-ok' : 's-bad'}>{test.ok ? `Test answered in ${(test.ms / 1000).toFixed(1)}s.` : `Test failed: ${plainError(test.error || test.reply) || 'no reply'}`}</span>
+            : undefined}
+        >
           <div className="provider-command">
             <code>{provider.authCommand}</code>
             <CopyButton text={provider.authCommand} title="Copy sign-in command" />
+            <button className="btn compact" disabled={test === 'running' || !provider.installed} onClick={runTest}>
+              {test === 'running' ? 'Testing…' : 'Test'}
+            </button>
           </div>
         </SettingRow>
+        {provider.supportsStreaming && (
+          <SettingRow
+            label="Streaming"
+            hint={provider.streaming
+              ? 'Tokens and tool activity appear live in web chat.'
+              : 'Replies arrive in one block when finished.'}
+          >
+            <button
+              className={`provider-switch ${provider.streaming ? 'on' : ''}`}
+              disabled={!provider.installed || busy}
+              onClick={onToggleStreaming}
+              aria-label={`${provider.streaming ? 'Disable' : 'Enable'} streaming for ${provider.name}`}
+            >
+              <span />
+            </button>
+          </SettingRow>
+        )}
       </section>
 
-      <div className="settings-section-title"><span /><strong>Runtime</strong></div>
+      {provider.supportsModelPicker && (
+        <>
+          <div className="settings-section-title"><span /><strong>Models</strong></div>
+          <section className="provider-card">
+            <ProviderModels
+              driver={provider.driver}
+              models={models}
+              saving={saving === `models:${provider.id}`}
+              onFavorite={(id) => modelHandlers.favorite(provider, id)}
+              onMove={(id, dir) => modelHandlers.move(provider, id, dir)}
+              onHide={(id) => modelHandlers.hide(provider, id)}
+              onRemove={(id) => modelHandlers.remove(provider, id)}
+              onAdd={(id) => modelHandlers.add(provider, id)}
+            />
+          </section>
+        </>
+      )}
+
+      {/* What runs on the box: rarely touched, and locked unless the server allows it. */}
+      <details className="provider-advanced">
+        <summary>
+          <span>Runtime and environment</span>
+          <small>{locked ? 'Read-only' : 'Binary, config directory, arguments, variables'}</small>
+        </summary>
       {locked && (
         <p className="muted provider-locked-note">
           Runtime and environment settings are read-only here. Edit data/provider-config.json on the box, or set
@@ -612,57 +650,7 @@ function ProviderDetail({
         )}
       </section>
 
-      <div className="settings-section-title"><span /><strong>Behaviour</strong></div>
-      <section className="provider-card">
-        <SettingRow
-          label="Default provider"
-          hint={provider.default
-            ? (provider.id === FALLBACK_PROVIDER
-              ? 'Used by the iOS shortcut and new web chats.'
-              : `Used by the iOS shortcut and new web chats. Falls back to ${FALLBACK_PROVIDER} on usage limits.`)
-            : 'Make this the account unqualified requests run on.'}
-        >
-          <button className="btn compact" disabled={provider.default || !provider.installed || busy} onClick={onMakeDefault}>
-            {provider.default ? 'Default account' : 'Make default'}
-          </button>
-        </SettingRow>
-        {provider.supportsStreaming && (
-          <SettingRow
-            label="Streaming"
-            hint={provider.streaming
-              ? 'Tokens and tool activity appear live in web chat.'
-              : 'Replies arrive in one block when finished.'}
-          >
-            <button
-              className={`provider-switch ${provider.streaming ? 'on' : ''}`}
-              disabled={!provider.installed || busy}
-              onClick={onToggleStreaming}
-              aria-label={`${provider.streaming ? 'Disable' : 'Enable'} streaming for ${provider.name}`}
-            >
-              <span />
-            </button>
-          </SettingRow>
-        )}
-        {provider.default && provider.supportsModelPicker && (
-          <SettingRow label="Default model" hint="What runs when a request names no model.">
-            <DefaultModelPicker defaultModel={defaultModel} models={models || []} saving={saving} onChange={onChangeDefaultModel} />
-          </SettingRow>
-        )}
-        {!provider.isDefaultInstance && (
-          <SettingRow
-            label="Remove account"
-            hint={provider.default
-              ? 'This is the default provider — make another account the default first.'
-              : 'Forgets this account here. Its config directory and login are left on disk.'}
-          >
-            <button className="btn compact danger" disabled={busy || provider.default} onClick={onRemove}>
-              <Hi icon={TrashIcon} size={15} /> Remove
-            </button>
-          </SettingRow>
-        )}
-      </section>
-
-      <div className="settings-section-title"><span /><strong>Environment</strong></div>
+        <div className="provider-advanced-label">Environment</div>
       <section className="provider-card">
         <EnvironmentEditor
           env={provider.env || []}
@@ -671,22 +659,17 @@ function ProviderDetail({
         />
       </section>
 
-      {provider.supportsModelPicker && (
-        <>
-          <div className="settings-section-title"><span /><strong>Models</strong></div>
-          <section className="provider-card">
-            <ProviderModels
-              driver={provider.driver}
-              models={models}
-              saving={saving === `models:${provider.id}`}
-              onFavorite={(id) => modelHandlers.favorite(provider, id)}
-              onMove={(id, dir) => modelHandlers.move(provider, id, dir)}
-              onHide={(id) => modelHandlers.hide(provider, id)}
-              onRemove={(id) => modelHandlers.remove(provider, id)}
-              onAdd={(id) => modelHandlers.add(provider, id)}
-            />
-          </section>
-        </>
+      </details>
+
+      {!provider.isDefaultInstance && (
+        <div className="provider-remove">
+          <span className="muted">{provider.default
+            ? 'This is the default account. Make another account the default before removing it.'
+            : 'Removing forgets the account here. Its config directory and login stay on disk.'}</span>
+          <button className="btn compact danger" disabled={busy || provider.default} onClick={onRemove}>
+            <Hi icon={TrashIcon} size={15} /> Remove account
+          </button>
+        </div>
       )}
     </div>
   )
@@ -696,11 +679,11 @@ function ProviderDetail({
 
 interface ProvidersViewProps {
   onAuthError: () => void
-  /** URL hash section to scroll to once loaded — 'usage' today. */
-  scrollTo?: string
+  /** Open another Settings pane (the CLIProxy page links back here). */
+  onNavigate?: (section: string, hash?: string | null) => void
 }
 
-export default function ProvidersView({ onAuthError, scrollTo }: ProvidersViewProps) {
+export default function ProvidersView({ onAuthError }: ProvidersViewProps) {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -710,6 +693,8 @@ export default function ProvidersView({ onAuthError, scrollTo }: ProvidersViewPr
   // Model catalogs are fetched lazily per account (on first view) and cached here
   // so the model list and the default-model picker share one source.
   const [modelCatalogs, setModelCatalogs] = useState<Record<string, Model[]>>({})
+  const [ai, setAi] = useState<AiSettingsData | null>(null)
+  useEffect(() => { getAiSettings().then(setAi).catch(() => {}) }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -748,6 +733,11 @@ export default function ProvidersView({ onAuthError, scrollTo }: ProvidersViewPr
     if (current?.supportsModelPicker) ensureModels(current.id)
   }, [current?.id, current?.supportsModelPicker, ensureModels])
 
+  const defaultAccount = providers.find((p) => p.default) || null
+  useEffect(() => {
+    if (defaultAccount?.supportsModelPicker) ensureModels(defaultAccount.id)
+  }, [defaultAccount?.id, defaultAccount?.supportsModelPicker, ensureModels])
+
   const apply = useCallback(async (key: string, patch: any) => {
     setSaving(key)
     setError(null)
@@ -770,11 +760,12 @@ export default function ProvidersView({ onAuthError, scrollTo }: ProvidersViewPr
     // automatically fall back to opencode when that happens.
     if (provider.id !== FALLBACK_PROVIDER) {
       const ok = window.confirm(
-        `${provider.name} has usage limits. When it hits a limit, requests will automatically fall back to ${FALLBACK_PROVIDER} (the free platform default).\n\nMake ${provider.name} the default provider?`,
+        `${provider.name} has usage limits. When it hits a limit, requests will automatically fall back to OpenCode (the free platform default).\n\nMake ${provider.name} the default provider?`,
       )
       if (!ok) return
     }
-    apply(provider.id, { defaultProvider: provider.id })
+    // The old default's model id means nothing to another CLI; start from its own default.
+    apply(provider.id, { defaultProvider: provider.id, defaultModel: null })
   }
 
   function toggleEnabled(provider: Provider) {
@@ -895,23 +886,47 @@ export default function ProvidersView({ onAuthError, scrollTo }: ProvidersViewPr
   }), [modelCatalogs, saveModels])
 
   return (
-    <div className="view connections-view">
-      <div className="settings-shell">
-        <header className="settings-top">
-          <div>
-            <h1>Providers</h1>
-            <p>The accounts Totem runs agents on. Claude and Codex can hold several logins, each with its own config directory, models and quota.</p>
-          </div>
-          <div className="settings-actions">
-            {data?.generatedAt && <span>Checked {new Date(data.generatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>}
-            <button className="icon-btn small" onClick={load} title="Refresh"><Hi icon={ArrowPathIcon} size={16} /></button>
-          </div>
-        </header>
+    <SettingsPage>
+      {ai && !ai.configured && (
+        <SettingsNote tone="warn">
+          <span>
+            <strong>No AI is set up yet.</strong> Sign one of the CLIs below in on the server (its sign-in command is under the account), or add an API key.
+            Until then chat, the phone shortcut and totems answer with a pointer back here; everything else works.
+          </span>
+        </SettingsNote>
+      )}
+      {loading && !data ? (
+        <p className="muted">Loading…</p>
+      ) : (
+        <>
+          <ProviderDefaults
+            providers={providers}
+            defaultModel={data?.defaultModel}
+            models={defaultAccount ? modelCatalogs[defaultAccount.id] || [] : []}
+            saving={saving}
+            checkedAt={data?.generatedAt}
+            onRefresh={load}
+            onMakeDefault={makeDefault}
+            onChangeModel={changeDefaultModel}
+          />
 
-        {loading && !data ? (
-          <div className="spinner">Loading...</div>
-        ) : (
-          <>
+          <SettingsSection
+            id="accounts"
+            title="Accounts"
+            description="The agent CLIs on the server. Claude and Codex can hold several logins, each with its own config directory, models and quota."
+            plain
+            action={drivers.filter((d: any) => d.multiAccount).map((d: any) => (
+              <button
+                key={d.driver}
+                className="btn compact"
+                disabled={saving === `add:${d.driver}`}
+                onClick={() => addAccount(d)}
+                title={`Add another ${d.name} account`}
+              >
+                <Hi icon={PlusIcon} size={14} /> {d.name}
+              </button>
+            ))}
+          >
             <div className="provider-workbench">
               <aside className="provider-rail">
                 {providers.map((p) => (
@@ -924,19 +939,6 @@ export default function ProvidersView({ onAuthError, scrollTo }: ProvidersViewPr
                     onToggle={() => toggleEnabled(p)}
                   />
                 ))}
-                <div className="provider-rail-add">
-                  {drivers.filter((d: any) => d.multiAccount).map((d: any) => (
-                    <button
-                      key={d.driver}
-                      className="btn compact"
-                      disabled={saving === `add:${d.driver}`}
-                      onClick={() => addAccount(d)}
-                      title={`Add another ${d.name} account`}
-                    >
-                      <Hi icon={PlusIcon} size={14} /> {d.name}
-                    </button>
-                  ))}
-                </div>
               </aside>
 
               {current ? (
@@ -945,22 +947,28 @@ export default function ProvidersView({ onAuthError, scrollTo }: ProvidersViewPr
                   saving={saving}
                   models={modelCatalogs[current.id]}
                   modelHandlers={modelHandlers}
-                  defaultModel={data?.defaultModel}
-                  onChangeDefaultModel={changeDefaultModel}
                   onPatchInstance={(patch) => patchInstance(current, patch)}
                   onMakeDefault={() => makeDefault(current)}
                   onToggleStreaming={() => toggleStreaming(current)}
                   onRemove={() => removeAccount(current)}
                 />
               ) : (
-                <div className="provider-detail-pane muted">No providers found on this box.</div>
+                <div className="provider-detail-pane muted">No agent CLIs found on this server.</div>
               )}
             </div>
+          </SettingsSection>
 
-            <UsageView embedded onAuthError={onAuthError} scrollIntoView={scrollTo === 'usage'} />
-          </>
-        )}
-      </div>
-    </div>
+          <ApiKeys data={ai} onSaved={setAi} onAuthError={onAuthError} />
+
+          <IntegrationSection
+            id="cliproxy"
+            which="cliproxy"
+            title="CLIProxy"
+            description="A proxy that pools several subscription logins behind one endpoint. Once it is connected, its accounts and quota show on the CLIProxy page."
+            onAuthError={onAuthError}
+          />
+        </>
+      )}
+    </SettingsPage>
   )
 }

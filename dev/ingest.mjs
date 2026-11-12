@@ -1,5 +1,5 @@
 // dev/ingest.mjs — `POST /api/alerts/:source`: alerts from outside become owner
-// notifications.
+// notifications. And `POST /api/dev/runs/:slug`: an ORCH thread's status (below).
 //
 // Mounted before the /api/* auth gate, because a sender (a PostHog webhook, a
 // cron on another box) cannot hold the owner's sign-in. It authorises itself
@@ -8,6 +8,7 @@
 // logged.
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { readJson } from './http.mjs'
+import { SLUG_RE } from './runs.mjs'
 
 const JSON_TYPE = { 'content-type': 'application/json; charset=utf-8' }
 const MAX_BODY = 64 * 1024
@@ -103,6 +104,42 @@ export function createAlertIngestHandler({ alerts, token = () => process.env.ALE
 
     const { alert, notified } = await alerts.record({ source, ...mapAlert(source, body) })
     send(res, 200, { ok: true, id: alert.id, notified })
+    return true
+  }
+}
+
+// `POST /api/dev/runs/:slug`: an ORCH thread's status (dev/runs.mjs). Its own token,
+// DEV_RUNS_TOKEN, else ALERT_INGEST_TOKEN; same rules as the alert route above. Only POST is claimed ahead of the auth
+// gate; GET and PUT on the same paths are the dashboard's and stay behind it.
+const RUN_PATH_RE = /^\/api\/dev\/runs\/[^/]+$/
+
+/** Matched in bridge.mjs ahead of the auth gate. */
+export const isRunIngestRequest = (method, path) => method === 'POST' && RUN_PATH_RE.test(path)
+
+export function createRunIngestHandler({ runs, token = () => process.env.DEV_RUNS_TOKEN || process.env.ALERT_INGEST_TOKEN }) {
+  if (!runs) throw new TypeError('createRunIngestHandler requires runs')
+  return async function runIngestHandler(req, res, suppliedUrl) {
+    const url = suppliedUrl instanceof URL ? suppliedUrl : new URL(req.url, 'http://localhost')
+    if (!isRunIngestRequest(req.method, url.pathname)) return false
+    const expected = token()
+    if (!expected) { send(res, 404, { error: 'not found' }); return true }
+    if (!sameToken(presentedToken(req), expected)) { send(res, 401, { error: 'unauthorized' }); return true }
+
+    let slug
+    try { slug = decodeURIComponent(url.pathname.slice('/api/dev/runs/'.length)) } catch { slug = '' }
+    if (!SLUG_RE.test(slug)) { send(res, 400, { error: 'slug must be 1-64 of a-z, 0-9 and -' }); return true }
+
+    const { body, tooLarge, invalid } = await readJson(req, MAX_BODY)
+    if (tooLarge) { send(res, 413, { error: 'body over 64 KB' }); return true }
+    if (invalid || !isObj(body)) { send(res, 400, { error: 'body must be a JSON object' }); return true }
+
+    try {
+      const { run, notified } = await runs.ingest(slug, body)
+      send(res, 200, { ok: true, slug, archived: run.archived, notified })
+    } catch (e) {
+      if (e.status === 400) send(res, 400, { error: e.message })
+      else send(res, 500, { error: 'could not save the run' })
+    }
     return true
   }
 }

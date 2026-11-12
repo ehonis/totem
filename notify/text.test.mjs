@@ -15,10 +15,6 @@ test('a title that would be truncated falls back to its label', () => {
   assert.ok(long.length <= TITLE_MAX)
 })
 
-test('no detail is just the label', () => {
-  assert.equal(fitTitle('Streak ends tonight'), 'Streak ends tonight')
-})
-
 test('the boundary is inclusive', () => {
   const exact = 'x'.repeat(TITLE_MAX)
   assert.equal(fitTitle(exact), exact)

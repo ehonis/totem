@@ -11,6 +11,7 @@ import { IconPlayerStopFilled, IconClock, IconCheck, IconMailOpened, IconChevron
 import type { ChatThread, Project } from './types'
 import { pendingQuestions } from './questions'
 import { pendingApproval } from './approvals'
+import { pendingInboxCards } from './inboxCards'
 
 // The running-chats panel, bottom-right on every screen. It lists the chats that
 // are answering and the finished ones he hasn't read yet (`needsReply`), that he
@@ -19,7 +20,9 @@ import { pendingApproval } from './approvals'
 // stays until he replies, marks it read, settles or snoozes it. The panel starts
 // folded to its pill and stays that way until he opens it, so a reload doesn't
 // put it in front of him; opened, it groups chats by where they live and offers
-// what the chats panel does: open, stop, snooze, settle, mark as read.
+// what the chats panel does: open, stop, snooze, settle, mark as read. A chat
+// whose agent staged an inbox proposal still waiting on him stays too, marked
+// "Waiting on your approval" (inboxCards.ts), read or not, until he decides it.
 //
 // On a phone, a project or folder page lists that place's recent chats, and the
 // panel would sit on top of them: there it drops the unread chats from elsewhere
@@ -72,10 +75,13 @@ function Row({ t, run, now, onOpen, onSnooze }: {
   const failed = !run && failedReply(t)
   const asking = pendingQuestions(t)
   const approving = !asking && pendingApproval(t)
+  const proposals = !asking && !approving ? pendingInboxCards(t) : []
   const status = asking
     ? <span className="vc-asking">{asking.part.questions.length === 1 ? 'A question for you' : `${asking.part.questions.length} questions for you`}</span>
     : approving
     ? <span className="vc-asking">Waiting for your approval</span>
+    : proposals.length
+    ? <span className="vc-asking" title={proposals.map((p) => p.title).join('\n')}>Waiting on your approval: {proposals.length === 1 ? proposals[0].title : `${proposals.length} proposals`}</span>
     : run
     ? <><span className="vc-live-dot" aria-hidden /><span>{elapsed(now - run.startedAt)} · {run.activity || 'Working'}</span></>
     : failed
@@ -153,7 +159,7 @@ export default function RunningChats({ onOpenChat, onShowPanel, narrow }: { onOp
   }, [runs, open])
 
   const candidates = useMemo(() => threads.filter((t) => (
-    !t.totemId && (runs[t.id] || pendingQuestions(t) || (t.needsReply && !onPlacePage)) && !onScreen.rows.has(t.id) && !onScreen.open.has(t.id)
+    !t.totemId && (runs[t.id] || pendingQuestions(t) || pendingInboxCards(t).length || (t.needsReply && !onPlacePage)) && !onScreen.rows.has(t.id) && !onScreen.open.has(t.id)
     && !isSnoozed(t, now) && t.settledOverride !== 'settled'
   )), [threads, runs, onScreen, now, onPlacePage])
 
@@ -187,8 +193,9 @@ export default function RunningChats({ onOpenChat, onShowPanel, narrow }: { onOp
   if (!visible.length) return null
 
   const running = visible.filter((t) => runs[t.id]).length
-  const done = visible.length - running
-  const summary = [running && `${running} running`, done && `${done} unread`].filter(Boolean).join(' · ')
+  const waiting = visible.filter((t) => !runs[t.id] && pendingInboxCards(t).length).length
+  const done = visible.length - running - waiting
+  const summary = [running && `${running} running`, waiting && `${waiting} waiting on you`, done && `${done} unread`].filter(Boolean).join(' · ')
 
   if (collapsed) {
     return (

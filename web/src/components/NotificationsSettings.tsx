@@ -14,7 +14,8 @@
  * The third is Duplicates: the dedupe gate's settings, and what it held back.
  */
 import React, { useCallback, useEffect, useState } from 'react'
-import { Hi, BellAlertIcon, WarnIcon, ArrowPathIcon, CheckCircleIcon, DevicePhoneMobileIcon } from '../icons'
+import { Hi, BellAlertIcon, WarnIcon, ArrowPathIcon, DevicePhoneMobileIcon } from '../icons'
+import { SettingsLoading, SettingsNote, SettingsPage, SettingsRow, SettingsSection, Switch } from './settings/ui'
 import {
   readPushState, subscribeToPush, unsubscribeFromPush, sendTestPush, getDevices,
   getDedupe, saveDedupe, STORY_MATCH,
@@ -103,154 +104,93 @@ export default function NotificationsSettings() {
     setBusy(false)
   }
 
-  if (!state) return <div className="settings-pane"><header className="settings-pane-head"><h2>Notifications</h2></header></div>
+  if (!state) return <SettingsLoading />
 
   const active = devices.filter((d) => d.state === 'active')
   const expired = devices.filter((d) => d.state === 'expired')
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent)
 
   return (
-    <div className="settings-pane">
-      <header className="settings-pane-head">
-        <h2>Notifications</h2>
-        <p>
-          Push notifications from Totem itself — reminders, the daily digest, and anything
-          that breaks. Test it from here and watch your phone.
-        </p>
-      </header>
-
+    <SettingsPage>
       {!configured && (
-        <div className="shortcut-warn error">
+        <SettingsNote tone="error">
           <WarnIcon />
           <span>
-            The server has no VAPID keys. Run <code>node notify/cli.mjs keys</code> on the box,
-            paste the three lines into <code>.env</code>, and restart the bridge.
+            The server has no VAPID keys. Run <code>node notify/cli.mjs keys</code> on the server,
+            paste the three lines into <code>.env</code>, and restart Totem.
           </span>
-        </div>
+        </SettingsNote>
       )}
+      {state.blocker && <SettingsNote tone="warn"><WarnIcon /><span>{state.blocker}</span></SettingsNote>}
 
-      {state.blocker && (
-        <div className="shortcut-warn">
-          <WarnIcon />
-          <span>{state.blocker}</span>
-        </div>
-      )}
-
-      <div className="settings-section-title"><span /><strong>This device</strong></div>
-      <div className="setting-list">
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Push notifications</strong>
-            <span>
-              {state.subscribed
-                ? 'This device is registered and will receive notifications.'
-                : 'Ask for permission and register this device.'}
+      <SettingsSection id="push" title="This device" description="Reminders, the daily digest, chats that finish while you are away, and anything that breaks.">
+        <SettingsRow
+          id="push-toggle"
+          title="Push notifications"
+          description={state.subscribed ? 'This device is registered and gets notifications.' : 'Asks this browser for permission and registers it.'}
+          control={state.subscribed ? (
+            <button className="btn" onClick={disable} disabled={busy}>Turn off</button>
+          ) : (
+            <button className="btn primary" onClick={enable} disabled={busy || Boolean(state.blocker) || !configured}>
+              {busy ? 'Working…' : 'Turn on'}
+            </button>
+          )}
+        />
+        <SettingsRow
+          id="push-test"
+          title="Send a test"
+          description="Goes the same way the real notifications do, to every registered device."
+          status={test && (
+            <span className={test.ok ? 's-ok' : 's-bad'}>
+              {test.ok
+                ? `Sent to ${test.delivered} device${test.delivered === 1 ? '' : 's'}. If nothing shows, check Focus modes${ios ? ' and that Totem is on the Home Screen' : ''}.`
+                : describeFailure(test)}
+              {test.results.filter((r) => !r.ok).map((r) => <em key={r.label}> {r.label}: {r.error || `HTTP ${r.status}`}.</em>)}
             </span>
-          </div>
-          <div className="setting-control">
-            {state.subscribed ? (
-              <button className="btn" onClick={disable} disabled={busy}>Turn off</button>
-            ) : (
-              <button className="btn primary" onClick={enable} disabled={busy || Boolean(state.blocker) || !configured}>
-                {busy ? 'Working…' : 'Turn on'}
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Send a test</strong>
-            <span>
-              Goes through the same path the scheduled digests use. Send it from this
-              computer and it should appear on every registered device.
-            </span>
-          </div>
-          <div className="setting-control">
+          )}
+          control={
             <button className="btn" onClick={runTest} disabled={busy || !configured || active.length === 0}>
               <Hi icon={BellAlertIcon} size={15} /> Send test
             </button>
-          </div>
-        </div>
-      </div>
+          }
+        />
+        {ios && !state.subscribed && (
+          <SettingsRow
+            id="push-iphone"
+            title="On an iPhone, add Totem to the Home Screen first"
+            description="Apple only allows push for installed web apps, never a Safari tab: Share, then Add to Home Screen, then open Totem from that icon and turn push on."
+            control={<button className="btn" onClick={() => void refresh()} disabled={busy}><Hi icon={ArrowPathIcon} size={15} /> Re-check</button>}
+          />
+        )}
+        {error && <p className="s-error">{error}</p>}
+      </SettingsSection>
 
-      {test && (
-        <div className={`shortcut-warn${test.ok ? '' : ' error'}`}>
-          {test.ok ? <CheckCircleIcon /> : <WarnIcon />}
-          <span>
-            {test.ok
-              ? `Sent to ${test.delivered} device${test.delivered === 1 ? '' : 's'}. If nothing arrives, the push service accepted it but the phone did not show it — check Focus modes and that Totem is on the Home Screen.`
-              : describeFailure(test)}
-            {test.results.filter((r) => !r.ok).map((r) => (
-              <em key={r.label}> {r.label}: {r.error || `HTTP ${r.status}`}.</em>
-            ))}
-          </span>
-        </div>
-      )}
-
-      {error && (
-        <div className="shortcut-warn error">
-          <WarnIcon />
-          <span>{error}</span>
-        </div>
-      )}
-
-      <div className="settings-section-title"><span /><strong>Devices</strong></div>
-      <div className="setting-list">
+      <SettingsSection id="push-devices" title="Devices" description="Every device that gets Totem’s notifications.">
         {devices.length === 0 && (
-          <div className="setting-row">
-            <div className="setting-copy">
-              <strong>No devices yet</strong>
-              <span>Turn push on from the device you want notified — most usefully, your phone.</span>
-            </div>
-          </div>
+          <SettingsRow title="No devices yet" description="Turn push on from the device you want notified, most usefully your phone. The iPhone app registers itself." />
         )}
         {active.map((device) => (
-          <div className="setting-row" key={device.id}>
-            <div className="setting-copy">
-              <strong><Hi icon={DevicePhoneMobileIcon} size={14} /> {device.label}</strong>
-              <span>Registered {when(device.createdAt)} · last notification {when(device.lastDeliveredAt)}{device.host ? ` · ${device.host}` : ''}</span>
-            </div>
-            <div className="setting-control"><span className="pill ok">Active</span></div>
-          </div>
+          <SettingsRow
+            key={device.id}
+            title={<><Hi icon={DevicePhoneMobileIcon} size={14} /> {device.label}</>}
+            description={`Registered ${when(device.createdAt)} · last notification ${when(device.lastDeliveredAt)}${device.host ? ` · ${device.host}` : ''}`}
+            control={<span className="pill pill-ok">Active</span>}
+          />
         ))}
         {expired.map((device) => (
-          <div className="setting-row" key={device.id}>
-            <div className="setting-copy">
-              <strong>{device.label}</strong>
-              {/* Named rather than hidden: the usual cause is the web app being
-                  removed from the Home Screen, and silently dropping the row makes
-                  that look like it never existed. */}
-              <span>
-                Gone — the push service rejected it{device.lastError ? ` (${device.lastError})` : ''}.
-                Re-add Totem to that device's Home Screen and turn push on again.
-              </span>
-            </div>
-            <div className="setting-control"><span className="pill warn">Expired</span></div>
-          </div>
+          // Named rather than hidden: the usual cause is the web app being removed
+          // from the Home Screen, and dropping the row makes that look like it never existed.
+          <SettingsRow
+            key={device.id}
+            title={device.label}
+            description={`Gone: the push service rejected it${device.lastError ? ` (${device.lastError})` : ''}. Add Totem to that device’s Home Screen again and turn push on.`}
+            control={<span className="pill pill-warn">Expired</span>}
+          />
         ))}
-      </div>
+      </SettingsSection>
 
       <DuplicatesSection />
-
-      <div className="settings-section-title"><span /><strong>Getting it on your phone</strong></div>
-      <div className="setting-list">
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>iOS needs Totem on the Home Screen</strong>
-            <span>
-              Apple only allows push for installed web apps — it never works from a Safari tab.
-              Open Totem in Safari on the phone, tap Share, then "Add to Home Screen". Open it
-              from the new icon, come back to this page, and tap Turn on.
-            </span>
-          </div>
-          <div className="setting-control">
-            <button className="btn" onClick={() => void refresh()} disabled={busy}>
-              <Hi icon={ArrowPathIcon} size={15} /> Re-check
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </SettingsPage>
   )
 }
 
@@ -285,92 +225,79 @@ function DuplicatesSection() {
     }
   }
 
-  if (!state) return error ? <div className="shortcut-warn error"><WarnIcon /><span>{error}</span></div> : null
+  if (!state) return error ? <SettingsNote tone="error"><WarnIcon /><span>{error}</span></SettingsNote> : null
   const { settings } = state
   const match = STORY_MATCH.some((m) => m.value === settings.sameStoryScore)
     ? STORY_MATCH
     : [...STORY_MATCH, { value: settings.sameStoryScore, label: `Custom (${settings.sameStoryScore})` }]
 
   return (
-    <>
-      <div className="settings-section-title"><span /><strong>Duplicates</strong></div>
-      <div className="setting-list">
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Hold back repeats</strong>
-            <span>
-              Something already said is not said again: a quota stays spent until it resets, and a story
-              several feeds report goes out once. Reminders, approvals and chat answers are never held back.
-            </span>
-          </div>
-          <div className="setting-control">
-            <select className="model-select" value={settings.enabled ? 'on' : 'off'} onChange={(e) => void save({ enabled: e.target.value === 'on' })}>
-              <option value="on">On</option>
-              <option value="off">Off</option>
-            </select>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Same story</strong>
-            <span>How alike two headlines must be. The same link always counts; so does the same model name and version.</span>
-          </div>
-          <div className="setting-control">
-            <select className="model-select" disabled={!settings.enabled} value={String(settings.sameStoryScore)} onChange={(e) => void save({ sameStoryScore: Number(e.target.value) })}>
-              {match.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-            </select>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Compare stories over</strong>
-            <span>How far back a new headline is checked against what was sent.</span>
-          </div>
-          <div className="setting-control">
-            <select className="model-select" disabled={!settings.enabled} value={String(settings.storyWindowHours)} onChange={(e) => void save({ storyWindowHours: Number(e.target.value) })}>
-              {[...new Set([12, 24, 48, 72, 168, settings.storyWindowHours])].sort((a, b) => a - b).map((h) => (
-                <option key={h} value={h}>{h < 48 ? `${h} hours` : `${h / 24} days`}</option>
+    <SettingsSection
+      id="duplicates"
+      title="Duplicates"
+      description="Something already said is not said again: a quota stays spent until it resets, and a story several feeds report goes out once. Reminders, approvals and chat answers are never held back."
+    >
+      <SettingsRow
+        id="dedupe"
+        title="Hold back repeats"
+        control={<Switch label="Hold back repeats" checked={settings.enabled} onChange={(v) => void save({ enabled: v })} />}
+      />
+      {settings.enabled && (
+        <>
+          <SettingsRow
+            id="same-story"
+            title="Same story"
+            description="How alike two headlines must be. The same link always counts; so does the same model name and version."
+            control={
+              <select className="model-select" aria-label="Same story" value={String(settings.sameStoryScore)} onChange={(e) => void save({ sameStoryScore: Number(e.target.value) })}>
+                {match.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+            }
+          />
+          <SettingsRow
+            id="story-window"
+            title="Compare stories over"
+            description="How far back a new headline is checked against what was sent."
+            control={
+              <select className="model-select" aria-label="Compare stories over" value={String(settings.storyWindowHours)} onChange={(e) => void save({ storyWindowHours: Number(e.target.value) })}>
+                {[...new Set([12, 24, 48, 72, 168, settings.storyWindowHours])].sort((a, b) => a - b).map((h) => (
+                  <option key={h} value={h}>{h < 48 ? `${h} hours` : `${h / 24} days`}</option>
+                ))}
+              </select>
+            }
+          />
+          <SettingsRow
+            id="model-check"
+            title="Ask a model about close calls"
+            description="Only for headlines the word and name overlap could not settle, on your default AI account. If it fails or is slow, the notification goes out."
+            control={<Switch label="Ask a model about close calls" checked={settings.modelCheck} onChange={(v) => void save({ modelCheck: v })} />}
+          />
+        </>
+      )}
+      <SettingsRow
+        id="held-back"
+        title={`${state.suppressed} held back in the last ${state.days} days`}
+        description={state.suppressed ? 'Each is counted on the notification it repeated, in the bell.' : 'Nothing has been a repeat lately.'}
+        control={<button className="btn compact" onClick={() => void load()}><Hi icon={ArrowPathIcon} size={14} /> Refresh</button>}
+      >
+        {state.items.length > 0 && (
+          <details className="s-fold">
+            <summary>Show the last {Math.min(10, state.items.length)}</summary>
+            <ul className="s-plain-list">
+              {state.items.slice(0, 10).map((item) => (
+                <li key={item.id}>
+                  <strong>{item.body || item.title}</strong>
+                  <span className="muted">
+                    {item.reason === 'same-story' ? `Same story as “${item.duplicateTitle}”` : 'Already sent'}
+                    {` · ${item.why} · ${when(item.at)}`}
+                  </span>
+                </li>
               ))}
-            </select>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Ask a model about close calls</strong>
-            <span>
-              Only for a pair of headlines the word and name overlap could not settle, on your default AI
-              account. If it fails or is slow, the notification goes out.
-            </span>
-          </div>
-          <div className="setting-control">
-            <select className="model-select" disabled={!settings.enabled} value={settings.modelCheck ? 'on' : 'off'} onChange={(e) => void save({ modelCheck: e.target.value === 'on' })}>
-              <option value="off">Off</option>
-              <option value="on">On</option>
-            </select>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>{state.suppressed} held back in the last {state.days} days</strong>
-            <span>{state.suppressed ? 'Each one is counted on the notification it repeated, in the bell.' : 'Nothing has been a repeat lately.'}</span>
-          </div>
-          <div className="setting-control">
-            <button className="btn" onClick={() => void load()}><Hi icon={ArrowPathIcon} size={15} /> Refresh</button>
-          </div>
-        </div>
-        {state.items.slice(0, 10).map((item) => (
-          <div className="setting-row" key={item.id}>
-            <div className="setting-copy">
-              <strong>{item.body || item.title}</strong>
-              <span>
-                {item.reason === 'same-story' ? `Same story as “${item.duplicateTitle}”` : 'Already sent'}
-                {` · ${item.why} · ${when(item.at)}`}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
-      {error && <div className="shortcut-warn error"><WarnIcon /><span>{error}</span></div>}
-    </>
+            </ul>
+          </details>
+        )}
+      </SettingsRow>
+      {error && <p className="s-error">{error}</p>}
+    </SettingsSection>
   )
 }

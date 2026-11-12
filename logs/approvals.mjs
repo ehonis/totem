@@ -4,6 +4,11 @@
 // The owner activates the lease out of band. Once active, the same conversation may
 // authorize multiple inbox actions; every authorized use slides the inactivity
 // deadline forward. The lease remains auditable and can be revoked immediately.
+//
+// The one-time code is only a proof while `oneTimeCodes()` says so. It travels in a
+// notification, and the notification ledger is a file under data/ that agents can
+// read, so once an approval code is set (auth/approval-code.mjs) the code is not
+// shown, not sent, and not accepted: the owner approves in Totem, with the code.
 
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -30,7 +35,7 @@ function iso(value) {
   return Number.isFinite(value) ? new Date(value).toISOString() : null
 }
 
-export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => {}, now = Date.now, onRequest = null } = {}) {
+export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => {}, now = Date.now, onRequest = null, oneTimeCodes = async () => true } = {}) {
   if (!file) throw new Error('createApprovalStore needs a file')
   let queue = Promise.resolve()
 
@@ -47,7 +52,10 @@ export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => 
     } catch { return [] }
   }
 
+  // While one-time codes are off, none is kept on disk either: the file is
+  // readable by agents, and a code in it is only waiting for codes to come back.
   async function writeAll(grants) {
+    if (!(await oneTimeCodes())) for (const lease of grants) if (lease.code) lease.code = null
     await mkdir(dirname(file), { recursive: true })
     const tmp = `${file}.${randomUUID()}.tmp`
     await writeFile(tmp, JSON.stringify({ grants: grants.slice(-MAX_KEEP), updatedAt: new Date(now()).toISOString() }, null, 2))
@@ -89,10 +97,12 @@ export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => 
     ...(!isLease(lease) ? { legacy: true } : {}),
   })
 
-  const ownerView = (lease) => ({
+  const ownerView = (lease, codes = true) => ({
     ...publicView(lease),
-    code: isLease(lease) && lease.status === 'pending' ? lease.code : null,
+    code: codes && isLease(lease) && lease.status === 'pending' ? lease.code : null,
   })
+
+  const CODES_OFF = 'one-time codes are off on this Totem: the owner approves sessions in Totem → Logs, not by reading out a code'
 
   async function request({ explanation, why, requestedBy = 'unknown' }) {
     const what = String(explanation || '').trim()
@@ -124,7 +134,7 @@ export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => 
         schemaVersion: SCHEMA_VERSION,
         id: randomUUID(),
         kind: 'session',
-        code: makeCode(),
+        code: (await oneTimeCodes()) ? makeCode() : null,
         status: 'pending',
         explanation: what.slice(0, 2000),
         why: reason.slice(0, 2000),
@@ -140,13 +150,17 @@ export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => 
       grants.push(lease)
       await writeAll(grants)
       log(`approval session ${lease.id.slice(0, 8)} requested by ${lease.requestedBy}`)
-      try { await onRequest?.(ownerView(lease)) } catch (error) { log(`approval notify failed: ${error?.message || error}`) }
+      try { await onRequest?.(ownerView(lease, await oneTimeCodes())) } catch (error) { log(`approval notify failed: ${error?.message || error}`) }
       return publicView(lease)
     })
   }
 
   async function approve({ approvalSessionId = null, grantId = null, code = null } = {}) {
     const id = approvalSessionId || grantId
+    if (code && !(await oneTimeCodes())) {
+      if (!id) throw new Error(CODES_OFF)
+      code = null
+    }
     return withLock(async () => {
       const grants = await readAll()
       expire(grants)
@@ -167,6 +181,10 @@ export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => 
 
   async function deny({ approvalSessionId = null, grantId = null, code = null, reason = '' } = {}) {
     const id = approvalSessionId || grantId
+    if (code && !(await oneTimeCodes())) {
+      if (!id) throw new Error(CODES_OFF)
+      code = null
+    }
     return withLock(async () => {
       const grants = await readAll()
       expire(grants)
@@ -202,6 +220,7 @@ export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => 
 
   async function authorize({ approvalSessionId, code = null, requestedBy = 'unknown' } = {}) {
     const requester = actorKey(requestedBy)
+    const codes = await oneTimeCodes()
     return withLock(async () => {
       const grants = await readAll()
       expire(grants)
@@ -213,6 +232,7 @@ export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => 
         throw new Error(`that approval session belongs to ${lease.requestedBy}, not ${requester}`)
       }
 
+      if (lease.status === 'pending' && code && !codes) { await writeAll(grants); throw new Error(CODES_OFF) }
       if (lease.status === 'pending' && code && codeMatches(lease.code, code)) {
         lease.status = 'approved'
         lease.decidedAt = now()
@@ -233,14 +253,15 @@ export function createApprovalStore({ file, ttlMs = DEFAULT_TTL_MS, log = () => 
   }
 
   async function list({ status = null, limit = 50 } = {}) {
+    const codes = await oneTimeCodes()
     return withLock(async () => {
       const grants = await readAll()
-      if (expire(grants)) await writeAll(grants)
+      if (expire(grants) || (!codes && grants.some((lease) => lease.code))) await writeAll(grants)
       const rows = grants
         .filter((lease) => !status || lease.status === status)
         .sort((a, b) => b.requestedAt - a.requestedAt)
         .slice(0, limit)
-        .map(ownerView)
+        .map((lease) => ownerView(lease, codes))
       return {
         grants: rows,
         pending: grants.filter((lease) => isLease(lease) && lease.status === 'pending').length,

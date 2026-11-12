@@ -11,9 +11,23 @@ export type WorkItem = { kind: 'tools'; tools: ToolPart[]; key: string } | { kin
 export type WorkBlock = { kind: 'work'; items: WorkItem[]; key: string }
 
 /**
- * Pull the tool runs, and the text before the last of them, into one `work`
- * block placed where the first of them was. Anything else (a proposal, a file,
- * a sub-agent's card, the owner's steer) stays where it was, outside the fold.
+ * What the agent says between calls is folded only while it is commentary: a
+ * line or two of "let me check…". Anything longer, or shaped like an answer (a
+ * heading, a list, a table, code), stays in the reply, because agents often
+ * answer first and then save a note or file a task, and the line after that
+ * last call ("Noted in memory.") is not the answer.
+ */
+export function isCommentary(text: string) {
+  const t = text.trim()
+  return t.length < 280 && !/^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|\||```)/m.test(t) && !/\n\s*\n/.test(t)
+}
+
+/**
+ * Pull the tool runs, and the commentary before the last of them, into `work`
+ * blocks, each placed where its first step was. Text before the last call that
+ * is not commentary stays in the reply and splits the fold around it, so the
+ * reply still reads in order. Anything else (a proposal, a file, a sub-agent's
+ * card, the owner's steer) stays where it was, outside the fold.
  *
  * Only a settled reply folds. While it runs, what the agent says between its
  * calls stays in the reply where the owner can follow it, and each run of calls
@@ -28,15 +42,27 @@ export function foldWork<B extends { kind: string; key: string }>(list: B[], set
     if (list[i].kind === 'tools' || list[i].kind === 'agent') { last = i; break }
   }
   if (!list.some((b, i) => i <= last && b.kind === 'tools')) return list
-  const items: WorkItem[] = []
   const out: (B | WorkBlock | null)[] = []
+  let items: WorkItem[] = []
   let at = -1
+  const close = () => {
+    if (at < 0) return
+    if (items.some((it) => it.kind === 'tools')) out[at] = { kind: 'work', items, key: `work-${items[0].key}` }
+    else out.splice(at, 1, ...(items as unknown as B[]))
+    items = []
+    at = -1
+  }
   list.forEach((b, i) => {
-    if (i > last || (b.kind !== 'tools' && b.kind !== 'text')) { out.push(b); return }
+    const folds = i <= last && (b.kind === 'tools' || (b.kind === 'text' && isCommentary((b as unknown as { text: string }).text)))
+    if (!folds) {
+      if (b.kind === 'text') close()
+      out.push(b)
+      return
+    }
     if (at < 0) { at = out.length; out.push(null) }
     items.push(b as unknown as WorkItem)
   })
-  out[at] = { kind: 'work', items, key: `work-${items[0].key}` }
+  close()
   return out as (B | WorkBlock)[]
 }
 

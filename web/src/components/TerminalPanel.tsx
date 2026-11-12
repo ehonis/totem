@@ -28,10 +28,8 @@ import {
   type TerminalSessionInfo,
 } from '../terminal/client'
 import { Hi, CommandLineIcon, PlusIcon, XMarkIcon, TrashIcon } from '../icons'
+import ResizeHandle, { TERMINAL_WIDTH, usePublishedWidth } from './ResizeHandle'
 
-const WIDTH_STORAGE_KEY = 'totem.terminal.width'
-const MIN_WIDTH = 340
-const MAX_WIDTH_RATIO = 0.7
 
 // Matches the dashboard's palette (see styles.css :root) so the terminal reads as
 // part of the app rather than a pasted-in black box.
@@ -57,16 +55,6 @@ const XTERM_THEME = {
   brightMagenta: '#a78bfa',
   brightCyan: '#67d3fb',
   brightWhite: '#ffffff',
-}
-
-function clampWidth(width: number): number {
-  const max = Math.max(MIN_WIDTH, Math.floor(window.innerWidth * MAX_WIDTH_RATIO))
-  return Math.min(Math.max(Math.round(width), MIN_WIDTH), max)
-}
-
-function readStoredWidth(): number {
-  const stored = Number(localStorage.getItem(WIDTH_STORAGE_KEY))
-  return clampWidth(Number.isFinite(stored) && stored > 0 ? stored : 520)
 }
 
 /** Short, stable label for a tab. */
@@ -215,7 +203,6 @@ export default function TerminalPanel({ open, onClose }: TerminalPanelProps) {
   const [connection, setConnection] = useState<ConnectionState>('idle')
   const [detail, setDetail] = useState('')
   const [maxSessions, setMaxSessions] = useState(8)
-  const [width, setWidth] = useState(readStoredWidth)
   const [fitToken, setFitToken] = useState(0)
   const [error, setError] = useState('')
 
@@ -319,39 +306,13 @@ export default function TerminalPanel({ open, onClose }: TerminalPanelProps) {
     if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
   }, [])
 
-  // --- width drag ---
-  const draggingRef = useRef(false)
-  const startDrag = useCallback((event: React.PointerEvent) => {
-    event.preventDefault()
-    draggingRef.current = true
-    const onMove = (moveEvent: PointerEvent) => {
-      if (!draggingRef.current) return
-      // The panel is docked right, so width grows as the pointer moves left.
-      setWidth(clampWidth(window.innerWidth - moveEvent.clientX))
-    }
-    const onUp = () => {
-      draggingRef.current = false
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-      document.body.classList.remove('term-resizing')
-      setFitToken((n) => n + 1)
-    }
-    document.body.classList.add('term-resizing')
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
-  }, [])
-
-  useEffect(() => {
-    localStorage.setItem(WIDTH_STORAGE_KEY, String(width))
-    setFitToken((n) => n + 1)
-    // Published so the app's fixed-position affordances (the utilities launcher
-    // and the running-chats panel) can shift clear of the dock instead of sitting on top of it.
-    document.documentElement.style.setProperty('--term-width', `${width}px`)
-  }, [width])
-
-  useEffect(() => () => {
-    document.documentElement.style.removeProperty('--term-width')
-  }, [])
+  // The handle sizes it (--term-w); its real width, which the grid may hold under
+  // that, is published as --term-width for the launcher and the running-chats panel.
+  // Each pane refits itself on resize (its ResizeObserver); the handle bumps no
+  // fitToken, which would also move focus into the shell and send the next arrow
+  // key there instead of to the handle.
+  const panelRef = useRef<HTMLElement | null>(null)
+  usePublishedWidth(panelRef, open, '--term-width')
 
   if (!open) return null
 
@@ -361,14 +322,8 @@ export default function TerminalPanel({ open, onClose }: TerminalPanelProps) {
 
   return (
     // Keystrokes inside the terminal belong to the shell, never to the leader key.
-    <aside className="term-panel" style={{ width }} data-shortcuts-off>
-      <div
-        className="term-resize-handle"
-        onPointerDown={startDrag}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize terminal panel"
-      />
+    <aside className="term-panel" ref={panelRef} data-shortcuts-off>
+      <ResizeHandle role="terminal" {...TERMINAL_WIDTH} label="Resize the terminal panel" />
 
       <div className="term-tabs">
         <div className="term-tabs-scroll">

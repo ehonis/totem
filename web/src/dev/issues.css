@@ -1,0 +1,85 @@
+/* The Dev tab's Issues card (IssuesCard.tsx). Theme colours only: a label's own
+   colours come from labelLook() in issues.ts, computed against --bg-2. */
+
+.dev-issues-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 6px; }
+.dev-issues-search { flex: 1 1 240px; max-width: none; padding: 6px 10px; }
+.dev-issues-search:focus-within { border-color: var(--accent); }
+.dev-issues-search input::-webkit-search-cancel-button { display: none; }
+.dev-issues-kbd {
+  flex: none; font: inherit; font-size: 11px; line-height: 16px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 5px; padding: 0 5px;
+}
+.dev-issues-search:focus-within .dev-issues-kbd { visibility: hidden; }
+.dev-issues-tools .model-select { width: auto; max-width: 220px; }
+.dev-issues-warn { display: flex; font-size: 12.5px; margin: 6px 0; overflow-wrap: anywhere; }
+.dev-issues-count { font-size: 12px; margin: 4px 0 2px; }
+
+.dev-issues-list { list-style: none; margin: 4px -16px 0; padding: 0; }
+.dev-issue {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 16px; border-top: 1px solid var(--line); font-size: 13px; min-width: 0;
+}
+.dev-issue:hover { background: var(--bg-3); }
+/* The row takes focus (Chat about this from the keyboard; Enter opens the issue). */
+.dev-issue:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+.dev-issue-state { flex: none; }
+.dev-issue-state.open { color: var(--green); }
+.dev-issue-state.closed { color: var(--accent-2); }
+.dev-issue-state.not-planned { color: var(--muted); }
+
+/* Only the title is a link; the rest of the row is the card's, for Chat about this. */
+.dev-issue-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 7px; }
+a.dev-issue-title { color: var(--text); text-decoration: none; }
+a.dev-issue-title:hover { text-decoration: underline; text-decoration-color: var(--muted); text-underline-offset: 2px; }
+.dev-issue-repo {
+  flex: none; max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px; color: var(--muted); background: var(--bg-3); border: 1px solid var(--line);
+  border-radius: 6px; padding: 0 6px; line-height: 18px;
+}
+.dev-issue:hover .dev-issue-repo { background: var(--bg-2); }
+.dev-issue-num { flex: none; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.dev-issue-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dev-issue-labels { flex: 0 1 auto; display: flex; gap: 4px; min-width: 0; overflow: hidden; padding: 3px; margin: -3px; }
+.dev-label {
+  flex: none; font: inherit; font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap;
+  padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg-3); color: var(--muted); cursor: pointer;
+  max-width: 14em; overflow: hidden; text-overflow: ellipsis;
+}
+.dev-label-more { cursor: default; }
+.dev-label:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dev-label:hover { filter: brightness(1.15); }
+
+.dev-issue-meta { flex: none; display: inline-flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.dev-avatars { display: inline-flex; padding-left: 2px; }
+.dev-avatar {
+  width: 20px; height: 20px; border-radius: 50%; margin-left: -2px;
+  display: inline-grid; place-items: center; font-size: 9.5px; font-weight: 650; letter-spacing: 0.02em;
+  color: var(--text); background: color-mix(in srgb, hsl(var(--avatar-hue, 220) 65% 55%) 40%, var(--bg-3));
+  box-shadow: 0 0 0 2px var(--bg-2);
+}
+.dev-issue:hover .dev-avatar { box-shadow: 0 0 0 2px var(--bg-3); }
+.dev-avatar.me { box-shadow: 0 0 0 2px var(--bg-2), inset 0 0 0 1.5px var(--accent); }
+.dev-issue:hover .dev-avatar.me { box-shadow: 0 0 0 2px var(--bg-3), inset 0 0 0 1.5px var(--accent); }
+.dev-avatar.more { background: var(--bg-3); color: var(--muted); }
+.dev-issue-comments { display: inline-flex; align-items: center; gap: 3px; min-width: 2.6em; font-variant-numeric: tabular-nums; }
+.dev-issue-comments.none { visibility: hidden; }
+.dev-issue-time { min-width: 3.4em; text-align: right; font-variant-numeric: tabular-nums; }
+
+.dev-issues-empty { padding: 18px 0 8px; text-align: center; color: var(--muted); font-size: 13px; }
+.dev-issues-empty p { margin: 0 0 10px; }
+.dev-issues-more { display: flex; margin: 10px auto 0; }
+.dev-issues-note { font-size: 12px; margin-top: 10px; text-align: center; }
+
+@media (max-width: 720px) {
+  .dev-issues .dev-card-head, .dev-issues .dev-card-actions { flex-wrap: wrap; }
+  .dev-issues .dev-card-actions { flex: 1 1 100%; gap: 8px; }
+  .dev-issues-tools .model-select { flex: 1 1 40%; max-width: none; }
+  .dev-issue { flex-wrap: wrap; row-gap: 4px; align-items: flex-start; }
+  .dev-issue-state { margin-top: 1px; }
+  .dev-issue-main { flex: 1 1 calc(100% - 26px); flex-wrap: wrap; row-gap: 2px; }
+  .dev-issue-title { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .dev-issue-labels { order: 3; flex-wrap: wrap; max-width: none; margin-left: 26px; }
+  .dev-issue-meta { order: 4; margin-left: auto; }
+}

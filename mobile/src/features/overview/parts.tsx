@@ -3,7 +3,7 @@
 // these tokens are kept here instead of in theme.ts.
 import React, { useEffect, useRef } from 'react'
 import { Animated, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native'
-import { alpha, colors, textAlpha } from '../../theme'
+import { activePalette, alpha, colors, textAlpha } from '../../theme'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { IconAlertTriangle, IconChevronRight } from '../../lib/components/overview/icons'
@@ -22,7 +22,7 @@ export const ov = {
   /** color-mix(--ovx-line 70%, transparent): the rule between rows. */
   rowLine: 'rgba(255, 255, 255, 0.06)',
   /** A card's colour without the glass, for strokes that knock a mark out of a line. */
-  knock: '#171a22',
+  knock: activePalette ? activePalette.panel : '#171a22',
   /** .ovx-sys: the system tiles' tint. */
   tile: alpha(colors.bg, 0.4),
   bar: textAlpha(70),

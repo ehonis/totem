@@ -1,53 +1,27 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { ApiError, AuthError, getIntegrations, saveIntegrations } from '../api'
-import type { IntegrationField, IntegrationsPayload } from '../api'
+import type { IntegrationField, IntegrationInfo, IntegrationsPayload } from '../api'
+import { INTEGRATIONS_SAVED } from '../cliproxy/api'
+import { SettingsRow, SettingsSection } from './settings/ui'
 
 /*
- * Settings -> Integrations: the public URL and the services Totem talks to with
- * its own credentials (the Google Sheet task sync). WHOOP and Strava are not
- * here: Bushido holds those grants and Totem reads them from it. Values in the
- * server environment win and are read-only here. MCP-based connections (Google
- * Calendar, Plaud, GitHub, …) live in Studio -> Connections.
+ * The values Totem keeps in data/integrations.json: the public URL and the
+ * services it talks to with its own credentials. There is no Integrations pane
+ * any more; each block is drawn where it belongs: the public URL under General,
+ * the task sheet under Tasks, CLIProxy under Providers. Values set in
+ * the server environment win and are read-only here.
  */
 
 function errorText(e: unknown) {
   return e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
 }
 
-function FieldRow({ field, draft, onDraft, onSave, onClear, saving }: {
-  field: IntegrationField
-  draft: string
-  onDraft: (v: string) => void
-  onSave: () => void
-  onClear: () => void
-  saving: boolean
-}) {
-  return (
-    <div className="setting-row">
-      <div className="setting-copy">
-        <strong>{field.label}</strong>
-        <span>
-          <code>{field.name}</code>{' '}
-          {field.source === 'env' && <>— set in the server environment ({field.masked}); change it there.</>}
-          {field.source === 'settings' && <>— saved here ({field.masked}).</>}
-          {!field.source && '— not set.'}
-        </span>
-      </div>
-      {field.source !== 'env' && (
-        <div className="setting-control flex gap-2">
-          <input className="model-select" type={field.secret ? 'password' : 'text'} autoComplete="off"
-            placeholder={field.source ? 'Replace…' : 'Paste value'} value={draft} onChange={(e) => onDraft(e.target.value)} />
-          <button className="btn" disabled={saving || !draft.trim()} onClick={onSave}>Save</button>
-          {field.source === 'settings' && <button className="btn danger" disabled={saving} onClick={onClear}>Remove</button>}
-        </div>
-      )}
-    </div>
-  )
-}
+let shared: IntegrationsPayload | null = null
+const listeners = new Set<(p: IntegrationsPayload) => void>()
 
-export default function IntegrationsSettings({ onAuthError }: { onAuthError: () => void }) {
-  const [data, setData] = useState<IntegrationsPayload | null>(null)
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
+/** The integrations payload, shared by every block on screen. */
+export function useIntegrations(onAuthError: () => void) {
+  const [data, setData] = useState<IntegrationsPayload | null>(shared)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -57,88 +31,125 @@ export default function IntegrationsSettings({ onAuthError }: { onAuthError: () 
   }, [onAuthError])
 
   useEffect(() => {
-    getIntegrations().then(setData).catch(fail)
+    listeners.add(setData)
+    getIntegrations().then((p) => { shared = p; listeners.forEach((fn) => fn(p)) }).catch(fail)
+    return () => { listeners.delete(setData) }
   }, [fail])
 
-  async function save(values: Record<string, string | null>) {
+  const save = useCallback(async (values: Record<string, string | null>) => {
     setSaving(true)
     setError('')
     try {
       const next = await saveIntegrations(values)
-      setData(next)
-      setDrafts((d) => { const out = { ...d }; for (const k of Object.keys(values)) delete out[k]; return out })
+      shared = next
+      listeners.forEach((fn) => fn(next))
+      window.dispatchEvent(new Event(INTEGRATIONS_SAVED))
+      return true
     } catch (e) {
       fail(e)
+      return false
     } finally {
       setSaving(false)
     }
-  }
+  }, [fail])
 
-  if (!data) {
-    return (
-      <div className="settings-pane">
-        <header className="settings-pane-head"><h2>Integrations</h2></header>
-        <p className="text-muted">{error || 'Loading…'}</p>
-      </div>
-    )
-  }
+  return { data, error, saving, save }
+}
 
-  const field = (f: IntegrationField) => (
-    <FieldRow key={f.name} field={f} saving={saving} draft={drafts[f.name] || ''}
-      onDraft={(v) => setDrafts((d) => ({ ...d, [f.name]: v }))}
-      onSave={() => save({ [f.name]: (drafts[f.name] || '').trim() })}
-      onClear={() => save({ [f.name]: null })} />
-  )
+// What goes in each field, as its placeholder (the bridge's labels name them).
+const PLACEHOLDERS: Record<string, string> = {
+  TASK_SHEET_ID: 'The long ID from the sheet’s URL',
+  TASK_SHEET_TAB: 'e.g. Action items',
+  TASK_SHEET_ASSIGNEES: 'e.g. Sam, SB',
+  TASK_SHEET_TITLE: 'Defaults to the spreadsheet’s title',
+  TASK_SHEET_ACCOUNT: 'Only with several Drive accounts',
+  CLIPROXY_URL: 'https://proxy.example.com',
+  CLIPROXY_MANAGEMENT_KEY: 'A scoped management key',
+}
 
+function sourceLine(field: IntegrationField) {
+  if (field.source === 'env') return <>Set in the server environment ({field.masked}); change it there.</>
+  if (field.source === 'settings') return <>Saved{field.secret ? ` (${field.masked})` : ''}.</>
+  return 'Not set.'
+}
+
+/** One value: a field, Save, and Remove once it is saved here. */
+export function IntegrationFieldRow({ id, field, description, placeholder, saving, onSave }: {
+  id?: string
+  field: IntegrationField
+  description?: React.ReactNode
+  placeholder?: string
+  saving: boolean
+  onSave: (value: string | null) => Promise<boolean>
+}) {
+  const [draft, setDraft] = useState('')
+  const [saved, setSaved] = useState(false)
+  useEffect(() => { if (!saved) return; const t = setTimeout(() => setSaved(false), 2500); return () => clearTimeout(t) }, [saved])
+  const [removed, setRemoved] = useState(false)
+  const commit = (value: string | null) => onSave(value).then((ok) => { if (ok) { setDraft(''); setSaved(value !== null); setRemoved(value === null) } })
+  useEffect(() => { if (!removed) return; const t = setTimeout(() => setRemoved(false), 2500); return () => clearTimeout(t) }, [removed])
+  const fromEnv = field.source === 'env'
+  const shown = !field.secret && field.source ? field.masked || '' : ''
   return (
-    <div className="settings-pane">
-      <header className="settings-pane-head">
-        <h2>Integrations</h2>
-        <p>
-          Services Totem connects to with its own credentials. Everything here is off until you add them. Google
-          Calendar, Plaud, GitHub and other MCP servers are set up in Studio → Connections.
-        </p>
-      </header>
-      {error && <p className="text-[var(--danger,#e5484d)]">{error}</p>}
+    <SettingsRow
+      id={id}
+      title={field.label}
+      description={<>{description}{description ? ' ' : ''}{sourceLine(field)}</>}
+      status={saved ? <span className="s-ok">Saved</span> : removed ? <span className="muted">Removed</span> : undefined}
+      control={fromEnv ? <code>{field.name}</code> : (
+        <form className="s-form" onSubmit={(e) => { e.preventDefault(); if (draft.trim()) commit(draft.trim()) }}>
+          <input
+            className="s-input wide"
+            type={field.secret ? 'password' : 'text'}
+            autoComplete="off"
+            aria-label={field.label}
+            placeholder={shown || placeholder || (field.source ? 'Replace…' : PLACEHOLDERS[field.name] || (field.secret ? 'Paste value' : 'Enter value'))}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <button className="btn" type="submit" disabled={saving || !draft.trim()}>Save</button>
+          {field.source === 'settings' && <button className="btn danger" type="button" disabled={saving} onClick={() => commit(null)}>Remove</button>}
+        </form>
+      )}
+    />
+  )
+}
 
-      <div className="settings-section-title"><span /><strong>This install</strong></div>
-      <div className="setting-list">
-        {field(data.publicUrl)}
-        <p className="text-muted m-0 px-1">
-          The address you open Totem at from other devices, e.g. https://totem.example.com. The first-run setup link
-          is built from it, and behind a proxy that rewrites the host, requests naming it still count as same-origin.
-        </p>
-      </div>
-
-      {data.integrations.map((i) => (
-        <React.Fragment key={i.id}>
-          <div className="settings-section-title"><span /><strong>{i.label}</strong></div>
-          <div className="setting-list">
-            <div className="setting-row">
-              <div className="setting-copy">
-                <strong>{i.configured ? 'Configured.' : 'Not connected'}</strong>
-                <span>
-                  Create a service account at <a href={i.console} target="_blank" rel="noreferrer">Google Cloud</a>, share
-                  the spreadsheet with it as Editor, and fill in the fields below. See <code>{i.docs}</code>.
-                  {i.restartRequired && ' Restart Totem after changing these.'}
-                </span>
-              </div>
-            </div>
-            {i.fields.map(field)}
-            {i.credentialsFile && (
-              <div className="setting-row">
-                <div className="setting-copy">
-                  <strong>Service-account JSON</strong>
-                  <span>
-                    <code>{i.credentialsFile.name}</code> — set in the server environment only (it is a file path the
-                    server reads). {i.credentialsFile.state === 'found' ? 'Found.' : i.credentialsFile.state === 'missing' ? 'Set, but the file does not exist.' : 'Not set.'}
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-        </React.Fragment>
+/**
+ * One integration (the task sheet, CLIProxy) as a section of rows. `children` are
+ * extra rows after the fields; as a function they get the integration as shown.
+ */
+export function IntegrationSection({ id, which, title, description, onAuthError, children }: {
+  id?: string
+  which: IntegrationInfo['id']
+  title: string
+  description?: React.ReactNode
+  onAuthError: () => void
+  children?: React.ReactNode | ((info: IntegrationInfo) => React.ReactNode)
+}) {
+  const { data, error, saving, save } = useIntegrations(onAuthError)
+  const info = data?.integrations.find((i) => i.id === which)
+  if (!data) return error ? <SettingsSection id={id} title={title}><p className="s-error">{error}</p></SettingsSection> : null
+  if (!info) return null
+  return (
+    <SettingsSection
+      id={id}
+      title={title}
+      description={description}
+      action={<span className={`pill ${info.configured ? 'pill-ok' : ''}`}>{info.configured ? 'Connected' : 'Not connected'}</span>}
+    >
+      {info.fields.map((f) => (
+        <IntegrationFieldRow key={f.name} id={`${which}-${f.name.toLowerCase()}`} field={f} saving={saving} onSave={(v) => save({ [f.name]: v })} />
       ))}
-    </div>
+      {typeof children === 'function' ? children(info) : children}
+      {(info.blurb || info.docs) && (
+        <p className="muted">
+          {info.blurb}
+          {info.docs && <> See <code>{info.docs}</code>.</>}
+          {info.restartRequired && ' Restart Totem after changing these.'}
+        </p>
+      )}
+      {error && <p className="s-error">{error}</p>}
+    </SettingsSection>
   )
 }

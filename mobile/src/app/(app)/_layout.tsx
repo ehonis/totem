@@ -10,6 +10,7 @@ import { usePush } from '../../shell/push'
 import { useAccessReauth } from '../../shell/accessReauth'
 import { useMorningCheckin } from '../../shell/morningCheckin'
 import { navigateTo } from '../../shell/nav'
+import { PRODUCTIVITY_APPS, TOOL_LABELS } from '../../shell/routes'
 import { getSettings } from '../../lib/settings'
 import { colors } from '../../theme'
 
@@ -19,7 +20,7 @@ export default function AppLayout() {
   usePush()
   useAccessReauth()
   useMorningCheckin()
-  // Settings → General → Default tab. The app always opens on "/", so a different
+  // Settings → General → Open on. The app always opens on "/", so a different
   // landing tab is one navigation on first mount. (A quick action, handled a tick
   // later, still wins.)
   useEffect(() => {
@@ -45,7 +46,11 @@ export default function AppLayout() {
       <Drawer.Screen name="search" options={{ title: 'Search' }} />
       <Drawer.Screen name="totems" options={{ title: 'Totems' }} />
       <Drawer.Screen name="chat" options={{ title: 'Chat' }} />
-      <Drawer.Screen name="productivity" options={{ title: 'Productivity' }} />
+      {/* Productivity: the hub, then one page per tool at the web's paths (/productivity/todos…). */}
+      <Drawer.Screen name="productivity/index" options={{ title: 'Productivity' }} />
+      {PRODUCTIVITY_APPS.map((app) => (
+        <Drawer.Screen key={app} name={`productivity/${app}`} options={{ title: TOOL_LABELS[app] }} />
+      ))}
       <Drawer.Screen name="inbox" options={{ title: 'Inbox' }} />
       <Drawer.Screen name="fleet" options={{ title: 'Fleet' }} />
       <Drawer.Screen name="settings" options={{ title: 'Settings' }} />

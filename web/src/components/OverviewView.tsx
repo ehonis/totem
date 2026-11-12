@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { isScopedMeter } from '../usagePools'
 import {
-  getTodos, getCalendar, getHabits, getJobs, getAssistantUsage, getProductivity, getInboxCount, getGoals,
+  getTodos, getCalendar, getHabits, getJobs, getAssistantUsage, getProductivity, getInboxCount, getGoals, getAway,
   closeTodo, logHabit, AuthError,
 } from '../api'
+import { awayStatus, dayKey, upcomingAway, type AwaySpan } from '../away'
+import AwayEditor from './AwayEditor'
 import { useAiUsageLive } from '../useAiUsageLive'
 import { DayModal, HabitCheckButton, HabitMetricInput, HabitMetricSection, QuotaDots, isSyncedSleep, type DaySave } from './HabitsView'
 import { send, setActive } from '../chat/store'
@@ -13,6 +16,7 @@ import {
   IconArrowUp, IconChevronRight, IconRefresh, IconCalendarEvent, IconChecklist, IconFlame, IconTarget,
   IconListCheck, IconBulb, IconMicrophone2, IconBrandGithub, IconBrain, IconHistory, IconWand, IconSettings, IconInbox,
   IconAlertTriangle, IconMapPin, IconPlus, IconMinus, IconMessageCircle, IconCheck, IconBolt,
+  IconPlane, IconBeach, IconLuggage,
 } from './overview/icons'
 import { clock, dueDiff, dueLabel, periodTotal, startOfDay, until } from './overview/time'
 import './overview/overview.css'
@@ -20,17 +24,17 @@ import { useOwnerName } from '../useOwnerName'
 import ChatAbout from '../chat/about/ChatAbout'
 import { goalsContext, habitMetricContext, habitsContext, scheduleContext, systemContext, tasksContext, type ChatContext } from '../chat/about/context'
 
-// Usage lives partway down Settings ▸ Providers; Jobs is Studio's second pane,
-// whose route id is still 'workflows' for the sake of old links.
-const USAGE_SECTION: NavTarget = { tab: 'settings', sub: 'providers', hash: 'usage' }
-const JOBS_SECTION: NavTarget = { tab: 'settings', sub: 'jobs' }
+// Usage is its own Settings pane; a failing job opens the Totems page, where
+// every job lives.
+const USAGE_SECTION: NavTarget = { tab: 'settings', sub: 'usage' }
+const JOBS_SECTION: NavTarget = { tab: 'totems' }
 
 type Tabler = React.ComponentType<any>
 
 // Everything Totem has, one tap away. Code, Brain, Logs and Studio are no longer
 // in the side nav, so this row is the way in to them.
 const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
-  { id: 'todos', label: 'Todos', icon: IconChecklist, to: { tab: 'productivity', app: 'todos' } },
+  { id: 'todos', label: 'Tasks', icon: IconChecklist, to: { tab: 'productivity', app: 'todos' } },
   { id: 'calendar', label: 'Calendar', icon: IconCalendarEvent, to: { tab: 'productivity', app: 'calendar' } },
   { id: 'habits', label: 'Habits', icon: IconFlame, to: { tab: 'productivity', app: 'habits' } },
   { id: 'goals', label: 'Goals', icon: IconTarget, to: { tab: 'productivity', app: 'goals' } },
@@ -39,7 +43,7 @@ const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'journal', label: 'Journal', icon: IconMicrophone2, to: { tab: 'productivity', app: 'journal' } },
   { id: 'dev', label: 'Dev', icon: IconBrandGithub, to: 'dev' },
   { id: 'brain', label: 'Brain', icon: IconBrain, to: 'brain' },
-  { id: 'logs', label: 'Logs', icon: IconHistory, to: { tab: 'settings', sub: 'logs' } },
+  { id: 'logs', label: 'Activity', icon: IconHistory, to: { tab: 'settings', sub: 'logs' } },
   { id: 'studio', label: 'Skills', icon: IconWand, to: { tab: 'settings', sub: 'skills' } },
   { id: 'settings', label: 'Settings', icon: IconSettings, to: 'settings' },
 ]
@@ -175,6 +179,29 @@ function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValue, onNo
   )
 }
 
+const AWAY_ICON: Record<string, Tabler> = { trip: IconPlane, off: IconBeach, other: IconLuggage }
+
+// Today's trip or day off, and the next ones within a month, as a band across the top
+// of the schedule. Tapping one opens the editor.
+function AwayBand({ spans, today, onEdit }: { spans: AwaySpan[]; today: string; onEdit: () => void }) {
+  const shown = upcomingAway(spans, today).slice(0, 2)
+  if (!shown.length) return null
+  return (
+    <div className="ovx-away">
+      {shown.map((s) => {
+        const now = s.start <= today
+        return (
+          <button type="button" key={s.id} className={`ovx-away-band${now ? ' now' : ''}`} onClick={onEdit} title="Edit time away">
+            <TI icon={AWAY_ICON[s.kind] || IconLuggage} size={16} />
+            <span className="ovx-away-label">{now ? 'Away' : 'Next away'} · {s.label}</span>
+            <span className="ovx-away-when">{awayStatus(s, today)}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function Bar({ value, tone }: { value: number; tone?: string }) {
   return (
     <span className="ovx-bar" aria-hidden>
@@ -197,6 +224,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
   const [doneIds, setDoneIds] = useState<Set<string>>(() => new Set())
   const [habitBusy, setHabitBusy] = useState<Set<string>>(() => new Set())
   const [habitNote, setHabitNote] = useState<{ habit: any; date: string } | null>(null)
+  const [awayOpen, setAwayOpen] = useState(false)
   const { data: ai } = useAiUsageLive({ onAuthError })
   // A clock that ticks once a minute keeps "now" and "in 20m" honest.
   const [now, setNow] = useState(() => new Date())
@@ -221,6 +249,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
       run('jobs', () => getJobs()),
       run('assistant', getAssistantUsage),
       run('prod', getProductivity),
+      run('away', () => getAway()),
     ])
     const d: any = {}, e: Record<string, string> = {}
     for (const [k, v, err] of results) { d[k] = v; if (err) e[k] = err }
@@ -281,6 +310,12 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
     }
   }, [habitNote, onAuthError])
 
+  // ---- away ------------------------------------------------------------
+  // The bridge's today is the owner's time zone; the device's is the fallback.
+  const awayToday: string = data.away?.today || dayKey(now)
+  const awaySpans: AwaySpan[] = data.away?.spans || []
+  const awayNow = awaySpans.find((s) => s.start <= awayToday && awayToday <= s.end)
+
   // ---- calendar --------------------------------------------------------
   const today0 = startOfDay(now)
   const events: any[] = useMemo(
@@ -331,10 +366,16 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
   const jobsOn = jobs.filter((j) => j.enabled)
   const failing = jobsOn.filter((j) => j.lastRun?.status === 'error')
   const nextJob = jobsOn.filter((j) => j.nextRunAt).sort((a, b) => a.nextRunAt - b.nextRunAt)[0]
-  const accounts: any[] = ai?.ok ? (ai.accounts || []) : []
-  const tightest = (acct: any) => [...(acct.meters || [])].filter((m: any) => m.remainingPct != null)
+  // Switched-off logins serve nothing, and a pooled seat running low is not news
+  // while another in its pool can serve (the pills and nudges agree).
+  const accounts: any[] = ai?.ok ? (ai.accounts || []).filter((a: any) => !a.hidden && !a.disabled) : []
+  const pools: any[] = ai?.pools || []
+  const tightest = (acct: any) => [...(acct.meters || [])].filter((m: any) => m.remainingPct != null && !isScopedMeter(m))
     .sort((a: any, b: any) => a.remainingPct - b.remainingPct)[0]
-  const lowAccounts = accounts.filter((a) => { const m = tightest(a); return m && m.remainingPct <= 15 })
+  // Another seat, not this one: the last seat serving is the one worth naming.
+  const servesItself = (a: any) => a.state === 'ok' || a.state === 'low'
+  const pooledAndServing = (a: any) => a.source === 'cliproxy' && pools.some((p) => p.backend === a.backend && p.total > 1 && p.usable - (servesItself(a) ? 1 : 0) > 0)
+  const lowAccounts = accounts.filter((a) => { const m = tightest(a); return m && m.remainingPct <= 15 && !pooledAndServing(a) })
   const inboxOpen: number = data.inbox?.open || 0
 
   const daily = useMemo(() => {
@@ -351,6 +392,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
   const hour = now.getHours()
   const greeting = hour < 5 ? 'Still up' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
   const summary: string[] = []
+  if (awayNow) summary.push(`away: ${awayNow.label}`)
   if (data.cal) summary.push(remaining.length ? `${remaining.length} ${remaining.length === 1 ? 'event' : 'events'} left today` : 'No more events today')
   if (data.todos) summary.push(focus.length ? `${focus.length} ${focus.length === 1 ? 'task' : 'tasks'} due` : 'nothing due')
   if (data.habits && habits.length) summary.push(habitsLeft.length ? `${habitsLeft.length} ${habitsLeft.length === 1 ? 'habit' : 'habits'} to go` : 'habits done')
@@ -427,6 +469,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
               onOpen={() => onNavigate({ tab: 'productivity', app: 'calendar' })}
               about={() => data.cal && scheduleContext({ allDay: allDayToday, timed: timedToday, tomorrow: showTomorrow ? tomorrowEvents : [] }, now)}
             >
+              {data.away && <AwayBand spans={awaySpans} today={awayToday} onEdit={() => setAwayOpen(true)} />}
               {errs.cal ? <Failed msg={errs.cal} />
                 : !data.cal ? <Loading />
                 : (
@@ -476,6 +519,11 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
                     )}
                   </div>
                 )}
+              {data.away && !upcomingAway(awaySpans, awayToday).length && (
+                <button type="button" className="ovx-away-add" onClick={() => setAwayOpen(true)}>
+                  <TI icon={IconPlane} size={15} />Add time away
+                </button>
+              )}
             </Section>
 
             <Section
@@ -605,7 +653,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
         )}
 
         <section className="ovx-system" aria-label="Totem">
-          <ChatAbout button={false} of={() => systemContext({
+          <ChatAbout of={() => systemContext({
             quotas: accounts.map((a) => ({ name: a.displayName || a.label, label: tightest(a)?.label, remainingPct: tightest(a)?.remainingPct })),
             jobsOn: jobsOn.length, jobsTotal: jobs.length,
             failing: failing.map((j) => ({ name: j.name, error: j.lastRun?.error })),
@@ -677,6 +725,15 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
         </section>
       </div>
 
+      {awayOpen && (
+        <AwayEditor
+          spans={awaySpans.filter((s) => s.end >= awayToday)}
+          today={awayToday}
+          onClose={() => setAwayOpen(false)}
+          onChange={(spans) => setData((d: any) => ({ ...d, away: { ...(d.away || {}), today: awayToday, spans } }))}
+          onAuthError={onAuthError}
+        />
+      )}
       {habitNote && (
         <DayModal
           habit={habitNote.habit}

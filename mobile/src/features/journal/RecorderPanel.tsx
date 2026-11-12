@@ -75,7 +75,7 @@ export default function RecorderPanel({ engineReady, delayMinutes, onSave, onSav
               accessibilityLabel={mainLabel}
               style={[st.btn, live && { borderColor: alpha(colors.red, 0.7) }]}
             >
-              {live ? <Hi icon={StopSolidIcon} size={30} color={colors.red} /> : (
+              {live ? <Hi icon={StopSolidIcon} size={34} color={colors.red} /> : (
                 <LinearGradient
                   colors={['#ff8aa0', colors.red, '#c4324f']}
                   locations={[0, 0.55, 1]}
@@ -107,7 +107,7 @@ export default function RecorderPanel({ engineReady, delayMinutes, onSave, onSav
                 label={live ? 'Live microphone level — the bars move while you talk' : 'Microphone level'}
               />
             </View>
-            <T size={12.5} muted align="center" lineHeight={18} style={{ maxWidth: 460 }}>
+            <T size={13.5} muted align="center" lineHeight={19} style={{ maxWidth: 320 }}>
               {state === 'recording' && 'Recording — tap the square when you’re done.'}
               {state === 'paused' && 'Paused.'}
               {state === 'requesting' && 'Waiting for the microphone…'}
@@ -118,8 +118,8 @@ export default function RecorderPanel({ engineReady, delayMinutes, onSave, onSav
             {live && (
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
                 {state === 'recording'
-                  ? <Btn compact icon={PauseIcon} title="Pause" onPress={recorder.pause} />
-                  : <Btn compact icon={PlayIcon} title="Resume" onPress={recorder.resume} />}
+                  ? <Btn icon={PauseIcon} title="Pause" onPress={recorder.pause} style={{ minHeight: 44, minWidth: 120 }} />
+                  : <Btn icon={PlayIcon} title="Resume" onPress={recorder.resume} style={{ minHeight: 44, minWidth: 120 }} />}
               </View>
             )}
           </View>
@@ -138,8 +138,8 @@ export default function RecorderPanel({ engineReady, delayMinutes, onSave, onSav
           <Waveform samples={result?.waveform || []} height={64} idleColor={colors.accent} label="Waveform of the recording you just made" />
           {result ? <AudioBar source={result.uri} /> : null}
           <View style={st.reviewActions}>
-            <Btn compact kind="danger" icon={TrashIcon} title="Discard" onPress={recorder.reset} disabled={saving} />
-            <Btn kind="primary" onPress={save} disabled={saving} style={{ paddingHorizontal: 18 }}>
+            <Btn kind="danger" icon={TrashIcon} title="Discard" onPress={recorder.reset} disabled={saving} style={{ minHeight: 44 }} />
+            <Btn kind="primary" onPress={save} disabled={saving} style={{ paddingHorizontal: 18, minHeight: 44, flex: 1 }}>
               {saving ? <Spin icon={ArrowPathIcon} size={14} color={colors.white} /> : <Hi icon={CheckCircleIcon} size={16} color={colors.white} />}
               <T weight={600} color={colors.white}>{saving ? 'Saving…' : 'Save'}</T>
             </Btn>
@@ -178,14 +178,14 @@ export default function RecorderPanel({ engineReady, delayMinutes, onSave, onSav
                 style={st.textarea}
               />
               <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8 }}>
-                <Btn compact title="Cancel" onPress={() => setTyping(false)} disabled={saving} />
-                <Btn compact kind="primary" title={saving ? 'Saving…' : 'Save entry'} onPress={saveText} disabled={saving || !text.trim()} />
+                <Btn title="Cancel" onPress={() => setTyping(false)} disabled={saving} style={{ minHeight: 44 }} />
+                <Btn kind="primary" title={saving ? 'Saving…' : 'Save entry'} onPress={saveText} disabled={saving || !text.trim()} style={{ minHeight: 44 }} />
               </View>
             </View>
           ) : (
-            <Press onPress={() => setTyping(true)} style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <Hi icon={PencilIcon} size={12} color={colors.muted} />
-              <T size={12} muted style={{ textDecorationLine: 'underline' }}>Type an entry instead</T>
+            <Press haptic onPress={() => setTyping(true)} style={st.typeBtn} accessibilityRole="button">
+              <Hi icon={PencilIcon} size={14} color={colors.muted} />
+              <T size={14} muted>Type an entry instead</T>
             </Press>
           )}
         </View>
@@ -199,17 +199,17 @@ const mixRed = '#813c50'
 
 const st = StyleSheet.create({
   panel: {
-    backgroundColor: colors.bg2, borderWidth: 1, borderColor: colors.line, borderRadius: 12,
-    paddingTop: 22, paddingHorizontal: 18, paddingBottom: 16, alignItems: 'center', gap: 12,
+    backgroundColor: colors.bg2, borderWidth: 1, borderColor: colors.line,
+    paddingTop: 14, paddingHorizontal: 18, paddingBottom: 8, alignItems: 'center', gap: 8, borderRadius: 16,
   },
-  stage: { width: 112, height: 112, alignItems: 'center', justifyContent: 'center' },
-  ring: { position: 'absolute', width: 112, height: 112, borderRadius: 56, backgroundColor: alpha(colors.red, 0.2) },
+  stage: { width: 120, height: 120, alignItems: 'center', justifyContent: 'center' },
+  ring: { position: 'absolute', width: 120, height: 120, borderRadius: 60, backgroundColor: alpha(colors.red, 0.2) },
   btn: {
-    width: 76, height: 76, borderRadius: 38, backgroundColor: colors.bg3, borderWidth: 3, borderColor: '#3a3f4d',
+    width: 88, height: 88, borderRadius: 44, backgroundColor: colors.bg3, borderWidth: 3, borderColor: '#3a3f4d',
     alignItems: 'center', justifyContent: 'center',
   },
   dot: {
-    width: 56, height: 56, borderRadius: 28,
+    width: 64, height: 64, borderRadius: 32,
     shadowColor: colors.red, shadowOpacity: 0.45, shadowRadius: 10, shadowOffset: { width: 0, height: 2 },
   },
   readout: { alignItems: 'center', gap: 6, width: '100%' },
@@ -223,6 +223,7 @@ const st = StyleSheet.create({
     paddingVertical: 8, paddingHorizontal: 11,
   },
   type: { width: '100%', alignItems: 'center' },
+  typeBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, paddingHorizontal: 12 },
   textarea: {
     minHeight: 96, textAlignVertical: 'top', backgroundColor: colors.bg, color: colors.text,
     borderWidth: 1, borderColor: colors.line, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10,

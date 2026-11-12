@@ -475,8 +475,13 @@ export function createDedupeGate({
    *
    * Two deliveries racing each other cannot both pass: the check and the
    * reservation are one step under the lock.
+   *
+   * `reserve: false` only asks: a repeat is suppressed and logged as usual, but
+   * anything else returns `send` without reserving, and no model check starts.
+   * A hold asks this when it first applies (notify/notifier.mjs), because the
+   * earlier copy's window may run out while the entry waits.
    */
-  async function admit(item) {
+  async function admit(item, { reserve = true } = {}) {
     const cfg = await settings()
     const at = now()
     if (!cfg.enabled || isPinned(item.category, categories)) return { action: 'send', ticket: null }
@@ -497,7 +502,7 @@ export function createDedupeGate({
       if (!match && story) {
         const best = closestStory(state.sent, story, item, cfg, at)
         if (best?.same) match = { ...best, reason: 'same-story' }
-        else if (best?.borderline && cfg.modelCheck && tiebreak) {
+        else if (reserve && best?.borderline && cfg.modelCheck && tiebreak) {
           const pair = pairOf(story, best.record.story)
           const check = checks.get(pair)
           if (check?.state === 'done' && check.verdict === true) {
@@ -538,6 +543,7 @@ export function createDedupeGate({
         log(`notification suppressed (${match.reason}): ${row.title} — ${match.why}`)
         return { action: 'suppress', reason: match.reason, match: row }
       }
+      if (!reserve) return { action: 'send', ticket: null }
 
       const record = {
         id: `k_${randomUUID().slice(0, 8)}`,
@@ -613,10 +619,11 @@ export function createDedupeGate({
     if (isPinned(entry.category, categories)) return null
     for (const fn of holds) {
       let verdict
-      try { verdict = fn(entry) } catch (e) { log('notification hold threw, sending', e?.message || e); continue }
+      try { verdict = fn(entry, at) } catch (e) { log('notification hold threw, sending', e?.message || e); continue }
       if (!verdict) continue
       const until = Number.isFinite(verdict?.until) ? verdict.until : at + 15 * MINUTE
-      return { until }
+      // `tag` stays on the entry (`heldBy`), so its owner can find what it held.
+      return typeof verdict?.tag === 'string' && verdict.tag ? { until, tag: verdict.tag } : { until }
     }
     return null
   }

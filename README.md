@@ -21,7 +21,8 @@ or an auth proxy in front of it, and its defaults reflect that. Formerly named V
   per chat, with several accounts per CLI (e.g. personal and work), per-account environments,
   live quota meters, and a fallback provider when one hits its usage limit.
 - **Productivity data, stored locally.** Tasks in SQLite (recurrence, archive, recycle bin,
-  optional sync to GitHub issues or a shared Google Sheet), weekly/monthly/quarterly/yearly
+  a link to a GitHub issue with its live state, and a read-only view of a shared Google Sheet
+  of action items), weekly/monthly/quarterly/yearly
   goals with metrics fed from Strava, habits with contribution grids and cadences, simple
   lists, and Google Calendar.
 - **Voice journal.** Record in the dashboard; whisper.cpp transcribes on the box; an agent
@@ -39,7 +40,7 @@ or an auth proxy in front of it, and its defaults reflect that. Formerly named V
   own chat, and notifies you only when something matters. The built-in jobs (morning brief,
   digests, ingests, syncs; all off until enabled) are totems too.
 - **Integrations.** WHOOP (sleep and recovery) and Strava (activities, gear, mileage), both read from the Bushido training app, which holds the grants; Plaud
-  (voice recorder, via its MCP server), GitHub (App or `gh` CLI), Google Calendar, web push
+  (voice recorder, via its MCP server), GitHub (issue states and the Dev tab, through `gh`), Google Calendar, web push
   notifications, Open-Meteo weather and Google News headlines, and a plug-in-the-camera photo
   sync to Apple Photos. On a Mac: your Messages (read and send from the dashboard), Contacts and
   Photos library (searchable by what is in the picture), with agents limited to drafting messages
@@ -86,22 +87,24 @@ There are no screenshots in the repository yet.
 
 ## Quick start
 
-Requirements: Linux or macOS, Node.js 22.16 or newer, and git. For AI, at least one of the
+Requirements: Linux or macOS, Node.js 22.16 or newer, pnpm, and git. For AI, at least one of the
 Codex, Claude Code, OpenCode or Cursor CLIs on the same machine, signed in or given an API key.
 
-1. Clone and install. `npm install` also installs the dashboard's dependencies.
+1. Clone and install with [pnpm](https://pnpm.io). `corepack enable pnpm` once gives you the
+   version the repo pins (on Node 25 and later, which no longer bundle Corepack, run
+   `npm i -g corepack` first). `pnpm install` also installs the dashboard's dependencies.
 
    ```sh
    git clone https://github.com/ehonis/Totem.git
    cd Totem
-   npm install
+   pnpm install
    ```
 
 2. Start it. The first start builds the dashboard, then runs the server on port 8787. No
    `.env` is needed.
 
    ```sh
-   npm start
+   pnpm start
    ```
 
 3. The server prints a one-time setup link:
@@ -115,14 +118,14 @@ Codex, Claude Code, OpenCode or Cursor CLIs on the same machine, signed in or gi
    Open it, choose the owner password, and you are signed in. The link works once and only
    until the process restarts; a restart prints a new one.
 
-4. Open **Settings -> AI**. It lists the agent CLIs it can find, whether each is installed and
+4. Open **Settings -> Providers**. It lists the agent CLIs it can find, whether each is installed and
    signed in, and the command that fixes it (for example `codex login`). Pick the default,
    optionally paste an API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `CURSOR_API_KEY`),
    choose a model, and press **Test**. Until an AI is set up, chat and the phone shortcut say
    so and everything else works.
 
 5. Optional, in any order:
-   - **Settings -> Integrations**: set the public URL and the Google Sheet task sync. WHOOP and
+   - **Settings -> General** sets the public URL and **Settings -> Tasks** the read-only task sheet. WHOOP and
      Strava are connected in Bushido; set `BUSHIDO_URL` and `BUSHIDO_API_TOKEN` to read them.
    - **Settings -> Connections**: add MCP servers (Google Calendar, Plaud, GitHub, ...) and sync
      them into each CLI.
@@ -142,7 +145,7 @@ docker compose logs totem | grep setup
 ```
 
 The image includes the Claude Code and Codex CLIs. Sign one in with
-`docker compose exec -it totem claude` (or `codex login`), or paste an API key in Settings -> AI.
+`docker compose exec -it totem claude` (or `codex login`), or paste an API key in Settings -> Providers.
 Data, OAuth tokens and CLI logins are kept in named volumes. The web terminal is not available
 in the image.
 
@@ -168,7 +171,7 @@ directly.
 - [desktop/README.md](desktop/README.md): the macOS and Windows app (own window, global hotkeys, tray)
 - [TOTEM-OVERVIEW.md](TOTEM-OVERVIEW.md): a design write-up of why it is built this way
 - `docs/`: one file per subsystem (providers, jobs, skills, journal, notifications, Strava,
-  WHOOP, GitHub App, terminal, inbound MCP server, camera sync, shortcuts)
+  WHOOP, task issue links, terminal, inbound MCP server, camera sync, shortcuts)
 
 ## License
 

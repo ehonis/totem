@@ -117,7 +117,7 @@ function AccountCard({ account, backendLabel }: { account: any; backendLabel: st
 
 interface AiUsagePanelProps {
   onAuthError: () => void
-  /** Kept so Settings ▸ Usage can still opt into live updates; the stream is always live. */
+  /** Kept so Settings › Usage can still opt into live updates; the stream is always live. */
   autoRefresh?: boolean
   /** Bump to force an immediate re-read — e.g. after the settings panel saves. */
   reloadKey?: number
@@ -129,7 +129,7 @@ export default function AiUsagePanel({ onAuthError, reloadKey = 0 }: AiUsagePane
   const accounts = data?.accounts || []
   // Group by backend so three Claude profiles read as one Claude section.
   const backends = [...new Set(accounts.map((a: any) => a.backend))] as string[]
-  // Section titles follow Settings ▸ Usage, falling back to the stock names.
+  // Section titles follow Settings › Usage, falling back to the stock names.
   const labelFor = (backend: string) => data?.providers?.[backend] || BACKEND_LABEL[backend] || backend
 
   return (

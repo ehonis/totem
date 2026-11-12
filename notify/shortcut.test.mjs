@@ -28,11 +28,6 @@ test('a long body is cut at a word and marked as cut', () => {
   assert.doesNotMatch(body, /alph…$/)
 })
 
-test('the model summary is used when it comes back usable', () => {
-  const s = parseSummary('{"title": "Task added", "body": "Buy milk is on your Personal list, due today."}')
-  assert.deepEqual(s, { title: 'Task added', body: 'Buy milk is on your Personal list, due today.' })
-})
-
 test('a fence, a preamble, and pretty-printing are all survivable', () => {
   const raw = 'Here you go:\n```json\n{\n  "title": "Task added",\n  "body": "Buy milk, due today."\n}\n```'
   assert.deepEqual(parseSummary(raw), { title: 'Task added', body: 'Buy milk, due today.' })

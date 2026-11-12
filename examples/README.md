@@ -5,8 +5,8 @@ installed automatically: a fresh install only receives the generic skills in
 `skills/seeds/`, and those are copied into `data/skills/` once, on first boot.
 
 The examples show how a skill can be tailored to one person's setup, for instance
-a meeting ingest that only looks at certain venture tags and syncs accepted items
-to a shared sheet. Read them, adapt the names and rules to your own setup, and
+a meeting ingest that only looks at certain venture tags and files accepted items
+under them. Read them, adapt the names and rules to your own setup, and
 import only the ones you want.
 
 ## Importing a skill

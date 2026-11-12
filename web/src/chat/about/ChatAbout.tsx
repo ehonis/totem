@@ -1,12 +1,13 @@
 // "Chat about this" on a card or page. Dropped inside the card, it takes the
-// card (its parent, or the nearest `host` above it) and adds: a small button
-// that shows while the pointer is over the card, a right-click menu, and a
-// long-press menu on a touch screen. Shift+right-click keeps the browser's own
-// menu, and so does right-clicking a link, a field or selected text.
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+// card (its parent, or the nearest `host` above it) and adds a right-click menu,
+// and a long-press menu on a touch screen; nothing is drawn on the card itself.
+// Text selected on the card goes with the chat, and the menu offers to copy it,
+// so taking over right-click costs nothing. Shift+right-click keeps the browser's
+// own menu, and so does right-clicking a link or a field.
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AuthError } from '../../api'
-import { Hi, ChatBubbleLeftRightIcon, ClipboardDocumentIcon } from '../../icons'
+import { Hi, ChatBubbleLeftRightIcon, ClipboardDocumentIcon, DocumentTextIcon } from '../../icons'
 import { pushError, pushSuccess } from '../../toast'
 import type { ChatContext } from './context'
 import { chatAboutAuthError, copyChatAbout, startChatAbout } from './start'
@@ -23,33 +24,46 @@ const NATIVE = 'input, textarea, select, a[href], [contenteditable="true"], .cha
 // A touch the card's own handler claimed, so the card around it leaves it alone.
 const CLAIMED = Symbol('chatAbout')
 
-type Menu = { x: number; y: number; guardUntil: number }
+// A right-click's mousedown and its contextmenu arrive together; older than this,
+// the snapshot belongs to some other click.
+const PRESS_FRESH_MS = 1500
 
-export default function ChatAbout({ of, host, button = true }: {
+type Menu = { x: number; y: number; guardUntil: number; selection: string }
+type Action = 'chat' | 'copy-card' | 'copy-selection'
+
+/** The selected text, if the selection touches `el`. */
+function selectionIn(el: HTMLElement): string {
+  const sel = window.getSelection()
+  const text = String(sel || '').trim()
+  if (!text || !sel?.rangeCount) return ''
+  for (let i = 0; i < sel.rangeCount; i++) if (sel.getRangeAt(i).intersectsNode(el)) return text
+  return ''
+}
+
+export default function ChatAbout({ of, host }: {
   /** The card's context, read when it is used (so never stale), from the card's element. */
   of: (host: HTMLElement) => ChatContext | null | undefined
   /** CSS selector of the card, when the component sits deeper than its direct child. */
   host?: string
-  /** False for a whole page or pane: menus only, no hover button. */
-  button?: boolean
 }) {
   const anchor = useRef<HTMLSpanElement>(null)
   const hostEl = useRef<HTMLElement | null>(null)
   const ofRef = useRef(of)
   ofRef.current = of
   const [menu, setMenu] = useState<Menu | null>(null)
-  const [inButton, setInButton] = useState(false)
 
-  const run = useCallback(async (copy = false) => {
+  const run = useCallback(async (action: Action, selection: string) => {
     setMenu(null)
-    const ctx = hostEl.current && ofRef.current(hostEl.current)
-    if (!ctx) return
     try {
-      if (copy) { await copyChatAbout(ctx); pushSuccess('Copied') }
+      if (action === 'copy-selection') { await navigator.clipboard.writeText(selection); pushSuccess('Copied'); return }
+      const base = hostEl.current && ofRef.current(hostEl.current)
+      if (!base) return
+      const ctx = selection ? { ...base, selection } : base
+      if (action === 'copy-card') { await copyChatAbout(ctx); pushSuccess('Copied') }
       else await startChatAbout(ctx)
     } catch (e: any) {
       if (e instanceof AuthError) chatAboutAuthError()
-      else pushError(e?.message || 'Could not start that chat')
+      else pushError(e?.message || (action === 'chat' ? 'Could not start that chat' : 'Could not copy that'))
     }
   }, [])
 
@@ -58,8 +72,16 @@ export default function ChatAbout({ of, host, button = true }: {
     const el = self?.parentElement && (host ? self.parentElement.closest<HTMLElement>(host) : self.parentElement)
     if (!el) return
     hostEl.current = el
-    setInButton(Boolean(self!.closest('button')))
     el.classList.add('chat-about-host')
+
+    // What was selected when the right button went down. macOS selects the word
+    // under the pointer before it sends contextmenu, and that word is not
+    // something the owner chose. The menu key has no press, so it reads the
+    // selection as it is.
+    let pressed: { at: number; selection: string } | null = null
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 2 || (e.button === 0 && e.ctrlKey)) pressed = { at: Date.now(), selection: selectionIn(el) }
+    }
 
     // Touch state for one press at a time.
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -76,13 +98,19 @@ export default function ChatAbout({ of, host, button = true }: {
     const onContext = (e: MouseEvent) => {
       if (e.defaultPrevented || e.shiftKey) return
       const target = e.target as Element | null
-      if (target?.closest(NATIVE) || String(window.getSelection() || '').trim()) return
+      if (target?.closest(NATIVE)) return
       e.preventDefault()
       // Android fires this during a long press: the lift opens the menu.
       if (start) { cancel(); arm(); return }
+      const fresh = pressed && Date.now() - pressed.at < PRESS_FRESH_MS ? pressed : null
+      pressed = null
+      const selection = fresh ? fresh.selection : selectionIn(el)
+      // The word macOS just selected is dropped again, so the page looks as it did.
+      if (fresh && !selection && String(window.getSelection() || '').trim()) window.getSelection()?.removeAllRanges()
       // The keyboard's menu key reports no position; open at the card instead.
       const r = el.getBoundingClientRect()
-      setMenu(e.clientX || e.clientY ? { x: e.clientX, y: e.clientY, guardUntil: 0 } : { x: r.left + 12, y: r.top + 12, guardUntil: 0 })
+      const at = e.clientX || e.clientY ? { x: e.clientX, y: e.clientY } : { x: r.left + 12, y: r.top + 12 }
+      setMenu({ ...at, guardUntil: 0, selection })
     }
 
     const onTouchStart = (e: TouchEvent) => {
@@ -108,7 +136,7 @@ export default function ChatAbout({ of, host, button = true }: {
       armed = false
       if (e.cancelable) e.preventDefault()
       swallowUntil = Date.now() + LIFT_GUARD_MS
-      setMenu({ ...at, guardUntil: swallowUntil })
+      setMenu({ ...at, guardUntil: swallowUntil, selection: '' })
     }
     const onClick = (e: MouseEvent) => {
       if (!swallowUntil) return
@@ -117,6 +145,7 @@ export default function ChatAbout({ of, host, button = true }: {
       if (swallow) { e.preventDefault(); e.stopPropagation() }
     }
 
+    el.addEventListener('mousedown', onMouseDown, true)
     el.addEventListener('contextmenu', onContext)
     el.addEventListener('touchstart', onTouchStart, { passive: true })
     el.addEventListener('touchmove', onTouchMove, { passive: true })
@@ -127,6 +156,7 @@ export default function ChatAbout({ of, host, button = true }: {
       cancel()
       hostEl.current = null
       el.classList.remove('chat-about-host')
+      el.removeEventListener('mousedown', onMouseDown, true)
       el.removeEventListener('contextmenu', onContext)
       el.removeEventListener('touchstart', onTouchStart)
       el.removeEventListener('touchmove', onTouchMove)
@@ -136,33 +166,15 @@ export default function ChatAbout({ of, host, button = true }: {
     }
   }, [host])
 
-  const press = (e: React.SyntheticEvent) => { e.preventDefault(); e.stopPropagation(); void run() }
-
   return (
     <>
-      {button ? (
-        // A span, not a button: some cards are buttons themselves.
-        <span
-          ref={anchor}
-          role="button"
-          tabIndex={inButton ? -1 : 0}
-          className="chat-about-btn"
-          title="Chat about this"
-          aria-label="Chat about this"
-          onClick={press}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') press(e) }}
-          onPointerDown={(e) => e.stopPropagation()}
-          draggable={false}
-        >
-          <Hi icon={ChatBubbleLeftRightIcon} size={15} />
-        </span>
-      ) : <span ref={anchor} hidden />}
+      <span ref={anchor} hidden />
       {menu && createPortal(<AboutMenu menu={menu} onClose={() => setMenu(null)} onRun={run} />, document.body)}
     </>
   )
 }
 
-function AboutMenu({ menu, onClose, onRun }: { menu: Menu; onClose: () => void; onRun: (copy?: boolean) => void }) {
+function AboutMenu({ menu, onClose, onRun }: { menu: Menu; onClose: () => void; onRun: (action: Action, selection: string) => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ x: menu.x, y: menu.y })
   // useDismiss, except that presses left over from the long press's lift don't count.
@@ -193,11 +205,16 @@ function AboutMenu({ menu, onClose, onRun }: { menu: Menu; onClose: () => void; 
   useEffect(() => { ref.current?.querySelector('button')?.focus() }, [])
   return (
     <div ref={ref} className="chat-about-menu" role="menu" style={{ left: pos.x, top: pos.y }} onContextMenu={(e) => e.preventDefault()}>
-      <button type="button" role="menuitem" onClick={() => onRun()}>
-        <Hi icon={ChatBubbleLeftRightIcon} size={15} /> Chat about this
+      <button type="button" role="menuitem" onClick={() => onRun('chat', menu.selection)}>
+        <Hi icon={ChatBubbleLeftRightIcon} size={15} /> {menu.selection ? 'Chat about the selection' : 'Chat about this'}
       </button>
-      <button type="button" role="menuitem" onClick={() => onRun(true)}>
-        <Hi icon={ClipboardDocumentIcon} size={15} /> Copy as text
+      {menu.selection && (
+        <button type="button" role="menuitem" onClick={() => onRun('copy-selection', menu.selection)}>
+          <Hi icon={ClipboardDocumentIcon} size={15} /> Copy
+        </button>
+      )}
+      <button type="button" role="menuitem" onClick={() => onRun('copy-card', menu.selection)}>
+        <Hi icon={DocumentTextIcon} size={15} /> Copy card as text
       </button>
     </div>
   )

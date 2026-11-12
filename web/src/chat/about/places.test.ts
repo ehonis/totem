@@ -47,4 +47,11 @@ describe('places', () => {
       expect(app, f).toBe(web)
     }
   })
+
+  it('redacts with the same patterns as the bridge, in the dashboard and the app', () => {
+    const bridge = readFileSync(`${root}chat/redact.mjs`, 'utf8')
+    for (const copy of ['web/src/chat/about/redact.ts', 'mobile/src/lib/chat/about/redact.ts']) {
+      expect(readFileSync(root + copy, 'utf8'), copy).toBe(bridge)
+    }
+  })
 })

@@ -165,8 +165,13 @@ never held back. With the gate off, `sentKeys` is empty and the digest plans
 everything.
 
 `gate.addHold(fn)` is for keeping a *queued* notification waiting (away days):
-`fn(entry)` returns nothing, `true` (try again in 15 minutes) or `{ until }`, and
-the entry goes back to pending at `until` without spending an attempt. Pinned
+`fn(entry, at)` returns nothing, `true` (try again in 15 minutes) or `{ until, tag? }`,
+and the entry goes back to pending at `until` without spending an attempt; a `tag` is kept on
+the entry as `heldBy`, and a tagged entry is never marked missed for being late. The first
+time an entry is held, the drain asks `admit(item, { reserve: false })` (check only: no
+reservation, no model check), so a repeat is suppressed before it waits rather than after
+the earlier copy's window has run out. `claimDue` claims entries that were never held before
+held ones, so a backlog coming due together never delays anything else. Pinned
 categories are never held. Direct pushes do not consult holds.
 
 Where the duplicates came from, before the gate:
@@ -543,6 +548,20 @@ and the drain finishes any such entry still queued as `stale` before sending
 (`isRetiredNudge` in `notify/notifier.mjs`), whether it was filed under
 `habit.slipping` or `goal.nearcomplete`. Metric trends on a habit ("Under goal",
 `metricFacts`) still go out; they report a run of days, not a deadline.
+
+**Nudges wait out an away day.** Each category's `away` column says whether a queued
+one is sent (`'send'`) or held (`'hold'`) on a day inside one of the owner's away spans
+(`docs/away.md`); an entry queued with `quietHours: 'override'` is always sent. The away
+hold is one `gate.addHold` (`createAwayHold` in `away/hold.mjs`): a held entry goes back to
+pending until the next local morning, tagged `heldBy: 'away'`, and is asked again then, so it
+goes out the first morning the owner is back. A tagged entry skips the missed-delivery cutoff
+(an outage at 07:00 must not lose the backlog); nudges about their own day still lapse on
+their `expiresAt`. On the way back the drain drops only older copies of the same
+notification among tagged entries (`releasedAfterAway`): older digests of a slot and exact
+`dedupeKey` repeats, so a week away is one evening digest and every distinct nudge. Reminders, calendar alerts, approvals, chat
+answers, birthdays, job failures, outside alerts and a machine going offline are `'send'`.
+Direct pushes (a chat finishing, a Shortcut answer, a job failure) never pass through the
+queue and are not held.
 
 Anything that cannot be verified is still treated as stale, including a collector
 that throws: a notification that could not be checked is exactly the one not

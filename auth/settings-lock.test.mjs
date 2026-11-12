@@ -10,19 +10,16 @@ import { join } from 'node:path'
 
 const bridge = readFileSync(join(import.meta.dirname, '..', 'bridge.mjs'), 'utf8')
 
-test('the sheet credentials path is env-only and never sent back as a path', () => {
-  const keys = bridge.slice(bridge.indexOf('const INTEGRATION_KEYS = ['), bridge.indexOf(']', bridge.indexOf('const INTEGRATION_KEYS = [')))
-  assert.doesNotMatch(keys, /GOOGLE_SHEETS_CREDENTIALS_FILE/)
-  assert.match(bridge, /state: !GOOGLE_SHEETS_CREDENTIALS_FILE \? 'unset' : existsSync\(GOOGLE_SHEETS_CREDENTIALS_FILE\) \? 'found' : 'missing'/)
+test('the task sheet settings name no file the server reads', () => {
+  const start = bridge.indexOf('const INTEGRATION_KEYS = [')
+  const keys = bridge.slice(start, bridge.indexOf('\n]', start))
+  assert.deepEqual([...keys.matchAll(/name: '(TASK_SHEET_\w+)'/g)].map((m) => m[1]),
+    ['TASK_SHEET_ID', 'TASK_SHEET_TAB', 'TASK_SHEET_ASSIGNEES', 'TASK_SHEET_TITLE', 'TASK_SHEET_ACCOUNT'])
+  // The service-account sync and its credentials file were retired.
+  assert.doesNotMatch(bridge, /GOOGLE_SHEETS_CREDENTIALS_FILE|credentialsFile/)
 })
 
 test('usage profile paths need the opt-in', () => {
   const start = bridge.indexOf('if (patch.addAccount) {')
   assert.match(bridge.slice(start, start + 400), /if \(!EXEC_CONFIG_EDITABLE\) throw/)
-})
-
-test('agent API keys are masked to the last four characters', async () => {
-  const { maskSecret } = await import('../ai/settings.mjs')
-  assert.equal(maskSecret('sk-ant-0123456789wxyz'), '••••wxyz')
-  assert.equal(maskSecret('short'), '••••')
 })

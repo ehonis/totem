@@ -12,10 +12,11 @@ import { T } from '../../ui/Text'
 import { Badge, Press } from '../../ui/kit'
 import { success, tap } from '../../ui/haptics'
 import {
-  getTodos, getCalendar, getHabits, getJobs, getAssistantUsage, getProductivity, getInboxCount, getGoals,
+  getTodos, getCalendar, getHabits, getJobs, getAssistantUsage, getProductivity, getInboxCount, getGoals, getAway,
   closeTodo, moveBoardTodo, logHabit, AuthError,
   peekTodos, peekCalendar, peekHabits, peekProductivity, peekInboxCount, peekGoals, isAccountChanged,
 } from '../../lib/api'
+import { awayStatus, dayKey, upcomingAway, type AwaySpan } from '../../lib/away'
 import { clearSecretStored } from '../../lib/connection'
 import { useAiUsageLive } from '../../lib/useAiUsageLive'
 import { useOwnerName } from '../../lib/useOwnerName'
@@ -26,6 +27,7 @@ import {
   IconArrowUp, IconChevronRight, IconRefresh, IconCalendarEvent, IconChecklist, IconFlame, IconTarget,
   IconListCheck, IconBulb, IconMicrophone2, IconHistory, IconWand, IconSettings, IconInbox,
   IconAlertTriangle, IconMapPin, IconPlus, IconCheck, IconBolt, IconServer2,
+  IconPlane, IconBeach, IconLuggage,
 } from '../../lib/components/overview/icons'
 import IconSearch from '@tabler/icons-react-native/dist/esm/icons/IconSearch.mjs'
 import { clock, dueDiff, dueLabel, periodTotal, startOfDay, until } from '../../lib/components/overview/time'
@@ -35,13 +37,18 @@ import { HabitMetricSection } from './MetricTile'
 import { openHabitDay, type DaySave } from './HabitDaySheet'
 import { goalsContext, habitMetricContext, habitsContext, scheduleContext, systemContext, tasksContext } from '../../lib/chat/about/context'
 import { chatAboutMenu } from '../../ui/chatAbout'
+import { openAway } from './AwaySheet'
 
 type NavTarget = Parameters<typeof navigateTo>[0]
 type Tabler = React.ComponentType<any>
 
-// Usage lives partway down Settings ▸ Providers; Jobs is its own settings pane.
-const USAGE_SECTION: NavTarget = { tab: 'settings', sub: 'providers', hash: 'usage' }
-const JOBS_SECTION: NavTarget = { tab: 'settings', sub: 'jobs' }
+// .ovx-away-band: today's trip or day off, and the next ones within a month.
+const AWAY_ICON: Record<string, Tabler> = { trip: IconPlane, off: IconBeach, other: IconLuggage }
+
+// Usage is its own Settings pane.
+const USAGE_SECTION: NavTarget = { tab: 'settings', sub: 'usage' }
+// Every job is a totem; a failing one is fixed from its page.
+const JOBS_SECTION: NavTarget = { tab: 'totems' }
 
 // The sidebar's Totems mark (the web's TotemsIcon), tinted like a Tabler glyph.
 function TotemsGlyph({ size = 21, color }: { size?: number; color?: string }) {
@@ -52,13 +59,14 @@ function TotemsGlyph({ size = 21, color }: { size?: number; color?: string }) {
 // is the way to every screen: Inbox, Search and Totems sit where the web lists Code
 // and Brain, which the app has no screen for yet (left out rather than dead-ending).
 const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
-  { id: 'todos', label: 'Todos', icon: IconChecklist, to: { tab: 'productivity', app: 'todos' } },
-  { id: 'calendar', label: 'Calendar', icon: IconCalendarEvent, to: { tab: 'productivity', app: 'calendar' } },
-  { id: 'habits', label: 'Habits', icon: IconFlame, to: { tab: 'productivity', app: 'habits' } },
-  { id: 'goals', label: 'Goals', icon: IconTarget, to: { tab: 'productivity', app: 'goals' } },
-  { id: 'lists', label: 'Lists', icon: IconListCheck, to: { tab: 'productivity', app: 'lists' } },
-  { id: 'recs', label: 'Recs', icon: IconBulb, to: { tab: 'productivity', app: 'recs' } },
-  { id: 'journal', label: 'Journal', icon: IconMicrophone2, to: { tab: 'productivity', app: 'journal' } },
+  // Each Productivity tool opens its own page (#177), named as its top bar names it.
+  { id: 'todos', label: 'Tasks', icon: IconChecklist, to: 'todos' },
+  { id: 'calendar', label: 'Calendar', icon: IconCalendarEvent, to: 'calendar' },
+  { id: 'habits', label: 'Habits', icon: IconFlame, to: 'habits' },
+  { id: 'goals', label: 'Goals', icon: IconTarget, to: 'goals' },
+  { id: 'lists', label: 'Lists', icon: IconListCheck, to: 'lists' },
+  { id: 'recs', label: 'Recs', icon: IconBulb, to: 'recs' },
+  { id: 'journal', label: 'Journal', icon: IconMicrophone2, to: 'journal' },
   { id: 'inbox', label: 'Inbox', icon: IconInbox, to: 'inbox' },
   { id: 'search', label: 'Search', icon: IconSearch, to: 'search' },
   { id: 'totems', label: 'Totems', icon: TotemsGlyph, to: 'totems' },
@@ -138,6 +146,7 @@ export default function OverviewScreen() {
       run('jobs', () => getJobs()),
       run('assistant', getAssistantUsage),
       run('prod', getProductivity),
+      run('away', () => getAway()),
     ])
     // A refresh updates in place: a section whose reload fails keeps what it last
     // showed rather than turning into an error card, and only a section that never
@@ -243,6 +252,18 @@ export default function OverviewScreen() {
     })
   }, [habitDay, data.habits])
 
+  // ---- away ------------------------------------------------------------
+  // The bridge's today is the owner's time zone; the device's is the fallback.
+  const awayToday: string = data.away?.today || dayKey(now)
+  const awaySpans: AwaySpan[] = data.away?.spans || []
+  const awayShown = upcomingAway(awaySpans, awayToday).slice(0, 2)
+  const awayNow = awaySpans.find((s) => s.start <= awayToday && awayToday <= s.end)
+  const editAway = () => openAway({
+    spans: awaySpans.filter((s) => s.end >= awayToday),
+    today: awayToday,
+    onChange: (spans) => setData((d: any) => ({ ...d, away: { ...(d.away || {}), today: awayToday, spans } })),
+  })
+
   // ---- calendar --------------------------------------------------------
   const today0 = startOfDay(now)
   const events: any[] = useMemo(
@@ -319,6 +340,7 @@ export default function OverviewScreen() {
   const hour = now.getHours()
   const greeting = hour < 5 ? 'Still up' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
   const summary: string[] = []
+  if (awayNow) summary.push(`away: ${awayNow.label}`)
   if (data.cal) summary.push(remaining.length ? `${remaining.length} ${remaining.length === 1 ? 'event' : 'events'} left today` : 'No more events today')
   if (data.todos) summary.push(focus.length ? `${focus.length} ${focus.length === 1 ? 'task' : 'tasks'} due` : 'nothing due')
   if (data.habits && habits.length) summary.push(habitsLeft.length ? `${habitsLeft.length} ${habitsLeft.length === 1 ? 'habit' : 'habits'} to go` : 'habits done')
@@ -341,10 +363,10 @@ export default function OverviewScreen() {
     })
   }
 
-  const openCalendar = () => navigateTo({ tab: 'productivity', app: 'calendar' })
-  const openTodos = () => navigateTo({ tab: 'productivity', app: 'todos' })
-  const openGoals = () => navigateTo({ tab: 'productivity', app: 'goals' })
-  const openHabits = () => navigateTo({ tab: 'productivity', app: 'habits' })
+  const openCalendar = () => navigateTo('calendar')
+  const openTodos = () => navigateTo('todos')
+  const openGoals = () => navigateTo('goals')
+  const openHabits = () => navigateTo('habits')
 
   return (
     <Screen title="Overview" glow="overview">
@@ -404,6 +426,23 @@ export default function OverviewScreen() {
           onOpen={openCalendar}
           about={() => data.cal && scheduleContext({ allDay: allDayToday, timed: timedToday, tomorrow: showTomorrow ? tomorrowEvents : [] }, now)}
         >
+          {awayShown.length > 0 && (
+            <View style={st.away}>
+              {awayShown.map((s) => {
+                const on = s.start <= awayToday
+                return (
+                  <Press key={s.id} haptic onPress={editAway} accessibilityLabel={`Edit time away: ${s.label}`}
+                    style={[st.awayBand, on && st.awayBandNow]}>
+                    <TI icon={AWAY_ICON[s.kind] || IconLuggage} size={16} color={on ? colors.text : ov.soft} />
+                    <T size={13.5} weight={600} color={on ? colors.text : ov.soft} numberOfLines={1} style={{ flexShrink: 1 }}>
+                      {on ? 'Away' : 'Next away'} · {s.label}
+                    </T>
+                    <T size={12.5} color={ov.faint} numberOfLines={1} style={{ marginLeft: 'auto' }}>{awayStatus(s, awayToday)}</T>
+                  </Press>
+                )
+              })}
+            </View>
+          )}
           {errs.cal ? <Failed msg={errs.cal} />
             : !data.cal ? <Loading />
             : (
@@ -455,6 +494,12 @@ export default function OverviewScreen() {
                 )}
               </View>
             )}
+          {data.away && !awayShown.length && (
+            <Press onPress={editAway} style={st.awayAdd} accessibilityLabel="Add time away">
+              <TI icon={IconPlane} size={15} color={ov.faint} />
+              <T size={12.5} color={ov.faint}>Add time away</T>
+            </Press>
+          )}
         </Section>
 
         <Section
@@ -742,6 +787,13 @@ function relAgo(ts: number): string {
 }
 
 const st = StyleSheet.create({
+  away: { gap: 6, marginBottom: 10 },
+  awayBand: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 7, paddingHorizontal: 12,
+    borderRadius: 10, backgroundColor: alpha(colors.away, 0.1), borderLeftWidth: 3, borderLeftColor: alpha(colors.away, 0.55),
+  },
+  awayBandNow: { backgroundColor: alpha(colors.away, 0.18), borderLeftColor: colors.away },
+  awayAdd: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingVertical: 4, alignSelf: 'flex-start' },
   inner: { paddingTop: 12, paddingHorizontal: 16, paddingBottom: FAB_CLEARANCE, gap: 16 },
   head: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   iconBtn: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginTop: 2 },

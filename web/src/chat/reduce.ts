@@ -105,6 +105,30 @@ export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): Chat
       else parts.push({ type: 'approval', ...a })
       return next
     }
+    case 'inbox': {
+      // An inbox proposal this reply staged: added where it was staged, updated
+      // in place when the owner decides it.
+      const c = event.inbox || {}
+      if (!c.id) return msg
+      const at = parts.findIndex((p) => p.type === 'inbox' && p.id === c.id)
+      if (at >= 0) parts[at] = { ...parts[at], ...c } as any
+      else parts.push({ type: 'inbox', kind: 'inbox', title: '', status: 'pending', ...c })
+      return next
+    }
+    case 'change': {
+      // The PR card from change_finish (dev/change.mjs), once per id.
+      const c = event.change || {}
+      if (c.type !== 'change-pr' || !c.id || parts.some((p) => p.type === 'change-pr' && p.id === c.id)) return msg
+      parts.push({ ...c })
+      return next
+    }
+    // A page the agent rendered inline (chat/visuals.mjs), once per id.
+    case 'visual': {
+      const v = event.visual || {}
+      if (!v.id || !v.uploadId || parts.some((p) => p.type === 'visual' && p.id === v.id)) return msg
+      parts.push({ type: 'visual', id: v.id, uploadId: v.uploadId, title: v.title || 'Chart', height: v.height || 320, ...(v.url ? { url: v.url } : {}) })
+      return next
+    }
     case 'steer': {
       // The owner's words mid-reply, kept where they landed among the steps.
       const st = event.steer || {}

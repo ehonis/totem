@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { filterTodos, optimisticMove, rollbackMove, sortTodos } from './state'
+import { filterTodos, sortTodos } from './state'
 import type { Todo } from './types'
 
 function todo(input: Partial<Todo> & Pick<Todo, 'id' | 'title'>): Todo {
@@ -58,11 +58,5 @@ describe('todo board state', () => {
     expect(sortTodos(sameDate, ['priority', 'due']).map(item => item.id)).toEqual([
       'high-today', 'high-tomorrow', 'low-today',
     ])
-  })
-
-  it('optimistically moves and can restore the exact prior board', () => {
-    const next = optimisticMove(fixture, 'a', 'doing', 0)
-    expect(next.todos.find(item => item.id === 'a')?.status).toBe('doing')
-    expect(rollbackMove(next.todos, next.rollback)).toEqual(fixture)
   })
 })

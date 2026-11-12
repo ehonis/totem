@@ -10,14 +10,22 @@
 // A bridge behind Cloudflare Access also needs an Access token (cfAccess.ts). It
 // is kept beside the secret and sent as `cf-access-token` on every request; when
 // Access stops accepting it, `accessNeeded` asks the UI to sign in again.
+//
+// The approval code (auth/approval-code.mjs on the bridge) is kept beside them in
+// the keychain too, and sent only on the routes that confer approval
+// (approvalCode.ts): the bearer secret alone approves nothing. It is stored with
+// the base URL it was entered for and dropped when the app moves to another
+// server, so one Totem's code is never sent to a different one.
 import * as SecureStore from 'expo-secure-store'
 import { useSyncExternalStore } from 'react'
-import { Platform } from 'react-native'
+import { AppState, Platform } from 'react-native'
 import { isAccessResponse } from './cfAccess'
+import { readWhenUnlocked, type AppActivity } from './readWhenUnlocked'
 
 const BASE_KEY = 'totem.bridge.base'
 const SECRET_KEY = 'totem.bridge.secret'
 const ACCESS_KEY = 'totem.bridge.cfAccess'
+const APPROVAL_KEY = 'totem.bridge.approvalCode'
 
 // expo-secure-store has no web implementation. The web build only exists for
 // previewing layouts in a desktop browser, so it keeps the secret in localStorage.
@@ -36,10 +44,11 @@ export interface Connection {
   accessToken?: string
   /** Access answered a request instead of the bridge: the token is missing or expired. */
   accessNeeded?: boolean
+  /** This device's approval code, when the owner has entered or set one here. */
+  approvalCode?: string
 }
 
 let current: Connection = { baseUrl: '', secret: '' }
-let loaded = false
 const subs = new Set<() => void>()
 const emit = () => subs.forEach((fn) => fn())
 
@@ -60,15 +69,51 @@ export function normalizeBaseUrl(input: string, defaultPort = '8787'): string {
   return `http://${raw}${hasPort ? '' : `:${defaultPort}`}`
 }
 
-export async function loadConnection(): Promise<Connection> {
-  if (loaded) return current
+interface Stored { baseUrl: string; secret: string; accessToken: string; approvalRaw: string | null }
+type KeychainGet = (key: string) => Promise<string | null>
+
+/** Everything kept on the device. With the plain keychain getter it throws if a read is refused (a locked phone). */
+async function readStored(get: KeychainGet): Promise<Stored> {
   const baseUrl = localStorage.getItem(BASE_KEY) || ''
-  const secret = (await secure.getItemAsync(SECRET_KEY).catch(() => null)) || ''
-  const accessToken = (await secure.getItemAsync(ACCESS_KEY).catch(() => null)) || ''
-  current = { baseUrl, secret, ...(accessToken ? { accessToken } : {}) }
-  loaded = true
-  emit()
-  return current
+  const secret = (await get(SECRET_KEY)) || ''
+  const accessToken = (await get(ACCESS_KEY)) || ''
+  const approvalRaw = await get(APPROVAL_KEY)
+  return { baseUrl, secret, accessToken, approvalRaw }
+}
+
+/** Only once the reads have failed in the foreground: each refused item counts as absent. */
+const lenientGet: KeychainGet = (key) => secure.getItemAsync(key).catch(() => null)
+
+const appActivity: AppActivity = {
+  isActive: () => AppState.currentState === 'active',
+  untilActive: () => new Promise<void>((resolve) => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') { sub.remove(); resolve() }
+    })
+    // It may have come to the foreground before the listener was added.
+    if (AppState.currentState === 'active') { sub.remove(); resolve() }
+  }),
+  delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+}
+
+let loading: Promise<Connection> | null = null
+
+/**
+ * Read the connection once. A keychain that refuses the read (the app started in
+ * the background on a locked phone) is not a signed-out app: this waits until the
+ * app is opened and reads again (readWhenUnlocked.ts), so it can settle late.
+ */
+export function loadConnection(): Promise<Connection> {
+  loading ??= (async () => {
+    const outcome = await readWhenUnlocked(() => readStored((key) => secure.getItemAsync(key)), appActivity)
+    if (!outcome.ok) console.warn('[connection] keychain unreadable in the foreground; treating it as signed out', outcome.error)
+    const { baseUrl, secret, accessToken, approvalRaw } = outcome.ok ? outcome.value : await readStored(lenientGet)
+    const approvalCode = boundCode(approvalRaw, baseUrl)
+    current = { baseUrl, secret, ...(accessToken ? { accessToken } : {}), ...(approvalCode ? { approvalCode } : {}) }
+    emit()
+    return current
+  })()
+  return loading
 }
 
 export async function saveConnection(next: Connection) {
@@ -77,14 +122,37 @@ export async function saveConnection(next: Connection) {
   else await secure.deleteItemAsync(SECRET_KEY).catch(() => {})
   if (next.accessToken) await secure.setItemAsync(ACCESS_KEY, next.accessToken)
   else await secure.deleteItemAsync(ACCESS_KEY).catch(() => {})
-  current = { ...next, accessNeeded: false }
+  // Another server: the code entered for the last one is not this one's.
+  const sameServer = next.baseUrl === current.baseUrl
+  if (!sameServer) await secure.deleteItemAsync(APPROVAL_KEY).catch(() => {})
+  current = { ...next, approvalCode: sameServer ? current.approvalCode : '', accessNeeded: false }
   emit()
 }
 
-/** Sign out: forget the secret, keep the address so signing back in is one field. */
+/** The stored code, only if it was saved for this base URL. */
+function boundCode(raw: string | null, baseUrl: string): string {
+  try {
+    const saved = JSON.parse(raw || '')
+    return saved?.baseUrl === baseUrl && typeof saved.code === 'string' ? saved.code : ''
+  } catch {
+    return ''
+  }
+}
+
+/** Sign out: forget the secret and the approval code, keep the address so signing back in is one field. */
 export async function clearSecretStored() {
   await secure.deleteItemAsync(SECRET_KEY).catch(() => {})
-  current = { ...current, secret: '' }
+  await secure.deleteItemAsync(APPROVAL_KEY).catch(() => {})
+  current = { ...current, secret: '', approvalCode: '' }
+  emit()
+}
+
+/** Keep (or, with '', forget) this device's approval code. */
+export async function saveApprovalCode(code: string) {
+  const value = code.trim()
+  if (value) await secure.setItemAsync(APPROVAL_KEY, JSON.stringify({ baseUrl: current.baseUrl, code: value }))
+  else await secure.deleteItemAsync(APPROVAL_KEY).catch(() => {})
+  current = { ...current, approvalCode: value }
   emit()
 }
 
@@ -109,6 +177,7 @@ function markAccessNeeded() {
 export const getConnection = () => current
 export const getBaseUrl = () => current.baseUrl
 export const getStoredSecret = () => current.secret
+export const getStoredApprovalCode = () => current.approvalCode || ''
 export const isConnected = () => Boolean(current.baseUrl && current.secret)
 
 /** An absolute URL for a bridge path. Absolute URLs pass through untouched. */

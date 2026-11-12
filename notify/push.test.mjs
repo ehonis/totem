@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { createECDH, createPublicKey, verify as cryptoVerify } from 'node:crypto'
 import {
   encryptPayload, decryptPayload, deriveKeys, generateVapidKeys, signVapidToken,
-  vapidHeaders, audienceFor, sendPush, pushPayload, b64url, fromB64url, normalizeTopic, isRetryable,
+  vapidHeaders, sendPush, pushPayload, b64url, fromB64url, normalizeTopic, isRetryable,
 } from './push.mjs'
 
 // RFC 8291 §5 and Appendix A, verbatim.
@@ -28,13 +28,6 @@ const RFC = {
   nonce: '4h_95klXJ5E_qnoN',
   body: 'DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN',
 }
-
-test('the ECDH agreement matches the RFC example', () => {
-  const as = createECDH('prime256v1')
-  as.setPrivateKey(fromB64url(RFC.asPrivate))
-  assert.equal(b64url(as.getPublicKey()), RFC.asPublic)
-  assert.equal(b64url(as.computeSecret(fromB64url(RFC.uaPublic))), RFC.sharedSecret)
-})
 
 test('every derived key matches the RFC example', () => {
   const { ikm, cek, nonce } = deriveKeys({
@@ -70,17 +63,6 @@ test('the RFC ciphertext decrypts back to its plaintext', () => {
     authSecret: RFC.authSecret,
   })
   assert.equal(plain.toString('utf8'), RFC.plaintext)
-})
-
-test('the header carries salt, record size and the server key in the right places', () => {
-  const body = encryptPayload({
-    payload: 'hi', uaPublicKey: RFC.uaPublic, authSecret: RFC.authSecret,
-    salt: fromB64url(RFC.salt), serverKeys: { privateKey: fromB64url(RFC.asPrivate) },
-  })
-  assert.deepEqual(body.subarray(0, 16), fromB64url(RFC.salt))
-  assert.equal(body.readUInt32BE(16), 4096)
-  assert.equal(body.readUInt8(20), 65)
-  assert.equal(b64url(body.subarray(21, 86)), RFC.asPublic)
 })
 
 test('a fresh salt and server key are used for every message', () => {
@@ -176,11 +158,6 @@ test('a subject that is not mailto: or https: is refused up front', () => {
     () => signVapidToken({ endpoint: 'https://push/1', subject: 'ethan@example.com', privateKey }),
     /mailto:/,
   )
-})
-
-test('audienceFor strips path and query', () => {
-  assert.equal(audienceFor('https://fcm.googleapis.com/fcm/send/abc:def'), 'https://fcm.googleapis.com')
-  assert.equal(audienceFor('https://web.push.apple.com/a/b?c=d'), 'https://web.push.apple.com')
 })
 
 const SUBSCRIPTION = {

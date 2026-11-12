@@ -1,4 +1,5 @@
-import { TodoDomainError } from './errors.mjs';
+import { assertSyncTarget, TodoDomainError } from './errors.mjs';
+import { normalizeStatus } from './service.mjs';
 import { compatibilityTodo, normalizeTodoInput, projectList } from './http.mjs';
 
 // Venture tags are configured per install, so the schema takes any string and the
@@ -94,7 +95,7 @@ function normalizeAliases(input = {}, { update = false } = {}) {
   assertClassificationAliases(input);
   const normalized = normalizeTodoInput(input, { update });
   if (!update && Object.hasOwn(input, 'status')) normalized.status = input.status;
-  for (const field of ['source', 'github', 'sheet']) {
+  for (const field of ['source']) {
     if (Object.hasOwn(input, field)) normalized[field] = input[field];
   }
   return normalized;
@@ -115,7 +116,8 @@ function daysValue(value) {
 }
 
 function matchesReadFilters(todo, input) {
-  if (input.status && todo.status !== input.status) return false;
+  // `doing` was retired: a filter on it means open (normalizeStatus).
+  if (input.status && todo.status !== normalizeStatus(input.status)) return false;
   if (input.outcome && todo.outcome !== input.outcome) return false;
   if (input.area && todo.area !== input.area) return false;
   if (input.ventureTag && todo.ventureTag !== input.ventureTag) return false;
@@ -134,7 +136,7 @@ function mcpTodo(todo) {
 
 function openTodos(service, input) {
   return service.list({ snoozed: false, sort: 'manual' })
-    .filter(todo => todo.status === 'todo' || todo.status === 'doing')
+    .filter(todo => todo.status === 'todo')
     .filter(todo => matchesReadFilters(todo, input))
     .map(mcpTodo);
 }
@@ -180,9 +182,10 @@ export function createTodoMcpTools({ service, commands, fetchedAt = () => new Da
       if (!input.id) throw new TodoDomainError('MISSING_TODO_ID', 'id is required.');
       const { id } = input;
       const fields = normalizeAliases(input, { update: true });
-      const shareTarget = fields.syncTarget ?? 'local';
-      const shareOptions = { github: fields.github, sheet: fields.sheet };
-      let requestedStatus = Object.hasOwn(input, 'status') ? input.status : null;
+      // Before any change: a refused share (github, sheet, anything unknown) must not
+      // leave the task renamed or completed behind an error.
+      assertSyncTarget(fields.syncTarget);
+      let requestedStatus = Object.hasOwn(input, 'status') ? normalizeStatus(input.status) : null;
       // "Not doing" is how a task reached done, not a different place it went, so it
       // rides the same status change and only adds the outcome.
       const notDoing = input.notDoing === true;
@@ -205,8 +208,6 @@ export function createTodoMcpTools({ service, commands, fetchedAt = () => new Da
         if (input.complete === true) requestedStatus = 'done';
       }
       delete fields.source;
-      delete fields.github;
-      delete fields.sheet;
       delete fields.syncTarget;
       const changedFields = Object.keys(fields).length > 0;
       let todo = changedFields
@@ -222,13 +223,9 @@ export function createTodoMcpTools({ service, commands, fetchedAt = () => new Da
           notDoing ? { outcome: 'not_doing' } : undefined,
         );
       }
-      const shared = shareTarget !== 'local';
-      if (shared) {
-        todo = await commands.share(id, shareTarget, contextFor(session, `share task with ${shareTarget}`), shareOptions);
-      }
       const result = {
         ok: true,
-        updated: changedFields || shared || (statusChanged && !Object.hasOwn(input, 'complete')),
+        updated: changedFields || (statusChanged && !Object.hasOwn(input, 'complete')),
         todo: mcpTodo(todo),
         fetchedAt: fetchedAt(),
       };
@@ -253,23 +250,30 @@ const CREATE_PROPERTIES = {
   area: { type: 'string', enum: ['Personal', 'Ventures'] },
   ventureTag: S_VENTURE_TAG,
   source: { type: 'string' },
-  status: { type: 'string', enum: ['todo', 'doing', 'done'] },
-  syncTarget: { type: 'string', enum: ['local', 'github', 'sheet'], default: 'local' },
-  github: { type: 'object' },
-  sheet: { type: 'object' },
+  status: {
+    type: 'string',
+    enum: ['todo', 'doing', 'done'],
+    description: 'A task is open (todo) or done. "doing" is accepted from older callers and stored as todo.',
+  },
+  syncTarget: {
+    type: 'string',
+    enum: ['local'],
+    default: 'local',
+    description: 'Tasks stay in Totem. Sharing a task to GitHub or the sheet was removed and is refused.',
+  },
 };
 
 export const TODO_MCP_TOOL_DEFINITIONS = Object.freeze([
   {
     name: 'totem_get_tasks',
     title: 'Read tasks',
-    description: 'Read Totem tasks. Returns local todo and doing tasks by default and optionally recent completions — including archived ones, since completed work is swept into the archive at the end of each day. Each finished task carries `outcome`: "completed" if it happened, "not_doing" if he decided against it.',
+    description: 'Read Totem tasks. Returns open tasks by default and optionally recent completions — including archived ones, since completed work is swept into the archive at the end of each day. Each finished task carries `outcome`: "completed" if it happened, "not_doing" if he decided against it.',
     inputSchema: {
       type: 'object',
       properties: {
         includeCompleted: { type: 'boolean' },
         days: { type: 'number', minimum: 0, description: 'Completed-task look-back window. Default 30.' },
-        status: { type: 'string', enum: ['todo', 'doing'] },
+        status: { type: 'string', enum: ['todo', 'doing'], description: 'Open tasks are todo; "doing" is accepted as todo.' },
         outcome: {
           type: 'string',
           enum: ['completed', 'not_doing'],
@@ -301,7 +305,7 @@ export const TODO_MCP_TOOL_DEFINITIONS = Object.freeze([
   {
     name: 'totem_create_task',
     title: 'Create a task',
-    description: 'Create a Totem task. It stays local unless syncTarget is explicitly github or sheet.',
+    description: 'Create a Totem task. Tasks stay local; the shared task sheet is read-only.',
     inputSchema: {
       type: 'object', properties: CREATE_PROPERTIES, anyOf: [{ required: ['content'] }, { required: ['title'] }], additionalProperties: false,
     },
@@ -311,7 +315,7 @@ export const TODO_MCP_TOOL_DEFINITIONS = Object.freeze([
   {
     name: 'totem_update_task',
     title: 'Update or complete a task',
-    description: 'Update a Totem task or change its status. Pass complete for work that happened and notDoing for work he has decided against — both land in Done, and `outcome` on the task says which. Externally linked tasks retain their connector completion rules.',
+    description: 'Update a Totem task or change its status. Pass complete for work that happened and notDoing for work he has decided against — both land in Done, and `outcome` on the task says which. A task linked to an Action Items row is completed in the sheet; a GitHub issue link is only a link.',
     inputSchema: {
       type: 'object',
       properties: {

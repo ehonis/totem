@@ -77,7 +77,11 @@ export async function load(): Promise<void> {
 }
 
 /** A tab always lands on its own window; a walk back does not survive a switch. */
-export function pick(tab: GoalTab) { set({ tab, anchor: null, goals: tab === state.tab ? state.goals : [] }); void load() }
+export function pick(tab: GoalTab) {
+  const same = tab === state.tab
+  set({ tab, anchor: null, goals: same ? state.goals : [], window: same ? state.window : null })
+  void load()
+}
 
 export function step(direction: -1 | 1) {
   const { window, tab } = state

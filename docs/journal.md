@@ -218,7 +218,7 @@ still save and sit as failed with a Retry button, so nothing is lost by recordin
 - **The whisper binary is not portable.** It is built with `GGML_NATIVE=ON` for this CPU. A new box
   runs the install script again; that is the whole point of it being a script.
 - **Node 22 vs 24.** The service pins Node 24; the shell has 22. Both run the module (nothing here
-  needs anything newer than 20), but `npm install` at the root after pulling is now required for
+  needs anything newer than 20), but `pnpm install` at the root after pulling is now required for
   `ffmpeg-static`, same as `node-pty` and `ws`.
 - **The digest has its own timeout, and it is not `AGENT_TIMEOUT_MS`.** That one is three minutes,
   sized for a phone request someone is standing there waiting for. The first real entry — 21

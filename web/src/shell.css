@@ -13,11 +13,77 @@
 .app.shell > .main { grid-column: 3; }
 .app.shell > .term-panel { grid-column: 4; }
 
+/* The chats panel and the terminal are drag-resizable (components/ResizeHandle.tsx),
+   their widths in --sh-panel-w and --term-w, set on .app.shell. Registered as
+   non-inherited, so a drag restyles the shell alone rather than every element
+   under it; the grid tracks read them directly for the same reason. The var()
+   fallbacks repeat the initial values for engines without @property (Safari
+   before 16.4, Firefox before 128), where the variable is then plain and unset. */
+@property --sh-panel-w { syntax: '<length>'; inherits: false; initial-value: 268px; }
+@property --term-w { syntax: '<length>'; inherits: false; initial-value: 520px; }
+
+/* Each panel is a grid track that grows from its minimum up to its saved width,
+   after the page column has its minimum. That minimum is what the page needs
+   (--page-need: a chat and, when one is open, its side panel at their own
+   minimums, chat.css), cut down only by what the open panels' minimums leave of
+   the window. So the chats panel and the terminal give way first, the page gives
+   way only once they are at their minimums, nothing scrolls sideways, and a
+   saved width comes back when there is room again. */
+.app.shell {
+  --chat-min: 380px;
+  --side-min: 320px;
+  --sh-min: 220px; /* its header (wordmark, bell, collapse) breaks below this */
+  --sh-max: 560px;
+  --term-min: min(340px, 24vw);
+}
+@media (min-width: 721px) {
+  .app.shell {
+    --page-need: 420px;
+    --sh-room: 0px;
+    --term-room: 0px;
+    --main-min: min(var(--page-need), 100% - 64px - var(--sh-room) - var(--term-room));
+  }
+  /* The chat's minimum and the side panel's saved width (never under its
+     minimum), plus the page's 1px left border (below). The handle publishes
+     --side-saved here, so a narrower window squeezes the chats panel and the
+     terminal before the side panel, and a drag that widened it survives a
+     resize or a reload. */
+  .app.shell:has(> .main > .vc-split.has-artifact:not(.artifact-wide)) { --page-need: calc(var(--chat-min) + max(var(--side-min), var(--side-saved, 0px)) + 1px); }
+  .app.shell.panel-open { --sh-room: var(--sh-min); }
+  .app.shell.term-open { --term-room: var(--term-min); }
+  .app.shell.panel-open {
+    grid-template-columns: 64px minmax(var(--sh-min), min(var(--sh-panel-w, 268px), var(--sh-max))) minmax(var(--main-min), 1fr);
+  }
+  .app.shell.term-open {
+    grid-template-columns: 64px auto minmax(var(--main-min), 1fr) minmax(var(--term-min), var(--term-w, 520px));
+  }
+  .app.shell.panel-open.term-open {
+    grid-template-columns: 64px minmax(var(--sh-min), min(var(--sh-panel-w, 268px), var(--sh-max))) minmax(var(--main-min), 1fr) minmax(var(--term-min), var(--term-w, 520px));
+  }
+}
+
+@media (min-width: 721px) {
+  .app.shell > .sh-rail,
+  .app.shell > .sh-panel { border-right: 0; }
+  .app.shell > .sh-panel,
+  .app.shell > .main {
+    border-top: 1px solid var(--line);
+    border-left: 1px solid var(--line);
+  }
+  /* One curve: on the chats panel, or on the page when the panel is hidden. */
+  .app.shell > .sh-panel,
+  .app.shell:not(.panel-open) > .main { border-top-left-radius: 22px; }
+  /* What shows outside that curve is the shell itself, so it is the rail's
+     colour; the page paints its own background inside the curve. */
+  .app.shell { background: var(--rail); }
+  .app.shell > .main { background: var(--bg); }
+}
+
 /* --- rail ------------------------------------------------------------------ */
 .sh-rail {
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 12px 0 14px; min-height: 0;
-  background: #0b0c10; border-right: 1px solid #1a1d26;
+  background: var(--rail); border-right: 1px solid var(--rail-line);
 }
 .sh-rail-brand {
   position: relative; display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 8px;
@@ -26,7 +92,7 @@
 .sh-rail-logo { width: 32px; height: 32px; }
 .sh-rail-brand-toggle {
   position: absolute; inset: 0; display: grid; place-items: center; border-radius: 12px;
-  background: #1c1f29; color: var(--text); opacity: 0; transition: opacity .12s;
+  background: var(--rail-hover); color: var(--text); opacity: 0; transition: opacity .12s;
 }
 .sh-rail-brand:hover .sh-rail-brand-toggle, .sh-rail-brand:focus-visible .sh-rail-brand-toggle { opacity: 1; }
 .sh-rail-tabs { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow-y: auto; scrollbar-width: none; }
@@ -35,8 +101,8 @@
   background: none; border: 0; color: color-mix(in srgb, var(--text) 62%, transparent);
   transition: background .12s, color .12s;
 }
-.sh-rail-btn:hover { background: #181b24; color: var(--text); }
-.sh-rail-btn.on { background: #1f2330; color: var(--text); }
+.sh-rail-btn:hover { background: var(--rail-hover); color: var(--text); }
+.sh-rail-btn.on { background: var(--rail-on); color: var(--text); }
 .sh-rail-foot { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 /* The running version under Settings; inline at the foot of the phone drawer. */
 .sh-version {
@@ -53,7 +119,7 @@
 /* Label on hover, to the right of the rail. */
 .sh-tip {
   position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
-  padding: 5px 9px; border-radius: 8px; background: #2a2f3c; color: var(--text);
+  padding: 5px 9px; border-radius: 8px; background: var(--bg-hover); color: var(--text);
   font-size: 12.5px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .1s .25s;
   z-index: 60; box-shadow: 0 6px 18px #0008;
 }
@@ -61,7 +127,8 @@
 
 /* --- chats panel ------------------------------------------------------------ */
 .sh-panel {
-  width: 268px; min-height: 0; display: flex; flex-direction: column;
+  position: relative; /* anchors its resize handle */
+  width: auto; min-width: 0; min-height: 0; display: flex; flex-direction: column;
   background: var(--bg-2); border-right: 1px solid var(--line);
   padding: 0 8px;
 }
@@ -108,7 +175,7 @@
   position: relative; display: flex; align-items: center; gap: 13px; width: 100%; height: 44px; padding: 0 12px;
   border-radius: 10px; background: none; border: 0; color: color-mix(in srgb, var(--text) 86%, transparent); font-size: 15.5px; text-align: left;
 }
-.sh-drawer-item.on { background: #252a37; color: var(--text); }
+.sh-drawer-item.on { background: var(--bg-hover); color: var(--text); }
 .sh-drawer-item .sh-badge { position: static; margin-left: auto; }
 .sh-drawer .vc-thread-main { height: 42px; font-size: 15px; }
 .sh-drawer .sh-new { height: 44px; font-size: 15.5px; }
@@ -118,7 +185,7 @@
   border-top: 1px solid var(--line);
 }
 .sh-drawer-bottom { width: 44px; height: 44px; }
-.sh-drawer-bottom.on { background: #252a37; color: var(--text); }
+.sh-drawer-bottom.on { background: var(--bg-hover); color: var(--text); }
 
 @media (max-width: 720px) {
   /* No bottom dock any more. Everything that used to clear it now just keeps a
@@ -126,7 +193,7 @@
      Literals only — see the env()-in-custom-property gotcha in styles.css. */
   :root { --dock-h: 0px; --dock-bottom: 0px; --dock-clear: 14px; }
   @media (display-mode: standalone) { :root { --dock-clear: 30px; } }
-  .app.shell { grid-template-columns: minmax(0, 1fr); }
+  .app.shell, .app.shell.term-open { grid-template-columns: minmax(0, 1fr); }
   .app.shell > .main { grid-column: 1; }
   .app.shell::after { display: none; }
   .app.shell .main { display: flex; flex-direction: column; }
@@ -135,8 +202,8 @@
   /* Settings (and anything else) nests a scrolling .view inside a .view: the
      outer one's padding sat under the inner scroller and ended it 70px early,
      a dead band where the old dock used to be. Only the innermost pays. */
-  .app.shell .view:has(.view, .settings-content, .todo-board-list, .tg-body) { padding-bottom: 0; }
-  .app.shell .view .settings-content, .app.shell .view .todo-board-list, .app.shell .view .tg-body { padding-bottom: calc(var(--dock-clear) + 56px); }
+  .app.shell .view:has(.view, .settings-content, .tk-scroll, .tg-body) { padding-bottom: 0; }
+  .app.shell .view .settings-content, .app.shell .view .tk-scroll, .app.shell .view .tg-body { padding-bottom: calc(var(--dock-clear) + 56px); }
   .app.shell .view .settings-content:has(.view) { padding-bottom: 0; }
 }
 
@@ -167,7 +234,7 @@
   html.sh-dragging .app.shell > .main { transition: none; transform: translateX(var(--sh-drag)); border-radius: 22px 0 0 22px; overflow: hidden; }
   html.sh-dragging .sh-drawer { transition: none; transform: translateX(calc((var(--sh-drag) / 330px - 1) * 24%)); opacity: 1; }
   /* Things pinned to the viewport would otherwise stay put while the page moves. */
-  .app.shell.drawer-open .action-launcher, .app.shell.drawer-open .todo-new-task { opacity: 0; pointer-events: none; }
+  .app.shell.drawer-open .action-launcher { opacity: 0; pointer-events: none; }
 }
 
 /* --- phone: the "new chat" button ------------------------------------------------ */
@@ -183,18 +250,60 @@
   }
   .sh-fab:active { transform: scale(.94); }
   .app.shell.drawer-open .sh-fab { opacity: 0; pointer-events: none; }
-  /* Todos' own "new task" button sits beside it rather than under it. */
-  .app.shell .todo-new-task { right: calc(16px + 54px + 12px); bottom: calc(var(--dock-clear) + 13px); }
-}
-@media (max-width: 720px) {
-  /* The lifecycle chips keep a lane clear of the two corner buttons. */
-  .app.shell .todo-board-footer { padding-right: calc(16px + 54px + 12px + 44px + 8px); }
 }
 @media (max-width: 720px) {
   /* Voice sits directly above new chat: the same column, a little smaller, so the
      pair reads as one control and stays out of Todos' "new task" button. */
   .sh-fab.sh-fab-voice {
     width: 46px; height: 46px; right: 20px; bottom: calc(var(--dock-clear) + 8px + 54px + 12px);
-    background: #2a2f3c; color: var(--text); border: 1px solid #3a4152;
+    background: var(--bg-hover); color: var(--text); border: 1px solid var(--line-strong);
   }
 }
+
+/* --- desktop app window chrome (desktop.ts, components/WindowControls.tsx) -------
+   The desktop app's window has no title bar: the page runs to the window's top
+   edge, glow and all. Windows: the window buttons sit in the top-right corner,
+   as tall as the header beside them, and each page leaves them room. macOS: the
+   traffic lights float over the rail's top, which starts lower to clear them. */
+html[data-desktop="windows"] { --wc-w: 138px; --wc-h: 40px; }
+html[data-desktop="windows"]:has(.app.shell > .main > .vc-split) { --wc-h: 56px; }
+.wc { position: fixed; top: 0; right: 0; z-index: 200; display: flex; height: var(--wc-h); }
+.wc-btn {
+  display: grid; place-items: center; width: 46px; height: 100%; padding: 0;
+  background: transparent; border: 0; border-radius: 0;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+  transition: background .1s, color .1s;
+}
+.wc-btn:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+.wc-btn:active { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.wc-btn.wc-close:hover { background: #c42b1c; color: #fff; }
+.wc-btn.wc-close:active { background: #b3271a; color: #fff; }
+/* The window is in the background (App.tsx sets this on blur): dim, as Windows does. */
+html.glow-paused .wc-btn:not(:hover) { color: color-mix(in srgb, var(--text) 42%, transparent); }
+
+/* Every page but the chat starts below the buttons' strip; the chat's header
+   (or the side panel's, when one is open) makes room inside its own row. */
+html[data-desktop="windows"] .app.shell > .main:not(:has(> .vc-split)) { padding-top: var(--wc-h); }
+/* Productivity's folder tabs sit on the sidebar colour; the strip above them takes it too. */
+html[data-desktop="windows"] .app.shell > .main:has(> .productivity) { background: var(--bg-2); }
+html[data-desktop="windows"] .vc-split:not(.has-artifact) .vc-top,
+html[data-desktop="windows"] .vc-split.has-artifact .vc-art-head { padding-right: calc(10px + var(--wc-w)); }
+html[data-desktop="windows"] .auth-shell { padding-top: var(--wc-h); }
+
+html[data-desktop="macos"] .sh-rail { padding-top: 40px; }
+
+@media (max-width: 720px) {
+  html[data-desktop="windows"] { --wc-h: 52px; }
+  html[data-desktop="windows"] .app.shell > .main:not(:has(> .vc-split)) { padding-top: 0; }
+  html[data-desktop="windows"] .sh-mbar { padding-right: calc(6px + var(--wc-w)); }
+  html[data-desktop="macos"] .sh-mbar, html[data-desktop="macos"] .vc-top { padding-left: 80px; }
+}
+
+/* The desktop app's "Restart to update" (components/DesktopUpdate.tsx), above Settings. */
+.sh-rail-btn.sh-update { color: var(--accent); }
+.sh-rail-btn.sh-update:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.sh-rail-btn.sh-update.downloading { color: var(--muted); cursor: default; animation: sh-update-pulse 1.6s ease-in-out infinite; }
+.sh-rail-btn.sh-update:disabled { opacity: 1; }
+@keyframes sh-update-pulse { 50% { opacity: .45; } }
+html.reduce-motion .sh-rail-btn.sh-update.downloading { animation: none; }
+.sh-drawer-foot .sh-update { width: 44px; height: 44px; }

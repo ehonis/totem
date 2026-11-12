@@ -14,7 +14,7 @@ import { logHabit } from '../../lib/api'
 import { pushToast } from '../../lib/toast'
 import { answered, checkinItems, type CheckinItem } from '../../lib/habitCheckin'
 import { Sheet, closeSheet } from './form'
-import { Stepper } from './CheckRow'
+import { Stepper } from './parts'
 import { toDate, type Entry, type HabitsPayload } from './logic'
 import { getHabitsData, loadHabits, mutate, useHabits } from './store'
 
@@ -24,7 +24,7 @@ const allAnswered = (payload: HabitsPayload | null) => {
 }
 
 export default function CheckinSheet() {
-  const { data, loading } = useHabits()
+  const { data, loading, error } = useHabits()
   const [busy, setBusy] = useState<Record<string, boolean>>({})
   const busyRef = useRef(busy)
   busyRef.current = busy
@@ -79,6 +79,11 @@ export default function CheckinSheet() {
     >
       {loading && !data ? (
         <Spinner label="Loading…" />
+      ) : !data && error ? (
+        <Empty title="Habits didn’t load.">
+          <T size={13} muted align="center">{error}</T>
+          <Btn title="Try again" onPress={() => void loadHabits()} />
+        </Empty>
       ) : !items.length ? (
         <Empty title="Nothing to check in." />
       ) : (

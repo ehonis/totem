@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
-import { WarnIcon } from '../icons'
 import { listVoices, preferredVoice, setPreferredVoice, speechRate, setSpeechRate, speechSupported } from '../chat/speech'
+import { pushError } from '../toast'
+import { SettingsLoading, SettingsNote, SettingsPage, SettingsRow, SettingsSection } from './settings/ui'
 
-// Settings → Voice. Two engines: Realtime (OpenAI, the ChatGPT-style one, costs a
-// few cents a conversation) and Local (whisper.cpp on the box plus this device's
-// voices, free). "Auto" uses Realtime when a key is configured.
+// Settings → Voice. Two engines: Realtime (OpenAI, the ChatGPT-style one, a few
+// cents a conversation) and Local (whisper.cpp on the server plus this device's
+// voices, free). "Auto" uses Realtime when an OpenAI key is set.
 
 interface Status {
   realtime: { configured: boolean; model: string; voice: string; voices: string[]; models: { id: string; name: string; note: string }[] }
@@ -16,112 +17,135 @@ interface Status {
 
 const money = (n: number) => (n < 0.01 && n > 0 ? '<$0.01' : `$${n.toFixed(2)}`)
 
-export default function VoiceSettings() {
+/** This device's voices, which Chrome loads after the page does. */
+function useDeviceVoices() {
+  const [voices, setVoices] = useState(() => listVoices())
+  useEffect(() => {
+    if (!speechSupported()) return
+    const update = () => setVoices(listVoices())
+    speechSynthesis.addEventListener?.('voiceschanged', update)
+    update()
+    return () => speechSynthesis.removeEventListener?.('voiceschanged', update)
+  }, [])
+  return voices
+}
+
+export default function VoiceSettings({ onNavigate }: { onNavigate?: (section: string, hash?: string | null) => void }) {
   const [s, setS] = useState<Status | null>(null)
+  const [error, setError] = useState('')
+  const voices = useDeviceVoices()
   const [deviceVoice, setDeviceVoice] = useState(preferredVoice()?.name || '')
   const [rate, setRate] = useState(speechRate())
-  const load = () => api<Status>('/api/voice/status').then(setS).catch(() => {})
+
+  const load = () => api<Status>('/api/voice/status').then(setS).catch((e) => setError(e.message))
   useEffect(() => { load() }, [])
+  useEffect(() => { if (!deviceVoice && voices[0]) setDeviceVoice(preferredVoice()?.name || '') }, [voices, deviceVoice])
+
   async function save(patch: Partial<Status['settings']>) {
-    await api('/api/voice/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
-    load()
+    try {
+      await api('/api/voice/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
+      load()
+    } catch (e: any) { pushError(e.message) }
   }
-  if (!s) return <div className="settings-pane"><header className="settings-pane-head"><h2>Voice</h2></header></div>
+
+  function preview() {
+    if (!speechSupported()) return
+    speechSynthesis.cancel()
+    const u = new SpeechSynthesisUtterance('This is how Totem sounds reading a reply aloud.')
+    const v = voices.find((x) => x.name === deviceVoice)
+    if (v) u.voice = v
+    u.rate = rate
+    speechSynthesis.speak(u)
+  }
+
+  if (!s) return <SettingsLoading error={error} />
   const rt = s.realtime
   return (
-    <div className="settings-pane">
-      <header className="settings-pane-head">
-        <h2>Voice</h2>
-        <p>How Totem talks in voice mode. Realtime is the ChatGPT-style one: it hears you, answers in a natural voice, lets you cut in, and uses your apps while you talk.</p>
-      </header>
-
+    <SettingsPage>
       {!rt.configured && (
-        <div className="shortcut-warn">
-          <WarnIcon />
+        <SettingsNote tone="warn">
           <span>
-            Realtime needs an OpenAI API key (a ChatGPT subscription doesn’t include API use). Create one at
-            platform.openai.com, add <code>OPENAI_API_KEY=…</code> to <code>.env</code> on the box, and restart the bridge.
+            Realtime needs an OpenAI API key; a ChatGPT subscription does not include API use. Add one under{' '}
+            {onNavigate ? <button type="button" className="s-link" onClick={() => onNavigate('providers', 'api-keys')}>Providers › API keys</button> : 'Providers › API keys'}.
             Until then voice mode uses the free local engine.
           </span>
-        </div>
+        </SettingsNote>
       )}
 
-      <div className="settings-section-title"><span /><strong>Engine</strong></div>
-      <div className="setting-list">
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Voice engine</strong>
-            <span>Auto uses Realtime when a key is set, and local otherwise.</span>
-          </div>
-          <div className="setting-control">
-            <select className="model-select" value={s.settings.engine} onChange={(e) => save({ engine: e.target.value as any })}>
+      <SettingsSection title="Voice mode" description="How Totem listens and answers when you talk to it.">
+        <SettingsRow
+          id="voice-engine"
+          title="Engine"
+          description="Realtime hears you, answers in a natural voice, lets you cut in and uses your apps as you talk. Local is free and runs on your server. Auto picks Realtime when it can."
+          status={rt.configured ? `Realtime spend: ${money(s.spend.today)} today · ${money(s.spend.month)} this month (estimated at list prices).` : undefined}
+          control={
+            <select className="model-select" aria-label="Voice engine" value={s.settings.engine} onChange={(e) => save({ engine: e.target.value as Status['settings']['engine'] })}>
               <option value="auto">Auto</option>
               <option value="realtime" disabled={!rt.configured}>Realtime (OpenAI)</option>
               <option value="local">Local (free)</option>
             </select>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Realtime model</strong>
-            <span>{rt.models.find((m) => m.id === rt.model)?.note}</span>
-          </div>
-          <div className="setting-control">
-            <select className="model-select" value={rt.model} onChange={(e) => save({ model: e.target.value })} disabled={!rt.configured}>
-              {rt.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Realtime voice</strong>
-            <span>Marin and Cedar sound the most natural.</span>
-          </div>
-          <div className="setting-control">
-            <select className="model-select" value={rt.voice} onChange={(e) => save({ voice: e.target.value })} disabled={!rt.configured}>
-              {rt.voices.map((v) => <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>)}
-            </select>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Spend</strong>
-            <span>Estimated from each response’s token usage at list prices.</span>
-          </div>
-          <div className="setting-control"><span className="muted">{money(s.spend.today)} today · {money(s.spend.month)} this month</span></div>
-        </div>
-      </div>
-
-      <div className="settings-section-title"><span /><strong>Local voice</strong></div>
-      <div className="setting-list">
-        <div className="setting-row">
-          <div className="setting-copy">
-            <strong>Transcription</strong>
-            <span>whisper.cpp on the box. {s.local.ready ? 'Installed.' : 'Not installed: run scripts/install-whisper.sh.'}</span>
-          </div>
-        </div>
-        {speechSupported() && (
+          }
+        />
+        {rt.configured && (
           <>
-            <div className="setting-row">
-              <div className="setting-copy">
-                <strong>Reading voice</strong>
-                <span>This device’s voice for local voice mode and “Read aloud”. Enhanced or Premium voices sound far better; download them in your device’s settings.</span>
-              </div>
-              <div className="setting-control">
-                <select className="model-select" value={deviceVoice} onChange={(e) => { setPreferredVoice(e.target.value); setDeviceVoice(e.target.value) }}>
-                  {listVoices().map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
+            <SettingsRow
+              id="realtime-model"
+              title="Realtime model"
+              description={rt.models.find((m) => m.id === rt.model)?.note}
+              control={
+                <select className="model-select" aria-label="Realtime model" value={rt.model} onChange={(e) => save({ model: e.target.value })}>
+                  {rt.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
-              </div>
-            </div>
-            <div className="setting-row">
-              <div className="setting-copy"><strong>Speaking rate</strong><span>{rate.toFixed(2)}×</span></div>
-              <div className="setting-control">
-                <input type="range" min={0.8} max={1.4} step={0.05} value={rate} onChange={(e) => { const r = Number(e.target.value); setRate(r); setSpeechRate(r) }} />
-              </div>
-            </div>
+              }
+            />
+            <SettingsRow
+              id="realtime-voice"
+              title="Realtime voice"
+              description="Marin and Cedar sound the most natural."
+              control={
+                <select className="model-select" aria-label="Realtime voice" value={rt.voice} onChange={(e) => save({ voice: e.target.value })}>
+                  {rt.voices.map((v) => <option key={v} value={v}>{v.charAt(0).toUpperCase() + v.slice(1)}</option>)}
+                </select>
+              }
+            />
           </>
         )}
-      </div>
-    </div>
+        <SettingsRow
+          id="transcription"
+          title="Local transcription"
+          description={s.local.ready
+            ? 'whisper.cpp on the server, for local voice mode and dictation.'
+            : <>whisper.cpp on the server, for local voice mode and dictation. Install it with <code>scripts/install-whisper.sh</code>.</>}
+          control={<span className={`pill ${s.local.ready ? 'pill-ok' : 'pill-warn'}`}>{s.local.ready ? 'Installed' : 'Not installed'}</span>}
+        />
+      </SettingsSection>
+
+      {speechSupported() && (
+        <SettingsSection title="Reading aloud" description="This device’s own voice, for local voice mode and Read aloud. Saved on this device only.">
+          <SettingsRow
+            id="reading-voice"
+            title="Voice"
+            description="Enhanced or Premium voices sound far better; download them in your device’s settings."
+            control={
+              <>
+                <select className="model-select" aria-label="Reading voice" value={deviceVoice} onChange={(e) => { setPreferredVoice(e.target.value); setDeviceVoice(e.target.value) }}>
+                  {voices.length ? voices.map((v) => <option key={v.name} value={v.name}>{v.name}</option>) : <option value="">Loading voices…</option>}
+                </select>
+                <button type="button" className="btn" onClick={preview}>Play</button>
+              </>
+            }
+          />
+          <SettingsRow
+            id="speaking-rate"
+            title="Speaking rate"
+            description={`${rate.toFixed(2)}×`}
+            control={
+              <input type="range" aria-label="Speaking rate" min={0.7} max={1.6} step={0.05} value={rate}
+                onChange={(e) => { const r = Number(e.target.value); setRate(r); setSpeechRate(r) }} />
+            }
+          />
+        </SettingsSection>
+      )}
+    </SettingsPage>
   )
 }

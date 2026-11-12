@@ -158,15 +158,19 @@ export default function EntryCard({ entry, now, busy, onSkip, onIngest, onRetry,
       </View>
 
       <View style={st.titleRow}>
-        <T size={15} weight={600} lineHeight={20} style={{ flexShrink: 1 }}>{entryTitle(entry)}</T>
+        <T size={16} weight={600} lineHeight={22} style={{ flexShrink: 1 }}>{entryTitle(entry)}</T>
         {entry.status === 'transcribed' && (
-          <Press onPress={() => { void rename() }} hitSlop={8} accessibilityLabel="Rename entry" style={{ padding: 2 }}>
+          <Press onPress={() => { void rename() }} hitSlop={14} accessibilityRole="button" accessibilityLabel="Rename entry" style={{ padding: 2 }}>
             <Hi icon={PencilIcon} size={12} color={colors.muted} />
           </Press>
         )}
       </View>
 
-      {!open && excerpt ? <T size={13} muted lineHeight={19} style={{ marginTop: 6 }}>{excerpt}</T> : null}
+      {!open && excerpt ? (
+        <Press onPress={() => { tap(); setOpen(true) }} accessibilityRole="button" accessibilityLabel={excerpt} accessibilityHint="Shows the whole transcript">
+          <T size={14} muted lineHeight={21} style={{ marginTop: 6 }}>{excerpt}</T>
+        </Press>
+      ) : null}
       {state === 'transcribe-failed' && entry.error ? <T size={12.5} color={colors.red} style={{ marginTop: 6 }}>{entry.error}</T> : null}
       {state === 'ingest-failed' && entry.ingest.error ? <T size={12.5} color={colors.red} style={{ marginTop: 6 }}>{entry.ingest.error}</T> : null}
 
@@ -195,14 +199,14 @@ export default function EntryCard({ entry, now, busy, onSkip, onIngest, onRetry,
           <View style={{ transform: [{ rotate: open ? '90deg' : '0deg' }] }}>
             <Hi icon={ChevronRightIcon} size={13} color={colors.muted} />
           </View>
-          <T size={12} muted>{open ? 'Hide transcript' : 'Show transcript'}</T>
+          <T size={13} muted>{open ? 'Hide transcript' : 'Show transcript'}</T>
         </Press>
       )}
 
       <View style={st.actions}>
         {(state === 'waiting' || state === 'due') && (
-          <Btn compact kind="danger" icon={NoSymbolIcon} disabled={busy || state === 'due'} onPress={onSkip}>
-            <T size={12} weight={600} color="#f0879e">Don’t ingest</T>
+          <Btn kind="danger" icon={NoSymbolIcon} disabled={busy || state === 'due'} onPress={onSkip} style={{ minHeight: 44 }}>
+            <T size={13} weight={600} color="#f0879e">Don’t ingest</T>
           </Btn>
         )}
         <EntryMenu items={items} disabled={busy} />
@@ -211,14 +215,14 @@ export default function EntryCard({ entry, now, busy, onSkip, onIngest, onRetry,
       {open && entry.transcript && (
         <View style={st.transcript}>
           <AudioPlayback entry={entry} />
-          {paragraphs.map((p, i) => <T key={i} size={14} lineHeight={22} style={{ marginBottom: 10 }}>{p}</T>)}
+          {paragraphs.map((p, i) => <T key={i} size={15} lineHeight={24} selectable style={{ marginBottom: 12 }}>{p}</T>)}
           <View style={st.meta}>
             {entry.transcript.model ? <T size={11.5} muted>whisper {entry.transcript.model}</T> : null}
             {entry.transcript.ms > 0 ? <T size={11.5} muted>{Math.round(entry.transcript.ms / 1000)} s to transcribe</T> : null}
             {entry.transcript.editedAt ? <T size={11.5} muted>edited</T> : null}
             {entry.ingest.journalFile ? <T size={11.5} muted>brain: {entry.ingest.journalFile}</T> : null}
             {entry.status === 'transcribed' && (
-              <Press onPress={() => router.push(`/journal/${encodeURIComponent(entry.id)}`)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Press onPress={() => router.push(`/journal/${encodeURIComponent(entry.id)}`)} accessibilityRole="button" style={{ flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44 }}>
                 <Hi icon={PencilSquareIcon} size={12} color={colors.muted} />
                 <T size={11.5} muted style={{ textDecorationLine: 'underline' }}>Fix the transcript</T>
               </Press>
@@ -366,7 +370,7 @@ function splitParagraphs(text: string): string[] {
 const st = StyleSheet.create({
   card: {
     backgroundColor: colors.bg2, borderWidth: 1, borderColor: colors.line, borderRadius: 12,
-    paddingVertical: 13, paddingHorizontal: 15, borderLeftWidth: 3,
+    paddingTop: 13, paddingBottom: 8, paddingHorizontal: 15, borderLeftWidth: 3,
   },
   tabular: { fontVariant: ['tabular-nums'] },
   top: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 },
@@ -382,9 +386,9 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.bg3,
     borderWidth: 1, borderColor: colors.line, borderRadius: 6, paddingVertical: 2, paddingHorizontal: 7,
   },
-  disclose: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 10, alignSelf: 'flex-start' },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, flexWrap: 'wrap' },
-  menuToggle: { width: 36, height: 32, marginLeft: -6, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  disclose: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, paddingRight: 12, marginTop: 0, alignSelf: 'flex-start' },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2, marginBottom: -6, flexWrap: 'wrap' },
+  menuToggle: { width: 44, height: 44, marginLeft: -8, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   transcript: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.line },
   meta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 14, rowGap: 4, marginTop: 4 },
   reply: { marginTop: 6, maxHeight: 320, backgroundColor: colors.bg, borderRadius: 8, borderWidth: 1, borderColor: colors.line, padding: 10 },

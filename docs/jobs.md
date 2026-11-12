@@ -44,7 +44,7 @@ a bug the UI shows you rather than hides.
 | Job store, run history, notifications | `jobs/store.mjs` |
 | Tests | `jobs/*.test.mjs` — `npm test` |
 | Engine, runners, API routes | `bridge.mjs`, "The job engine" section |
-| Jobs UI | `web/src/components/JobsView.tsx` |
+| Jobs UI | the Totems page, `web/src/components/TotemsView.tsx` (schedule editor and run history in `web/src/totems/schedule.tsx`) |
 | Home-board tile | `web/src/components/OverviewView.tsx`, the `jobs` tile |
 | Job state | `data/jobs.json` (gitignored) |
 | Run history | `data/job-runs.jsonl` (gitignored, trimmed past ~2MB) |
@@ -309,15 +309,17 @@ and fails with a message saying so, rather than silently falling through.
 | `journal-ingest` | 07:00 | `journal-ingest` + the `journal-ingest` skill. Needs Plaud |
 | `plaud-meetings-ingest` | 08:00 | `plaud-meetings-ingest` + the `plaud-action-items-ingest` skill. Needs Plaud |
 | `whoop-sleep-ingest` | 11:00 | `whoop-sleep`. See `docs/whoop-sleep-ingest.md` |
-| `self-update` ("Deploy Totem") | watch: this checkout's `main`, every 2 min | `self-update`: refuse a dirty tree or another branch, `pull --ff-only`, `npm install` if a `package*.json` changed, `npm run build`, then restart the service once no chat or job is running (systemd's `TOTEM_SERVICE_NAME`, or on macOS the launchd label it runs under, via `launchctl kickstart -k`). Off unless `TOTEM_SELF_UPDATE_ENABLED` |
+| `linkedin-networking` | Monday and Wednesday, 09:00 | An agent totem (its `prompt`, `linkedin/totem.mjs`): reads LinkedIn and stages at most five cards for the owner to do himself. Off unless `LINKEDIN_NETWORKING_ENABLED`. See `docs/linkedin.md` |
+| `self-update` ("Deploy Totem") | watch: this checkout's `main`, every 2 min | `self-update`: refuse a dirty tree or another branch, or a service PATH with neither pnpm nor corepack, then `pull --ff-only`, `pnpm install --frozen-lockfile` if a `package.json`, `pnpm-lock.yaml` or `pnpm-workspace.yaml` changed, `pnpm run build`, then restart the service once no chat or job is running (systemd's `TOTEM_SERVICE_NAME`, or on macOS the launchd label it runs under, via `launchctl kickstart -k`). Off unless `TOTEM_SELF_UPDATE_ENABLED` |
 
-These are **seeds, not built-ins**. `SEED_JOB_DEFS` is read on first boot and when
+These are **seeds, not built-ins**. A seed may carry a `runner`, a `skillId` or an
+inline `prompt` (an agent totem), like any job. `SEED_JOB_DEFS` is read on first boot and when
 a genuinely new id ships; it is never re-applied to a job that already exists, so
 an edit or a delete can't be overruled by a deploy. The `*_ENABLED` / `*_TIME` env
 vars seed the first boot only.
 
 Deleting one is allowed and is remembered in `deletedSeeds`, so it stays gone
-across restarts. **Defaults you deleted** at the bottom of the Jobs tab offers them
+across restarts. **Built-ins you deleted** at the bottom of the Totems page offers them
 back (`POST /api/jobs/restore`).
 
 ## Gotchas

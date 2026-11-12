@@ -127,6 +127,8 @@ export function asWatch(w: any): Watch | null {
 export const sourceKey = (s: WatchSource) => (s.kind === 'git' ? `git ${s.repo} ${s.ref}` : `url ${s.url}${s.contains ? ` ${s.contains}` : ''}`)
 export interface Draft {
   name: string; summary?: string; icon: string; taskType: string; instructions: string; schedule: any; trigger: Watch | null; browser: boolean
+  /** 'full' lets its runs use any command and write anywhere, with nobody approving; null keeps the standard limits. */
+  access?: 'full' | null
   notify: string; recommendations: Rec[]; questions: string[]
 }
 /** Which model runs it. `provider: 'default'` is the default account's default model. */

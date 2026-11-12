@@ -24,7 +24,7 @@ import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 /** Terminal states an action can land in. `pending` is never written to disk. */
-export const ACTION_STATUSES = ['ok', 'error', 'denied', 'skipped']
+export const ACTION_STATUSES = ['ok', 'error', 'denied', 'skipped', 'uncertain']
 
 /**
  * Who asked for this. Kept small and closed so the log stays groupable — a free
@@ -95,7 +95,7 @@ export function createActionLog({ file, log = () => {}, now = Date.now } = {}) {
    * @param {string} [entry.actor]   who asked — see ACTORS
    * @param {string} [entry.channel] the usage-log channel this belongs to, so the two line up
    * @param {string} [entry.target]  what it acted on, e.g. a task id or inbox P-id
-   * @param {string} [entry.status]  ok | error | denied | skipped. Default 'ok'
+   * @param {string} [entry.status]  ok | error | denied | skipped | uncertain. Default 'ok'
    * @param {string} [entry.summary] one line a human reads first: what happened
    * @param {string} [entry.why]     why it happened — for AI-initiated actions this is required by the caller
    * @param {*}      [entry.detail]  the specifics: arguments, exit code, counts

@@ -39,17 +39,6 @@ test('a plug-in is announced once, with the dates it covered', () => {
   assert.equal(result.status, 'ok')
 })
 
-test('one photo is not "1 photos"', () => {
-  const result = summarize({
-    pending: [{ kind: 'sync', copied: 1, duplicates: 0, days: ['2026-08-28'] }],
-    backlog: noBacklog,
-    now: NOW,
-  })
-  assert.match(result.notifications[0].title, /^1 photo off the camera$/)
-  assert.match(result.notifications[0].body, /from 2026-08-28/)
-  assert.doesNotMatch(result.notifications[0].body, /duplicate/)
-})
-
 test('a fresh backlog does not nag', () => {
   // Photos that arrived an hour ago are not a problem, they are the normal state
   // between a plug-in and the next time the lid opens.

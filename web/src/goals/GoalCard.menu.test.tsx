@@ -145,25 +145,6 @@ describe('the card carries no loose buttons', () => {
     expect(onPostpone).toHaveBeenCalled()
   })
 
-  it('puts the percentage at the end of the bar and the check where it used to be', () => {
-    const { container } = card({
-      metrics: [{
-        id: 'm1', label: 'Miles Biked', unit: 'miles', targetValue: 50, value: 30.9,
-        percent: 62, sourceKind: 'strava_distance', sourceLabel: 'Strava, Rides in this period',
-        available: true, unavailableReason: null, rolledUpValue: 0, feederCount: 0,
-        unreadableFeederCount: 0, rollsUpToMetricId: null,
-      }] as Goal['metrics'],
-      progress: { fraction: 0.62, percent: 62, subGoalsDone: 0, subGoalsTotal: 0, subGoalsAbandoned: 0, complete: false },
-    })
-
-    // The number sits in the bar's own row, not in the header beside the title.
-    const row = container.querySelector('.goal-bar-row')
-    expect(row?.querySelector('.goal-percent')?.textContent).toBe('62%')
-    expect(container.querySelector('.goal-card-head .goal-percent')).toBeNull()
-    // And the check has moved to the header's right-hand tools.
-    expect(container.querySelector('.goal-card-tools .goal-check.big')).not.toBeNull()
-  })
-
   it('gives a goal with several numbers a bar of its own rather than borrowing one', () => {
     const metric = (id: string, percent: number) => ({
       id, label: id, unit: 'miles', targetValue: 10, value: percent / 10, percent,

@@ -4,8 +4,9 @@
 // "Achieved" chip, never a strikethrough. Only a goal you stopped is crossed off.
 // Editing the title/note and the numbers open as sheets; postpone and delete confirm
 // with the platform alert.
-import React, { useEffect, useRef, useState } from 'react'
-import { Animated, StyleSheet, TextInput, View } from 'react-native'
+import React, { useEffect, useState } from 'react'
+import { StyleSheet, TextInput, View } from 'react-native'
+import Reanimated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated'
 import { router } from 'expo-router'
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg'
 import IconActivityHeartbeat from '@tabler/icons-react-native/dist/esm/icons/IconActivityHeartbeat.mjs'
@@ -16,7 +17,7 @@ import { confirm } from '../../ui/menu'
 import { success, tap } from '../../ui/haptics'
 import {
   Hi, BookmarkIcon, ChartBarIcon, CheckBadgeSolidIcon, CheckCircleIcon, ClockIcon, EllipsisHorizontalIcon,
-  FlagIcon, NoSymbolIcon, PencilIcon, PlayIcon, TrophySolidIcon, XMarkIcon,
+  FlagIcon, NoSymbolIcon, PencilIcon, PlayIcon, PlusIcon, TrophySolidIcon, XMarkIcon,
 } from '../../lib/icons'
 import { GOAL_DONE_ICON, goalIconFor } from '../../lib/goals/goalIcon'
 import { formatAmount } from '../../lib/goals/types'
@@ -26,6 +27,8 @@ import { openUrl } from '../../lib/siblingApps'
 import { goalContext } from '../../lib/chat/about/context'
 import { CHAT_ABOUT_ACTION, chatAbout } from '../../ui/chatAbout'
 import MetricSourceWarning from './MetricSourceWarning'
+import Ring from './Ring'
+import { useCalm } from '../habits/motion'
 
 /** One hue per horizon (.period-week …), shared with the tabs and the overview. */
 export const PERIOD_COLOR: Record<GoalPeriodType, string> = {
@@ -85,26 +88,38 @@ export function Chip({ kind = 'plain', icon, iconSize = 11, children, onPress, s
   return onPress ? <Press onPress={onPress}>{body}</Press> : body
 }
 
-/** .goal-bar: the accent→accent-2 gradient fill (green once the goal is done). */
+/**
+ * .goal-bar: the accent→accent-2 gradient (green once the goal is done), revealed
+ * up to the percent and eased there, so a logged number visibly moves the bar.
+ */
 export function GoalBar({ percent, done, unreadable }: { percent: number; done?: boolean; unreadable?: boolean }) {
   const [w, setW] = useState(0)
   const fill = Math.max(0, Math.min(100, percent))
+  const reduced = useCalm()
+  const shown = useSharedValue(fill)
+  useEffect(() => {
+    shown.value = reduced ? fill : withTiming(fill, { duration: 520, easing: Easing.out(Easing.cubic) })
+  }, [fill, reduced, shown])
+  const reveal = useAnimatedStyle(() => ({ width: `${shown.value}%` }))
   return (
     <View style={[s.bar, unreadable && { backgroundColor: colors.bg2, borderWidth: 1, borderColor: colors.bg3 }]} onLayout={(e) => setW(e.nativeEvent.layout.width)}>
-      {w > 0 && fill > 0 && (
-        <Svg width={(w * fill) / 100} height={6}>
-          <Defs>
-            <LinearGradient id={done ? "goalbar-done" : "goalbar"} x1="0" y1="0" x2="1" y2="0">
-              <Stop offset="0" stopColor={done ? colors.green : colors.accent} />
-              <Stop offset="1" stopColor={done ? '#6ee787' : colors.accent2} />
-            </LinearGradient>
-          </Defs>
-          <Rect x={0} y={0} width={(w * fill) / 100} height={6} fill={done ? "url(#goalbar-done)" : "url(#goalbar)"} />
-        </Svg>
-      )}
+      <Reanimated.View style={[{ height: BAR, overflow: 'hidden', borderRadius: 999 }, reveal]}>
+        {w > 0 && (
+          <Svg width={w} height={BAR}>
+            <Defs>
+              <LinearGradient id={done ? 'goalbar-done' : 'goalbar'} x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0" stopColor={done ? colors.green : colors.accent} />
+                <Stop offset="1" stopColor={done ? '#6ee787' : colors.accent2} />
+              </LinearGradient>
+            </Defs>
+            <Rect x={0} y={0} width={w} height={BAR} fill={done ? 'url(#goalbar-done)' : 'url(#goalbar)'} />
+          </Svg>
+        )}
+      </Reanimated.View>
     </View>
   )
 }
+const BAR = 8
 
 function Percent({ value, done }: { value: number | null; done?: boolean }) {
   return (
@@ -155,10 +170,10 @@ function MetricRow({ metric, onLog, busy, percentAtEnd, done }: {
           </View>
         ) : (
           <View style={s.log}>
-            <Btn compact title="+1" disabled={busy} onPress={() => onLog({ delta: 1 })} />
+            <Btn compact icon={PlusIcon} title={`1${metric.unit ? ` ${metric.unit}` : ''}`} disabled={busy} onPress={() => onLog({ delta: 1 })} style={s.plusOne} />
             <TextInput
               value={draft}
-              placeholder="log"
+              placeholder="Log…"
               placeholderTextColor={colors.muted}
               keyboardType="numbers-and-punctuation"
               keyboardAppearance="dark"
@@ -202,7 +217,7 @@ function SubGoalRow({ subGoal, busy, onToggle, onAbandon, onRename, onLog, onEdi
   const notDoing = subGoal.abandoned && !subGoal.complete
   const tool = (icon: any, label: string, onPress: () => void, disabled?: boolean) => (
     <Press haptic onPress={onPress} disabled={busy || disabled} accessibilityLabel={label} hitSlop={4} style={s.stepTool}>
-      <Hi icon={icon} size={14} color={colors.muted} />
+      <Hi icon={icon} size={15} color={colors.muted} />
     </Press>
   )
   return (
@@ -211,10 +226,12 @@ function SubGoalRow({ subGoal, busy, onToggle, onAbandon, onRename, onLog, onEdi
         onPress={() => { if (!subGoal.complete) success(); else tap(); onToggle() }}
         disabled={busy}
         accessibilityLabel={subGoal.complete ? `Reopen ${name}` : `Mark ${name} done`}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: subGoal.complete }}
         hitSlop={6}
-        style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}
+        style={s.stepCheck}
       >
-        {subGoal.complete ? <Hi icon={CheckCircleIcon} size={20} color={colors.green} /> : <View style={s.ring} />}
+        {subGoal.complete ? <Hi icon={CheckCircleIcon} size={24} color={colors.green} /> : <View style={s.ring} />}
       </Press>
       <View style={{ flex: 1, minWidth: 0, gap: 5 }}>
         {renaming ? (
@@ -225,7 +242,7 @@ function SubGoalRow({ subGoal, busy, onToggle, onAbandon, onRename, onLog, onEdi
           />
         ) : (
           <T
-            size={13}
+            size={14}
             color={subGoal.complete ? '#a8cfb0' : notDoing ? colors.muted : colors.text}
             style={notDoing ? { textDecorationLine: 'line-through' } : undefined}
           >
@@ -273,19 +290,8 @@ export default function GoalCard({ goal, busy, bushidoHosts = [], actions }: {
   const notDoing = goal.abandoned && !done
   const singleMetric = goal.metrics.length === 1 && goal.subGoals.length === 0
 
-  // The flourish hangs off the transition into done, never off loading a done goal.
-  const pop = useRef(new Animated.Value(1)).current
-  const wasComplete = useRef(goal.complete)
-  useEffect(() => {
-    const was = wasComplete.current
-    wasComplete.current = goal.complete
-    if (!goal.complete || was) return
-    success()
-    Animated.sequence([
-      Animated.timing(pop, { toValue: 1.025, duration: 160, useNativeDriver: true }),
-      Animated.spring(pop, { toValue: 1, friction: 4, useNativeDriver: true }),
-    ]).start()
-  }, [goal.complete, pop])
+  // Achieving a goal moves the card under Achieved, where it mounts fresh; the
+  // flourish for that is the page's (GoalsView `celebrating`), not this card's.
 
   const openNumbers = (step?: string) => router.push({ pathname: '/goal/numbers', params: step ? { id: goal.id, step } : { id: goal.id } })
   const openEdit = (mode: 'all' | 'note') => router.push({ pathname: '/goal/edit', params: { id: goal.id, mode } })
@@ -324,14 +330,13 @@ export default function GoalCard({ goal, busy, bushidoHosts = [], actions }: {
   const links = goal.links.filter((l) => l.id !== bushidoLink?.id)
 
   return (
-    <Animated.View
+    <View
       style={[
         s.card,
         { borderLeftColor: alpha(period, 0.45) },
         goal.periodState === 'expired' && { borderLeftColor: colors.amber },
         done && s.cardDone,
         notDoing && { opacity: 0.72 },
-        { transform: [{ scale: pop }] },
       ]}
     >
       {done && (
@@ -348,13 +353,18 @@ export default function GoalCard({ goal, busy, bushidoHosts = [], actions }: {
         </View>
       )}
       <View style={s.head}>
-        <View style={[s.icon, done
-          ? { backgroundColor: alpha(colors.green, 0.16), borderColor: alpha(colors.green, 0.45) }
-          : { backgroundColor: alpha(period, 0.14), borderColor: alpha(period, 0.28) }]}>
-          <Hi icon={Glyph} size={17} color={done ? colors.green : period} />
-        </View>
+        {/* The goal's icon inside its progress: read the card's state without reading a number. */}
+        <Ring
+          percent={done ? 100 : goal.progress.percent}
+          color={done ? colors.green : period}
+          track={done ? alpha(colors.green, 0.2) : alpha(period, 0.18)}
+          size={46}
+          stroke={4}
+        >
+          <Hi icon={Glyph} size={19} color={done ? colors.green : period} />
+        </Ring>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <T size={15} weight={600} color={notDoing ? colors.muted : colors.text} style={notDoing ? { textDecorationLine: 'line-through' } : undefined}>
+          <T size={16} weight={600} color={notDoing ? colors.muted : colors.text} style={notDoing ? { textDecorationLine: 'line-through' } : undefined}>
             {goal.title}
           </T>
           <View style={s.chips}>
@@ -378,16 +388,20 @@ export default function GoalCard({ goal, busy, bushidoHosts = [], actions }: {
         </View>
         <View style={s.tools}>
           <NativeMenu sections={sections} title={goal.title} label={`More actions for ${goal.title}`} disabled={busy}>
-            <View style={s.menuBtn}><Hi icon={EllipsisHorizontalIcon} size={17} color={colors.muted} /></View>
+            <View style={s.menuBtn}><Hi icon={EllipsisHorizontalIcon} size={20} color={colors.muted} /></View>
           </NativeMenu>
           <Press
             onPress={() => { tap(); actions.onToggle() }}
             disabled={busy}
             hitSlop={6}
-            accessibilityLabel={done ? `Reopen ${goal.title}` : `Mark ${goal.title} complete`}
-            style={done ? s.won : s.checkBox}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: done }}
+            accessibilityLabel={done ? `${goal.title}, achieved. Reopen` : `Mark ${goal.title} achieved`}
+            style={s.checkBox}
           >
-            {done ? <Hi icon={TrophySolidIcon} size={20} color={colors.amber} /> : <View style={s.bigRing} />}
+            {done
+              ? <View style={s.won}><Hi icon={TrophySolidIcon} size={22} color={colors.amber} /></View>
+              : <View style={[s.bigRing, { borderColor: alpha(period, 0.7) }]} />}
           </Press>
         </View>
       </View>
@@ -457,7 +471,7 @@ export default function GoalCard({ goal, busy, bushidoHosts = [], actions }: {
           <Btn compact icon={XMarkIcon} onPress={() => { setAdding(false); setStepDraft('') }} />
         </View>
       )}
-    </Animated.View>
+    </View>
   )
 }
 
@@ -471,37 +485,38 @@ const s = StyleSheet.create({
     borderColor: '#244f33', borderLeftColor: colors.green,
     shadowColor: colors.green, shadowOpacity: 0.35, shadowRadius: 14, shadowOffset: { width: 0, height: 6 },
   },
-  head: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  icon: { width: 30, height: 30, borderRadius: 9, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  head: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 5 },
   chip: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingVertical: 2, paddingHorizontal: 7, borderRadius: 999, borderWidth: 1, maxWidth: 260,
   },
-  tools: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  menuBtn: { width: 28, height: 28, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
-  checkBox: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
-  bigRing: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: colors.muted },
-  ring: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: colors.muted },
+  tools: { flexDirection: 'row', alignItems: 'center', gap: 0, marginTop: -4, marginRight: -6 },
+  menuBtn: { width: 40, height: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  checkBox: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  bigRing: { width: 30, height: 30, borderRadius: 15, borderWidth: 2.5, borderColor: colors.muted },
+  ring: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: colors.muted },
+  stepCheck: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', marginTop: -6, marginLeft: -4 },
+  plusOne: { minHeight: 44, paddingHorizontal: 14 },
   won: {
-    width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center',
+    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center',
     backgroundColor: alpha(colors.amber, 0.15), borderWidth: 1, borderColor: alpha(colors.amber, 0.45),
     shadowColor: colors.amber, shadowOpacity: 0.5, shadowRadius: 8, shadowOffset: { width: 0, height: 0 },
   },
-  bar: { height: 6, borderRadius: 999, backgroundColor: colors.bg3, overflow: 'hidden' },
+  bar: { height: BAR, borderRadius: 999, backgroundColor: colors.bg3, overflow: 'hidden' },
   barRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   metricHead: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 10, rowGap: 2 },
   metricName: { flexDirection: 'row', alignItems: 'center', gap: 7, flexShrink: 1, maxWidth: '100%' },
   metricAmount: { marginLeft: 'auto', textAlign: 'right', fontVariant: ['tabular-nums'], flexShrink: 1 },
-  metricFoot: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 24, flexWrap: 'wrap' },
+  metricFoot: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28, flexWrap: 'wrap' },
   log: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 5 },
   logInput: {
-    width: 62, backgroundColor: colors.bg3, borderWidth: 1, borderColor: colors.line, color: colors.text,
+    width: 72, minHeight: 44, backgroundColor: colors.bg3, borderWidth: 1, borderColor: colors.line, color: colors.text,
     borderRadius: 8, paddingVertical: 5, paddingHorizontal: 7, fontSize: 16, fontFamily: fonts[400],
   },
-  steps: { gap: 8, borderLeftWidth: 2, borderLeftColor: colors.line, paddingLeft: 10, marginLeft: 4 },
+  steps: { gap: 12, borderLeftWidth: 2, borderLeftColor: colors.line, paddingLeft: 10, marginLeft: 4 },
   step: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  stepTool: { width: 24, height: 24, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
+  stepTool: { width: 36, height: 36, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginTop: -8 },
   rename: {
     paddingVertical: 3, paddingHorizontal: 8, borderWidth: 1, borderColor: colors.line, borderRadius: 7,
     backgroundColor: colors.bg, color: colors.text, fontSize: 16, fontFamily: fonts[400],
