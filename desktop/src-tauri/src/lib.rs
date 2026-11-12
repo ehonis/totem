@@ -31,6 +31,7 @@ use tauri_plugin_window_state::StateFlags;
 #[cfg(target_os = "macos")]
 use tauri::RunEvent;
 
+mod access;
 mod update;
 
 const MAIN: &str = "main";
@@ -278,6 +279,7 @@ fn build_main(app: &AppHandle, server: Option<&Url>, visible: bool, native_title
         None => WebviewUrl::App("index.html".into()),
     };
     let opener = app.clone();
+    let access_server = server.cloned();
     let mut builder = WebviewWindowBuilder::new(app, MAIN, url)
         .title("Totem")
         .inner_size(1280.0, 860.0)
@@ -300,9 +302,17 @@ fn build_main(app: &AppHandle, server: Option<&Url>, visible: bool, native_title
                             reveal_download(&opener, &target);
                         }
                     }
+                    // The buttons on the bundled sign-in page (src/access/mod.rs).
+                    Some("signin") => access::action(&opener, url.path()),
                     _ => {}
                 }
                 return false;
+            }
+            // Cloudflare Access's login page opens in the default browser instead.
+            if let Some(server) = &access_server {
+                if !access::intercept(&opener, server, url) {
+                    return false;
+                }
             }
             if url.scheme() != "totem-external" {
                 return true;
@@ -361,6 +371,9 @@ fn build_main(app: &AppHandle, server: Option<&Url>, visible: bool, native_title
                 }
                 PageLoadEvent::Finished if ours => {
                     let _ = window.eval(&update::status_script(window.app_handle()));
+                }
+                PageLoadEvent::Finished if access::is_signin_page(payload.url()) => {
+                    let _ = window.eval(&access::status_script(window.app_handle()));
                 }
                 _ => {}
             }
@@ -591,6 +604,7 @@ pub fn run() {
             let bindings = register_shortcuts(&handle, &config.shortcuts);
             app.manage(AppState { config: Mutex::new(config), path, bindings: Mutex::new(bindings) });
             app.manage(update::Updates::default());
+            app.manage(access::Access::default());
             app.manage(Downloads::default());
 
             if let (Some(server), false) = (server.as_ref(), native_title_bar) {

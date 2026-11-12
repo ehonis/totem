@@ -63,6 +63,11 @@ jobs:
         with:
           workspaces: desktop/src-tauri
       - run: npm ci
+      # The Access sign-in's token transfer (src/access/transfer.rs) has unit
+      # tests, including one against a box sealed by tweetnacl. One OS is enough.
+      - name: Test
+        if: runner.os == 'macOS'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib access::transfer
       - name: Build
         run: |
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then

@@ -27,6 +27,13 @@ What it adds over a browser tab:
   maximize. A page that isn't Totem's own (a sign-in page in between, or a Totem
   server too old to draw the buttons) gets the normal title bar back.
 - Links that leave Totem, or that would open a new tab, open in your normal browser.
+- A server behind Cloudflare Access signs you in in your normal browser, not in
+  the window, so saved passwords, passkeys and Google sign-in work. The window
+  says "Finish signing in in your browser" and picks the sign-in up by itself
+  (the same command-line sign-in `cloudflared access login` uses), then carries
+  on to the page it was opening. When Access asks again (its session ran out),
+  the browser usually finishes on its own. "Sign in in this window instead" is
+  there for an Access setup the browser sign-in can't handle.
 - Drop photos and files from Finder or File Explorer anywhere on the chat to
   attach them to your next message.
 
