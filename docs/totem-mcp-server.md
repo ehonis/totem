@@ -600,6 +600,23 @@ no create, update or delete tool, because a trip found in an email is an inferen
 AGENTS.md, confirm-only). Gateway: `away__list`, `away__propose`
 (gateway 1.13.0). See `docs/away.md`.
 
+### 6.9e AI subscription usage — **BUILT**
+
+Three read-only tools for "where am I hitting limits, on which account, how often":
+`totem_usage_get_current` (every account the usage poller tracks: provider, name, plan, each
+window's used %, reset and status — spent, low, ok or no data — plus each provider's pool),
+`totem_usage_get_history` (CLIProxy's recorded readings for its Claude and Codex logins, up to 21
+days, bucketed to each window's peak so the answer stays small) and `totem_usage_limit_report`
+(per account and window: cap hits, counted once per window period rather than per reading;
+blocked hours from the first reading at the cap to the reset; peak and average peak; busiest days
+and hours; per provider, how long every account was capped at once; coverage, gaps, accounts with
+no history, and a `method` list saying how each figure was counted). They read the poller's last
+snapshot and the same `/quota/history` the CLIProxy tab's graphs use: nothing refreshes a login or
+spends a vendor's rate limit, and no output carries a token, key or credential path. Cursor and
+logins outside CLIProxy are live-only. Code: `ai-usage/mcp.mjs`, `ai-usage/report.mjs`. Gateway:
+`usage__get_current`, `usage__get_history`, `usage__limit_report` (gateway 1.16.0);
+`serverInfo.version` **2.14.0**.
+
 ### 6.10 Versioning and protocol negotiation — **BUILT**
 
 `serverInfo.version` is **2.9.0**. 2.9.0 renamed the field that carries a sentence for the

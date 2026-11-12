@@ -66,7 +66,8 @@ const PROTOCOL_VERSION = '2025-06-18'
 // 1.13.0 adds away__list and away__propose (trips and days off; propose stages an inbox item).
 // 1.14.0 names the chat run on its calls to the bridge (x-totem-run), so a staged proposal answers that chat.
 // 1.15.0 sends a call that names a routed target (a T3 Code machine's environmentId) to that target's own connection.
-const GATEWAY_INFO = { name: 'totem-gateway', version: '1.15.0' }
+// 1.16.0 adds usage__get_current, usage__get_history and usage__limit_report (AI subscription usage, read-only).
+const GATEWAY_INFO = { name: 'totem-gateway', version: '1.16.0' }
 export const NS = '__' // namespace separator: <serverId>__<toolName>
 
 // How long a downstream gets to come up. Only the handshake and the tool listing
@@ -499,6 +500,10 @@ const BUILTIN_SERVERS = {
   // away__list / away__propose: the owner's trips and days off. Propose only stages
   // an inbox item; the span exists once the owner accepts it (away/mcp.mjs).
   away: { filter: /^totem_away_(list|propose)$/, strip: 'totem_away_', description: "The owner's away spans (trips, days off), via the Totem bridge" },
+  // usage__get_current / usage__get_history / usage__limit_report: AI subscription
+  // usage (Claude, Codex, Cursor) and how often each account hit a cap. Read-only;
+  // the poller and CLIProxy's history live in the bridge (ai-usage/mcp.mjs).
+  usage: { filter: /^totem_usage_(get_current|get_history|limit_report)$/, strip: 'totem_usage_', description: 'AI subscription usage, quotas and limit hits, via the Totem bridge' },
   // linkedin__*: the owner's LinkedIn, read through the bridge's browser, where only
   // GETs leave the page. No tool acts on LinkedIn: propose_action stages a card the
   // owner does himself (linkedin/mcp.mjs). Empty where the bridge has no browser.
@@ -951,6 +956,10 @@ export class Gateway {
               REC_PROMPT_RULE + ' ' +
               'away__list reads the owner\'s trips and days off; away__propose only stages a new one in the ' +
               'Totem inbox for the owner to accept, so treat proposed dates as unconfirmed. ' +
+              'For questions about AI subscription usage, quotas, rate limits or hitting limits (Claude, Codex, ' +
+              'Cursor), use usage__get_current for now, usage__get_history for the recorded readings and ' +
+              'usage__limit_report for how often and how long each account was capped; pass its method lines on ' +
+              'with its numbers. ' +
               'linkedin__* (when present) read the owner\'s LinkedIn notifications, messages, feed and profiles; ' +
               'they cannot like, comment, reply, message or connect. linkedin__propose_action only stages a card in his ' +
               'inbox with the link and a draft, and he does it himself. ' +
