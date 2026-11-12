@@ -136,6 +136,7 @@ import { createRecService, resurfaceDeferredRecs } from './recs/service.mjs'
 import { createAwayStore, normalizeSpan as normalizeAwaySpan } from './away/store.mjs'
 import { createAwayHttpHandler } from './away/http.mjs'
 import { createAwayMcpTools, AWAY_MCP_TOOL_DEFINITIONS } from './away/mcp.mjs'
+import { createUsageMcpTools, USAGE_MCP_TOOL_DEFINITIONS } from './ai-usage/mcp.mjs'
 import { createLinkedinReader } from './linkedin/reader.mjs'
 import { createLinkedinMcpTools, LINKEDIN_MCP_TOOL_DEFINITIONS } from './linkedin/mcp.mjs'
 import { ACTION_VERBS as LINKEDIN_VERBS, linkedinHistory, normalizeLinkedinProposal, proposalTitle as linkedinTitle, stagingConflict as linkedinConflict } from './linkedin/proposals.mjs'
@@ -11643,7 +11644,9 @@ const MCP_SUPPORTED_PROTOCOLS = new Set([MCP_PROTOCOL_VERSION, '2025-03-26', '20
 // 2.12.0: totem_away_list and totem_away_propose, and the `away` inbox kind (docs/away.md).
 // 2.13.0: totem_linkedin_* (read-only LinkedIn, where a browser exists) and the
 // `linkedin` inbox kind, which the owner does himself (docs/linkedin.md).
-const MCP_SERVER_INFO = { name: 'totem', title: 'Totem', version: '2.13.0' }
+// 2.14.0: totem_usage_get_current, totem_usage_get_history and totem_usage_limit_report
+// (AI subscription usage and limit hits, read-only; ai-usage/mcp.mjs).
+const MCP_SERVER_INFO = { name: 'totem', title: 'Totem', version: '2.14.0' }
 
 // Every tool answers with compact JSON rather than prose: the calling model is the
 // one doing the reasoning, so it wants data, not sentences. `fetchedAt` rides along
@@ -11723,7 +11726,9 @@ function mcpInstructions() {
     'they cost nothing. So read freely and often. Prefer calling a tool over asking the owner a question',
     'you could answer yourself, and never guess at his schedule, tasks or habits when you can look.',
     'Re-read rather than relying on something you fetched earlier in this conversation; every result',
-    'carries a fetchedAt timestamp so you can tell.',
+    'carries a fetchedAt timestamp so you can tell. For AI subscription usage, quotas, rate limits or',
+    'hitting limits, use totem_usage_get_current (now), totem_usage_get_history and',
+    'totem_usage_limit_report (how often each account hit a cap, with how it was counted).',
     '',
     'WRITING. You can change real state, and it takes effect the moment you call the tool — there is',
     'no staging step and no undo. totem_create_task, totem_update_task (which is also how you',
@@ -12238,6 +12243,19 @@ const awayMcpTool = (definition) => ({
   },
 })
 
+// AI subscription usage: the live meters, CLIProxy's recorded history and the limit
+// report. Read-only (ai-usage/mcp.mjs); the gateway re-serves these as usage__*.
+let usageMcpTools = null
+const usageMcpTool = (definition) => ({
+  name: definition.name,
+  description: definition.description,
+  inputSchema: definition.inputSchema,
+  handler: async (args) => {
+    if (!usageMcpTools) throw new Error('usage MCP tools are not initialized')
+    return await usageMcpTools[definition.name](args)
+  },
+})
+
 // LinkedIn: read, and propose actions the owner does himself. No tool acts on
 // LinkedIn (linkedin/mcp.mjs); the gateway re-serves these as linkedin__*.
 let linkedinMcpTools = null
@@ -12257,6 +12275,7 @@ const MCP_TOOLS = [
   ...LIST_MCP_TOOL_DEFINITIONS.map((definition) => listMcpTool(definition.name)),
   ...REC_MCP_TOOL_DEFINITIONS.map(recMcpTool),
   ...AWAY_MCP_TOOL_DEFINITIONS.map(awayMcpTool),
+  ...USAGE_MCP_TOOL_DEFINITIONS.map(usageMcpTool),
   {
     name: 'totem_get_calendar',
     description:
@@ -14038,6 +14057,7 @@ const awayMcpMeta = Object.fromEntries(AWAY_MCP_TOOL_DEFINITIONS.map((definition
   definition.name,
   { title: definition.title, annotations: definition.annotations, outputSchema: definition.outputSchema },
 ]))
+const usageMcpMeta = Object.fromEntries(USAGE_MCP_TOOL_DEFINITIONS.map(({ name, title, annotations, outputSchema }) => [name, { title, annotations, outputSchema }]))
 const linkedinMcpMeta = Object.fromEntries(LINKEDIN_MCP_TOOL_DEFINITIONS.map(({ name, title, annotations, outputSchema }) => [name, { title, annotations, outputSchema }]))
 
 // Apple tools (registered only when APPLE_ENABLED is on; see APPLE_MCP_TOOLS).
@@ -14285,6 +14305,7 @@ const MCP_TOOL_META = {
   ...listMcpMeta,
   ...recMcpMeta,
   ...awayMcpMeta,
+  ...usageMcpMeta,
   totem_get_calendar: {
     title: 'Read calendar', annotations: ANN.readRemote,
     outputSchema: out({
@@ -17022,6 +17043,20 @@ const cliproxyManager = createCliproxyManager({
   }),
 })
 cliproxyHttpHandler = createCliproxyHttpHandler({ manager: cliproxyManager, configured: () => cliproxyClient.configured() })
+// Read-only usage for agents: the poller's snapshot and the same history the graphs read.
+usageMcpTools = createUsageMcpTools({
+  snapshot: () => fetchAiUsage(),
+  history: () => cliproxyManager.history(),
+  // Every account by id, hidden ones included, so a hidden login's history is still named.
+  accounts: () => {
+    const byId = new Map()
+    for (const a of [...(aiUsage.snapshot?.accounts || []), ...(aiUsage.proxyAnnotated || [])]) byId.set(a.id, a)
+    return [...byId.values()]
+  },
+  configured: () => cliproxyClient.configured(),
+  tz: MORNING_BRIEFING_TZ,
+  redact,
+})
 fleetReportHandler = createFleetReportHandler({ store: fleetStore })
 let fleetCollector = null
 async function fleetLoop() {
