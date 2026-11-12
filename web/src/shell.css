@@ -264,7 +264,10 @@
    The desktop app's window has no title bar: the page runs to the window's top
    edge, glow and all. Windows: the window buttons sit in the top-right corner,
    as tall as the header beside them, and each page leaves them room. macOS: the
-   traffic lights float over the rail's top, which starts lower to clear them. */
+   traffic lights sit in a title strip across the window's top, in the rail's
+   colour; the chats panel and the page start below it, so the lights never land
+   on the panel's curve and no page's scrollbar runs into the window's rounded
+   corner. In full screen the lights are gone and so is the strip. */
 html[data-desktop="windows"] { --wc-w: 138px; --wc-h: 40px; }
 html[data-desktop="windows"]:has(.app.shell > .main > .vc-split) { --wc-h: 56px; }
 .wc { position: fixed; top: 0; right: 0; z-index: 200; display: flex; height: var(--wc-h); }
@@ -290,7 +293,10 @@ html[data-desktop="windows"] .vc-split:not(.has-artifact) .vc-top,
 html[data-desktop="windows"] .vc-split.has-artifact .vc-art-head { padding-right: calc(10px + var(--wc-w)); }
 html[data-desktop="windows"] .auth-shell { padding-top: var(--wc-h); }
 
-html[data-desktop="macos"] .sh-rail { padding-top: 40px; }
+@media (min-width: 721px) {
+  html[data-desktop="macos"] .app.shell { padding-top: 40px; }
+  html[data-desktop="macos"].wc-fullscreen .app.shell { padding-top: 0; }
+}
 
 @media (max-width: 720px) {
   html[data-desktop="windows"] { --wc-h: 52px; }
