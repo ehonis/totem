@@ -51,6 +51,31 @@ test('desktop pages fill the shell without reserving an empty right panel', { sk
   } finally { await browser.close() }
 })
 
+// The Mac app has no title bar and its traffic lights sit at the window's top left,
+// wider than the rail. Its chats panel and page start below a title strip, so the
+// lights never land on the panel's curve and a page's scrollbar never runs into
+// the window's rounded corner; full screen (no lights) drops the strip.
+test('the Mac app keeps its traffic lights in a title strip above the panels', { skip: !executablePath }, async () => {
+  const browser = await chromium.launch({ executablePath })
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
+    const css = await Promise.all(['styles.css', 'shell.css'].map((p) => readFile(new URL(`../web/src/${p}`, import.meta.url), 'utf8')))
+    await page.setContent(`<html data-desktop="macos"><style>${css.join('\n')} html,body{height:100%;margin:0}</style><body><div class="app shell panel-open" style="height:100%">
+      <nav class="sh-rail">Totem</nav><aside class="sh-panel"><div class="sh-panel-head">Chats</div></aside>
+      <main class="main"><section class="view"><div style="height:1800px">Page</div></section></main>
+    </div></body></html>`)
+    const tops = () => page.evaluate(() => Object.fromEntries(['.sh-rail', '.sh-panel', '.main'].map((s) => [s, document.querySelector(s).getBoundingClientRect().top])))
+    const strip = await tops()
+    // The lights end about 77px in and 27px down; the panel's curve starts at 64px.
+    assert.ok(strip['.sh-panel'] >= 34 && strip['.main'] >= 34, `panel and page start below the lights: ${JSON.stringify(strip)}`)
+    await page.evaluate(() => document.documentElement.classList.add('wc-fullscreen'))
+    const full = await tops()
+    assert.equal(full['.sh-panel'], 0, 'full screen has no strip')
+    await page.evaluate(() => { document.documentElement.classList.remove('wc-fullscreen'); document.documentElement.dataset.desktop = 'windows' })
+    assert.equal((await tops())['.sh-panel'], 0, 'Windows has no strip')
+  } finally { await browser.close() }
+})
+
 
 // The chat header beside a side panel. A side panel can leave the chat column any
 // width (down to about 180px with three panels open), and what the header holds

@@ -80,10 +80,11 @@ export function windowCommand(cmd: WindowCmd, args?: Record<string, unknown>): P
 
 /**
  * Where a press moves the window: the tops of the rail, the chats panel and each
- * page, and the strip the page leaves above itself on Windows. Anything you can
- * click inside them (buttons, links, fields) still clicks.
+ * page, the strip the page leaves above itself on Windows and the title strip
+ * above everything on macOS. Anything you can click inside them (buttons,
+ * links, fields) still clicks.
  */
-const DRAG_REGIONS = '.sh-rail, .sh-panel-head, .sh-mbar, .vc-top, .vc-art-head, .app.shell > .main, .auth-shell'
+const DRAG_REGIONS = '.sh-rail, .sh-panel-head, .sh-mbar, .vc-top, .vc-art-head, .app.shell > .main, .app.shell, .auth-shell'
 const INTERACTIVE = 'button, a, input, select, textarea, label, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="menuitem"], [role="tab"], [tabindex]:not([tabindex="-1"])'
 
 /** The element a press lands on moves the window when it is a drag region itself or plain content inside one. */
@@ -92,9 +93,10 @@ function dragsWindow(target: EventTarget | null): boolean {
   if (target.closest(INTERACTIVE)) return false
   const region = target.closest(DRAG_REGIONS)
   if (!region) return false
-  // The page and the sign-in screen are handles only where nothing covers them:
-  // the strip above a page's content (Windows), the space around the sign-in card.
-  if (region.matches('.app.shell > .main, .auth-shell')) return target === region
+  // The page, the shell and the sign-in screen are handles only where nothing
+  // covers them: the strip above a page's content (Windows), the title strip
+  // (macOS), the space around the sign-in card.
+  if (region.matches('.app.shell > .main, .app.shell, .auth-shell')) return target === region
   return true
 }
 
@@ -129,6 +131,9 @@ export function installWindowChrome(): void {
 
   const syncMaximized = () => {
     void windowCommand('is_maximized').then((max) => root.classList.toggle('wc-maximized', max === true))
+    // A full-screen Mac window has no traffic lights, so it needs no title strip.
+    // The window then covers the whole screen, menu bar included, which a zoomed one never does.
+    if (chrome === 'macos') root.classList.toggle('wc-fullscreen', window.outerHeight >= screen.height && window.outerWidth >= screen.width)
   }
   syncMaximized()
   window.addEventListener('resize', syncMaximized)
