@@ -51,7 +51,8 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   cards) accepts the same way, through the same `resolveInboxItem`, with the owner's optional note.
 - `src/theme.ts` holds the web's CSS variables (`--bg` → `colors.bg`). `src/ui/` holds the building blocks:
   `T` (text), and `kit.tsx` with Btn, IconBtn, Card, Chip, Segmented, Input, Toggle and Empty. `menu.ts` has native
-  menus/confirms, `haptics.ts` has haptics, `Markdown.tsx` renders markdown, and `ToastHost` reads the same toast store
+  menus/confirms, `haptics.ts` has haptics, `Markdown.tsx` renders markdown, `BridgeWebView.tsx` shows a bridge page
+  in a locked-down WebView (Gotchas), and `ToastHost` reads the same toast store
   but draws errors only (a deliberate difference from the web: success and info toasts, Undo included, are dropped as
   they arrive, a success keeping its haptic; anything that needs the owner to act, like Access asking to sign in
   again, is pushed as an error). The inline Undo line (`features/todos/detail/bits.tsx` `UndoLine`) closes
@@ -147,8 +148,16 @@ npm run start:tailscale                            # Metro on the Tailscale IP, 
   `loadConnection` reads through `readWhenUnlocked` (`src/lib/readWhenUnlocked.ts`), which waits
   for the app to be opened and reads again. Only after reads keep failing with the app open
   (three tries) does it log, count the refused items as absent and show Connect; never sooner.
-- `react-native-nitro-markdown`, `react-native-pager-view` and `@react-native-menu/menu` are native-only.
-  They need a dev build; Expo Go cannot run this app.
+- `react-native-nitro-markdown`, `react-native-pager-view`, `@react-native-menu/menu` and `react-native-webview`
+  are native-only. They need a dev build; Expo Go cannot run this app.
+- **`ui/BridgeWebView.tsx` is the one WebView for bridge pages** (rules in `lib/bridgePage.ts`, tested by
+  `lib/bridgePage.test.mjs`; `docs/chat.md` → Charts in replies). Charts in replies use it; so should any screen that
+  shows a page the bridge serves. Its one credential, the Access token, is the source's
+  header, built once per mount for a bridge target only, so it goes with the first request and nowhere else: never
+  attach a header, rebuild the source or reload the view. Keep `incognito`, `originWhitelist={['*']}` (otherwise the
+  library hands other schemes to `Linking.openURL` before any guard runs) and every navigation through
+  `bridgeNavigation` (the source URL loads once); inject no script, and read no message but the height, which only
+  `onHeight` asks for. Never send the bridge secret: pages may be agent-written, and load from a signed URL.
 - Building and submitting non-interactively needs the App Store Connect API key in the environment
   (`EXPO_ASC_API_KEY_PATH`, `EXPO_ASC_KEY_ID`, `EXPO_ASC_ISSUER_ID`, `EXPO_APPLE_TEAM_ID`,
   `EXPO_APPLE_TEAM_TYPE`); the owner keeps them outside the repo. Set `EXPO_NO_CAPABILITY_SYNC=1`:
