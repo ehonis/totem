@@ -750,9 +750,57 @@ tool card is hidden (the chart stands for it); `html_preview` folds into the ste
 (`--foreground`, `--muted-foreground`, `--card`, `--border`, `--accent`, `--chart-1`…`6`,
 `--radius`, `--font-sans`), so a page written for one reads right in the other.
 
-**iPhone app** (`mobile/src/features/chat/VisualCard.tsx`): a card with the chart's title
-that opens the page in the in-app browser, still under its sandbox. Drawing it inline needs
-`react-native-webview`, a native module, so it waits for an App Store build.
+At phone width the frame is the reply's width (about 360 px) and fits the page's height the
+same way; nothing in it depends on the viewport.
+
+**iPhone app** (`mobile/src/features/chat/VisualCard.tsx`): drawn inline in
+`BridgeWebView` (`mobile/src/ui/BridgeWebView.tsx`, a `react-native-webview` WebView; rules in
+`mobile/src/lib/bridgePage.ts`), on the chat's background, fitted to the page's height (8,000
+px at most), with a corner button that opens it full screen (its own page load, scrolling
+inside). It used to be a card that opened the page in the in-app browser
+(SFSafariViewController), which cannot send the app's Cloudflare Access token
+(`cf-access-token`): behind Access the chart URL answered with Access's sign-in page, so the
+chart never showed (#260).
+
+`BridgeWebView` is the app's one way to show a page the bridge serves, so another screen can
+reuse it. It keeps the web frame's contract:
+
+- **What it loads.** A bridge path or a URL under the bridge's base (`bridgePageUrl`), read
+  once per mount; anything else renders nothing and fails. A chart narrows that to
+  `/api/chat/uploads/<id>?sig=…` (`visualPagePath` in `features/chat/visualPage.ts`), so
+  anything else gets the plain card and is never loaded.
+- **Credentials on the first request only.** `bridgeSource` builds the source once per mount:
+  the URL plus the Access token as a header. Never the bridge secret: the page may be
+  agent-written, and a page the bridge serves to a WebView is signed.
+  react-native-webview sends a source's headers with that load and never with a navigation,
+  a subresource or a page's request. A target off the bridge gets no source, so no header is
+  ever built for another origin, and the navigation rule below refuses every later top-level
+  load, the bridge URL included, so nothing re-sends them. A page's script cannot read
+  request headers. The bridge's `VISUAL_CSP` `sandbox` still gives a chart an opaque origin.
+- **No shared state.** `incognito` (a non-persistent data store: whatever cookie Access sets
+  lasts as long as the view and never reaches the app's jar), `sharedCookiesEnabled` and
+  third-party cookies off, no cache, no link previews, no data detectors, no file access.
+- **No script unless asked; one message.** With `onHeight` (charts), the view injects
+  `PAGE_HEIGHT_SCRIPT`, because a page opened at the top level never posts its height (its
+  bootstrap only does that framed). The script measures the page the way the bootstrap does
+  and posts `totem-visual:size`, which is the only message read (`pageHeightFrom`); a page's
+  own `totem-visual:open` is dropped. Without `onHeight` no script is injected and no message
+  is read (react-native-webview still registers its own history shim). A link opens through `window.open`, which WebKit allows only on a tap
+  (`javaScriptCanOpenWindowsAutomatically` off), in the in-app browser, and only to another
+  site (`linkOpensOutside`).
+- **Navigation.** Every request reaches `bridgeNavigation` (`originWhitelist={['*']}`;
+  with the library's default, a `tel:` or app link would go to `Linking.openURL` without
+  asking it). The source URL loads once. While it is loading, another URL is a redirect
+  (Access's sign-in), a failure: for a chart, a card with "Couldn't load the chart · tap to
+  retry". The source URL again, while loading (an inline `location.reload()` running as the
+  page parses) or after, closes the view, and so does any other page once it has loaded; a
+  chart shows the web's "reloaded or tried to open another page" line. Only a `#hash` jump
+  within the page is let through.
+
+The app's web preview (`BridgeWebView.web.tsx`) uses the dashboard's sandboxed frame, which
+sends no headers. The WebView is a native module, so the change shipped with an App Store
+build; a binary without it never gets the JS that needs it (the fingerprint runtime keeps OTA
+updates apart).
 
 ## Files and memory
 

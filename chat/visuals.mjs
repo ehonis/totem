@@ -7,7 +7,8 @@
 // console, so the agent can see what it made and fix it; `html_render` stores the
 // page as a chat upload and adds a `visual` part to the reply, which the
 // dashboard shows in a sandboxed frame fitted to the page's height
-// (web/src/chat/VisualFrame.tsx) and the iPhone app as a card that opens it.
+// (web/src/chat/VisualFrame.tsx) and the iPhone app in a WebView held to the
+// same rules (mobile/src/ui/BridgeWebView.tsx).
 //
 // The page never runs with Totem's origin. It is served only with VISUAL_CSP,
 // whose `sandbox` gives it an opaque origin even when opened on its own, and the
@@ -207,8 +208,8 @@ export const OPEN_LINK_MESSAGE = 'totem-visual:open'
 
 // Framed: report the page's height whenever it changes, and hand http(s) links
 // to the host to open, both <a href> clicks and window.open from a chart's own
-// click handler (the frame has no popups). Opened on its own (the iPhone app, a
-// new tab): links open in a new window.
+// click handler (the frame has no popups). Opened on its own (a new tab, the
+// iPhone app's WebView, which injects its own height report): links open in a new window.
 const BOOTSTRAP_SCRIPT = `(function(){var f=window.parent!==window;if(f)window.open=function(t){var u;if(t==null||t==="")return null;try{u=new URL(String(t),document.baseURI);}catch(x){return null;}if(/^https?:$/.test(u.protocol)&&u.href.split("#")[0]!==location.href.split("#")[0])window.parent.postMessage({type:${JSON.stringify(OPEN_LINK_MESSAGE)},url:u.href},"*");return null;};document.addEventListener("click",function(e){var l=e.isTrusted?e.composedPath().find(function(t){return t&&t.matches&&t.matches("a[href]");}):null,u;if(!l)return;try{u=new URL(l.getAttribute("href"),document.baseURI);}catch(x){return;}if(!/^https?:$/.test(u.protocol)||u.href.split("#")[0]===location.href.split("#")[0])return;e.preventDefault();if(f)window.parent.postMessage({type:${JSON.stringify(OPEN_LINK_MESSAGE)},url:u.href},"*");else window.open(u.href,"_blank","noopener");},true);if(!f)return;var h,o,z=function(){var r=document.documentElement,v=Math.ceil(r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height);if(v===h)return;h=v;window.parent.postMessage({type:${JSON.stringify(SIZE_MESSAGE)},height:v},"*");};if(window.ResizeObserver){o=new ResizeObserver(z);o.observe(document.documentElement);}document.addEventListener("DOMContentLoaded",function(){if(o&&document.body)o.observe(document.body);z();});window.addEventListener("load",z);})();`
 
 function bootstrapMarkup(markup) {
