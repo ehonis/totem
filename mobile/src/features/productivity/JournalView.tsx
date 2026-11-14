@@ -33,6 +33,8 @@ import EntryCard from '../journal/EntryCard'
 import { uploadJournalRecording } from '../journal/upload'
 import type { RecorderResult } from '../journal/useRecorder'
 import { cacheSettings, onEntryChanged, onSettingsChanged } from '../journal/store'
+import { LandFlash, useLandOn, useStill } from '../../ui/landing'
+import { farIndex } from '../../lib/landing'
 
 /** A clock that ticks once a second only while something on screen needs it. */
 function useNow(active: boolean) {
@@ -183,6 +185,25 @@ export default function JournalView({ active }: { active: boolean }) {
 
   const sections = groups.map((g) => ({ key: g.date, label: g.label, date: g.date, data: g.entries }))
 
+  // A search hit (src/lib/landing.ts): scroll to the entry's card and flash it. A card
+  // not rendered yet fails the scroll; the near guess below draws it for the next try.
+  const sectionList = useRef<SectionList<JournalEntry, (typeof sections)[number]>>(null)
+  const scrollFailed = useRef(false)
+  const still = useStill()
+  const landed = useLandOn('journal', {
+    ready: active && !loading,
+    locate: ({ id }) => {
+      const sectionIndex = sections.findIndex((section) => section.data.some((e) => e.id === id))
+      if (sectionIndex < 0) return null
+      scrollFailed.current = false
+      // Item 0 of a section is its header here, so the entry is one on.
+      const itemIndex = sections[sectionIndex].data.findIndex((e) => e.id === id) + 1
+      const flat = sections.slice(0, sectionIndex).reduce((n, section) => n + section.data.length + 1, 0) + itemIndex
+      sectionList.current?.scrollToLocation({ sectionIndex, itemIndex, viewPosition: 0.4, animated: !still && !farIndex(0, flat, 3) })
+      return scrollFailed.current ? null : id
+    },
+  })
+
   const renderEntry = ({ item: e }: { item: JournalEntry }) => (
     <View style={{ marginBottom: 10 }}>
       <EntryCard
@@ -201,11 +222,18 @@ export default function JournalView({ active }: { active: boolean }) {
           if (ok) void act(e, async () => { await deleteJournalEntry(e.id); setEntries((l) => l.filter((x) => x.id !== e.id)); return { entry: undefined } })
         }}
       />
+      <LandFlash on={landed === e.id} />
     </View>
   )
 
   return (
     <SectionList
+      ref={sectionList}
+      extraData={landed}
+      onScrollToIndexFailed={(info) => {
+        scrollFailed.current = true
+        sectionList.current?.getScrollResponder()?.scrollTo({ y: info.averageItemLength * info.index, animated: false })
+      }}
       sections={loading ? [] : sections}
       keyExtractor={(e) => e.id}
       renderItem={renderEntry}

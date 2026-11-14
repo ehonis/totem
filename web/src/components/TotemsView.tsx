@@ -13,6 +13,7 @@ import IconPicker from './IconPicker'
 import { ScheduleBuilder, RunHistory, Switch, NOTIFY_CHOICES, relativeTime, TimezoneContext } from '../totems/schedule'
 import { TotemIcon, TYPE_LABEL, kindOf, statusLine, openTotemChat, runTotemNow, asWatch, sourceKey, type Rec, type Watch, type WatchSource, type Draft, type Choice, type Msg, type DraftRecord } from '../totems/shared'
 import './totems.css'
+import { findLanding, landKey, useLandOn } from '../landing'
 
 // Totems: standing agents that wake on a schedule or when something they watch
 // changes, remember between runs, and tell the owner only what matters
@@ -442,7 +443,7 @@ function MemoryTab({ job }: { job: any }) {
     catch (e: any) { pushError(e.message) } finally { setSaving(false) }
   }
   return (
-    <div>
+    <div data-land={landKey('totem-memory', job.id)}>
       <p className="muted">What {job.name} remembers between runs. It keeps this up to date itself; edit anything that’s wrong.</p>
       <textarea className="tm-input mono" rows={16} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Empty until its first run." />
       <div className="tm-actions">
@@ -491,7 +492,7 @@ function SkillInstructions({ job }: { job: any }) {
     try { adopt(await fn()); pushToast(message, 'info') } catch (e: any) { pushError(e.message) } finally { setBusy(false) }
   }
   return (
-    <section className="tm-section">
+    <section className="tm-section" data-land={landKey('totem-instructions', job.id)}>
       <h2>Instructions</h2>
       <p className="muted">
         What {job.name} tells the AI each run.
@@ -565,7 +566,7 @@ function SettingsTab({ job, onChanged, onDeleted }: { job: any; onChanged: (job:
         </label>
       </section>
       {agent ? (
-        <section className="tm-section">
+        <section className="tm-section" data-land={landKey('totem-instructions', job.id)}>
           <h2>Instructions</h2>
           <textarea className="tm-input" rows={8} value={instructions} onChange={(e) => setInstructions(e.target.value)} />
           {instructions !== (job.prompt || '') && (
@@ -642,6 +643,11 @@ function SettingsTab({ job, onChanged, onDeleted }: { job: any; onChanged: (job:
 function Detail({ job, onBack, onChanged, onDeleted, onOpenChat }: { job: any; onBack: () => void; onChanged: (job: any) => void; onDeleted: () => void; onOpenChat: () => void }) {
   const [tab, setTab] = useState<'settings' | 'memory' | 'runs'>('settings')
   const [running, setRunning] = useState(false)
+  // A search hit on its instructions or memory opens that tab and flashes the section (landing.ts).
+  useLandOn('totem', {
+    prepare: ({ id, extra }) => { if (id === job.id) setTab(extra.section === 'memory' ? 'memory' : 'settings') },
+    find: ({ id, extra }) => (id === job.id ? findLanding(landKey(extra.section === 'memory' ? 'totem-memory' : 'totem-instructions', id)) : null),
+  })
   async function run() {
     setRunning(true)
     const fresh = await runTotemNow(job)

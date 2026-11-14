@@ -20,6 +20,7 @@ import {
   asWatch,
 } from './shared'
 import { ModelSection, WhenItRuns, watchReady } from './when'
+import { LandFlash, useLandOn } from '../../ui/landing'
 
 export function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -135,7 +136,7 @@ function SkillInstructions({ job }: { job: any }) {
   )
 }
 
-function SettingsTab({ job }: { job: any }) {
+function SettingsTab({ job, landed = false }: { job: any; landed?: boolean }) {
   const agent = !job.runner && !job.skillId
   const [instructions, setInstructions] = useState(job.prompt || '')
   const [recommending, setRecommending] = useState(false)
@@ -169,14 +170,20 @@ function SettingsTab({ job }: { job: any }) {
   return (
     <View style={{ gap: 10 }}>
       {agent ? (
-        <Section title="Instructions">
-          <Area value={instructions} onChange={setInstructions} />
-          {instructions !== (job.prompt || '') ? (
-            <View style={st.actions}><Btn kind="primary" title="Save instructions" onPress={() => save({ prompt: instructions })} /></View>
-          ) : null}
-        </Section>
+        <View>
+          <Section title="Instructions">
+            <Area value={instructions} onChange={setInstructions} />
+            {instructions !== (job.prompt || '') ? (
+              <View style={st.actions}><Btn kind="primary" title="Save instructions" onPress={() => save({ prompt: instructions })} /></View>
+            ) : null}
+          </Section>
+          <LandFlash on={landed} />
+        </View>
       ) : job.skillId ? (
-        <SkillInstructions job={job} />
+        <View>
+          <SkillInstructions job={job} />
+          <LandFlash on={landed} />
+        </View>
       ) : (
         <Section title="What it runs">
           <T muted size={13}>Built-in code ({job.runner}), with no instructions to edit. Its schedule and notifications are below.</T>
@@ -254,6 +261,13 @@ export default function TotemDetailScreen() {
   const job = jobs?.find((j) => j.id === id)
   const [tab, setTab] = useState<'settings' | 'memory' | 'runs'>('settings')
   const [running, setRunning] = useState(false)
+  // A search hit on its instructions or memory (src/lib/landing.ts): that tab, flashed.
+  // Both sit at the top of their tab, so there is nothing to scroll.
+  const landed = useLandOn('totem', {
+    ready: !!job,
+    prepare: ({ id: totem, extra }) => { if (totem === id) setTab(extra.section === 'memory' ? 'memory' : 'settings') },
+    locate: ({ id: totem, extra }) => (totem === id ? (extra.section === 'memory' ? 'memory' : 'instructions') : null),
+  })
 
   // Arrived from a deep link or search with the list never loaded.
   useEffect(() => { if (!jobs) void loadJobs() }, [jobs])
@@ -302,8 +316,8 @@ export default function TotemDetailScreen() {
             onChange={setTab}
             options={[{ value: 'settings', label: 'Settings' }, { value: 'memory', label: 'Memory' }, { value: 'runs', label: 'Runs' }]}
           />
-          {tab === 'settings' ? <SettingsTab job={job} /> : null}
-          {tab === 'memory' ? <MemoryTab job={job} /> : null}
+          {tab === 'settings' ? <SettingsTab job={job} landed={landed === 'instructions'} /> : null}
+          {tab === 'memory' ? <View><MemoryTab job={job} /><LandFlash on={landed === 'memory'} /></View> : null}
           {tab === 'runs' ? <RunHistory jobId={job.id} /> : null}
         </ScrollView>
       )}

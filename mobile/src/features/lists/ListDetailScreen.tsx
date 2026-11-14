@@ -37,6 +37,8 @@ import {
 } from './items'
 import { createUndoQueue } from './undoQueue'
 import { CheckCircle, ErrorLine } from './bits'
+import { LandFlash, useLandOn, useStill } from '../../ui/landing'
+import { farIndex } from '../../lib/landing'
 
 /** How long a removal waits for Undo before it is sent. */
 // As long as the Undo line stays up sighted (UndoLine, 8 s), so that Undo cancels the
@@ -89,6 +91,24 @@ export default function ListDetailScreen() {
 
   const clearUndo = useCallback(() => setUndo(null), [])
   const list = stored ? withoutItems(withPending(stored, drafts), removing) : null
+
+  // A search hit (src/lib/landing.ts) on this list: scroll to the item that matched
+  // (opening Checked if it is there) and flash it; a title match just opens the list.
+  const flatList = useRef<Animated.FlatList<Row>>(null)
+  const drawnRows = useRef<Row[]>([])
+  const still = useStill()
+  const landedItem = useLandOn('list', {
+    ready: loaded && focused && !!stored,
+    prepare: ({ extra }) => { if (extra.item && stored?.items.some((item) => item.id === extra.item && item.checked)) setShowChecked(true) },
+    locate: ({ id: listId, extra }) => {
+      if (listId !== id) return null
+      if (!extra.item) return listId
+      const index = drawnRows.current.findIndex((row) => row.kind === 'item' && row.item.id === extra.item)
+      if (index < 0) return null
+      flatList.current?.scrollToIndex({ index, viewPosition: 0.4, animated: !still && !farIndex(0, index, 12) })
+      return extra.item
+    },
+  })
 
   /**
    * Send one change, in order after the ones before it. Only the answer to the last
@@ -263,6 +283,7 @@ export default function ListDetailScreen() {
     ...(checked.length ? [{ kind: 'checked' as const, count: checked.length }] : []),
     ...(showChecked ? checked.map((item) => ({ kind: 'item' as const, item })) : []),
   ]
+  drawnRows.current = rows
   const linked = new Set(list.linkedTodos.map((todo) => todo.id))
   const available = todos.filter((todo) => !linked.has(todo.id) && todo.status !== 'done')
 
@@ -304,7 +325,10 @@ export default function ListDetailScreen() {
       {bar}
       <LayoutAnimationConfig skipEntering>
       <Animated.FlatList
+        ref={flatList}
         data={rows}
+        extraData={landedItem}
+        onScrollToIndexFailed={() => {}}
         keyExtractor={(row) => (row.kind === 'item' ? row.item.id : 'checked-head')}
         itemLayoutAnimation={LinearTransition.duration(220)}
         // The whole list in the first batch (lists are short), so no row fades in on open.
@@ -335,14 +359,17 @@ export default function ListDetailScreen() {
             </View>
           </Press>
         ) : (
-          <ItemRow
-            item={row.item}
-            editing={editingId === row.item.id}
-            onToggle={() => toggle(row.item, !row.item.checked)}
-            onEdit={() => { if (!isPending(row.item)) setEditingId(row.item.id) }}
-            onSave={(text) => saveText(row.item, text)}
-            onRemove={() => remove(row.item)}
-          />
+          <View>
+            <ItemRow
+              item={row.item}
+              editing={editingId === row.item.id}
+              onToggle={() => toggle(row.item, !row.item.checked)}
+              onEdit={() => { if (!isPending(row.item)) setEditingId(row.item.id) }}
+              onSave={(text) => saveText(row.item, text)}
+              onRemove={() => remove(row.item)}
+            />
+            <LandFlash on={landedItem === row.item.id} radius={0} />
+          </View>
         )}
       />
       </LayoutAnimationConfig>

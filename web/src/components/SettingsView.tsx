@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { flashElement, prefersStill } from '../landing'
 import IconSettings from '@tabler/icons-react/dist/esm/icons/IconSettings.mjs'
 import IconPalette from '@tabler/icons-react/dist/esm/icons/IconPalette.mjs'
 import IconMessages from '@tabler/icons-react/dist/esm/icons/IconMessages.mjs'
@@ -124,12 +125,11 @@ function useRevealTarget(target: string | undefined, section: string, body: Reac
         if (Date.now() < until) frame = requestAnimationFrame(find)
         return
       }
-      const reduce = document.documentElement.classList.contains('reduce-motion') || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-      el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' })
+      const still = prefersStill()
+      el.scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' })
       el.focus({ preventScroll: true })
-      el.classList.remove('s-pulse')
-      void el.offsetWidth
-      if (!reduce) el.classList.add('s-pulse')
+      // The same flash as a search hit anywhere else (landing.ts); a still outline with less motion.
+      flashElement(el, still)
     }
     frame = requestAnimationFrame(find)
     return () => cancelAnimationFrame(frame)

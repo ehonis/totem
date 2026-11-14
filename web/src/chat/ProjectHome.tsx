@@ -17,6 +17,7 @@ import { TI, formatBytes } from './ui'
 import { IconUpload, IconTrash, IconExternalLink, IconPaperclip, IconFolderUp, IconChevronRight, IconWorld, IconX } from './icons'
 import { pushError, pushToast } from '../toast'
 import { downloads } from '../downloads'
+import { findLanding, landKey, useLandOn } from '../landing'
 
 // A project's own page: what shows in the chat pane when a project is open and
 // no chat is. The composer on top starts a chat in the project; below it, the
@@ -449,6 +450,11 @@ export default function ProjectHome({ projectId, composer, maxUploadBytes }: { p
   useProjectPage(projectId)
   useEffect(() => { loadProject(projectId) }, [projectId])
   useEffect(() => setTab('chats'), [projectId])
+  // A search hit on the project's instructions or memory opens that tab and flashes it (landing.ts).
+  useLandOn('project', {
+    prepare: ({ id, extra }) => { if (id === projectId && (extra.section === 'instructions' || extra.section === 'memory')) setTab(extra.section) },
+    find: ({ id, extra }) => (id === projectId && (!extra.section || tab === extra.section) ? findLanding(landKey('project', id)) : null),
+  })
   const parent = useChat((s) => (summary?.parentId ? s.projects.find((p) => p.id === summary.parentId) : undefined))
   const project = detail || (summary ? { ...summary, files: undefined } : null)
   if (!project) return <div className="vc-proj-page"><p className="vc-proj-blank">Loading the project…</p></div>
@@ -474,7 +480,7 @@ export default function ProjectHome({ projectId, composer, maxUploadBytes }: { p
           </button>
         ))}
       </div>
-      <div className="vc-proj-body">
+      <div className="vc-proj-body" data-land={landKey('project', project.id)}>
         {tab === 'chats' && <ChatsTab project={project} />}
         {tab === 'files' && (detail ? <FilesTab project={detail} maxUploadBytes={maxUploadBytes} /> : <p className="vc-proj-blank">Loading files…</p>)}
         {tab === 'instructions' && (

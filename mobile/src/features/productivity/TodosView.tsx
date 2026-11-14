@@ -39,6 +39,8 @@ import { UndoLine, type UndoState } from '../todos/detail/bits'
 import { clearCreated, getBoard, loadBoard, loadIssueStates, loadSheet, setTodos, useBoard } from '../todos/store'
 import { openTodo } from '../todos/nav'
 import { dateLabel } from '../todos/format'
+import { LandFlash, useLandOn } from '../../ui/landing'
+import { farIndex } from '../../lib/landing'
 
 // The "+" sits one gap left of the new-chat button (right 16, 54 wide: shell/Screen.tsx).
 const NEW_TASK_SIZE = 44
@@ -146,6 +148,28 @@ export default function TodosView({ active }: { active: boolean }) {
     return () => clearTimeout(timer)
   }, [freshId])
 
+  // A search hit (src/lib/landing.ts): bring its task into the list (no filter, the
+  // Completed fold open), scroll to it and flash it. A snoozed or archived task is not
+  // in the list, so that landing gives up quietly.
+  const scrollFailed = useRef(false)
+  const landed = useLandOn('task', {
+    ready: active && board.loaded,
+    prepare: ({ id }) => {
+      const todo = getBoard().todos.find((item) => item.id === id)
+      if (!todo) return
+      if (filtering && !visible.some((item) => item.id === id)) setQuery({})
+      if (todo.status === 'done') { setView((current) => ({ ...current, completedOpen: true })); setShowAllDone(true) }
+    },
+    locate: ({ id }) => {
+      const index = rows.findIndex((row) => row.kind === 'card' && row.todo.id === id)
+      if (index < 0) return null
+      // A row not drawn yet fails the scroll (onScrollToIndexFailed scrolls on); the next try lands.
+      scrollFailed.current = false
+      list.current?.scrollToIndex({ index, viewPosition: 0.4, animated: !reduced && !farIndex(0, index, 10) })
+      return scrollFailed.current ? null : id
+    },
+  })
+
   /** Say what happened in the Undo line; its Undo runs `back`. A newer line replaces it. */
   function offer(kind: UndoKind, todo: Todo, back: () => unknown, extra?: Parameters<typeof undoText>[2]) {
     const line = undoText(kind, todo, extra)
@@ -243,26 +267,29 @@ export default function TodosView({ active }: { active: boolean }) {
     const down = pair?.down ?? null
     const link = issueLinkOf(todo)
     return (
-      <TodoCard
-        todo={todo}
-        now={() => now}
-        swipeable={!bulkMode}
-        onOpen={(item) => openTodo(item)}
-        onAddNote={(item) => openTodo(item, 'notes')}
-        onMove={(item, status) => move(item, status === 'done' ? 'done' : 'todo')}
-        onReorder={(item, direction) => void actions.reorder(item, direction, direction < 0 ? up : down)}
-        reorder={{ up: !!up, down: !!down, note: row.section === 'done' ? 'Completed reads newest first' : 'Due date and priority set this order' }}
-        onSnooze={snooze}
-        onDueDate={actions.reschedule}
-        onNotDoing={notDoing}
-        onPriority={actions.setPriority}
-        onDelete={remove}
-        dueSection={row.section === 'overdue' || row.section === 'today' ? row.section : undefined}
-        issue={link ? board.issueStates[issueKey(link)] ?? null : null}
-        fresh={freshId === todo.id}
-        selected={bulkMode ? selection.has(todo.id) : undefined}
-        onSelect={bulkMode ? select : undefined}
-      />
+      <View>
+        <TodoCard
+          todo={todo}
+          now={() => now}
+          swipeable={!bulkMode}
+          onOpen={(item) => openTodo(item)}
+          onAddNote={(item) => openTodo(item, 'notes')}
+          onMove={(item, status) => move(item, status === 'done' ? 'done' : 'todo')}
+          onReorder={(item, direction) => void actions.reorder(item, direction, direction < 0 ? up : down)}
+          reorder={{ up: !!up, down: !!down, note: row.section === 'done' ? 'Completed reads newest first' : 'Due date and priority set this order' }}
+          onSnooze={snooze}
+          onDueDate={actions.reschedule}
+          onNotDoing={notDoing}
+          onPriority={actions.setPriority}
+          onDelete={remove}
+          dueSection={row.section === 'overdue' || row.section === 'today' ? row.section : undefined}
+          issue={link ? board.issueStates[issueKey(link)] ?? null : null}
+          fresh={freshId === todo.id}
+          selected={bulkMode ? selection.has(todo.id) : undefined}
+          onSelect={bulkMode ? select : undefined}
+        />
+        <LandFlash on={landed === todo.id} />
+      </View>
     )
   }
 
@@ -278,9 +305,9 @@ export default function TodosView({ active }: { active: boolean }) {
         data={rows}
         style={{ flex: 1 }}
         itemLayoutAnimation={reduced ? undefined : LinearTransition.duration(220)}
-        onScrollToIndexFailed={() => list.current?.scrollToEnd({ animated: !reduced })}
+        onScrollToIndexFailed={() => { scrollFailed.current = true; list.current?.scrollToEnd({ animated: !reduced }) }}
         keyExtractor={(row) => row.key}
-        extraData={{ selection, freshId, issues: board.issueStates, source }}
+        extraData={{ selection, freshId, landed, issues: board.issueStates, source }}
         contentContainerStyle={[st.list, { paddingBottom: LIST_FOOT + insets.bottom }]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"

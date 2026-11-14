@@ -9,7 +9,10 @@ import type { ChatFrameHandle, ChatFrameProps } from './ChatFrame'
 function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, dock, dockBottom, onAtEndChange }: ChatFrameProps<T>, ref: React.Ref<ChatFrameHandle>) {
   const listRef = useRef<LegendListRef>(null)
   const atEnd = useRef(true)
-  useImperativeHandle(ref, () => ({ scrollToEnd: (animated = true) => { listRef.current?.scrollToEnd({ animated }) } }), [])
+  useImperativeHandle(ref, () => ({
+    scrollToEnd: (animated = true) => { listRef.current?.scrollToEnd({ animated }) },
+    scrollToIndex: (index: number, animated = true) => { listRef.current?.scrollToIndex({ index, viewPosition: 0.3, animated }) },
+  }), [])
   const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent
     const next = contentSize.height - (contentOffset.y + layoutMeasurement.height) < 80

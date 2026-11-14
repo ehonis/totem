@@ -23,6 +23,7 @@ import { ShelfPane, SheetDetail, SummaryPane, TaskDetail, type Summary } from '.
 import { SheetIcon, SnoozeIcon } from '../todos/taskIcons'
 import { snoozeTimes } from '../todos/format'
 import '../todos/todos.css'
+import { useLandOn } from '../landing'
 
 type Pane = { kind: 'task'; id: string; notes?: number } | { kind: 'sheet'; id: string } | { kind: 'shelf'; shelf: 'archive' | 'deleted' } | null
 type RowMenu = { kind: 'snooze' | 'due' | 'priority'; id: string; anchor: HTMLElement | null }
@@ -265,6 +266,26 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
     // Only a new reveal should run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board.revealId])
+  // A search hit (landing.ts): bring its task into the list (scope, search, the
+  // Snoozed and Completed folds), then the helper scrolls to it and flashes it. An
+  // archived task is not on the board, so that landing gives up quietly.
+  useLandOn('task', {
+    ready: board.loaded,
+    prepare: ({ id }) => {
+      const todo = todoById.get(id)
+      if (!todo) return
+      const isSnoozed = todo.status !== 'done' && !!todo.snoozedUntil && new Date(todo.snoozedUntil) > now
+      setView((current) => ({
+        ...current,
+        scope: current.scope !== 'all' && (current.scope === 'sheet' || current.scope !== todo.area) ? 'all' : current.scope,
+        snoozedOpen: current.snoozedOpen || isSnoozed,
+        completedOpen: current.completedOpen || todo.status === 'done',
+      }))
+      if (needle && !filterTodos([todo], { search: needle }, now).length) setSearch('')
+      setActiveKey(id)
+    },
+    find: ({ id }) => rows.current.get(id) ?? null,
+  })
   useLayoutEffect(() => {
     if (flashId) rows.current.get(flashId)?.scrollIntoView?.({ block: 'nearest' })
   }, [flashId])

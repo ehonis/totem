@@ -33,6 +33,7 @@ import EntryMenu from '../journal/EntryMenu'
 import type { MenuItem } from '../journal/EntryMenu'
 import JournalSettingsModal from '../journal/JournalSettings'
 import type { JournalEngine, JournalEntry, JournalSettings } from '../journal/types'
+import { useLandOn } from '../landing'
 
 interface Props { onAuthError: () => void }
 
@@ -143,6 +144,8 @@ export default function JournalView({ onAuthError }: Props) {
   }, [settings, fail])
 
   const groups = useMemo(() => groupByDay(entries), [entries])
+  // A search hit lands on its entry's card (landing.ts).
+  useLandOn('journal', { ready: !loading })
   const waiting = entries.filter((e) => cardState(e, now) === 'waiting').length
 
   return (
@@ -475,7 +478,7 @@ function EntryCard({ entry, now, busy, onSkip, onIngest, onRetry, onRename, onEd
   menuItems.push({ key: 'delete', label: 'Delete entry', icon: TrashIcon, danger: true, onSelect: onDelete, separated: true })
 
   return (
-    <article className={`journal-entry state-${state}${open ? ' open' : ''}`}>
+    <article className={`journal-entry state-${state}${open ? ' open' : ''}`} data-land={`journal:${entry.id}`}>
       <div className="journal-entry-row">
         <div className="journal-entry-main">
           <div className="journal-entry-top">

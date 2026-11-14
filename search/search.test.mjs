@@ -3,8 +3,9 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSearchIndex, ftsQuery, plainMarks, MARK_START, MARK_END } from './index.mjs'
-import { markdownSections, noteSource, chatSource, journalSource } from './sources.mjs'
+import { DatabaseSync } from 'node:sqlite'
+import { createSearchIndex, ftsQuery, matchPart, plainMarks, MARK_START, MARK_END } from './index.mjs'
+import { markdownSections, noteSource, chatSource, journalSource, listSource, goalSource, projectSource, totemSource } from './sources.mjs'
 
 const fixed = (docs, kind = 'note') => ({ kind, load: async () => docs })
 
@@ -109,4 +110,57 @@ test('note, journal and chat sources produce openable docs', async () => {
   assert.equal(chats.length, 1)
   assert.deepEqual(chats[0].target, { tab: 'chat', thread: 't1', message: 'm1' })
   assert.equal(chats[0].date, '2026-09-01')
+})
+
+// Opening a hit lands on the thing that matched (#261): each target names it.
+
+test('matchPart names the first item with every word, else any word, else none', () => {
+  const parts = [{ id: 'i1', text: 'Eggs' }, { id: 'i2', text: 'Seiko watch strap' }, { id: 'i3', text: 'Watch battery' }]
+  assert.equal(matchPart(parts, 'watch batt'), 'i3')
+  assert.equal(matchPart(parts, 'WATCH'), 'i2')
+  assert.equal(matchPart(parts, 'strap gravel'), 'i2')
+  assert.equal(matchPart(parts, 'gravel'), null)
+  assert.equal(matchPart([{ id: 'c', text: 'Café crème' }], 'cafe'), 'c')
+  assert.equal(matchPart(null, 'x'), null)
+})
+
+test('a list hit names the matched item in its target, and the items stay in the index', async () => {
+  const db = new DatabaseSync(':memory:')
+  db.exec(`CREATE TABLE lists (id TEXT, title TEXT, updated_at TEXT);
+    CREATE TABLE list_items (id TEXT, list_id TEXT, text TEXT, checked INTEGER, position INTEGER);
+    INSERT INTO lists VALUES ('L1', 'Packing', '2026-11-01T00:00:00Z');
+    INSERT INTO list_items VALUES ('a', 'L1', 'Passport', 0, 0), ('b', 'L1', 'Watch charger', 1, 1)`)
+  const index = createSearchIndex({ sources: [listSource({ db })] })
+  const [hit] = (await index.search('charger')).results
+  assert.deepEqual(hit.target, { tab: 'productivity', app: 'lists', id: 'L1', item: 'b' })
+  assert.equal('parts' in hit, false)
+  // A title-only match names no item.
+  const [byTitle] = (await index.search('packing')).results
+  assert.deepEqual(byTitle.target, { tab: 'productivity', app: 'lists', id: 'L1' })
+  assert.equal((await index.get('list:L1')).body, '- [ ] Passport\n- [x] Watch charger')
+})
+
+test('a goal target carries its period, and a step its parent goal and that goal\'s period', async () => {
+  const db = new DatabaseSync(':memory:')
+  db.exec(`CREATE TABLE goals (id TEXT, parent_id TEXT, title TEXT, notes TEXT, period_type TEXT, period_start TEXT, period_end TEXT, completed_at TEXT, abandoned_at TEXT, deleted_at TEXT);
+    INSERT INTO goals VALUES ('g1', NULL, 'Ride 100 km', NULL, 'month', '2026-11-01', '2026-11-30', NULL, NULL, NULL),
+      ('g2', 'g1', 'Fix the bike', NULL, NULL, NULL, NULL, NULL, NULL, NULL)`)
+  const [goal, step] = await goalSource({ db }).load()
+  assert.deepEqual(goal.target, { tab: 'productivity', app: 'goals', id: 'g1', period: 'month', start: '2026-11-01', end: '2026-11-30' })
+  assert.deepEqual(step.target, { tab: 'productivity', app: 'goals', id: 'g2', parent: 'g1', period: 'month', start: '2026-11-01', end: '2026-11-30' })
+})
+
+test('project and totem targets say which section matched', async () => {
+  const projects = { list: async () => [{ id: 'p1', name: 'Bike', instructions: 'Be brief', updatedAt: 1 }], readMemory: async () => '- likes gravel' }
+  const docs = await projectSource({ projects }).load()
+  assert.deepEqual(docs.map((d) => d.target), [
+    { tab: 'chat', project: 'p1', section: 'instructions' },
+    { tab: 'chat', project: 'p1', section: 'memory' },
+  ])
+  const dir = await mkdtemp(join(tmpdir(), 'search-totem-'))
+  try {
+    await writeFile(join(dir, 'memory.md'), 'last run fine')
+    const totems = await totemSource({ jobs: { list: async () => [{ id: 'j1', name: 'Digest', prompt: 'Sum up' }] }, memoryPath: () => join(dir, 'memory.md') }).load()
+    assert.deepEqual(totems.map((d) => d.target.section), ['instructions', 'memory'])
+  } finally { await rm(dir, { recursive: true, force: true }) }
 })

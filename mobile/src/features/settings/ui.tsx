@@ -9,7 +9,6 @@ import {
   Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions,
   type StyleProp, type TextInputProps, type ViewStyle,
 } from 'react-native'
-import { useReducedMotion } from 'react-native-reanimated'
 import { MenuView } from '@react-native-menu/menu'
 import { useNavigation } from 'expo-router'
 import { usePreventRemove } from 'expo-router/react-navigation'
@@ -21,11 +20,11 @@ import { T } from '../../ui/Text'
 import { Press, Toggle } from '../../ui/kit'
 import { Hi, ChevronDownIcon, ChevronRightIcon, WarnIcon, CheckCircleIcon, InformationCircleIcon } from '../../lib/icons'
 import { bridgeUrl } from '../../lib/connection'
-import { useSettings } from '../../lib/settings'
 import { pushError, pushSuccess } from '../../lib/toast'
 import { FAB_CLEARANCE } from '../../shell/Screen'
 import { tap } from '../../ui/haptics'
 import { confirm } from '../../ui/menu'
+import { LandFlash, useStill } from '../../ui/landing'
 
 /** Options for a pushed screen: the native header, in the dashboard's colours. */
 export function pushedOptions(title: string, backTitle = 'Back') {
@@ -57,26 +56,19 @@ const Reveal = createContext<RevealApi>({ reveal: () => {} })
  * pane's data usually loads after it mounts, so the row asks to be revealed
  * when it appears rather than the pane looking for it.
  */
-function useStill() {
-  const system = useReducedMotion()
-  const app = useSettings().reduceMotion
-  return system || app
-}
-
 function useRevealed(id?: string) {
   const { target, reveal } = useContext(Reveal)
   const ref = useRef<View>(null)
   const [flash, setFlash] = useState(false)
-  const still = useStill()
   const hit = !!id && id === target
   useEffect(() => {
     if (!hit) return
     const t = setTimeout(() => { if (ref.current) reveal(ref.current) }, 120)
-    if (still) return () => clearTimeout(t)
+    // With less motion too: LandFlash draws a still outline then (every search landing's rule).
     setFlash(true)
     const off = setTimeout(() => setFlash(false), 1600)
     return () => { clearTimeout(t); clearTimeout(off) }
-  }, [hit, reveal, still])
+  }, [hit, reveal])
   return { ref, flash }
 }
 
@@ -162,8 +154,9 @@ export function Section({ id, title, description, action, plain, footer, childre
  */
 export function Group({ children, flash, style }: { children: React.ReactNode; flash?: boolean; style?: StyleProp<ViewStyle> }) {
   return (
-    <View style={[st.group, flash && st.flash, style]}>
+    <View style={[st.group, style]}>
       <View style={{ marginBottom: -StyleSheet.hairlineWidth }}>{children}</View>
+      <LandFlash on={!!flash} />
     </View>
   )
 }
@@ -249,7 +242,7 @@ export function Row({ id, title, description, status, control, accessory, onRese
   ) : <View style={style}>{child}</View>
   const lead = accessory ? <>{copy}<View style={st.accessory}>{accessory}</View></> : copy
   return (
-    <View ref={ref} collapsable={false} style={[st.row, flash && st.flash]}>
+    <View ref={ref} collapsable={false} style={st.row}>
       <View style={[st.rowHead, stacked && st.rowStacked]}>
         {/* Without a control in between, the value and chevron are the same button as the copy. */}
         {!control && detail
@@ -260,6 +253,7 @@ export function Row({ id, title, description, status, control, accessory, onRese
         {control && detail ? press(detail, st.detail, false) : null}
       </View>
       {children ? <View style={{ paddingBottom: 12 }}>{children}</View> : null}
+      <LandFlash on={flash} radius={0} />
     </View>
   )
 }
@@ -438,7 +432,6 @@ export const st = StyleSheet.create({
   footer: { marginTop: 7, paddingHorizontal: 14 },
   footerBox: { marginTop: 7, paddingHorizontal: 14, gap: 4 },
   group: { backgroundColor: colors.bg2, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, overflow: 'hidden' },
-  flash: { backgroundColor: alpha(colors.accent, 0.14) },
   // The vertical padding lives in the row's parts, so the whole height of the copy is its tap target.
   row: { paddingHorizontal: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line, minHeight: 48, justifyContent: 'center' },
   rowHead: { flexDirection: 'row', alignItems: 'stretch', gap: 12 },

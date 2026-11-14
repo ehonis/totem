@@ -40,6 +40,8 @@ import '../chat/chat.css'
 import { chatGlow } from '../chat/glow'
 import { useSettings } from '../settings'
 import { useOwnerName } from '../useOwnerName'
+import { findLanding, landKey, useLandOn } from '../landing'
+import { createFollow } from '../chat/follow'
 import ResizeHandle, { SIDE_PANEL_VAR } from './ResizeHandle'
 
 function greeting(name: string) {
@@ -293,33 +295,49 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   // --- scrolling ---------------------------------------------------------------
   // Follow the reply while you're at the bottom; stop the moment you scroll up to
   // read something, and offer a way back. Opening a chat always starts at the bottom.
-  const pinned = useRef(true)
+  const follow = useRef(createFollow()).current
   const onScroll = () => {
     const el = scrollRef.current
     // Hidden behind another tab there is no layout to judge by.
     if (!el || !el.clientHeight) return
-    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-    setAtBottom(pinned.current)
+    const atEnd = follow.scrolled(el.scrollHeight - el.scrollTop - el.clientHeight)
+    if (atEnd !== null) setAtBottom(atEnd)
   }
   const scrollToBottom = (smooth = true) => {
     const el = scrollRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   }
   // The view isn't rendered behind another tab, so showing it is opening the chat too.
-  useLayoutEffect(() => { pinned.current = true; scrollToBottom(false); setAtBottom(true) }, [activeId, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { follow.open(); scrollToBottom(false); setAtBottom(true) }, [activeId, visible]) // eslint-disable-line react-hooks/exhaustive-deps
   const lastContent = messages[messages.length - 1]?.content.length || 0
   const lastParts = messages[messages.length - 1]?.parts?.length || 0
-  useLayoutEffect(() => { if (pinned.current) scrollToBottom(false) }, [messages.length, lastContent, lastParts, run?.activity]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { if (follow.following) scrollToBottom(false) }, [messages.length, lastContent, lastParts, run?.activity]) // eslint-disable-line react-hooks/exhaustive-deps
+  // A search hit lands on its message (landing.ts): no following the bottom until it
+  // has landed (chat/follow.ts says why); if it never turns up, go back down. The
+  // flash goes on the bubble or the reply's text, not the whole row.
+  useLandOn('msg', {
+    ready: visible && messages.length > 0,
+    prepare: () => follow.startLanding(),
+    find: ({ id }) => {
+      const row = findLanding(landKey('msg', id), scrollRef.current ?? document)
+      return row ? row.querySelector<HTMLElement>(':scope > .vc-bubble, :scope > .vc-assistant-body') ?? row : null
+    },
+    onLanded: () => {
+      const el = scrollRef.current
+      setAtBottom(follow.endLanding(true, el ? el.scrollHeight - el.scrollTop - el.clientHeight : Infinity))
+    },
+    onMiss: () => { follow.endLanding(false); scrollToBottom(false); setAtBottom(true) },
+  })
   // Code blocks, images and Markdown keep growing the log after its first layout:
-  // stay at the bottom through that while pinned.
+  // stay at the bottom through that while following.
   useEffect(() => {
     const el = scrollRef.current
     if (!el || typeof ResizeObserver === 'undefined') return undefined
-    const ro = new ResizeObserver(() => { if (pinned.current) el.scrollTop = el.scrollHeight })
+    const ro = new ResizeObserver(() => { if (follow.following) el.scrollTop = el.scrollHeight })
     ro.observe(el)
     if (el.firstElementChild) ro.observe(el.firstElementChild)
     return () => ro.disconnect()
-  }, [empty, activeId, visible])
+  }, [empty, activeId, visible]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- actions -----------------------------------------------------------------
   function newChat(k: 'regular' | 'temporary' = 'regular') {

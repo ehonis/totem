@@ -323,6 +323,9 @@
 
 /* --- assistant reply -------------------------------------------------------- */
 .vc-assistant-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; font-size: 15.5px; line-height: 1.7; }
+/* A search hit's flash (landing.ts) washes a margin round the reply's text instead of touching it. */
+.vc-assistant-body.land-flash, .vc-assistant-body.land-flash-still { --land-pad: 10px; --land-ring: transparent; border-radius: 4px; }
+.vc-assistant-body.land-flash-still { box-shadow: none; outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 10px; border-radius: 14px; }
 .vc-assistant-body > .md { min-width: 0; contain-intrinsic-size: auto 240px; }
 /* A reply's text is most of a long chat's layout, and a drag of the chats panel
    or a side panel, or a window resize, changes the chat column's width every
