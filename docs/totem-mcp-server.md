@@ -617,6 +617,31 @@ logins outside CLIProxy are live-only. Code: `ai-usage/mcp.mjs`, `ai-usage/repor
 `usage__get_current`, `usage__get_history`, `usage__limit_report` (gateway 1.16.0);
 `serverInfo.version` **2.14.0**.
 
+Two more for scheduling AI work (`ai-usage/forecast.mjs`, gateway 1.17.0, `serverInfo.version`
+**2.15.0**):
+
+- `totem_usage_forecast` (`usage__forecast`) projects every Claude and Codex login forward. Per
+  login and window: % left, reset, pace (%/h over the last few hours, and the 7-day average),
+  `runsOutAt` before the reset, and `unusedAtResetPct` (what the projection leaves when the window
+  resets: capacity a scheduled job can take at no cost). Per provider: the pool's pace, when every
+  login is capped at once (`blockedSpans`), and `spare` to use before resets. It follows the
+  CLIProxy graphs' model (CLIProxy logins are one pool routed soonest weekly reset first; a login
+  serves only while both its 5-hour and weekly windows have room; spending 5-hour points spends the
+  week at the login's own measured ratio; a 5-hour window starts on first use), with one
+  difference: the default `pace: "blend"` runs the recent pace for 5 h and then each login's 7-day
+  average, since a busy afternoon repeated around the clock for a week is a wall of caps that never
+  comes. `pace: "recent"` matches the graphs. Quiet hours and off days (owner's time zone) spend
+  nothing. Logins outside CLIProxy have no history and are projected idle; Cursor's monthly cycle is
+  listed, not projected.
+- `totem_usage_plan` (`usage__plan`) takes a job's size (`small` 5, `medium` 20, `large` 50, `full`
+  100, or `fiveHourPct`: % of one 5-hour window on the provider's largest plan; Claude plans are
+  weighted by price as the graphs do) and optional `provider`, `notBefore`/`afterHours`,
+  `deadline`/`withinHours` and `reservePct` (kept for the owner, default 10). It steps the same
+  projection and returns the first login and time where both windows hold the job: `best`
+  (`startAt` local, `startAtIso` for a scheduler, `startsNow`), up to three alternatives, `tooBig`
+  for logins where the job exceeds a whole window, and `afterDeadline` when nothing fits in time. At
+  the same start time it prefers a login whose week would otherwise reset unused.
+
 ### 6.10 Versioning and protocol negotiation — **BUILT**
 
 `serverInfo.version` is **2.9.0**. 2.9.0 renamed the field that carries a sentence for the

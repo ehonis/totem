@@ -11646,7 +11646,9 @@ const MCP_SUPPORTED_PROTOCOLS = new Set([MCP_PROTOCOL_VERSION, '2025-03-26', '20
 // `linkedin` inbox kind, which the owner does himself (docs/linkedin.md).
 // 2.14.0: totem_usage_get_current, totem_usage_get_history and totem_usage_limit_report
 // (AI subscription usage and limit hits, read-only; ai-usage/mcp.mjs).
-const MCP_SERVER_INFO = { name: 'totem', title: 'Totem', version: '2.14.0' }
+// 2.15.0: totem_usage_forecast and totem_usage_plan (where usage is heading, and when a
+// job of a given size fits; ai-usage/forecast.mjs).
+const MCP_SERVER_INFO = { name: 'totem', title: 'Totem', version: '2.15.0' }
 
 // Every tool answers with compact JSON rather than prose: the calling model is the
 // one doing the reasoning, so it wants data, not sentences. `fetchedAt` rides along
@@ -11728,7 +11730,9 @@ function mcpInstructions() {
     'Re-read rather than relying on something you fetched earlier in this conversation; every result',
     'carries a fetchedAt timestamp so you can tell. For AI subscription usage, quotas, rate limits or',
     'hitting limits, use totem_usage_get_current (now), totem_usage_get_history and',
-    'totem_usage_limit_report (how often each account hit a cap, with how it was counted).',
+    'totem_usage_limit_report (how often each account hit a cap, with how it was counted). Before',
+    'scheduling or starting AI work (a job, sub-agents, a long run), call totem_usage_plan with its',
+    'size for when and on which provider it fits, or totem_usage_forecast for where usage is heading.',
     '',
     'WRITING. You can change real state, and it takes effect the moment you call the tool — there is',
     'no staging step and no undo. totem_create_task, totem_update_task (which is also how you',
