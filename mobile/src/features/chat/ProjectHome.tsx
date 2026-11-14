@@ -14,6 +14,7 @@ import { colors } from '../../theme'
 import { ProjectIcon, ThreadIcon } from './ThreadIcon'
 import { TI, vc } from './ui'
 import { IconArrowLeft } from './icons'
+import { LandFlash, useLandOn } from '../../ui/landing'
 
 export default function ProjectHome({ projectId }: { projectId: string }) {
   const project = useChat((s) => s.projectDetail[projectId] || s.projects.find((p) => p.id === projectId))
@@ -24,6 +25,12 @@ export default function ProjectHome({ projectId }: { projectId: string }) {
   useEffect(() => { loadProject(projectId) }, [projectId])
   const folders = useMemo(() => foldersOf(projects, projectId), [projects, projectId])
   const chats = useMemo(() => all.filter((t) => t.projectId === projectId && t.messages.length > 0), [all, projectId])
+  // A search hit on the project's instructions flashes them (src/lib/landing.ts); the app
+  // has no Memory tab, so a memory hit just opens the project.
+  const landed = useLandOn('project', {
+    ready: !!project,
+    locate: ({ id, extra }) => (id === projectId && extra.section === 'instructions' && project?.instructions ? 'instructions' : id === projectId ? 'project' : null),
+  })
   if (!project) return null
   const now = Date.now()
   return (
@@ -37,7 +44,12 @@ export default function ProjectHome({ projectId }: { projectId: string }) {
         <ProjectIcon p={project} size={26} color={vc.soft} />
         <T size={26} weight={500} lineHeight={34} style={{ flexShrink: 1 }}>{project.name}</T>
       </View>
-      {project.instructions ? <T size={14} lineHeight={21} color={vc.soft} numberOfLines={3} style={{ marginBottom: 14 }}>{project.instructions}</T> : null}
+      {project.instructions ? (
+        <View style={{ marginBottom: 14 }}>
+          <T size={14} lineHeight={21} color={vc.soft} numberOfLines={3}>{project.instructions}</T>
+          <LandFlash on={landed === 'instructions'} radius={8} />
+        </View>
+      ) : null}
       {folders.length ? (
         <View style={{ marginBottom: 10 }}>
           <T size={12} color={vc.faint} style={st.group}>Folders</T>

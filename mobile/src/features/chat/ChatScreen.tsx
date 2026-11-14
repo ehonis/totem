@@ -54,6 +54,8 @@ import { TotemRunButton } from '../totems/shared'
 import { PageGlow } from '../../ui/PageGlow'
 import { chatGlow } from '../../lib/chat/glow'
 import { useSettings } from '../../lib/settings'
+import { useLanding, useLandOn, useStill } from '../../ui/landing'
+import { farIndex } from '../../lib/landing'
 import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconFolder, IconFolderOff, IconSparkles, IconChevronDown, IconSettings, IconUsersGroup, IconUserPlus } from './icons'
 
 function greeting(name: string) {
@@ -379,6 +381,23 @@ export default function ChatScreen() {
     return getState().models[provider]?.find((x) => x.id === id)?.name
   }
 
+  // A search hit (src/lib/landing.ts): once the chat has opened at its end, scroll to
+  // the matched message and flash it. Scrolled away from the end, the list stops following.
+  // A far message is jumped to, a near one scrolled to (farIndex); the list stops
+  // holding its end from the request until the flash is over.
+  const still = useStill()
+  const landing = useLanding('msg')
+  const landed = useLandOn('msg', {
+    ready: focused && messages.length > 0,
+    delayMs: 400,
+    locate: ({ id }) => {
+      const index = messages.findIndex((m) => m.id === id)
+      if (index < 0) return null
+      frame.current?.scrollToIndex(index, !still && !farIndex(messages.length - 1, index, 3))
+      return id
+    },
+  })
+
   const renderItem = (m: ChatMessage, i: number) => {
     const last = i === messages.length - 1
     const moved = switches.get(m.id)
@@ -393,6 +412,7 @@ export default function ChatScreen() {
             onEdit={(text) => active && editAndResend(active.id, m.id, text)}
             onRetry={m.unsent && active && !busy ? () => retryUnsent(active.id) : undefined}
             onDiscard={m.unsent && active && !busy ? () => { const text = discardUnsent(active.id); if (text) setInput(text); requestAnimationFrame(() => composer.current?.focus()) } : undefined}
+            flash={landed === m.id}
           />
         ) : (
           <AssistantMessage
@@ -403,6 +423,7 @@ export default function ChatScreen() {
             modelName={modelNameFor(m.provider, m.model)}
             isLast={m.id === lastAssistantId && last}
             onRegenerate={!busy && active ? () => regenerate(active.id) : undefined}
+            flash={landed === m.id}
           />
         )}
       </View>
@@ -541,11 +562,12 @@ export default function ChatScreen() {
         data={messages}
         keyExtractor={(m: ChatMessage) => m.id}
         renderItem={renderItem}
-        extraData={`${busy}|${run?.activity || ''}|${lastAssistantId}|${providers.length}|${Object.keys(models).length}`}
+        extraData={`${busy}|${run?.activity || ''}|${lastAssistantId}|${providers.length}|${Object.keys(models).length}|${landed}`}
         empty={emptyEl}
         // Low, into the home-indicator gap, as ChatGPT sits.
         dockBottom={Math.max(insets.bottom - 12, 10)}
         onAtEndChange={setAtEnd}
+        followEnd={!landing && !landed}
         dock={
           <View style={st.dock}>
             {!empty && !atEnd ? (

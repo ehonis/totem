@@ -13,7 +13,11 @@ import type { LegendListRef } from '@legendapp/list/react-native'
 import { useIsFocused } from 'expo-router'
 import { setToastFloor } from '../../ui/toastFloor'
 
-export interface ChatFrameHandle { scrollToEnd: (animated?: boolean) => void }
+export interface ChatFrameHandle {
+  scrollToEnd: (animated?: boolean) => void
+  /** Bring one message into view (a search hit landing on it). */
+  scrollToIndex: (index: number, animated?: boolean) => void
+}
 
 export interface ChatFrameProps<T> {
   data: T[]
@@ -29,13 +33,22 @@ export interface ChatFrameProps<T> {
   /** How far the dock keeps off the bottom edge with the keyboard down. */
   dockBottom: number
   onAtEndChange?: (atEnd: boolean) => void
+  /**
+   * False while a search hit lands on an older message (src/lib/landing.ts): the list
+   * opened at its end, and holding the end through an image or code block growing
+   * the log would pull it back down from the message (the web's chat/follow.ts).
+   */
+  followEnd?: boolean
 }
 
-function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, dock, dockBottom, onAtEndChange }: ChatFrameProps<T>, ref: React.Ref<ChatFrameHandle>) {
+function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, dock, dockBottom, onAtEndChange, followEnd = true }: ChatFrameProps<T>, ref: React.Ref<ChatFrameHandle>) {
   const listRef = useRef<LegendListRef>(null)
   const atEnd = useRef(true)
   const [dockHeight, setDockHeight] = useState(120)
-  useImperativeHandle(ref, () => ({ scrollToEnd: (animated = true) => { listRef.current?.scrollToEnd({ animated }).catch?.(() => {}) } }), [])
+  useImperativeHandle(ref, () => ({
+    scrollToEnd: (animated = true) => { listRef.current?.scrollToEnd({ animated }).catch?.(() => {}) },
+    scrollToIndex: (index: number, animated = true) => { listRef.current?.scrollToIndex({ index, viewPosition: 0.3, animated })?.catch?.(() => {}) },
+  }), [])
   // Toasts stack just above the dock, so they never cover the composer.
   const focused = useIsFocused()
   useEffect(() => {
@@ -73,7 +86,7 @@ function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, d
           drawDistance={600}
           alignItemsAtEnd
           initialScrollAtEnd
-          maintainScrollAtEnd={{ animated: false, on: { dataChange: true, itemLayout: true, layout: true } }}
+          maintainScrollAtEnd={followEnd ? MAINTAIN_END : false}
           keyboardLiftBehavior="whenAtEnd"
           // The composer floats over the list, so the list ends in room for it: the
           // last message stops just above the composer. (The library's composer
@@ -107,6 +120,7 @@ function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, d
   )
 }
 
+const MAINTAIN_END = { animated: false, on: { dataChange: true, itemLayout: true, layout: true } }
 const SCRIM = ['rgba(15, 17, 21, 0)', 'rgba(15, 17, 21, 0.74)', 'rgba(15, 17, 21, 0.94)'] as const
 const st = { scrim: { position: 'absolute', left: 0, right: 0, top: -56, bottom: 0 } } as const
 

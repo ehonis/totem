@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { getBrain, getNote, AuthError } from '../api'
 import { useErrorToast } from '../toast'
 import Markdown from './Markdown'
+import { headingIndexAtLine, useLandOn } from '../landing'
 
 const COLORS: Record<string, string> = { folder: '#7c5cff', note: '#5b8cff', topic: '#3fb950', person: '#e3b341' }
 const colorFor = (n: any) => COLORS[n.type] || '#8a91a3'
@@ -35,6 +36,19 @@ export default function BrainView({ onAuthError, openPath }: BrainViewProps) {
   }, [onAuthError])
 
   useEffect(() => { if (openPath && /\.md$/i.test(openPath)) openNote(openPath) }, [openPath, openNote])
+
+  // A search hit lands on the heading its section starts at (landing.ts), once the
+  // note it names is open; text before the first heading lands on the note's start.
+  const drawerRef = useRef<HTMLDivElement>(null)
+  useLandOn('note', {
+    find: ({ id, extra }) => {
+      if (!note || note.path !== id || note.markdown === 'Loading…' || !drawerRef.current) return null
+      const k = headingIndexAtLine(note.markdown, Number(extra.line) || 1)
+      const body = drawerRef.current.querySelector<HTMLElement>('.note-body')
+      if (k === null) return body?.firstElementChild as HTMLElement | null
+      return body?.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')[k] ?? null
+    },
+  })
 
   // Load graph data.
   useEffect(() => {
@@ -265,10 +279,10 @@ export default function BrainView({ onAuthError, openPath }: BrainViewProps) {
           </div>
           <div className="brain-hint">{stats.notes} notes · {stats.links} links · drag to pan · scroll to zoom · click a note to read</div>
           {note && (
-            <div className="note-drawer">
+            <div className="note-drawer" ref={drawerRef}>
               <button className="btn close" onClick={() => setNote(null)}>✕</button>
               <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>{note.path}</div>
-              <Markdown text={note.markdown} />
+              <Markdown text={note.markdown} className="note-body" />
             </div>
           )}
         </>

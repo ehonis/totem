@@ -4,7 +4,7 @@
 // refresh with Strava first, + Goal), the open goals and the Achieved list.
 // State lives in features/goals/store so the composer and editors (sheets here)
 // act on the same list.
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
 import Animated, { FadeIn, LinearTransition, ZoomIn } from 'react-native-reanimated'
 import { router } from 'expo-router'
@@ -24,8 +24,11 @@ import GoalCard, { PERIOD_COLOR, type GoalCardActions } from '../goals/GoalCard'
 import GoalsOverview from '../goals/GoalsOverview'
 import PeriodHero from '../goals/PeriodHero'
 import { periodSummary } from '../goals/summary'
-import { apply, load, periodOf, pick, refresh, resetAnchor, setError, step, typeOf, useGoals } from '../goals/store'
+import { apply, load, periodOf, pick, refresh, resetAnchor, setError, showWindow, step, typeOf, useGoals } from '../goals/store'
 import { useCalm } from '../habits/motion'
+import { goalAnchor } from '../../lib/landing'
+import { dateKey } from '../../lib/todos/format'
+import { LandFlash, scrollToNode, useLandOn, useStill } from '../../ui/landing'
 
 // No quarter: a tab that is always empty is a tab you learn to skip. Short names so
 // all five fit across a phone; VoiceOver and the summary card use the full ones.
@@ -136,14 +139,34 @@ export default function GoalsView({ active }: { active: boolean }) {
     )
   }
 
+  // A search hit (src/lib/landing.ts): the tab of the goal's period, at the window it
+  // was filed under, then its card (a step lands on its goal's card) scrolled to and flashed.
+  const scroll = useRef<ScrollView>(null)
+  const content = useRef<View>(null)
+  const nodes = useRef(new Map<string, View>())
+  const still = useStill()
+  const landed = useLandOn('goal', {
+    ready: active,
+    prepare: ({ extra }) => {
+      const shortcut = PERIODS.find((p) => typeOf(p) === extra.period)
+      if (shortcut) showWindow(shortcut, goalAnchor(extra, dateKey(new Date())) as typeof anchor)
+    },
+    locate: ({ id, extra }) => {
+      const key = nodes.current.has(id) ? id : extra.parent && nodes.current.has(extra.parent) ? extra.parent : null
+      return key && scrollToNode(scroll.current, content.current, nodes.current.get(key), !still) ? key : null
+    },
+  })
+
   const hosts = bushido?.hosts ?? []
   const card = (goal: Goal) => (
     <Animated.View
       key={goal.id}
+      ref={(node: View | null) => { if (node) nodes.current.set(goal.id, node); else nodes.current.delete(goal.id) }}
       layout={calm ? undefined : LinearTransition.duration(240)}
       entering={calm ? undefined : celebrating.has(goal.id) ? ZoomIn.springify().damping(13) : FadeIn.duration(180)}
     >
       <GoalCard goal={goal} busy={busy} bushidoHosts={hosts} actions={actionsFor(goal, bushido)} />
+      <LandFlash on={landed === goal.id} />
     </Animated.View>
   )
 
@@ -199,6 +222,8 @@ export default function GoalsView({ active }: { active: boolean }) {
         </View>
       </View>
       <ScrollView
+        ref={scroll}
+        innerViewRef={content as React.RefObject<View>}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 16, paddingTop: 12, paddingBottom: FAB_CLEARANCE, gap: 14 }}
         keyboardShouldPersistTaps="handled"

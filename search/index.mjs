@@ -8,9 +8,11 @@
 // there is no incremental bookkeeping to get wrong.
 //
 // A source is { kind, load: async () => doc[] }. A doc is
-//   { id, title, body, date?, target? }
+//   { id, title, body, date?, target?, parts? }
 // `id` is unique within its kind; the index prefixes it (`note:people/sam.md#3`).
 // `target` is where the dashboard should go to open it (a NavTarget plus extras).
+// `parts` ([{ id, text }], a list's items) never leave the index: a hit names the
+// first part the query matches as `target.item`, so opening it lands on that row.
 // A source that throws is skipped for that build and reported, never fatal: a
 // corrupt journal entry must not take search down with it.
 import { DatabaseSync } from 'node:sqlite'
@@ -21,6 +23,23 @@ export const MARK_START = '\u0002'
 export const MARK_END = '\u0003'
 
 const MAX_BODY = 60_000
+
+const words = (text) => String(text || '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || []
+
+/**
+ * The id of the first part that has every word of the query as the start of one
+ * of its words; failing that, any word; failing that, null. A list hit is the
+ * whole list, so this is what tells the list which row matched.
+ */
+export function matchPart(parts, text) {
+  const terms = [...new Set(words(text))].slice(0, 12)
+  if (!terms.length || !Array.isArray(parts)) return null
+  const split = parts.filter((p) => p && p.id != null).map((p) => ({ id: p.id, words: words(p.text) }))
+  const has = (w, t) => w.some((x) => x.startsWith(t))
+  const all = split.find((p) => terms.every((t) => has(p.words, t)))
+  if (all) return all.id
+  return split.find((p) => terms.some((t) => has(p.words, t)))?.id ?? null
+}
 
 /**
  * The user's words as an FTS5 query: every word must appear (as a prefix, so a
@@ -37,10 +56,10 @@ export function ftsQuery(text, { any = false } = {}) {
 export function createSearchIndex({ sources = [], staleMs = 30_000, now = () => Date.now(), log = () => {} } = {}) {
   const db = new DatabaseSync(':memory:')
   db.exec(`CREATE VIRTUAL TABLE docs USING fts5(
-    key UNINDEXED, kind UNINDEXED, title, body, date UNINDEXED, target UNINDEXED,
+    key UNINDEXED, kind UNINDEXED, title, body, date UNINDEXED, target UNINDEXED, parts UNINDEXED,
     tokenize = 'porter unicode61 remove_diacritics 2'
   )`)
-  const insert = db.prepare('INSERT INTO docs (key, kind, title, body, date, target) VALUES (?, ?, ?, ?, ?, ?)')
+  const insert = db.prepare('INSERT INTO docs (key, kind, title, body, date, target, parts) VALUES (?, ?, ?, ?, ?, ?, ?)')
   const byKey = db.prepare('SELECT key, kind, title, body, date, target FROM docs WHERE key = ?')
   const countAll = db.prepare('SELECT kind, count(*) AS n FROM docs GROUP BY kind')
 
@@ -66,7 +85,8 @@ export function createSearchIndex({ sources = [], staleMs = 30_000, now = () => 
           const title = String(d.title || '').slice(0, 300)
           const body = String(d.body || '').slice(0, MAX_BODY)
           if (!title.trim() && !body.trim()) continue
-          insert.run(`${kind}:${d.id}`, kind, title, body, d.date ? String(d.date) : null, d.target ? JSON.stringify(d.target) : null)
+          const parts = Array.isArray(d.parts) && d.parts.length ? JSON.stringify(d.parts.map((p) => ({ id: p.id, text: String(p.text || '').slice(0, 500) }))) : null
+          insert.run(`${kind}:${d.id}`, kind, title, body, d.date ? String(d.date) : null, d.target ? JSON.stringify(d.target) : null, parts)
           n += 1
         }
       }
@@ -98,7 +118,7 @@ export function createSearchIndex({ sources = [], staleMs = 30_000, now = () => 
     const kindFilter = kinds.length ? ` AND kind IN (${kinds.map(() => '?').join(',')})` : ''
     // Title hits count five times a body hit: a note *called* "Watches" beats one
     // that mentions a watch in passing.
-    const rows = db.prepare(`SELECT key, kind, title, date, target,
+    const rows = db.prepare(`SELECT key, kind, title, date, target, parts,
         highlight(docs, 2, '${MARK_START}', '${MARK_END}') AS titleMarked,
         snippet(docs, 3, '${MARK_START}', '${MARK_END}', '…', 28) AS snippet,
         bm25(docs, 0, 0, 5.0, 1.0) AS score
@@ -123,7 +143,12 @@ export function createSearchIndex({ sources = [], staleMs = 30_000, now = () => 
     const total = Object.values(res.counts).reduce((a, b) => a + b, 0)
     return {
       query: String(text),
-      results: res.rows.map((r) => ({ ...row(r, r.snippet), titleMarked: r.titleMarked })),
+      results: res.rows.map((r) => {
+        const hit = { ...row(r, r.snippet), titleMarked: r.titleMarked }
+        const item = r.parts && hit.target ? matchPart(JSON.parse(r.parts), text) : null
+        if (item != null) hit.target = { ...hit.target, item }
+        return hit
+      }),
       counts: res.counts,
       total,
       loose,

@@ -5,6 +5,7 @@ import { queueContext } from '../chat/pendingContext'
 import { useDismiss } from '../chat/ui'
 import type { Attachment } from '../chat/types'
 import type { NavTarget } from '../router'
+import { hitLanding, requestLanding } from '../landing'
 import { pushError } from '../toast'
 import Markdown from './Markdown'
 import TotemsIcon from './TotemsIcon'
@@ -86,6 +87,9 @@ export default function SearchView({ onAuthError, onNavigate }: SearchViewProps)
 
   const open = useCallback((hit: SearchHit) => {
     const t = hit.target || {}
+    // The view it opens scrolls to the item that matched and flashes it (landing.ts).
+    const land = hitLanding(t)
+    if (land) requestLanding(land.kind, land.id, land.extra)
     if (t.tab === 'chat' && t.thread) { setActive(t.thread); onNavigate('chat'); return }
     if (t.tab === 'chat' && t.project) { openProject(t.project); onNavigate('chat'); return }
     if (t.tab === 'brain' && t.path) { onNavigate({ tab: 'brain', hash: t.path }); return }

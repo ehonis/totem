@@ -160,13 +160,24 @@ export function goalSource({ db }) {
   return {
     kind: 'goal',
     async load() {
-      return db.prepare(`SELECT id, title, notes, period_type, period_start, completed_at, abandoned_at
-        FROM goals WHERE deleted_at IS NULL`).all().map((g) => ({
+      // A step keeps no period of its own; it is in its goal's.
+      return db.prepare(`SELECT g.id, g.parent_id, g.title, g.notes, g.completed_at, g.abandoned_at,
+          COALESCE(g.period_type, p.period_type) AS period_type,
+          COALESCE(g.period_start, p.period_start) AS period_start,
+          COALESCE(g.period_end, p.period_end) AS period_end
+        FROM goals g LEFT JOIN goals p ON p.id = g.parent_id WHERE g.deleted_at IS NULL`).all().map((g) => ({
         id: g.id,
         title: g.title || 'Goal',
         body: [[g.period_type, g.period_start, g.completed_at ? 'achieved' : g.abandoned_at ? 'abandoned' : ''].filter(Boolean).join(' · '), g.notes].filter(Boolean).join('\n\n'),
         date: isoDay(g.period_start),
-        target: { tab: 'productivity', app: 'goals', id: g.id },
+        // The period lets Goals step to the window the goal is in; a step lands on its goal's card.
+        target: {
+          tab: 'productivity', app: 'goals', id: g.id,
+          ...(g.parent_id ? { parent: g.parent_id } : {}),
+          ...(g.period_type ? { period: g.period_type } : {}),
+          ...(isoDay(g.period_start) ? { start: isoDay(g.period_start) } : {}),
+          ...(isoDay(g.period_end) ? { end: isoDay(g.period_end) } : {}),
+        },
       }))
     },
   }
@@ -178,14 +189,16 @@ export function listSource({ db }) {
     kind: 'list',
     async load() {
       const items = new Map()
-      for (const it of db.prepare('SELECT list_id, text, checked FROM list_items ORDER BY position').all()) {
-        items.set(it.list_id, [...(items.get(it.list_id) || []), `- [${it.checked ? 'x' : ' '}] ${it.text}`])
+      for (const it of db.prepare('SELECT id, list_id, text, checked FROM list_items ORDER BY position').all()) {
+        items.set(it.list_id, [...(items.get(it.list_id) || []), it])
       }
       return db.prepare('SELECT id, title, updated_at FROM lists').all().map((l) => ({
         id: l.id,
         title: l.title,
-        body: (items.get(l.id) || []).join('\n'),
+        body: (items.get(l.id) || []).map((it) => `- [${it.checked ? 'x' : ' '}] ${it.text}`).join('\n'),
         date: isoDay(l.updated_at),
+        // The index names the item the query matched as target.item.
+        parts: (items.get(l.id) || []).map((it) => ({ id: it.id, text: it.text })),
         target: { tab: 'productivity', app: 'lists', id: l.id },
       }))
     },
@@ -200,9 +213,9 @@ export function projectSource({ projects }) {
       const docs = []
       for (const p of await projects.list()) {
         const memory = await projects.readMemory(p.id).catch(() => '')
-        const target = { tab: 'chat', project: p.id }
-        if (p.instructions?.trim()) docs.push({ id: `${p.id}/instructions`, title: `${p.name} › instructions`, body: p.instructions, date: day(p.updatedAt), target })
-        if (String(memory || '').trim()) docs.push({ id: `${p.id}/memory`, title: `${p.name} › memory`, body: memory, date: day(p.updatedAt), target })
+        const target = (section) => ({ tab: 'chat', project: p.id, section })
+        if (p.instructions?.trim()) docs.push({ id: `${p.id}/instructions`, title: `${p.name} › instructions`, body: p.instructions, date: day(p.updatedAt), target: target('instructions') })
+        if (String(memory || '').trim()) docs.push({ id: `${p.id}/memory`, title: `${p.name} › memory`, body: memory, date: day(p.updatedAt), target: target('memory') })
       }
       return docs
     },
@@ -216,12 +229,12 @@ export function totemSource({ jobs, memoryPath }) {
     async load() {
       const docs = []
       for (const j of await jobs.list()) {
-        const target = { tab: 'totems', totem: j.id }
+        const target = (section) => ({ tab: 'totems', totem: j.id, section })
         const name = j.name || j.title || j.id
         const instructions = j.prompt || j.instructions || ''
-        if (String(instructions).trim()) docs.push({ id: `${j.id}/instructions`, title: `${name} › instructions`, body: String(instructions), date: null, target })
+        if (String(instructions).trim()) docs.push({ id: `${j.id}/instructions`, title: `${name} › instructions`, body: String(instructions), date: null, target: target('instructions') })
         const memory = await readFile(memoryPath(j.id), 'utf8').catch(() => '')
-        if (memory.trim()) docs.push({ id: `${j.id}/memory`, title: `${name} › memory`, body: memory, date: null, target })
+        if (memory.trim()) docs.push({ id: `${j.id}/memory`, title: `${name} › memory`, body: memory, date: null, target: target('memory') })
       }
       return docs
     },

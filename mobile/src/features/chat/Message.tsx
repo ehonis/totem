@@ -42,6 +42,7 @@ import Spark, { WorkingLine } from './Spark'
 import { foldTotemCalls, type TotemAnswer } from '../../lib/chat/totemReply'
 import { TotemIcon, loadJobs, useJobs } from '../totems/shared'
 import { TI, ProviderLogo, formatBytes, formatDuration, vc } from './ui'
+import { LandFlash } from '../../ui/landing'
 import {
   IconAlertCircle, IconCopy, IconCheck, IconRefresh, IconFileText, IconFileTypePdf, IconClipboardText,
   IconBolt, IconDeviceDesktop, IconMicrophone, IconX, IconArrowForwardUp, IconWorld, IconPencil,
@@ -191,12 +192,14 @@ function MentionText({ text }: { text: string }) {
   )
 }
 
-export const UserMessage = React.memo(function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: {
+export const UserMessage = React.memo(function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard, flash = false }: {
   m: ChatMessage
   canEdit: boolean
   onEdit: (text: string) => void
   onRetry?: () => void
   onDiscard?: () => void
+  /** A search hit landed here (src/lib/landing.ts): flash the bubble. */
+  flash?: boolean
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(m.content)
@@ -220,6 +223,7 @@ export const UserMessage = React.memo(function UserMessage({ m, canEdit, onEdit,
         {outcome.text ? (
           <View style={st.bubble}>
             <T size={15} lineHeight={23} color={colors.text} style={WRAP}>{outcome.text}</T>
+            <LandFlash on={flash} radius={22} />
           </View>
         ) : null}
       </View>
@@ -264,6 +268,7 @@ export const UserMessage = React.memo(function UserMessage({ m, canEdit, onEdit,
               </View>
             ) : null}
             <MentionText text={m.content} />
+            <LandFlash on={flash} radius={22} />
           </View>
         </MessageMenu>
       ) : null}
@@ -462,7 +467,7 @@ function Shot({ part, onOpen }: { part: any; onOpen: () => void }) {
   )
 }
 
-export const AssistantMessage = React.memo(function AssistantMessage({ m, live, activity, provider, modelName, isLast, onRegenerate }: {
+export const AssistantMessage = React.memo(function AssistantMessage({ m, live, activity, provider, modelName, isLast, onRegenerate, flash = false }: {
   m: ChatMessage
   live: boolean
   activity?: string
@@ -470,6 +475,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
   modelName?: string
   isLast: boolean
   onRegenerate?: () => void
+  /** A search hit landed here (src/lib/landing.ts): flash the reply's text, with a margin. */
+  flash?: boolean
 }) {
   const [copied, setCopied] = useState(false)
   const [details, setDetails] = useState(false)
@@ -532,6 +539,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
         </View>
       ) : null}
       {m.status === 'stopped' ? <T size={13} color={vc.faint}>Stopped</T> : null}
+      <LandFlash on={flash} radius={12} pad={8} />
     </View>
   )
 

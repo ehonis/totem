@@ -10,6 +10,8 @@ import GoalCard from '../goals/GoalCard'
 import GoalComposer from '../goals/GoalComposer'
 import GoalsOverview from '../goals/GoalsOverview'
 import { PERIOD_LABELS } from '../goals/types'
+import { findLanding, goalAnchor, landKey, useLandOn } from '../landing'
+import { dateKey } from '../todos/format'
 import type { Goal, GoalMetricChanges, GoalOptions, GoalPeriod, GoalPeriodQuery, GoalPeriodShortcut, GoalPeriodType } from '../goals/types'
 
 // No quarter: weekly plans rarely use them in them, and a tab that is always empty is a tab
@@ -91,6 +93,19 @@ export default function GoalsView({ onAuthError }: { onAuthError: () => void }) 
   // Choosing a tab always lands on that tab's own window; a walk back is not a mode
   // that should survive switching from weeks to months.
   const pick = useCallback((next: GoalTab) => { setTab(next); setAnchor(null) }, [])
+
+  // A search hit (landing.ts): open the tab of the goal's period, stepped to the
+  // window it was filed under unless that is the current one. A step lands on its
+  // own row inside its goal's card, else on the card.
+  useLandOn('goal', {
+    prepare: ({ extra }) => {
+      const shortcut = PERIODS.find((p) => typeOf(p) === extra.period)
+      if (!shortcut) return
+      setTab(shortcut)
+      setAnchor(goalAnchor(extra, dateKey(new Date())) as { type: GoalPeriodType; start: string } | null)
+    },
+    find: ({ id, extra }) => findLanding(landKey('goal', id)) ?? (extra.parent ? findLanding(landKey('goal', extra.parent)) : null),
+  })
 
   // One period of the tab's type earlier or later than the one on screen.
   const step = useCallback((direction: -1 | 1) => {

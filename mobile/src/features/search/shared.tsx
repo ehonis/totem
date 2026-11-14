@@ -13,6 +13,7 @@ import { useChat, setActive, openProject, threadTitle } from '../../lib/chat/sto
 import { queueContext } from '../../lib/chat/pendingContext'
 import type { Attachment } from '../../lib/chat/types'
 import { pushError } from '../../lib/toast'
+import { hitLanding, requestLanding } from '../../lib/landing'
 import { navigateTo, openChat } from '../../shell/nav'
 import { colors, alpha } from '../../theme'
 import { T } from '../../ui/Text'
@@ -78,11 +79,17 @@ export function openResultSheet(hit: SearchHit) {
 /** Go where the hit lives (SearchView's open()). */
 export function openHit(hit: SearchHit) {
   const t = hit.target || {}
+  // The screen it opens scrolls to the item that matched and flashes it (src/lib/landing.ts).
+  // A note opens as its own sheet, which shows just that section, so it needs none.
+  const land = hitLanding(t)
+  if (land && land.kind !== 'note') requestLanding(land.kind, land.id, land.extra)
   if (t.tab === 'chat' && t.thread) { openChat(t.thread); return }
   if (t.tab === 'chat' && t.project) { openProject(t.project); router.navigate('/chat'); return }
   // The app has no Brain tab: a note opens as its own sheet instead.
   if (t.tab === 'brain') { openResultSheet(hit); return }
   if (t.tab === 'totems' && t.totem) { router.push({ pathname: '/totem/[id]', params: { id: t.totem } }); return }
+  // A list opens as its own screen in the app, which lands on the matched item.
+  if (t.app === 'lists' && t.id) { router.push({ pathname: '/list/[id]', params: { id: t.id } }); return }
   navigateTo({ tab: t.tab, app: t.app })
 }
 

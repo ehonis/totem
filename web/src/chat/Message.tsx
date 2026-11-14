@@ -150,14 +150,14 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
   const outcome = outcomeLabel(m)
   if (outcome) {
     return (
-      <div className="vc-steer vc-inbox-outcome">
+      <div className="vc-steer vc-inbox-outcome" data-land={`msg:${m.id}`}>
         <div className="vc-steer-label" title={m.content}><TI icon={IconArrowForwardUp} size={12} />{outcome.label}</div>
         {outcome.text && <div className="vc-bubble"><MentionText text={outcome.text} /></div>}
       </div>
     )
   }
   return (
-    <div className={`vc-row vc-user ${m.unsent ? 'unsent' : ''}`}>
+    <div className={`vc-row vc-user ${m.unsent ? 'unsent' : ''}`} data-land={`msg:${m.id}`}>
       {!!m.attachments?.length && (
         <div className="vc-user-attachments">
           {m.attachments.map((a) => <AttachmentChip key={a.id} a={a} onOpen={() => openAttachment(a, setLightbox)} />)}
@@ -356,7 +356,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
   const meta = [lane, modelName, lane ? null : secs].filter(Boolean).join(' · ')
 
   return (
-    <div className={`vc-row vc-assistant ${live ? 'live' : ''}`}>
+    <div className={`vc-row vc-assistant ${live ? 'live' : ''}`} data-land={`msg:${m.id}`}>
       <div className="vc-assistant-body">
         {list.map((b, i) => {
           if (b.kind === 'work') return <WorkLog key={b.key} items={b.items} live={live && i === list.length - 1} />

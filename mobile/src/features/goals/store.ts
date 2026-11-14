@@ -92,6 +92,14 @@ export function step(direction: -1 | 1) {
 
 export function resetAnchor() { set({ anchor: null }); void load() }
 
+/** A search hit's goal (src/lib/landing.ts): its period's tab, at the window it was filed under (null: the tab's own). */
+export function showWindow(tab: GoalPeriodShortcut, anchor: GoalsState['anchor']) {
+  const same = tab === state.tab && anchor?.start === state.anchor?.start && anchor?.type === state.anchor?.type
+  if (same) return
+  set({ tab, anchor, goals: [], window: null })
+  void load()
+}
+
 export const setError = (error: string) => set({ error })
 
 /** Run a mutation; swap the answered goal into the list, or reload. */

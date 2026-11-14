@@ -229,7 +229,7 @@ function SubGoalRow({ subGoal, onToggle, onAbandon, onRename, onLog, onEditNumbe
   }
 
   return (
-    <div className={`goal-step${subGoal.complete ? ' done' : ''}${subGoal.abandoned ? ' not-doing' : ''}`}>
+    <div className={`goal-step${subGoal.complete ? ' done' : ''}${subGoal.abandoned ? ' not-doing' : ''}`} data-land={`goal:${subGoal.id}`}>
       <button
         className="goal-check"
         disabled={busy}
@@ -468,7 +468,7 @@ export default function GoalCard({ goal, busy, options = null, onToggle, onToggl
   )
 
   return (
-    <article className={`goal-card period-${goal.period.type}${goal.complete ? ' done' : ''}${celebrating ? ' celebrate' : ''}${goal.abandoned ? ' not-doing' : ''}${goal.periodState === 'expired' ? ' expired' : ''}`}>
+    <article className={`goal-card period-${goal.period.type}${goal.complete ? ' done' : ''}${celebrating ? ' celebrate' : ''}${goal.abandoned ? ' not-doing' : ''}${goal.periodState === 'expired' ? ' expired' : ''}`} data-land={`goal:${goal.id}`}>
       <header className="goal-card-head">
         {/* Decoration, not information: everything it hints at is written out below it. */}
         <span className="goal-icon" aria-hidden="true"><Hi icon={Glyph} size={17} /></span>

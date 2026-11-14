@@ -4,6 +4,7 @@ import {
   linkListTodo, unlinkListTodo, updateList, updateListItem,
 } from '../api'
 import { CheckIcon, Hi, LinkIcon, PlusIcon, TrashIcon, XMarkIcon } from '../icons'
+import { findLanding, landKey, useLandOn } from '../landing'
 import type { TotemList } from '../lists/types'
 import type { Todo } from '../todos/types'
 
@@ -83,6 +84,14 @@ export default function ListsView({ onAuthError }: { onAuthError: () => void }) 
     await apply(() => addListItems(active.id, [{ text: value }]))
   }
 
+  // A search hit (landing.ts): open its list, then land on the item that matched,
+  // or on the list's header when the title matched.
+  useLandOn('list', {
+    ready: !loading,
+    prepare: ({ id }) => setActiveId(id),
+    find: ({ id, extra }) => (extra.item ? findLanding(landKey('list-item', extra.item)) : null) ?? findLanding(landKey('list', id)),
+  })
+
   if (loading) return (
     <div className="view lists-view" aria-busy="true">
       <div className="lists-skeleton side" /><div className="lists-skeleton body" />
@@ -112,7 +121,7 @@ export default function ListsView({ onAuthError }: { onAuthError: () => void }) 
         {!active ? (
           <div className="lists-empty"><Hi icon={CheckIcon} size={26} /><h2>No list selected</h2><p>Name one on the left, then add items as you think of them.</p></div>
         ) : <>
-          <header className="lists-head">
+          <header className="lists-head" data-land={landKey('list', active.id)}>
             <input
               className="lists-title" value={active.title} aria-label="List title"
               onChange={(event) => setLists((current) => current.map((list) => list.id === active.id ? { ...list, title: event.target.value } : list))}
@@ -129,7 +138,7 @@ export default function ListsView({ onAuthError }: { onAuthError: () => void }) 
 
           <div className="lists-items">
             {active.items.map((item) => (
-              <div className={`lists-item${item.checked ? ' checked' : ''}`} key={item.id}>
+              <div className={`lists-item${item.checked ? ' checked' : ''}`} key={item.id} data-land={landKey('list-item', item.id)}>
                 <input type="checkbox" checked={item.checked} disabled={busy} aria-label={`Check ${item.text}`}
                   onChange={(event) => void apply(() => updateListItem(item.id, { checked: event.target.checked }))} />
                 <span>{item.text}</span>
