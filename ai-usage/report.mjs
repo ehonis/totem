@@ -91,7 +91,7 @@ function formatter(tz) {
   return formatters.get(zone);
 }
 
-function localParts(ms, tz) {
+export function localParts(ms, tz) {
   const p = Object.fromEntries(formatter(tz).formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
   return { date: `${p.year}-${p.month}-${p.day}`, hour: Number(p.hour) % 24, minute: p.minute, weekday: p.weekday };
 }

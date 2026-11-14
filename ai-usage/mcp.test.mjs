@@ -34,14 +34,34 @@ function tools(overrides = {}) {
   return { t, calls }
 }
 
-test('three read-only tools, each with a title and an output schema requiring fetchedAt', () => {
-  assert.deepEqual(USAGE_MCP_TOOL_DEFINITIONS.map((d) => d.name), ['totem_usage_get_current', 'totem_usage_get_history', 'totem_usage_limit_report'])
+test('five read-only tools, each with a title and an output schema requiring fetchedAt', () => {
+  assert.deepEqual(USAGE_MCP_TOOL_DEFINITIONS.map((d) => d.name), [
+    'totem_usage_get_current', 'totem_usage_get_history', 'totem_usage_limit_report', 'totem_usage_forecast', 'totem_usage_plan',
+  ])
   for (const d of USAGE_MCP_TOOL_DEFINITIONS) {
     assert.ok(d.title)
     assert.deepEqual(d.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false })
     assert.ok(d.outputSchema.required.includes('fetchedAt'))
-    assert.match(d.description, /hitting limits/)
+    assert.match(d.description, d.name.endsWith('_plan') ? /before scheduling or starting AI work/ : /hitting limits/)
   }
+})
+
+test('the forecast and the plan read the snapshot and a week of history, and say when there is none', async () => {
+  const { t, calls } = tools()
+  const forecast = await t.totem_usage_forecast({ provider: 'claude' })
+  assert.deepEqual(forecast.providers.map((p) => p.provider), ['claude'])
+  assert.equal(forecast.accounts[0].name, 'Work seat')
+  assert.equal(forecast.historyNote, undefined)
+  assert.ok(!JSON.stringify(forecast).includes(SECRET))
+  const plan = await t.totem_usage_plan({ size: 'small' })
+  assert.equal(plan.fits, true)
+  assert.equal(plan.best.accountId, account.id)
+  assert.equal(calls.history, 1) // one proxy read serves both within a minute
+
+  const { t: none } = tools({ configured: () => false })
+  const idle = await none.totem_usage_forecast({})
+  assert.match(idle.historyNote, /CLIProxy is not set up.*projected idle/)
+  assert.equal(idle.accounts.length, 1)
 })
 
 test('the limit report names accounts, counts the capped window once and carries its method', async () => {
