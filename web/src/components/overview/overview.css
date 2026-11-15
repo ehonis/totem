@@ -143,6 +143,7 @@
   font-size: 13px; color: var(--ovx-soft) !important;
 }
 .ovx-more:hover { color: var(--text) !important; }
+.ovx-more.ovx-checkin { display: inline-flex; align-items: center; gap: 2px; color: var(--text) !important; }
 
 .ovx-skel { display: flex; flex-direction: column; gap: 10px; padding: 6px 0 10px; }
 .ovx-skel span { height: 12px; border-radius: 6px; background: var(--ovx-raise); animation: ovx-pulse 1.4s ease-in-out infinite; }

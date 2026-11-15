@@ -24,6 +24,54 @@ export function answered(entries: any, date: string, habitId: string): boolean {
   return !!e && (e.count > 0 || e.skipped === true)
 }
 
+/** Monday of the week holding `iso` (weeks run Monday to Sunday, as on the Habits tab). */
+function weekStart(iso: string): string {
+  const dow = (new Date(`${iso}T12:00:00`).getDay() + 6) % 7
+  return shiftDate(iso, -dow)
+}
+
+/**
+ * A habit's count over the period holding `date` (its week, Monday to Sunday,
+ * or its calendar month), leaving out `skip` if given.
+ */
+export function periodCount(h: any, entries: any, date: string, skip = ''): number {
+  const on = (d: string) => (d === skip ? 0 : entries?.[d]?.[h.id]?.count || 0)
+  if (h.cadence === 'weekly') {
+    const start = weekStart(date)
+    let total = 0
+    for (let i = 0; i < 7; i++) total += on(shiftDate(start, i))
+    return total
+  }
+  if (h.cadence === 'monthly') {
+    const ym = date.slice(0, 7)
+    let total = 0
+    for (const d of Object.keys(entries || {})) if (d.startsWith(ym)) total += on(d)
+    return total
+  }
+  return on(date)
+}
+
+/**
+ * Whether a weekly or monthly habit still owes anything in the period holding
+ * `date`: once the quota is met there is nothing to ask, but the day being
+ * answered never hides its own row.
+ */
+export function stillOwed(h: any, entries: any, date: string): boolean {
+  if (h.cadence !== 'weekly' && h.cadence !== 'monthly') return true
+  return periodCount(h, entries, date, date) < (h.target || 1)
+}
+
+/** A weekly or monthly row's progress, "2/4 this week", so it is not read as a daily one. */
+export function periodNote(item: CheckinItem, entries: any): string {
+  const h = item.habit
+  if (h.cadence !== 'weekly' && h.cadence !== 'monthly') return ''
+  const weekly = h.cadence === 'weekly'
+  // Yesterday may close its period (Sunday's week seen on Monday, the 31st on the 1st).
+  const next = shiftDate(item.date, 1)
+  const ended = item.part === 'yesterday' && (weekly ? weekStart(next) !== weekStart(item.date) : next.slice(0, 7) !== item.date.slice(0, 7))
+  return `${periodCount(h, entries, item.date)}/${h.target || 1} ${ended ? 'last' : 'this'} ${weekly ? 'week' : 'month'}`
+}
+
 /** Habits the owner answers by hand: not filled by an app, not by a WHOOP-style sync. */
 export function askable(h: any): boolean {
   if (h.archived || h.linkedApp) return false
@@ -43,15 +91,16 @@ export function checkinItems(payload: any, includeAnswered = false): { today: st
   const items: CheckinItem[] = []
   if (!today) return { today, yesterday, items }
   for (const h of habits) {
-    // Daily habits are owed every day; a weekly or monthly one only when it has a time of day.
-    if (h.cadence !== 'daily' && (h.when || 'any') === 'any') continue
     // A morning habit belongs to its own morning, asked below; yesterday's was yesterday's question.
     if (h.when === 'morning') continue
     if (String(h.createdAt || '').slice(0, 10) > yesterday) continue
+    // A weekly or monthly habit is asked about until its quota for the period is met.
+    if (!stillOwed(h, entries, yesterday)) continue
     if (includeAnswered || !answered(entries, yesterday, h.id)) items.push({ habit: h, date: yesterday, part: 'yesterday' })
   }
   for (const h of habits) {
     if (h.when !== 'morning') continue
+    if (!stillOwed(h, entries, today)) continue
     if (includeAnswered || !answered(entries, today, h.id)) items.push({ habit: h, date: today, part: 'today' })
   }
   return { today, yesterday, items }

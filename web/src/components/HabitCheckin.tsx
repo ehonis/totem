@@ -2,20 +2,32 @@
 // up on the first open of the day, on any device, and the Habits tab's "Check in"
 // opens it on demand. Yes ticks a habit for that day; No records the answer
 // without ticking it, so the habit is not asked about again.
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { AuthError, getHabits, logHabit, markHabitCheckin } from '../api'
-import { checkinItems, shouldOpenCheckin, type CheckinItem } from '../habitCheckin'
+import { CHECKIN_FROM_HOUR, checkinItems, periodNote, shiftDate, shouldOpenCheckin, type CheckinItem } from '../habitCheckin'
 import { Hi, XMarkIcon } from '../icons'
 import { pushError } from '../toast'
 
 /** window event: open the check-in now, whatever is pending. */
 export const OPEN_HABIT_CHECKIN = 'totem:habit-checkin'
 
+/** Enough history to count a monthly habit's quota. */
+const CHECKIN_DAYS = 35
+/** How often focusing the window may ask the bridge again on the same morning. */
+const RECHECK_MS = 10 * 60_000
+
+/** The local day the check-in belongs to: before 4am it is still last night. */
+function checkinDay(now = new Date()): string {
+  const iso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return now.getHours() < CHECKIN_FROM_HOUR ? shiftDate(iso, -1) : iso
+}
+
 const dayName = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
 
-function Row({ item, entry, busy, onAnswer }: {
+function Row({ item, entry, note, busy, onAnswer }: {
   item: CheckinItem
   entry: any
+  note: string
   busy: boolean
   onAnswer: (item: CheckinItem, yes: boolean) => void
 }) {
@@ -28,6 +40,7 @@ function Row({ item, entry, busy, onAnswer }: {
       <div className="habit-ci-name">
         {h.name}
         {item.part === 'yesterday' && h.when === 'night' && <small>last night</small>}
+        {note && <small>{note}</small>}
       </div>
       <div className="habit-ci-answer" role="group" aria-label={`${h.name}, ${item.part === 'today' ? 'this morning' : 'yesterday'}`}>
         <button type="button" className={`habit-ci-btn${no ? ' on no' : ''}`} disabled={busy} onClick={() => onAnswer(item, false)}>No</button>
@@ -43,27 +56,52 @@ export default function HabitCheckin({ onAuthError }: { onAuthError: () => void 
   const [busy, setBusy] = useState<Set<string>>(() => new Set())
 
   // First open of the day: once the app is in front, check whether to pop up.
-  const check = useCallback(async () => {
+  // A desktop window or a pinned tab can stay open for days and never turn
+  // hidden, so focus and the first click of a new morning count as opening
+  // it too (not a key press, which would land in the composer under the sheet). Never a timer: opening it marks it shown on every
+  // device, and a screen nobody is at would use that up.
+  const lastCheck = useRef<{ at: number; day: string }>({ at: 0, day: '' })
+  // The morning this window already popped up for, so a failed mark never pops it again.
+  const shownFor = useRef('')
+  const check = useCallback(async (force = false) => {
     if (document.visibilityState !== 'visible') return
+    const day = checkinDay()
+    const last = lastCheck.current
+    if (!force && last.day === day && Date.now() - last.at < RECHECK_MS) return
+    lastCheck.current = { at: Date.now(), day }
+    let payload: any
     try {
-      const payload = await getHabits(7)
-      if (!shouldOpenCheckin(payload)) return
-      setData(payload)
-      setOpen(true)
-      setData(await markHabitCheckin(payload.today))
+      payload = await getHabits(CHECKIN_DAYS)
     } catch (e) {
+      // No reset: an unreachable bridge is asked again after RECHECK_MS, not on every key.
+      if (e instanceof AuthError) onAuthError()
+      return
+    }
+    if (shownFor.current === payload.today || !shouldOpenCheckin(payload)) return
+    shownFor.current = payload.today
+    setData(payload)
+    setOpen(true)
+    try { setData(await markHabitCheckin(payload.today)) } catch (e) {
       if (e instanceof AuthError) onAuthError()
     }
   }, [onAuthError])
   useEffect(() => {
-    check()
-    document.addEventListener('visibilitychange', check)
-    return () => document.removeEventListener('visibilitychange', check)
+    const onVisible = () => { void check(true) }
+    const onActive = () => { void check() }
+    void check(true)
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onActive)
+    window.addEventListener('pointerdown', onActive, { capture: true, passive: true })
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onActive)
+      window.removeEventListener('pointerdown', onActive, { capture: true })
+    }
   }, [check])
 
   useEffect(() => {
     const show = async () => {
-      try { setData(await getHabits(7)); setOpen(true) } catch (e: any) {
+      try { setData(await getHabits(CHECKIN_DAYS)); setOpen(true) } catch (e: any) {
         if (e instanceof AuthError) onAuthError(); else pushError(e?.message || 'Could not load habits')
       }
     }
@@ -127,6 +165,7 @@ export default function HabitCheckin({ onAuthError }: { onAuthError: () => void 
                 key={`${item.habit.id}:${item.date}`}
                 item={item}
                 entry={data.entries?.[item.date]?.[item.habit.id]}
+                note={periodNote(item, data.entries)}
                 busy={busy.has(`${item.habit.id}:${item.date}`)}
                 onAnswer={answer}
               />

@@ -7,6 +7,8 @@ import {
 import { awayStatus, dayKey, upcomingAway, type AwaySpan } from '../away'
 import AwayEditor from './AwayEditor'
 import { useAiUsageLive } from '../useAiUsageLive'
+import { OPEN_HABIT_CHECKIN } from './HabitCheckin'
+import { CHECKIN_FROM_HOUR, checkinItems } from '../habitCheckin'
 import { DayModal, HabitCheckButton, HabitMetricInput, HabitMetricSection, QuotaDots, isSyncedSleep, type DaySave } from './HabitsView'
 import { networkText, send, setActive } from '../chat/store'
 import { TI, ProviderLogo } from '../chat/ui'
@@ -396,6 +398,9 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
   const habits: any[] = (data.habits?.habits || []).filter((h: any) => !h.archived && !isSyncedSleep(h))
   const habitsLeft = habits.filter((h) => periodTotal(h, entries, habitDay) < h.target && !(entries[habitDay]?.[h.id]?.count > 0))
   const habitsDoneToday = habits.length - habitsLeft.length
+  // Habits the morning check-in still asks about (yesterday's, and this morning's), so a missed day can be filled in from here.
+  // Before 4am yesterday's night is still tonight, as for the pop-up.
+  const checkinLeft = data.habits && new Date().getHours() >= CHECKIN_FROM_HOUR ? checkinItems(data.habits).items.length : 0
   const pinned = habits.filter((h) => h.metric?.pinned)
 
   // ---- goals -----------------------------------------------------------
@@ -679,6 +684,11 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
                     {habits.length > 8 && (
                       <button type="button" className="ovx-more" onClick={() => onNavigate({ tab: 'productivity', app: 'habits' })}>
                         {habits.length - 8} more
+                      </button>
+                    )}
+                    {checkinLeft > 0 && (
+                      <button type="button" className="ovx-more ovx-checkin" onClick={() => window.dispatchEvent(new Event(OPEN_HABIT_CHECKIN))}>
+                        Check in · {checkinLeft} to answer<TI icon={IconChevronRight} size={14} />
                       </button>
                     )}
                   </div>
