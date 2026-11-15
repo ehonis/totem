@@ -4,6 +4,7 @@
 // "/chat?thread=…", "/productivity/todos", "/settings/providers#usage", old
 // "/?tab=…" links), the same path as an absolute URL on the bridge's own origin,
 // or a page somewhere else (a GitHub run, a news story).
+import { originOf } from '../../lib/links.ts'
 
 /** web/src/router.ts TAB_IDS. */
 const WEB_TABS = ['overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'fleet', 'inbox', 'logs', 'brain', 'settings']
@@ -29,14 +30,9 @@ const decode = (s: string) => {
   try { return decodeURIComponent(s.replace(/\+/g, ' ')) } catch { return s }
 }
 
-/** scheme://host[:port], lowercased, default ports dropped; null for anything but http(s). */
-export function originOf(url: string): string | null {
-  const m = /^(https?):\/\/(?:[^@/?#]*@)?([^/?#]+)/i.exec(String(url || '').trim())
-  if (!m) return null
-  const scheme = m[1].toLowerCase()
-  const host = m[2].toLowerCase().replace(scheme === 'https' ? /:443$/ : /:80$/, '')
-  return `${scheme}://${host}`
-}
+// The app's one origin rule (lib/links.ts): an authority iOS and WHATWG could read
+// differently is never the bridge.
+export { originOf }
 
 /**
  * Where `url` lands. `bridgeOrigins` are the addresses the bridge answers on
@@ -45,14 +41,14 @@ export function originOf(url: string): string | null {
  */
 export function notificationDestination(url: string, bridgeOrigins: (string | null | undefined)[] = []): Destination {
   let rest = String(url || '').trim()
-  if (rest.startsWith('//')) rest = `https:${rest}`
+  if (/^[/\\]{2}/.test(rest)) rest = `https://${rest.replace(/^[/\\]+/, '')}`
   if (/^[a-z][a-z0-9+.-]*:/i.test(rest)) {
     const origin = originOf(rest)
     const own = origin && bridgeOrigins.some((b) => b && originOf(b) === origin)
     if (!own) return { kind: 'external', url: rest }
     rest = rest.replace(/^https?:\/\/[^/?#]*/i, '')
   }
-  if (!rest.startsWith('/')) rest = `/${rest}`
+  rest = `/${rest.replace(/^[/\\]+/, '')}`
 
   const hashAt = rest.indexOf('#')
   const hash = hashAt >= 0 ? decode(rest.slice(hashAt + 1)) || null : null

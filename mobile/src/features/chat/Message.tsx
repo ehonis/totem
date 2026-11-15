@@ -8,17 +8,19 @@ import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } fro
 import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { Image } from 'expo-image'
 import * as Clipboard from 'expo-clipboard'
-import * as WebBrowser from 'expo-web-browser'
 import { router } from 'expo-router'
 import { MenuView, type MenuAction } from '@react-native-menu/menu'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Markdown from '../../ui/Markdown'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
-import { impact, success, tap } from '../../ui/haptics'
+import { impact, success } from '../../ui/haptics'
+import { showMenu } from '../../ui/menu'
 import { alpha, colors, fonts } from '../../theme'
 import { authHeaders } from '../../lib/api'
-import { bridgeUrl } from '../../lib/connection'
+import { bridgeUrl, getBaseUrl } from '../../lib/connection'
+import { headersFor } from '../../lib/links'
+import { openFile } from './openLink'
 import { useSmoothText } from '../../lib/chat/smooth'
 import { useTextTicks } from '../../lib/chat/ticks'
 import { POWER_NAMES } from '../../lib/chat/models'
@@ -53,22 +55,10 @@ const WRAP = Platform.OS === 'web' ? ({ wordBreak: 'break-word', overflowWrap: '
 
 // --- files and pictures ----------------------------------------------------------
 
-/** An image the bridge serves: signed URLs open anywhere; the bearer covers the rest. */
-export const imageSource = (url?: string, uploadId?: string) => ({
-  uri: bridgeUrl(url || `/api/chat/uploads/${uploadId}`),
-  headers: authHeaders(),
-})
-
-const TEXTLIKE = /^(text\/|application\/(json|xml))/
-export function openFile(f: { id?: string; uploadId?: string; name: string; mime: string; url?: string; path?: string }) {
-  const id = f.uploadId || f.id || ''
-  tap()
-  // Text, Markdown and CSV read in a sheet; PDFs and pages open in the in-app browser.
-  if (TEXTLIKE.test(f.mime) || /\.(md|markdown|csv|tsv|txt|json)$/i.test(f.name)) {
-    router.push({ pathname: '/chat/file', params: { id, name: f.name, mime: f.mime, url: f.url || '' } })
-    return
-  }
-  WebBrowser.openBrowserAsync(bridgeUrl(f.url || `/api/chat/uploads/${id}`), { controlsColor: colors.accent }).catch(() => {})
+/** An image the bridge serves: signed URLs open anywhere; the bearer covers the rest, on the bridge's own origin only. */
+export const imageSource = (url?: string, uploadId?: string) => {
+  const uri = bridgeUrl(url || `/api/chat/uploads/${uploadId}`)
+  return { uri, headers: headersFor(uri, getBaseUrl(), authHeaders()) }
 }
 
 export function AttachmentChip({ a, onOpen, onRemove, status, progress, large }: {
@@ -159,6 +149,27 @@ function MessageMenu({ items, children }: { items: { id: string; title: string; 
     >
       {children}
     </MenuView>
+  )
+}
+
+/**
+ * The long-press menu around a reply, as an action sheet from React Native's own
+ * long press. Not MessageMenu: that is a native UIButton with a context-menu
+ * interaction, and a reply's links, tables and code sat inside it. Its touch
+ * tracking swallowed sideways swipes in a table or code block, and with them some
+ * taps on a link. Here a link or a scroller inside takes its touch first.
+ */
+function ReplyMenu({ items, children }: { items: { title: string; run: () => void }[]; children: React.ReactNode }) {
+  return (
+    <Pressable
+      onLongPress={() => { showMenu(items.map((i) => ({ label: i.title, onPress: i.run }))) }}
+      delayLongPress={450}
+      // Not one VoiceOver element: the reply's links and cards stay focusable one by
+      // one. The row under the reply has Copy, Regenerate and the details.
+      accessible={false}
+    >
+      {children}
+    </Pressable>
   )
 }
 
@@ -319,12 +330,6 @@ type Block =
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
 const PROPOSAL_FENCE = /```totem-proposal[\s\S]*?(```|$)/g
-
-// A GFM table's delimiter row, or a fenced code block: both render in a sideways
-// ScrollView. The long-press menu is a native UIButton on iOS, and a ScrollView
-// inside it never gets the swipe, so a reply holding one goes without the menu
-// (Copy and Regenerate are still in the row under it).
-const SIDEWAYS = /^\s*\|?\s*:?-{3,}:?\s*\|[\s|:-]*$|^\s*```/m
 
 function blocks(parts: Part[]): Block[] {
   const out: Block[] = []
@@ -545,7 +550,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
 
   return (
     <View>
-      {items.length && !live && !list.some((b) => b.kind === 'text' && SIDEWAYS.test(b.text)) ? <MessageMenu items={items}>{body}</MessageMenu> : body}
+      {items.length && !live ? <ReplyMenu items={items}>{body}</ReplyMenu> : body}
       {!live && (m.content || m.status === 'error') ? (
         <View style={st.actions}>
           {m.content ? <Act icon={copied ? IconCheck : IconCopy} label={copied ? 'Copied' : 'Copy'} onPress={doCopy} /> : null}

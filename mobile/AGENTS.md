@@ -180,6 +180,30 @@ npm run start:tailscale                            # Metro on the Tailscale IP, 
   `web/src` on totem-private `main`, not an old checkout, and normalise old shapes the way the web
   does. Every screen sits under an error boundary (`src/shell/ScreenError.tsx`), so a mismatch shows
   an error on that screen instead of closing the app.
+- **A link or file in a chat never opens a bridge URL in the in-app browser.** SFSafariViewController
+  (expo-web-browser) can't send the bearer or the Cloudflare Access token, so behind Access it showed
+  Access's login page unless Safari happened to hold a cookie. Every tapped link goes through
+  `lib/links.ts` `classifyLink` (the web's `web/src/links.ts`) and `features/chat/openLink.ts`: a path
+  on the box is signed by `/api/chat/files/link` and opened like a file, an `/api/` path is HEADed and
+  opened, a dashboard path goes to its app screen (one the app has no screen for, like Dev or Messages,
+  still opens in the in-app browser, as a notification's link does), mailto:/tel:/sms: go to
+  `Linking.openURL`, and other sites reach the browser. Text files read in `FileSheet`, the rest in `FileViewer`: a picture
+  through expo-image, a PDF in the app's one web view (`ui/BridgeWebView.tsx`, by its signed URL), anything else
+  as a download for the share sheet. Never load an HTML or SVG file in the web view by URL
+  (`webViewSource`): the bridge serves those as downloads without a sandbox, and WebKit would run one as a
+  page on the bridge's origin. `Markdown`'s
+  `onLinkPress` always returns false: left to `react-native-nitro-markdown`, mailto: and tel: went to
+  `Linking.canOpenURL`, which answers false for any scheme Info.plist doesn't declare, and every other
+  href it can't parse was dropped, so the tap did nothing. The bearer and the Access token go to the
+  bridge's own origin only (`headersFor`; `bridgeFetch` refuses any other), decided by one strict
+  `originOf` (links.ts, also used by `destination.ts`): an authority with `\`, `@`, `%`, whitespace or a
+  control character is never the bridge, because iOS's RFC 3986 parser and WHATWG URL read those
+  differently. `FileViewer` and `FileSheet` take only a `/`-relative bridge path as their `url` param (a
+  deep link can reach them). Tested in `lib/links.test.mjs`.
+- **A reply's long-press menu is React Native's, not `@react-native-menu/menu`.** That `MenuView` is a
+  native UIButton with a context-menu interaction; a reply's links, tables and code sat inside it, and
+  its touch tracking swallowed sideways swipes and some link taps. `ReplyMenu` (Message.tsx) is a
+  `Pressable` long press that opens the same items as an action sheet. The bubble keeps `MessageMenu`.
 - **A remote push's `content.data` is only its `body` key.** expo-notifications (iOS) builds
   `notification.request.content.data` from the APNs payload's `body` dictionary and ignores every
   other top-level key, so `notify/apns.mjs` puts `url`, `entryId`, `category` and `tag` under `body`.

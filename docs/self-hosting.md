@@ -239,6 +239,7 @@ docker compose) always wins and is shown as read-only.
 | Venture tags | Settings -> Tasks | `data/todos.db` (`todo_preferences`) |
 | MCP servers | Settings -> Connections | `data/mcp-manifest.json` |
 | Connection icons | Settings -> Connections, a row's Icon | `data/connection-icons.json` (`CONNECTION_ICONS_FILE`); pictures are chat uploads |
+| Which folder each task is filed under | Chats panel -> Tasks | `data/task-folders.json` (`TASK_FOLDERS_FILE`) |
 | Scheduled jobs | Totems | `data/jobs.json` |
 | Prompt skills | Settings -> Skills | `data/skills/` |
 

@@ -15,6 +15,8 @@ export interface SendArgs {
   projectId?: string
   /** A new project chat that leaves the project's context out. */
   projectContextOff?: boolean
+  /** A new chat started from a task (Chats panel → Tasks), linked to it from the first turn. */
+  taskId?: string
   modelSettings?: any
   voice?: boolean
   regenerate?: boolean

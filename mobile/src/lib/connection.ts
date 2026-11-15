@@ -20,6 +20,7 @@ import * as SecureStore from 'expo-secure-store'
 import { useSyncExternalStore } from 'react'
 import { AppState, Platform } from 'react-native'
 import { isAccessResponse } from './cfAccess'
+import { isBridgeUrl } from './links'
 import { readWhenUnlocked, type AppActivity } from './readWhenUnlocked'
 
 const BASE_KEY = 'totem.bridge.base'
@@ -186,8 +187,12 @@ export function bridgeUrl(path: string): string {
   return `${current.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`
 }
 
-/** fetch() against the bridge. Callers pass their own headers (authHeaders()); the Access token is added here too. */
+/**
+ * fetch() against the bridge. Callers pass their own headers (authHeaders()); the Access token is added here too.
+ * An absolute URL on any other origin is refused: the bearer and the token go to the bridge alone.
+ */
 export async function bridgeFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(path) && !isBridgeUrl(path, current.baseUrl)) throw new Error('That address is not this Totem server.')
   const headers = init.headers instanceof Headers ? Object.fromEntries(init.headers.entries()) : { ...(init.headers as Record<string, string> | undefined) }
   const r = await fetch(bridgeUrl(path), { ...init, headers: withAccess(headers) })
   if (isAccessResponse(r)) markAccessNeeded()

@@ -2,23 +2,27 @@
 //
 // A text file from a chat, read in a sheet (the phone's take on the web's
 // canvas panel, chat/ArtifactPanel.tsx): Markdown rendered, a CSV as a table,
-// anything else as monospaced text. A Copy button in the corner; "Open" hands
-// the file to the in-app browser for sharing or saving.
+// anything else as monospaced text. A Copy button in the corner, and Save or
+// share, which downloads it with the app's credentials for the share sheet (the
+// in-app browser it used to open can't send them, so behind Cloudflare Access it
+// showed Access's login page).
 import React, { useEffect, useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Clipboard from 'expo-clipboard'
-import * as WebBrowser from 'expo-web-browser'
 import { authHeaders } from '../../lib/api'
-import { bridgeFetch, bridgeUrl } from '../../lib/connection'
+import { bridgeFetch } from '../../lib/connection'
+import { pushError } from '../../lib/toast'
 import Markdown from '../../ui/Markdown'
 import { T } from '../../ui/Text'
 import { Press, Spinner } from '../../ui/kit'
 import { success, tap } from '../../ui/haptics'
 import { colors, fonts } from '../../theme'
 import { TI, vc } from './ui'
-import { IconCopy, IconExternalLink } from './icons'
+import { IconCopy, IconDownload } from './icons'
+import { refusal, shareFile } from './openLink'
+import { bridgePath, uploadPath } from '../../lib/links'
 
 function parseDelimited(text: string, sep: string) {
   const rows: string[][] = []
@@ -43,12 +47,14 @@ export default function FileSheet() {
   const insets = useSafeAreaInsets()
   const [text, setText] = useState<string | null>(null)
   const [error, setError] = useState('')
-  const src = url || `/api/chat/uploads/${id}`
+  // The params can arrive by deep link: only a `/`-relative bridge path or an upload id.
+  const src = url ? bridgePath(url) : uploadPath(id)
   useEffect(() => {
+    if (!src) { setError(`${name} can’t be opened from this link.`); return }
     bridgeFetch(src, { headers: authHeaders() })
-      .then(async (r) => { if (!r.ok) throw new Error(`Couldn't open it (${r.status})`); setText(await r.text()) })
+      .then(async (r) => { if (!r.ok) throw new Error(refusal({ status: r.status }, name)); setText(await r.text()) })
       .catch((e) => setError(e.message))
-  }, [src])
+  }, [src, name])
   const kind = /markdown/.test(mime) || /\.(md|markdown)$/i.test(name) ? 'markdown' : /csv|tab-separated/.test(mime) || /\.(csv|tsv)$/i.test(name) ? 'table' : 'text'
   const rows = kind === 'table' && text != null ? parseDelimited(text, /\.tsv$/i.test(name) || /tab-separated/.test(mime) ? '\t' : ',') : []
   // One scroller for the whole sheet (the header pinned), so it sits right at
@@ -59,16 +65,22 @@ export default function FileSheet() {
       stickyHeaderIndices={[0]}
       contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
     >
-      <View style={st.head}>
-        <T size={15} weight={600} numberOfLines={1} style={{ flex: 1 }}>{name}</T>
-        {text != null ? (
-          <Press style={st.btn} onPress={() => { Clipboard.setStringAsync(text).catch(() => {}); success() }} accessibilityLabel="Copy">
-            <TI icon={IconCopy} size={18} color={colors.text} />
-          </Press>
-        ) : null}
-        <Press style={st.btn} onPress={() => { tap(); WebBrowser.openBrowserAsync(bridgeUrl(src), { controlsColor: colors.accent }).catch(() => {}) }} accessibilityLabel="Open in the browser">
-          <TI icon={IconExternalLink} size={18} color={colors.text} />
-        </Press>
+      {/* A sticky header's own style is moved to RN's wrapper (ScrollViewStickyHeader gives the child
+          flex: 1 instead), which dropped the row: the buttons stacked under the title. The row sits inside. */}
+      <View style={{ backgroundColor: colors.bg }}>
+        <View style={st.head}>
+          <T size={15} weight={600} numberOfLines={1} style={{ flex: 1 }}>{name}</T>
+          {text != null ? (
+            <Press style={st.btn} onPress={() => { Clipboard.setStringAsync(text).catch(() => {}); success() }} accessibilityLabel="Copy">
+              <TI icon={IconCopy} size={18} color={colors.text} />
+            </Press>
+          ) : null}
+          {!error ? (
+            <Press style={st.btn} onPress={() => { tap(); if (src) shareFile(src, name).catch((e) => pushError(e?.message || `Couldn’t download ${name}.`)) }} accessibilityLabel="Save or share">
+              <TI icon={IconDownload} size={18} color={colors.text} />
+            </Press>
+          ) : null}
+        </View>
       </View>
       {error ? <T muted style={{ padding: 20 }}>{error}</T> : text == null ? <View style={{ paddingTop: 40 }}><Spinner /></View> : kind === 'table' ? (
         <ScrollView horizontal contentContainerStyle={{ padding: 16 }}>

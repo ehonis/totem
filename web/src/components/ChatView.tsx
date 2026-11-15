@@ -13,6 +13,7 @@ import { useTotemDirectory } from '../totems/shared'
 import { GroupPicker } from './TotemsView'
 import { isSnoozed, settledAt, wakeDescription } from '../chat/settle'
 import ProjectHome from '../chat/ProjectHome'
+import TaskBar from '../work/TaskBar'
 import ProjectIcon from '../chat/ProjectIcon'
 import Composer, { type ComposerHandle, type FollowUpPayload } from '../chat/Composer'
 import QueuedMessages from '../chat/QueuedMessages'
@@ -117,6 +118,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   // The project the panel is showing. A new chat here starts in it, on its default model.
   const scopeId = useChat((s) => s.projectId)
   const scopeProject = useChat((s) => s.projects.find((p) => p.id === s.projectId))
+  // A new chat started from a task (Chats panel → Tasks); its first send links it.
+  const draftTaskId = useChat((s) => s.draftTaskId)
   // Home's new chat offers the projects to start in instead, most recently used first.
   const allProjects = useChat((s) => s.projects)
   const startInProjects = useMemo(() => allProjects.filter((p) => !p.parentId).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6), [allProjects])
@@ -253,7 +256,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const contextOff = active ? !!active.projectContextOff : draftContextOff
   const kind = project ? 'regular' : active?.kind || draftKind
   const temporary = kind === 'temporary'
-  const draftKey = activeId || (project ? `new:project:${project.id}` : `new:${kind}`)
+  const draftKey = activeId || (draftTaskId ? `new:task:${draftTaskId}` : project ? `new:project:${project.id}` : `new:${kind}`)
   // A new chat starts on what was picked for it here, else its folder's or
   // project's model (threadChoice). A pick never follows him to another place,
   // and an open chat keeps its own model.
@@ -366,7 +369,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   })
 
   function onSend({ text, attachments }: { text: string; attachments: Attachment[] }) {
-    const id = send({ threadId: activeId, text, attachments, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff })
+    const id = send({ threadId: activeId, text, attachments, kind: !active && draftTaskId ? 'regular' : kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, taskId: active ? undefined : draftTaskId || undefined })
     setInput('')
     if (id !== activeId) {
       setDraftPick(null)
@@ -506,11 +509,11 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       followUp={followUp}
       queueEdit={queueEdit && queueEdit.threadId === activeId ? { onSave: saveQueueEdit } : undefined}
       onResume={!busy && active?.queueHeld && queue.length && activeId ? () => { void updateQueue(activeId, { action: 'resume' }) } : undefined}
-      above={queueEl}
+      above={<><TaskBar thread={active && !empty ? active : null} draftTaskId={active ? null : draftTaskId} projectId={project?.id || null} onShowPanel={onShowPanel} />{queueEl}</>}
       onVoice={() => setVoice(true)}
       busy={busy}
       autoFocus={visible}
-      placeholder={waitingApproval ? DECLINE_PLACEHOLDER : temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
+      placeholder={waitingApproval ? DECLINE_PLACEHOLDER : !active && draftTaskId ? 'What should we do about it?' : temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
       allowCommands={!temporary}
       maxUploadBytes={caps?.maxUploadBytes}
       onAuthError={onAuthError}

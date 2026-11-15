@@ -119,3 +119,10 @@ export { default as IconSquare } from '@tabler/icons-react/dist/esm/icons/IconSq
 export { default as IconSquares } from '@tabler/icons-react/dist/esm/icons/IconSquares.mjs'
 // The desktop app's "Restart to update" (components/DesktopUpdate.tsx).
 export { default as IconCircleArrowDown } from '@tabler/icons-react/dist/esm/icons/IconCircleArrowDown.mjs'
+export { default as IconCircle } from '@tabler/icons-react/dist/esm/icons/IconCircle.mjs'
+export { default as IconCircleCheck } from '@tabler/icons-react/dist/esm/icons/IconCircleCheck.mjs'
+export { default as IconArrowsSort } from '@tabler/icons-react/dist/esm/icons/IconArrowsSort.mjs'
+export { default as IconLink } from '@tabler/icons-react/dist/esm/icons/IconLink.mjs'
+export { default as IconLinkOff } from '@tabler/icons-react/dist/esm/icons/IconLinkOff.mjs'
+export { default as IconInbox } from '@tabler/icons-react/dist/esm/icons/IconInbox.mjs'
+export { default as IconTable } from '@tabler/icons-react/dist/esm/icons/IconTable.mjs'

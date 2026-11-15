@@ -1233,6 +1233,53 @@ open in front of the owner. A stopped run does not. Every timed toast has a bar 
 top edge counting down its time on screen, and hovering it holds both the bar and the
 timer (`pauseToast`/`resumeToast` in `web/src/toast.ts`).
 
+## Tasks panel
+
+The chats panel has a third face beside Chats and Totems: **Tasks**. It lists the owner's
+open tasks (the local task board: not done, not snoozed, archived or deleted) and, when the
+shared task sheet is set up, its action items, each with the chats that work on it right
+under it. Action items get worked on in chats; this is where the two meet, and one click
+moves between a task and any of its chats (`web/src/work/`).
+
+- **Folders.** A task is filed under a chat project or folder, or nowhere. The panel groups
+  by them (projects in the panel's order, each folder under its project, then "No folder"),
+  or shows one list. The filing lives on the chat side, `data/task-folders.json`
+  (`chat/task-folders.mjs`, `TASK_FOLDERS_FILE`; `GET /api/chat/task-folders`,
+  `PUT /api/chat/task-folders/<task ref>` with `{ projectId }` or `null`), not in the task
+  database. Reads leave out filings whose project is gone; deleting a folder moves its tasks
+  up to its project, deleting a project unfiles them, as with its chats.
+- **Links.** A chat names at most one task, `thread.taskId` (a local task id, or a sheet
+  row's `sheet:<gid>:<row>:<hash>`); many chats may name one task. Link from a chat's "…"
+  (Link to task…), by dragging a chat onto a task, or by starting a chat from the task (its
+  +, or a row with no chats yet): that opens a new chat in the task's folder (else the
+  project of its latest chat) and the first send carries `taskId` (`startTaskDraft`,
+  `draftTaskId` in `web/src/chat/store.ts`; `startChatTurn` stores it on a new chat only).
+- **The strip over the composer** (`web/src/work/TaskBar.tsx`) names a linked chat's task
+  with its due day, Done (local tasks), and the link button to change or unlink it; on a
+  new chat from a task it says so, with × for a plain chat instead. The task's title turns
+  every open chats panel to Tasks.
+- **What the agent is told.** Every turn of a linked chat (not voice) carries a short
+  `LINKED TASK.` block (`chat/task-link.mjs`, read fresh each turn by
+  `linkedTaskContext`): title, id, open or done, due day, priority, a clipped description,
+  and to offer task updates but ask before marking it done. A sheet row says the sheet is
+  read-only to Totem. A task deleted since is left out.
+- **The picker.** Filing a task, moving a chat (Move to…) and linking a chat to a task all
+  use one popover modelled on T3 Code's project selector (`web/src/work/ComboPicker.tsx`):
+  a search line, the rows (folders indented under their project; while searching, a
+  folder names its project on the right), arrow keys and Enter, and, once what was typed
+  matches no row, "New folder “…” in <project>" / "New project “…”" or "New task “…”".
+  It is portalled to `<body>` like every popover that can open inside the panel.
+- **Sorting.** Due date (undated last), priority, recent activity (the latest linked chat,
+  else the task's own last change) or name; show all, only tasks with chats, or only those
+  without; the sheet's items can be hidden. Kept per browser (`totem.work.view`), as are
+  folded groups and opened tasks.
+
+Nothing loads tasks until the Tasks face or a task strip is on screen; while one is, the
+store (`web/src/work/state.ts`) reads the board, the sheet feed (its own two-minute cache)
+and the filings every minute and on focus. Changes are drawn at once and put back if the
+bridge refuses. The iPhone app does not show the face yet; it keeps `taskId` on threads
+untouched.
+
 ## Other chats
 
 An agent can look at the owner's other chats, for the turn where he says "another thread

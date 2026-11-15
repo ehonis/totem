@@ -1,0 +1,158 @@
+/* The chats panel's Tasks face (TasksPanel.tsx), its pickers (ComboPicker.tsx)
+   and the task strip over the composer (TaskBar.tsx). Rows reuse .vc-thread so a
+   task sits in the panel exactly as a chat does. */
+
+/* --- toolbar ----------------------------------------------------------------- */
+.wk-toolbar { display: flex; align-items: center; gap: 4px; padding: 8px 6px 2px 8px; }
+.wk-search {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 30px; padding: 0 8px; border-radius: 8px;
+  background: var(--bg-3); color: var(--muted); border: 1px solid transparent;
+}
+.wk-search:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.wk-search input { flex: 1; min-width: 0; border: 0; outline: none; background: none; color: var(--text); font: inherit; font-size: 13px; }
+.wk-search input::placeholder { color: color-mix(in srgb, var(--muted) 85%, transparent); }
+.wk-search-clear { display: grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 5px; background: none; color: var(--muted); padding: 0; }
+.wk-search-clear:hover { color: var(--text); background: #ffffff10; }
+
+.wk-add {
+  display: flex; align-items: center; gap: 8px; height: 32px; margin: 4px 4px 2px; padding: 0 8px 0 13px; border-radius: 9px;
+  color: var(--muted); cursor: text;
+}
+.wk-add:hover, .wk-add:focus-within { background: var(--bg-3); }
+.wk-add:focus-within { color: var(--text); }
+.wk-add input { flex: 1; min-width: 0; border: 0; outline: none; background: none; color: var(--text); font: inherit; font-size: 13.5px; }
+.wk-add input::placeholder { color: color-mix(in srgb, var(--muted) 90%, transparent); }
+
+.wk-view-menu { position: fixed; z-index: 75; min-width: 0; }
+.wk-view-menu > button { min-height: 34px; font-size: 13.5px; }
+.wk-view-menu .vc-seg { margin: 2px 4px 8px; }
+.wk-menu-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-row-menu { position: fixed; z-index: 75; min-width: 0; }
+.wk-row-menu > button { min-height: 34px; font-size: 13.5px; }
+.wk-error { color: #ff9aac; }
+
+/* --- groups -------------------------------------------------------------------- */
+.wk-group { padding-bottom: 2px; }
+.wk-group-head { display: flex; align-items: center; gap: 2px; padding: 10px 4px 2px 6px; }
+/* A folder right under its own project's group sits a step in, without naming the project again. */
+.wk-group.nested .wk-group-head { padding-left: 18px; padding-top: 4px; }
+.wk-group.nested .wk-task { margin-left: 8px; }
+.wk-group-fold {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 24px; padding: 0 4px; border-radius: 6px;
+  background: none; border: 0; color: var(--muted); font: inherit; font-size: 12.5px; text-align: left;
+}
+.wk-group-fold:hover { color: var(--text); }
+.wk-group-chev { flex: none; opacity: .7; }
+.wk-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.wk-group-parent { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--muted) 65%, transparent); font-size: 11.5px; }
+.wk-group-count { margin-left: auto; padding-right: 2px; font-size: 11.5px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--muted) 75%, transparent); }
+.wk-group-add { opacity: 0; }
+.wk-group-head:hover .wk-group-add, .wk-group-add:focus-visible { opacity: 1; }
+@media (hover: none) { .wk-group-add { opacity: 1; } }
+
+/* --- a task -------------------------------------------------------------------- */
+.wk-task { border-radius: 10px; }
+.wk-task.open { background: color-mix(in srgb, var(--bg-3) 45%, transparent); }
+.wk-task.drop-over { background: color-mix(in srgb, var(--accent) 18%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+.wk-task-row .vc-thread-main.wk-task-main { padding-left: 4px; gap: 6px; }
+.wk-check {
+  position: relative; display: grid; place-items: center; width: 24px; height: 24px; margin-left: 7px; flex: none;
+  border: 0; border-radius: 50%; background: none; color: color-mix(in srgb, var(--muted) 85%, transparent); padding: 0;
+}
+.wk-check .ti { position: absolute; transition: opacity .12s, transform .12s; }
+.wk-check-on { opacity: 0; transform: scale(.8); color: var(--green); }
+button.wk-check:hover .wk-check-off { opacity: 0; }
+button.wk-check:hover .wk-check-on { opacity: 1; transform: none; }
+.wk-check.prio-4 { color: #ff7a8f; }
+.wk-check.prio-3 { color: var(--amber); }
+.wk-check.prio-2 { color: #7fa6ff; }
+.wk-check.sheet { color: color-mix(in srgb, var(--muted) 80%, transparent); }
+
+.wk-due { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; padding: 1px 5px; border-radius: 6px; color: var(--muted); background: #ffffff0a; }
+.wk-due.overdue { color: #ff9aac; background: #f0506e1f; }
+.wk-due.today { color: #f3c969; background: #e3b3411c; }
+.wk-count {
+  flex: none; padding: 0 4px 0 2px; font-size: 11.5px; font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--muted) 85%, transparent);
+}
+.wk-task-acts { display: none; align-items: center; gap: 1px; padding-right: 3px; flex: none; }
+.wk-task-row:hover .wk-task-acts, .wk-task-row:focus-within .wk-task-acts, .wk-task-row.menu-open .wk-task-acts { display: flex; }
+.wk-task-row:hover .wk-due, .wk-task-row:focus-within .wk-due, .wk-task-row.menu-open .wk-due { display: none; }
+@media (hover: none) {
+  .wk-task-acts { display: flex; }
+  .wk-task-acts .wk-act-new { display: none; }
+  .wk-task-row .wk-due { display: inline; }
+}
+
+/* Its chats, indented under it on a thread line. */
+.wk-chats { position: relative; padding: 0 0 4px 22px; }
+.wk-chats::before { content: ''; position: absolute; left: 18px; top: 0; bottom: 8px; width: 1px; background: var(--line-2); }
+.wk-chats .vc-thread-main { height: 30px; font-size: 13px; padding-left: 10px; }
+
+/* --- the T3 Code-style combobox (portalled to <body>) ------------------------------ */
+.wk-combo {
+  position: fixed; z-index: 80; display: flex; flex-direction: column; overflow: hidden;
+  color: var(--text); background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 12px;
+  box-shadow: 0 18px 44px -18px #000c, 0 2px 8px #0006;
+  animation: vc-pop .12s ease-out;
+}
+.wk-combo.down { animation-name: vc-pop-down; }
+.wk-combo .ti { display: block; flex: none; }
+.wk-combo-search {
+  display: flex; align-items: center; gap: 8px; margin: 10px 12px 2px; padding-bottom: 6px; flex: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--line-2) 90%, transparent); color: color-mix(in srgb, var(--muted) 70%, transparent);
+  transition: border-color .15s;
+}
+.wk-combo-search:focus-within { border-bottom-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+.wk-combo-search input { flex: 1; min-width: 0; height: 26px; border: 0; outline: none; background: none; color: var(--text); font: inherit; font-size: 14px; }
+.wk-combo-search input::placeholder { color: color-mix(in srgb, var(--muted) 80%, transparent); }
+.wk-combo-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px; scroll-padding: 4px; }
+.wk-combo-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 4px 8px; border-radius: 6px;
+  background: none; border: 0; color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+}
+.wk-combo-row .ti, .wk-combo-row .vc-proj-icon { color: color-mix(in srgb, var(--text) 62%, transparent); }
+.wk-combo-row.indent { padding-left: 28px; }
+.wk-combo-row.selected { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.wk-combo-row.on { background: color-mix(in srgb, var(--text) 9%, transparent); }
+.wk-combo-row.dim .wk-combo-label { color: var(--muted); }
+.wk-combo-row.action .wk-combo-label { color: color-mix(in srgb, var(--text) 85%, transparent); }
+.wk-combo-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-combo-detail { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+.wk-combo-check { color: var(--text) !important; }
+.wk-combo-section { padding: 8px 8px 3px; font-size: 11.5px; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+.wk-combo-sep { height: 1px; margin: 4px 6px; background: var(--line-2); }
+.wk-combo-empty { padding: 10px 8px; text-align: center; font-size: 13px; color: var(--muted); }
+@media (max-width: 720px) {
+  .wk-combo-row { min-height: 40px; font-size: 15px; }
+  .wk-combo-search input { font-size: 16px; }
+}
+
+/* --- the task strip over the composer (TaskBar.tsx): a tab sitting on the box's top edge --- */
+.wk-taskbar {
+  position: relative; display: flex; align-items: center; gap: 6px; margin: 0 30px -1px; padding: 4px 8px 5px 10px;
+  border: 1px solid #ffffff17; border-bottom: 0; border-radius: 14px 14px 0 0;
+  background: color-mix(in srgb, var(--vc-surface, var(--surface)) 70%, transparent);
+  font-size: 12.5px; line-height: 18px; color: var(--vc-soft, var(--muted));
+}
+.vc.no-glow .wk-taskbar { background: var(--vc-surface, var(--surface)); }
+.wk-taskbar .ti { flex: none; }
+.wk-taskbar-icon { color: var(--accent); }
+.wk-taskbar-label { flex: none; color: var(--vc-faint, var(--muted)); }
+.wk-taskbar-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text);
+  background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer;
+}
+.wk-taskbar-title:hover { text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--text) 35%, transparent); text-underline-offset: 3px; }
+.wk-taskbar-title.gone { color: var(--muted); font-style: italic; cursor: default; text-decoration: none; }
+.wk-taskbar .wk-due { font-size: 11px; }
+.wk-taskbar-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px; flex: none; height: 22px; min-width: 22px; padding: 0 6px; border-radius: 6px;
+  background: none; border: 0; color: var(--vc-soft, var(--muted)); font: inherit; font-size: 12px;
+}
+.wk-taskbar-btn:hover { background: var(--vc-raise, var(--raise)); color: var(--text); }
+@media (max-width: 720px) {
+  .wk-taskbar { margin: 0 14px -1px; }
+  .wk-taskbar-label { display: none; }
+  .wk-taskbar-btn { height: 32px; min-width: 32px; }
+}

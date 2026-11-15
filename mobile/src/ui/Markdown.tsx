@@ -1,6 +1,6 @@
 // Markdown, the way the web's components/Markdown.tsx and chat.css `.vc .md`
-// draw it: Inter at the reading size, links in soft blue that open in the
-// in-app browser, inline code on a dark chip, fenced code in a panel with its
+// draw it: Inter at the reading size, links in soft blue that open where they
+// belong (openLink below), inline code on a dark chip, fenced code in a panel with its
 // language and a Copy button, GFM tables with hairline borders. Parsed natively
 // (react-native-nitro-markdown, C++ md4c), rendered as real RN views.
 //
@@ -10,28 +10,25 @@
 import React, { useMemo, useState } from 'react'
 import { ScrollView, StyleSheet, Text, View } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
-import * as WebBrowser from 'expo-web-browser'
 import { Image } from 'expo-image'
 import { Markdown as NitroMarkdown, type CustomRenderers, type PartialMarkdownTheme, type NodeStyleOverrides } from 'react-native-nitro-markdown'
 import { colors, fonts, surfaces, textAlpha } from '../theme'
 import { bridgeUrl, withAccess } from '../lib/connection'
 import { tap } from './haptics'
-import { openUrl } from '../lib/siblingApps'
+import { followLink } from '../features/chat/openLink'
 
 const LINK = '#8fb0ff'
 const LINE = '#2a2f3c'
 
+/**
+ * A tapped link: the app follows every kind itself (features/chat/openLink.ts) and
+ * returns false so the library never acts. Left to it, mailto: and tel: went to
+ * Linking.canOpenURL, which says no for a scheme Info.plist doesn't list, and any
+ * href it couldn't parse (a file path, file://) was dropped: a tap that did nothing.
+ */
 export function openLink(href: string) {
-  if (/^https?:\/\//i.test(href)) {
-    void openUrl(href) // a Krakatoa or Bushido link opens that app
-    return false
-  }
-  // A bridge path ("/api/chat/uploads/…?sig=") opens against the bridge.
-  if (href.startsWith('/')) {
-    WebBrowser.openBrowserAsync(bridgeUrl(href), { controlsColor: colors.accent }).catch(() => {})
-    return false
-  }
-  return true // mailto:, tel: … the library's own validated fallback
+  void followLink(href)
+  return false
 }
 
 /** The `.md-code` panel: language on the left, Copy on the right, the code scrolling sideways. */

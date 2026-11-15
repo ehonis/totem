@@ -267,7 +267,10 @@ function normalizeAllowedTools(raw) {
   return [...new Set(raw.filter((r) => typeof r === 'string' && /^[A-Za-z0-9_.:-]{1,200}(\(.{1,500}\))?$/s.test(r.trim())).map((r) => r.trim()))].slice(-200)
 }
 
-const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'members', 'projectContextOff', 'needsReply', 'keepUnread', 'settledOverride', 'settledAt', 'unsettledAt', 'snoozedUntil', 'snoozedAt', 'sourceKey']
+/** A task a chat can be linked to: a local task id, or a shared sheet row's id. */
+export const validTaskRef = (id) => typeof id === 'string' && /^[A-Za-z0-9_:-]{1,160}$/.test(id)
+
+const METADATA_KEYS = ['kind', 'title', 'icon', 'provider', 'modelSettings', 'pinned', 'expiresAt', 'projectId', 'totemId', 'members', 'projectContextOff', 'needsReply', 'keepUnread', 'settledOverride', 'settledAt', 'unsettledAt', 'snoozedUntil', 'snoozedAt', 'sourceKey', 'taskId']
 
 function applyMetadata(thread, body, now) {
   if (body.kind === 'temporary' || body.kind === 'regular') thread.kind = body.kind
@@ -303,6 +306,14 @@ function applyMetadata(thread, body, now) {
     const key = str(body.sourceKey, 200).trim()
     if (key) thread.sourceKey = key
     else delete thread.sourceKey
+  }
+  // The owner's task this chat is working on (Chats panel → Tasks): a local
+  // task's id, or a shared sheet row's ("sheet:<gid>:<row>:<hash>"). Many chats
+  // may name one task; a chat names at most one.
+  if ('taskId' in body) {
+    const id = validTaskRef(body.taskId) ? body.taskId : ''
+    if (id) thread.taskId = id
+    else delete thread.taskId
   }
   // One of chat/thread-icons.mjs's names, chosen by the title model.
   if ('icon' in body) {

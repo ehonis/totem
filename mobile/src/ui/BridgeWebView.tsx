@@ -38,8 +38,8 @@ export type BridgeWebViewProps = {
   onLoaded?: () => void
   /** The page could not load: off the bridge, an HTTP error, a redirect, a crashed web process. */
   onFail?: () => void
-  /** The page reloaded itself or tried to go to another page, and was stopped. */
-  onLeave?: () => void
+  /** The page reloaded itself or tried to go to another page, and was stopped. `url`, when known, is where it tried to go. */
+  onLeave?: (url?: string) => void
 }
 
 export default function BridgeWebView({ target, scroll = false, style, onHeight, onLoaded, onFail, onLeave }: BridgeWebViewProps) {
@@ -53,7 +53,7 @@ export default function BridgeWebView({ target, scroll = false, style, onHeight,
     const decision = bridgeNavigation(req, src, phase.current)
     if (decision === 'allow' && phase.current === 'new' && req.isTopFrame !== false) phase.current = 'loading'
     if (decision === 'fail') end(onFail)
-    else if (decision === 'leave') end(onLeave)
+    else if (decision === 'leave') end(() => onLeave?.(String(req.url || '')))
     return decision === 'allow'
   }, [src, end, onFail, onLeave])
 
