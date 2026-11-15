@@ -266,6 +266,8 @@ export interface ChatThread {
   members?: string[]
   /** A project chat that reads none of the project's instructions, memory or files. */
   projectContextOff?: boolean
+  /** The owner's task this chat works toward (Chats panel → Tasks): a local task id or a sheet row's. */
+  taskId?: string
   /** Finished, and not yet answered or marked read. */
   needsReply?: boolean
   /** He marked it unread to come back to: opening it no longer reads it. Only set with needsReply. */

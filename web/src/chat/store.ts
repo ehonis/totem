@@ -69,6 +69,8 @@ export interface ChatState {
   projectDetail: Record<string, Project>
   /** The project the chats panel is showing, or null for Home. */
   projectId: string | null
+  /** A new chat being started from a task (Chats panel → Tasks): its first send links it. */
+  draftTaskId: string | null
 }
 
 export interface ChatPrefs {
@@ -120,6 +122,7 @@ let state: ChatState = {
   projects: [],
   projectDetail: {},
   projectId: new URLSearchParams(window.location.search).get('project'),
+  draftTaskId: null,
   prefs: { titles: { provider: '', model: '', effort: '', off: false }, autoSettleDays: 3 },
 }
 
@@ -350,16 +353,26 @@ export function draftFor(pick: DraftPick | null, key: string, { open, projectId 
 // --- threads ----------------------------------------------------------------
 
 export function setActive(id: string | null) {
-  if (state.activeId === id) return
+  // "New chat" again on a task's draft starts a plain one.
+  if (state.activeId === id) { if (!id && state.draftTaskId) set({ draftTaskId: null }); return }
   // Opening a chat that woke from a snooze is seeing it: the "Woke" mark goes.
   const opened = id ? state.threads.find((x) => x.id === id) : null
   if (opened && wokeAt(opened, now())) wakeThread(opened.id)
   // The panel follows the chat: opening a project's chat shows that project.
   const t = id ? state.threads.find((x) => x.id === id) : null
   const scope = t ? (t.projectId && state.projects.some((p) => p.id === t.projectId) ? t.projectId : null) : state.projectId
-  set({ activeId: id, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null, projectId: scope })
+  set({ activeId: id, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null, projectId: scope, draftTaskId: null })
   if (id && !state.browser[id]) loadBrowser(id)
 }
+
+/** A new chat for one of the owner's tasks, in the project or folder it belongs to. */
+export function startTaskDraft(taskId: string, projectId: string | null) {
+  set({ projectId, activeId: null, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null, draftTaskId: taskId })
+  if (projectId) loadProject(projectId)
+}
+
+/** Drop the task from the chat being started, leaving the draft where it is. */
+export function clearTaskDraft() { set({ draftTaskId: null }) }
 
 // --- projects -----------------------------------------------------------------
 // A project groups chats that share a default model, instructions, a memory the
@@ -368,7 +381,7 @@ export function setActive(id: string | null) {
 
 /** Show a project's page (or Home with null) with no chat open. */
 export function openProject(id: string | null) {
-  set({ projectId: id, activeId: null, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null })
+  set({ projectId: id, activeId: null, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null, draftTaskId: null })
   if (id) loadProject(id)
 }
 
@@ -410,12 +423,13 @@ export async function loadProject(id: string) {
   }
 }
 
-export async function createProject(body: { name: string; icon?: string; instructions?: string; parentId?: string }) {
+export async function createProject(body: { name: string; icon?: string; instructions?: string; parentId?: string }, { open = true }: { open?: boolean } = {}) {
   // No model of its own until one is picked: a folder follows its project, a
   // project the default in Settings → Providers (projectDefault).
   const { project } = await createProjectApi(body)
   takeProject(project)
-  openProject(project.id)
+  // A folder made from a picker (filing a task, moving a chat) leaves the panel where it is.
+  if (open) openProject(project.id)
   return project
 }
 
@@ -577,6 +591,12 @@ export function markRead(threadId: string) {
 export function markUnread(threadId: string) {
   patchThread(threadId, (t) => ({ ...t, needsReply: true, keepUnread: true }))
   putThread({ id: threadId, needsReply: true, keepUnread: true }).catch(fail)
+}
+
+/** Link a chat to one of the owner's tasks (Chats panel → Tasks), or unlink it with null. */
+export function linkTask(threadId: string, taskId: string | null) {
+  patchThread(threadId, (t) => ({ ...t, taskId: taskId || undefined }))
+  putThread({ id: threadId, taskId }).catch(fail)
 }
 
 /** Move a chat into a project, or back to Home with null. Its files come with it. */
@@ -1042,6 +1062,8 @@ export interface SendInput {
   projectId?: string | null
   /** A new project chat that leaves the project's context out. */
   projectContextOff?: boolean
+  /** A new chat started from a task, linked to it from the first turn. */
+  taskId?: string
 }
 
 /** Start a turn. Returns the thread id (new chats get one here). */
@@ -1061,10 +1083,11 @@ export function send(input: SendInput): string {
   }
   const assistant: ChatMessage = { id: `local-${newId()}`, role: 'assistant', content: '', parts: [], status: 'streaming', provider, createdAt: t0 }
   const contextOff = !!projectId && !thread && !!input.projectContextOff
+  const taskId = !thread && input.taskId ? input.taskId : undefined
   if (!thread) {
     thread = {
       id: threadId, kind, provider: kind === 'regular' ? provider : undefined, modelSettings: settings,
-      ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}),
+      ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(taskId ? { taskId } : {}),
       messages: [], createdAt: t0, updatedAt: t0, ...(kind === 'temporary' ? { expiresAt: endOfToday() } : {}),
     }
   }
@@ -1078,6 +1101,7 @@ export function send(input: SendInput): string {
     // Only read for a chat the bridge hasn't seen; an existing one keeps its project.
     ...(projectId ? { projectId } : {}),
     ...(contextOff ? { projectContextOff: true } : {}),
+    ...(taskId ? { taskId } : {}),
   }
   const { messages: _m, needsReply: _n, keepUnread: _k, ...meta } = thread
   outboxPut(threadId, { args, message: userMessage, thread: { ...meta, updatedAt: t0 }, at: t0 })

@@ -17,7 +17,7 @@ export function dragThreadProps(id: string): Partial<React.HTMLAttributes<HTMLEl
     draggable: true,
     onDragStart: (e: React.DragEvent) => {
       e.dataTransfer.setData(THREAD_TYPE, id)
-      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.effectAllowed = 'linkMove'
     },
   }
 }
@@ -48,6 +48,36 @@ export function useThreadDrop(target: string | null, label: string) {
       if (!t || (t.projectId || null) === target) return
       moveThread(id, target)
       pushToast(`Moved “${threadTitle(t)}” to ${label}`, 'info')
+    },
+  }
+  return { over, props }
+}
+
+/**
+ * A task in the chats panel's Tasks face: a chat dropped on it is linked to it
+ * (chat.taskId), staying in whatever project it is in.
+ */
+export function useThreadTaskDrop(taskRef: string, onLink: (threadId: string) => void) {
+  const [over, setOver] = useState(false)
+  const isThread = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes(THREAD_TYPE)
+  const props = {
+    onDragOver: (e: React.DragEvent) => {
+      if (!isThread(e)) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'link'
+      if (!over) setOver(true)
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setOver(false)
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!isThread(e)) return
+      e.preventDefault()
+      setOver(false)
+      const id = e.dataTransfer.getData(THREAD_TYPE)
+      const t = getState().threads.find((x) => x.id === id)
+      if (!t || t.taskId === taskRef) return
+      onLink(id)
     },
   }
   return { over, props }

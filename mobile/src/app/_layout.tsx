@@ -51,6 +51,7 @@ const ROUTES: { name: string; options: object }[] = [
   { name: 'chat/usage', options: sheet([0.6, 1]) },
   { name: 'chat/agents', options: sheet([0.6, 1]) },
   { name: 'chat/file', options: sheet([0.75, 1], colors.bg) },
+  { name: 'chat/view', options: sheet([1], colors.bg) },
   { name: 'chat/snooze', options: sheet([0.5]) },
   // A list's Snoozed or Settled chats, opened from the drawer's foot.
   { name: 'chat/shelf', options: sheet([0.75, 1]) },

@@ -10,3 +10,6 @@ export { default as IconShield } from '@tabler/icons-react-native/dist/esm/icons
 export { default as IconShieldCheck } from '@tabler/icons-react-native/dist/esm/icons/IconShieldCheck.mjs'
 export { default as IconShieldX } from '@tabler/icons-react-native/dist/esm/icons/IconShieldX.mjs'
 export { default as IconArrowsMaximize } from '@tabler/icons-react-native/dist/esm/icons/IconArrowsMaximize.mjs'
+export { default as IconDownload } from '@tabler/icons-react-native/dist/esm/icons/IconDownload.mjs'
+export { default as IconFileOff } from '@tabler/icons-react-native/dist/esm/icons/IconFileOff.mjs'
+export { default as IconFileZip } from '@tabler/icons-react-native/dist/esm/icons/IconFileZip.mjs'

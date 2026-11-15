@@ -79,13 +79,15 @@ import { createFleetHttpHandler, createFleetReportHandler, FLEET_REPORT_PATH } f
 import { createCollector as createFleetCollector } from './fleet/collect.mjs'
 import { createJournalStore } from './journal/store.mjs'
 import { createTranscriber } from './journal/transcribe.mjs'
-import { createThreadStore, validThreadId } from './chat/store.mjs'
+import { createThreadStore, validThreadId, validTaskRef } from './chat/store.mjs'
 import { createUploadStore, servedHeaders, validUploadId } from './chat/uploads.mjs'
 import { redactTokens } from './chat/redact.mjs'
 import { createFileAccess, chatFileRedirect, mimeFor as fileMime } from './chat/files.mjs'
 import { fetchFavicon } from './chat/favicon.mjs'
 import { createConnectionIconStore, validConnectionId } from './connections/icons.mjs'
 import { createProjectStore, moveMemoryEntries, validProjectId } from './chat/projects.mjs'
+import { createTaskFolderStore } from './chat/task-folders.mjs'
+import { linkedTaskBlock, findSheetItem } from './chat/task-link.mjs'
 import { createChatRuns } from './chat/runs.mjs'
 import { QUEUE_LIMIT, moveQueued, queueAfterRun } from './chat/queue.mjs'
 import { chatRefMeta, chatRefOf, cleanNote, createInboxOutcomes, inboxMarker, validInboxId } from './chat/inbox-outcome.mjs'
@@ -8603,6 +8605,8 @@ const chatFiles = createFileAccess({
 // Chat projects (chat/projects.mjs): shared instructions, memory and files.
 const CHAT_PROJECTS_DIR = process.env.CHAT_PROJECTS_DIR || join(HERE, 'data', 'chat-projects')
 const projectStore = createProjectStore({ dir: CHAT_PROJECTS_DIR })
+// The project or folder each task is filed under (chat/task-folders.mjs), for the chats panel's Tasks face.
+const taskFolders = createTaskFolderStore({ file: process.env.TASK_FOLDERS_FILE || join(HERE, 'data', 'task-folders.json') })
 // The icon the owner picked for each connection (connections/icons.mjs).
 const connectionIcons = createConnectionIconStore({ file: process.env.CONNECTION_ICONS_FILE || join(HERE, 'data', 'connection-icons.json') })
 /** Uploads something other than a chat message keeps: project files and pictures, connection icons. */
@@ -9487,6 +9491,20 @@ const memoryStatsFor = (path, driver) => memoryFileStats(path, {
 // memory itself is only named; the agent reads it when the request needs it.
 // A folder's chat also gets its parent project's, read-only.
 // `readOnly` are the files the chat may read but not write (the parent's memory).
+// A chat's linked task (thread.taskId, chat/task-link.mjs): a local task, or a
+// shared sheet row read from the feed's cache. A task gone since is left out.
+async function linkedTaskContext(taskId) {
+  if (!taskId) return ''
+  if (taskId.startsWith('sheet:')) {
+    // The feed's two-minute cache usually answers; a cold read of Drive gets three
+    // seconds before the turn goes on without the block.
+    const feed = await Promise.race([taskSheetFeed.read(), new Promise((resolve) => setTimeout(resolve, 3000, null))])
+    return linkedTaskBlock({ sheetItem: findSheetItem(feed?.items, taskId) })
+  }
+  const task = todoService.get(taskId)
+  return task && !task.deletedAt ? linkedTaskBlock({ task }) : ''
+}
+
 async function chatProjectContext(projectId, driver) {
   const project = validProjectId(projectId) ? await projectStore.get(projectId) : null
   if (!project) return { text: '', readOnly: [] }
@@ -9694,6 +9712,8 @@ async function startChatTurn(body) {
   // A project chat can leave the project's context out, from its first turn or any later one.
   const contextOff = !!projectId && (existing ? !!existing.projectContextOff : body.projectContextOff === true)
   const shareWithProject = projectId && !contextOff
+  // A new chat started from a task (Chats panel → Tasks) is linked to it from its first turn.
+  const newTaskId = !existing && validTaskRef(body.taskId) ? body.taskId : null
   // Older clients still send `mode` ('task' | 'computer') and `browser`: read
   // only as hints (chatReach), never an error.
   const voice = body.voice === true
@@ -9762,7 +9782,7 @@ async function startChatTurn(body) {
     delete t.snoozedUntil
     delete t.snoozedAt
     t.updatedAt = now
-  }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
+  }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(newTaskId ? { taskId: newTaskId } : {}), ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
 
   const files = await loadChatFiles(userMessage.attachments)
   // What he attaches in a project chat is shared with the whole project.
@@ -9790,7 +9810,9 @@ async function startChatTurn(body) {
   const memberJobs = (thread.members || []).map((id) => totemList.find((j) => j.id === id)).filter(Boolean)
   const othersCount = chatSettings.totemsInChat ? totemList.filter((j) => j.id !== totemId && !memberJobs.includes(j)).length : 0
   const groupRule = MCP_MODE === 'gateway' && !voice ? totemsChatRule({ chatId: threadId, members: memberJobs, others: othersCount }) : ''
-  const contextBlock = `${projectCtx?.text || ''}${totemCtx}${totemRule}${groupRule ? `${groupRule}\n\n` : ''}${othersRule}`
+  // The task this chat works toward (Chats panel → Tasks), read fresh each turn.
+  const taskCtx = voice ? '' : await linkedTaskContext(thread.taskId).catch(() => '')
+  const contextBlock = `${projectCtx?.text || ''}${taskCtx}${totemCtx}${totemRule}${groupRule ? `${groupRule}\n\n` : ''}${othersRule}`
   const needsTitle = !existing?.title || userIndex === 0
   const streamLive = streamingEnabled(provider, config)
   // The browser, computer use and the hour: every dashboard or app chat, never voice.
@@ -10521,6 +10543,7 @@ function dismissChatPush(threadId) {
 async function handleChatApi(req, res, path) {
   if (req.method === 'POST' && path === '/api/chat') return handleChatSend(req, res)
   if (path.startsWith('/api/chat/projects')) return handleChatProjectsApi(req, res, path)
+  if (path === '/api/chat/task-folders' || path.startsWith('/api/chat/task-folders/')) return handleTaskFoldersApi(req, res, path)
   if (req.method === 'GET' && path === '/api/chat/runs') return send(res, 200, { runs: chatRuns.list() })
   const runMatch = /^\/api\/chat\/runs\/([A-Za-z0-9_-]{1,128})\/stream$/.exec(path)
   if (req.method === 'GET' && runMatch) {
@@ -10949,6 +10972,29 @@ async function dropUnusedUploads(ids) {
   for (const id of ids) if (!used.has(id) && !kept.has(id)) await chatUploads.remove(id)
 }
 
+// The project or folder each task is filed under (chat/task-folders.mjs). The
+// read leaves out filings whose project is gone, so a stale row never shows.
+async function taskFoldersPayload() {
+  const projects = new Set((await projectStore.list()).map((p) => p.id))
+  const folders = {}
+  for (const [task, project] of Object.entries(await taskFolders.all())) if (projects.has(project)) folders[task] = project
+  return { folders }
+}
+
+async function handleTaskFoldersApi(req, res, path) {
+  if (path === '/api/chat/task-folders') {
+    return req.method === 'GET' ? send(res, 200, await taskFoldersPayload()) : send(res, 405, { error: 'method not allowed' })
+  }
+  if (req.method !== 'PUT') return send(res, 405, { error: 'method not allowed' })
+  let task = ''
+  try { task = decodeURIComponent(path.slice('/api/chat/task-folders/'.length)) } catch { return send(res, 400, { error: 'bad task id' }) }
+  const body = await readJsonBody(req)
+  const projectId = body.projectId == null || body.projectId === '' ? null : body.projectId
+  if (projectId && !(validProjectId(projectId) && await projectStore.get(projectId))) return send(res, 404, { error: 'project not found' })
+  try { await taskFolders.set(task, projectId) } catch (e) { return send(res, e.status || 500, { error: e.message }) }
+  return send(res, 200, await taskFoldersPayload())
+}
+
 async function handleChatProjectsApi(req, res, path) {
   if (path === '/api/chat/projects') {
     if (req.method === 'GET') {
@@ -11009,6 +11055,8 @@ async function handleChatProjectsApi(req, res, path) {
         await threadStore.update(t.id, (x) => { if (project.parentId) x.projectId = project.parentId; else delete x.projectId })
         moved++
       }
+      // Tasks filed there move the same way.
+      for (const g of gone) await taskFolders.reassign(g, project.parentId || null)
       await dropUnusedUploads([project, ...folders].flatMap((p) => [...p.files.map((f) => f.id), ...(p.image ? [p.image] : [])]))
       return send(res, 200, { ok: true, movedChats: moved, removedFolders: folders.length })
     }

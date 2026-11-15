@@ -12,14 +12,16 @@ import { TotemIcon, openTotemChat, refreshTotemDirectory, useTotemDirectory } fr
 import { GroupPicker, startGroupChat } from '../components/TotemsView'
 import { useThreadDrop } from './dnd'
 import type { Project } from './types'
+import TasksPanel from '../work/TasksPanel'
 
 // The chats panel, scoped. Home is what the panel always was (every chat in no
 // project) with the projects listed above it; opening a project swaps the panel
 // to that project's chats, the way Claude and ChatGPT do. A project's folders
 // sit above its own chats, each opening in place to show the chats inside.
 // Any of them (and Home, via the back arrow) takes a chat dragged onto it.
-// A switch at the top turns the panel to Totems: group chats, then every totem
-// with the one that ran last on top, each opening its own chat.
+// A switch at the top turns the panel to Totems (group chats, then every totem
+// with the one that ran last on top, each opening its own chat) or to Tasks (the
+// owner's tasks by folder, each with the chats working on it; work/TasksPanel.tsx).
 
 const FOLDED_KEY = 'totem.projects.folded'
 const OPEN_FOLDERS_KEY = 'totem.projects.openFolders'
@@ -181,14 +183,24 @@ function TotemsPanel({ onOpen }: { onOpen: (id?: string) => void }) {
 
 const goTotemsTab = () => { window.history.pushState({}, '', '/totems'); window.dispatchEvent(new PopStateEvent('popstate')) }
 
-/** Which face the chats panel shows: your chats, or your totems. Kept per browser. */
+/** Which face the chats panel shows: your chats, your totems, or your tasks. Kept per browser. */
 const PANEL_MODE_KEY = 'totem.panel.mode'
-function usePanelMode(): ['chats' | 'totems', (m: 'chats' | 'totems') => void] {
-  const [mode, setMode] = useState<'chats' | 'totems'>(() => (localStorage.getItem(PANEL_MODE_KEY) === 'totems' ? 'totems' : 'chats'))
-  return [mode, (m) => { setMode(m); localStorage.setItem(PANEL_MODE_KEY, m) }]
+type PanelMode = 'chats' | 'totems' | 'tasks'
+const PANEL_MODES: PanelMode[] = ['chats', 'totems', 'tasks']
+const readMode = (): PanelMode => { const m = localStorage.getItem(PANEL_MODE_KEY) as PanelMode; return PANEL_MODES.includes(m) ? m : 'chats' }
+function usePanelMode(): [PanelMode, (m: PanelMode) => void] {
+  const [mode, setMode] = useState<PanelMode>(readMode)
+  const choose = (m: PanelMode) => { setMode(m); localStorage.setItem(PANEL_MODE_KEY, m) }
+  // The composer's task strip turns every open panel to Tasks (work/TaskBar.tsx).
+  useEffect(() => {
+    const on = (e: Event) => { const m = (e as CustomEvent).detail; if (PANEL_MODES.includes(m)) choose(m) }
+    window.addEventListener('totem:panel-mode', on)
+    return () => window.removeEventListener('totem:panel-mode', on)
+  }, [])
+  return [mode, choose]
 }
 
-function PanelTabs({ mode, onMode }: { mode: 'chats' | 'totems'; onMode: (m: 'chats' | 'totems') => void }) {
+function PanelTabs({ mode, onMode }: { mode: PanelMode; onMode: (m: PanelMode) => void }) {
   const dir = useTotemDirectory()
   // A report waiting in a totem's chat shows on the Totems tab from the Chats side.
   const waiting = useChat((s) => s.threads.some((t) => t.totemId && t.needsReply && dir.has(t.totemId)))
@@ -198,6 +210,7 @@ function PanelTabs({ mode, onMode }: { mode: 'chats' | 'totems'; onMode: (m: 'ch
       <button type="button" role="tab" aria-selected={mode === 'totems'} className={mode === 'totems' ? 'on' : ''} onClick={() => onMode('totems')}>
         Totems{waiting && mode !== 'totems' && <span className="vc-reply-dot" aria-label="A totem has a report waiting" />}
       </button>
+      <button type="button" role="tab" aria-selected={mode === 'tasks'} className={mode === 'tasks' ? 'on' : ''} onClick={() => onMode('tasks')}>Tasks</button>
     </div>
   )
 }
@@ -286,6 +299,7 @@ export function ChatsNav({ onOpenChat }: { onOpenChat: () => void }) {
   const tabs = <PanelTabs mode={mode} onMode={setMode} />
 
   if (mode === 'totems') return <>{tabs}<TotemsPanel onOpen={onOpenChat} /></>
+  if (mode === 'tasks') return <>{tabs}<TasksPanel onOpenChat={onOpenChat} /></>
   if (project) {
     return (
       <>

@@ -1,55 +1,22 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react'
-import { useChat, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread, markRead, markUnread, setProjectContext, settleThread, unsettleThread, snoozeThread, wakeThread } from './store'
+import { useChat, getState, linkTask, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread, markRead, markUnread, setProjectContext, settleThread, unsettleThread, snoozeThread, wakeThread } from './store'
 import { pendingQuestions } from './questions'
 import { pendingApproval } from './approvals'
-import type { ChatThread, Project } from './types'
+import type { ChatThread } from './types'
 import { TI, useDismiss } from './ui'
-import { IconDots, IconPinned, IconPencil, IconTrash, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconHome, IconChevronLeft, IconMail, IconMailOpened, IconClock, IconAlarmOff, IconArrowBackUp, IconChevronUp, IconChevronDown, IconPlus } from './icons'
+import { IconDots, IconPinned, IconPencil, IconTrash, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconMail, IconMailOpened, IconClock, IconAlarmOff, IconArrowBackUp, IconChevronUp, IconChevronDown, IconPlus, IconLink } from './icons'
 import { dragThreadProps } from './dnd'
 import { useRowOnScreen } from './onScreen'
-import ProjectIcon from './ProjectIcon'
 import { pushToast } from '../toast'
 import ThreadIcon from './ThreadIcon'
 import SnoozeMenu from './SnoozeMenu'
+import { FolderPicker, TaskPicker } from '../work/pickers'
 import { shelve, nextWake, wokeAt, countdown, ago, settledAt, wakeDescription, type Shelf } from './settle'
 
-function MoveMenu({ t, onBack, onClose }: { t: ChatThread; onBack: () => void; onClose: () => void }) {
-  const projects = useChat((s) => s.projects)
-  const inProject = !!(t.projectId && projects.some((p) => p.id === t.projectId))
-  const move = (p: Project) => { onClose(); moveThread(t.id, p.id); pushToast(`Moved “${threadTitle(t)}” to ${p.name}`, 'info') }
-  // Each project with its folders under it.
-  const rows = projects.filter((p) => !p.parentId).flatMap((p) => [{ p, folder: false }, ...projects.filter((f) => f.parentId === p.id).map((f) => ({ p: f, folder: true }))])
-  return (
-    <>
-      <button type="button" role="menuitem" className="muted" onClick={onBack}><TI icon={IconChevronLeft} size={16} /><span>Move to…</span></button>
-      <div className="vc-menu-sep" />
-      {inProject && (
-        <button type="button" role="menuitem" onClick={() => { onClose(); moveThread(t.id, null); pushToast(`Moved “${threadTitle(t)}” to Home`, 'info') }}>
-          <TI icon={IconHome} size={16} /><span>Home (no project)</span>
-        </button>
-      )}
-      {rows.map(({ p, folder }) => (
-        <button key={p.id} type="button" role="menuitem" className={folder ? 'vc-menu-indent' : ''} disabled={p.id === t.projectId} onClick={() => move(p)}>
-          <ProjectIcon p={p} size={16} /><span>{p.name}</span>
-        </button>
-      ))}
-      {!projects.length && <div className="vc-menu-label">No projects yet. Make one from the Projects list.</div>}
-    </>
-  )
-}
-
-function ThreadMenu({ t, shelf, live, onRename, onSnooze, onClose }: { t: ChatThread; shelf: Shelf; live: boolean; onRename: () => void; onSnooze: () => void; onClose: () => void }) {
+function ThreadMenu({ t, shelf, live, onRename, onSnooze, onMove, onLinkTask, onClose }: { t: ChatThread; shelf: Shelf; live: boolean; onRename: () => void; onSnooze: () => void; onMove: () => void; onLinkTask: () => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [moving, setMoving] = useState(false)
   const inProject = useChat((s) => !!(t.projectId && s.projects.some((p) => p.id === t.projectId)))
   useDismiss(true, ref, onClose)
-  if (moving) {
-    return (
-      <div className="vc-menu vc-thread-menu" ref={ref} role="menu" onClick={(e) => e.stopPropagation()}>
-        <MoveMenu t={t} onBack={() => setMoving(false)} onClose={onClose} />
-      </div>
-    )
-  }
   return (
     <div className="vc-menu vc-thread-menu" ref={ref} role="menu" onClick={(e) => e.stopPropagation()}>
       {t.needsReply
@@ -67,7 +34,8 @@ function ThreadMenu({ t, shelf, live, onRename, onSnooze, onClose }: { t: ChatTh
         <button type="button" role="menuitem" onClick={() => { onClose(); regenerateTitle(t.id) }}><TI icon={IconSparkles} size={16} /><span>Regenerate title and icon</span></button>
       )}
       <button type="button" role="menuitem" onClick={() => { onClose(); setPinned(t.id, !t.pinned) }}><TI icon={IconPinned} size={16} /><span>{t.pinned ? 'Unpin' : 'Pin'}</span></button>
-      <button type="button" role="menuitem" onClick={() => setMoving(true)}><TI icon={IconFolder} size={16} /><span>Move to…</span></button>
+      <button type="button" role="menuitem" onClick={() => { onClose(); onMove() }}><TI icon={IconFolder} size={16} /><span>Move to…</span></button>
+      <button type="button" role="menuitem" onClick={() => { onClose(); onLinkTask() }}><TI icon={IconLink} size={16} /><span>{t.taskId ? 'Change task…' : 'Link to task…'}</span></button>
       {inProject && (
         <button type="button" role="menuitem" onClick={() => { onClose(); setProjectContext(t.id, !!t.projectContextOff) }}>
           <TI icon={t.projectContextOff ? IconFolder : IconFolderOff} size={16} /><span>{t.projectContextOff ? 'Use project context' : 'Leave out project context'}</span>
@@ -102,11 +70,17 @@ function ThreadMenu({ t, shelf, live, onRename, onSnooze, onClose }: { t: ChatTh
 export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Date.now() }: { t: ChatThread; active: boolean; live: boolean; onOpen: (id: string) => void; shelf?: Shelf; now?: number }) {
   const [menu, setMenu] = useState(false)
   const [snoozing, setSnoozing] = useState(false)
+  // Move to… and Link to task… open T3 Code's picker (work/pickers.tsx) off the row's "…".
+  const [picking, setPicking] = useState<'folder' | 'task' | null>(null)
+  const anchorRef = useRef<HTMLDivElement | null>(null)
+  const closePicker = useCallback(() => setPicking(null), [])
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   const retitling = useChat((s) => !!s.retitling[t.id])
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const rowRef = useRowOnScreen(t.id)
+  // Stable, so a re-render never detaches the row the picker is placed against.
+  const setRow = useCallback((node: HTMLDivElement | null) => { rowRef(node); anchorRef.current = node }, [rowRef])
   const close = useCallback(() => setMenu(false), [])
   const closeSnooze = useCallback(() => setSnoozing(false), [])
   const title = threadTitle(t)
@@ -139,7 +113,7 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
   const asking = !!pendingQuestions(t)
   const approving = !asking && !!pendingApproval(t)
   return (
-    <div ref={rowRef} className={`vc-thread shelf-${shelf} ${active ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''} ${(t.needsReply && !live) || woke ? 'waiting' : ''}`} {...dragThreadProps(t.id)}>
+    <div ref={setRow} className={`vc-thread shelf-${shelf} ${active ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''} ${(t.needsReply && !live) || woke ? 'waiting' : ''}`} {...dragThreadProps(t.id)}>
       <button type="button" className="vc-thread-main" onClick={() => onOpen(t.id)} title={title}>
         <ThreadIcon t={t} size={16} busy={retitling} />
         <span className={`vc-thread-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{title}</span>
@@ -175,7 +149,22 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
       <button type="button" className="vc-thread-more" onClick={(e) => { e.stopPropagation(); setSnoozing(false); setMenu((m) => !m) }} aria-label={`Options for ${title}`}>
         <TI icon={IconDots} size={16} />
       </button>
-      {menu && <ThreadMenu t={t} shelf={shelf} live={live} onRename={() => { setDraft(title); setEditing(true) }} onSnooze={() => { setMenu(false); setSnoozing(true) }} onClose={close} />}
+      {menu && <ThreadMenu t={t} shelf={shelf} live={live} onRename={() => { setDraft(title); setEditing(true) }} onSnooze={() => { setMenu(false); setSnoozing(true) }} onMove={() => setPicking('folder')} onLinkTask={() => setPicking('task')} onClose={close} />}
+      {picking === 'folder' && <FolderPicker
+        open anchor={anchorRef as React.RefObject<HTMLElement>} onClose={closePicker}
+        value={t.projectId || null} noneLabel="Home (no project)" label={`Move “${title}”`}
+        onPick={(id) => {
+          if ((t.projectId || null) === id) return
+          moveThread(t.id, id)
+          const p = id ? getState().projects.find((x) => x.id === id) : null
+          pushToast(`Moved “${title}” to ${p ? p.name : 'Home'}`, 'info')
+        }}
+      />}
+      {picking === 'task' && <TaskPicker
+        open anchor={anchorRef as React.RefObject<HTMLElement>} onClose={closePicker}
+        value={t.taskId || null} projectId={t.projectId || null}
+        onPick={(ref) => linkTask(t.id, ref)}
+      />}
       {snoozing && <SnoozeMenu onSnooze={(until) => snoozeThread(t.id, until)} onClose={closeSnooze} />}
     </div>
   )

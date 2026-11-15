@@ -8,6 +8,7 @@ import { installDownloadLinks } from './downloads'
 import { installLinkRouting } from './links'
 import DownloadActivity from './components/DownloadActivity'
 import { installChatAbout } from './chat/about/start'
+import { installWorkAuth } from './work/state'
 import { useShortcuts, useCommand } from './useShortcuts'
 import { useInboxCount, describeInboxCount } from './useInboxCount'
 import AuthGate from './components/AuthGate'
@@ -341,6 +342,8 @@ export default function App() {
   useEffect(() => installLinkRouting(), [])
   // "Chat about this" on any card opens the chat through the same router.
   useEffect(() => installChatAbout({ navigate, onAuthError }), [navigate, onAuthError])
+  // The chats panel's Tasks face signs out on a 401 like everything else.
+  useEffect(() => installWorkAuth(onAuthError), [onAuthError])
 
   const terminalVisible = Boolean(terminalAvailable) && terminalOpen
 
