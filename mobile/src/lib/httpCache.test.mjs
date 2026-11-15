@@ -74,6 +74,21 @@ test('a tagged answer is read through to disk, and a new cache peeks it before a
   assert.deepEqual(relaunched.peek('/api/todos'), { todos: ['milk'] })
 })
 
+test('forget drops one stored answer, from memory and disk', async () => {
+  const storage = memoryStorage()
+  const cache = cacheFor(storage)
+  await cache.get('/api/threads', bridge({ threads: ['all'] }).send, parse)
+  await cache.get('/api/todos', bridge({ todos: [] }).send, parse)
+  await settle()
+  cache.forget('/api/threads')
+  cache.forget('/api/never-stored')
+  await settle()
+  assert.equal(cache.peek('/api/threads'), undefined)
+  const relaunched = cacheFor(storage)
+  assert.equal(relaunched.peek('/api/threads'), undefined)
+  assert.deepEqual(relaunched.peek('/api/todos'), { todos: [] })
+})
+
 test('revalidation: If-None-Match goes out, a 304 answers the stored body, a change replaces it', async () => {
   const b = bridge({ todos: ['milk'] })
   const cache = cacheFor()

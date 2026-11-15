@@ -23,6 +23,10 @@ interface Props {
   models: Record<string, ModelRow[]>
   /** Put a discarded unsent message's text back in the composer. */
   onDiscarded: (text: string) => void
+  /** Older messages the bridge has (history.ts): offer them, say they are coming, or that they failed. */
+  earlier?: 'more' | 'loading' | 'error'
+  /** Read the page before the first message here. Stable, so the log stays memoized. */
+  onLoadEarlier?: () => void
 }
 
 const UserRow = React.memo(function UserRow({ threadId, m, busy, onDiscarded }: { threadId: string | null; m: ChatMessage; busy: boolean; onDiscarded: (text: string) => void }) {
@@ -61,12 +65,24 @@ function modelName(models: Record<string, ModelRow[]>, provider?: string, model?
   return models[provider]?.find((x) => x.id === id)?.name
 }
 
-export default React.memo(function MessageLog({ threadId, messages, busy, activity, provider, providers, models, onDiscarded }: Props) {
+/** The top of a chat loaded a window at a time: T3 Code's "Load earlier turns". */
+function EarlierControl({ state, onLoad }: { state: 'more' | 'loading' | 'error'; onLoad?: () => void }) {
+  return (
+    <div className="vc-history">
+      {state === 'loading'
+        ? <span className="vc-history-note vc-shimmer" role="status">Loading earlier messages…</span>
+        : <button type="button" className="vc-btn sm ghost vc-history-btn" onClick={onLoad}>{state === 'error' ? 'Couldn’t load earlier messages · Try again' : 'Load earlier messages'}</button>}
+    </div>
+  )
+}
+
+export default React.memo(function MessageLog({ threadId, messages, busy, activity, provider, providers, models, onDiscarded, earlier, onLoadEarlier }: Props) {
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
   // The chat moving to another account (chat/handoff.ts): a divider where each move happened.
   const switches = providerSwitches(messages)
   return (
     <div className="vc-log">
+      {earlier && <EarlierControl state={earlier} onLoad={onLoadEarlier} />}
       {messages.map((m, i) => {
         const live = busy && i === messages.length - 1
         const isLast = m === lastAssistant && i === messages.length - 1

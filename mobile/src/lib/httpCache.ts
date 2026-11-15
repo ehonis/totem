@@ -211,6 +211,11 @@ export function createHttpCache(storage: CacheStorage, {
       if (response.ok && isJson(response) && !blocked(response)) reached(mark)
     },
 
+    /** Drop one stored answer (a route the app no longer reads), if there is one. */
+    forget(path: string) {
+      if (account && keys().has(keyOf(account, path))) write(account, path, null)
+    },
+
     /** Forget everything: sign-out, or another bridge or secret. Settles once the disk is empty. */
     clear() {
       epoch++

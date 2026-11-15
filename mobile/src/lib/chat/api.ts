@@ -29,15 +29,18 @@ export interface StreamHandle {
   /** Stop listening. The run keeps going on the bridge; use stopChat to end it. */
   detach: () => void
   done: Promise<void>
+  /** It was dropped for going silent (STREAM_SILENT_MS), not detached on purpose. */
+  stalled: boolean
 }
 
-async function readSse(r: Response, onEvent: (e: StreamEvent) => void) {
+async function readSse(r: Response, onEvent: (e: StreamEvent) => void, onChunk: () => void) {
   const reader = r.body!.getReader()
   const decoder = new TextDecoder()
   let buf = ''
   for (;;) {
     const { value, done } = await reader.read()
     if (done) break
+    onChunk()
     buf += decoder.decode(value, { stream: true })
     const chunks = buf.split('\n\n')
     buf = chunks.pop() || ''
@@ -49,22 +52,35 @@ async function readSse(r: Response, onEvent: (e: StreamEvent) => void) {
   }
 }
 
+// The bridge writes a comment line every 20 s (chatSse in bridge.mjs), so a stream
+// silent for longer than this is dead: iOS froze its socket in the background and
+// it never errors. It is dropped, and the store attaches again from its last seq.
+export const STREAM_SILENT_MS = 50_000
+
 function stream(url: string, init: RequestInit, onEvent: (e: StreamEvent) => void, onError: (e: Error) => void): StreamHandle {
   const controller = new AbortController()
-  const done = (async () => {
+  let heard = Date.now()
+  const handle: StreamHandle = { detach: () => controller.abort(), done: Promise.resolve(), stalled: false }
+  const watchdog = setInterval(() => {
+    if (Date.now() - heard > STREAM_SILENT_MS) { handle.stalled = true; controller.abort() }
+  }, 10_000)
+  handle.done = (async () => {
     try {
       const r = await bridgeFetch(url, { ...init, signal: controller.signal })
+      heard = Date.now()
       if (r.status === 401) throw new AuthError()
       if (!r.ok || !r.body) {
         const body = await r.json().catch(() => ({}))
         throw Object.assign(new Error(body?.error || `HTTP ${r.status}`), { status: r.status })
       }
-      await readSse(r, onEvent)
+      await readSse(r, onEvent, () => { heard = Date.now() })
     } catch (e: any) {
       if (e?.name !== 'AbortError') onError(e)
+    } finally {
+      clearInterval(watchdog)
     }
   })()
-  return { detach: () => controller.abort(), done }
+  return handle
 }
 
 export function sendChat(args: SendArgs, onEvent: (e: StreamEvent) => void, onError: (e: Error) => void): StreamHandle {

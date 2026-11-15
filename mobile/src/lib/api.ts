@@ -103,6 +103,8 @@ async function getJSON<T = any>(url: string): Promise<T> {
 
 /** What the last GET of `url` answered, from the cache, without asking the bridge. */
 export const peekJSON = <T = any>(url: string): T | undefined => httpCache.peek<T>(url)
+/** Drop a stored answer the app no longer reads. */
+export const forgetCached = (url: string) => httpCache.forget(url)
 /** Whether the bridge was out of reach and screens show stored data (the offline hint). */
 export const getCacheStatus = httpCache.getStatus
 export const subscribeCacheStatus = httpCache.subscribe
@@ -338,7 +340,13 @@ export const toggleMcpConnection = (id: string, enabled: boolean) => sendJSON('/
 export const removeMcpConnection = (id: string) => sendJSON('/api/mcp/remove', 'POST', { id })
 
 // Cross-device chat history, persisted by the bridge.
-export const getThreads = () => getJSON('/api/threads') // { threads: [...] }
+// The list as summaries (chat/store.mjs threadSummary): each chat's last turn as a preview, no history.
+export const getThreadSummaries = () => getJSON<{ threads: any[] }>('/api/threads?view=summary')
+// One chat, a window at a time (lib/chat/history.ts): the latest turns, or the page before `before`.
+const threadPageUrl = (id: string, before?: string | null, turns = 10) =>
+  `/api/threads/${encodeURIComponent(id)}?turns=${turns}${before ? `&before=${encodeURIComponent(before)}` : ''}`
+export const getThreadPage = (id: string, before?: string | null) => getJSON(threadPageUrl(id, before))
+export const peekThreadPage = (id: string) => peekJSON(threadPageUrl(id))
 
 export async function putThread(thread: any) {
   const r = await bridgeFetch(`/api/threads/${encodeURIComponent(thread.id)}`, {

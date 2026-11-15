@@ -38,6 +38,8 @@ import { openHabitDay, type DaySave } from './HabitDaySheet'
 import { goalsContext, habitMetricContext, habitsContext, scheduleContext, systemContext, tasksContext } from '../../lib/chat/about/context'
 import { chatAboutMenu } from '../../ui/chatAbout'
 import { openAway } from './AwaySheet'
+import RecentChats from './RecentChats'
+import { isWakeNetworkError } from '../../lib/wake'
 
 type NavTarget = Parameters<typeof navigateTo>[0]
 type Tabler = React.ComponentType<any>
@@ -92,6 +94,33 @@ const headroomTone = (pct: number) => (pct <= 10 ? colors.red : pct <= 30 ? colo
 
 // A reload when the screen comes back into view, unless the last one is this fresh.
 const STALE_MS = 30_000
+// A section waits this long for the bridge, then says so: a socket iOS froze in
+// the background can otherwise hold a request (and the spinner) for a minute.
+const SECTION_TIMEOUT_MS = 12_000
+// Back in the app, sections that failed are asked again this long after: the
+// first tries often land before iOS has the network back.
+const WAKE_RETRIES_MS = [3_000, 10_000]
+
+// Each section and how to read it, in the order load() asks.
+const SECTIONS: [string, () => Promise<any>][] = [
+  ['todos', getTodos],
+  ['habits', () => getHabits(40)],
+  ['cal', () => getCalendar(3)],
+  ['inbox', getInboxCount],
+  ['week', () => getGoals('this_week')],
+  ['month', () => getGoals('this_month')],
+  ['jobs', () => getJobs()],
+  ['assistant', getAssistantUsage],
+  ['prod', getProductivity],
+  ['away', () => getAway()],
+]
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('Totem didn’t answer in time.')), ms)
+    p.then((v) => { clearTimeout(t); resolve(v) }, (e) => { clearTimeout(t); reject(e) })
+  })
+}
 
 const onAuthError = () => { void clearSecretStored() }
 
@@ -125,50 +154,62 @@ export default function OverviewScreen() {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 60_000); return () => clearInterval(t) }, [])
 
-  const load = useCallback(async () => {
+  // Sections whose last read failed, for the retries after coming back to the app.
+  const failed = useRef<Set<string>>(new Set())
+  const generation = useRef(0)
+  // Every section lands on its own as its answer arrives, so one slow or stuck
+  // request never holds the rest of the page (or the refresh spinner) back.
+  const load = useCallback(async (only?: string[]) => {
+    const gen = ++generation.current
     setRefreshing(true)
     loadedAt.current = Date.now()
-    const run = async (key: string, fn: () => Promise<any>): Promise<[string, any, string | null]> => {
-      try { return [key, await fn(), null] } catch (e: any) {
-        if (e instanceof AuthError) { onAuthError(); return [key, null, 'auth'] }
+    const list = only ? SECTIONS.filter(([k]) => only.includes(k)) : SECTIONS
+    await Promise.all(list.map(async ([key, fn]) => {
+      try {
+        const v = await withTimeout(fn(), SECTION_TIMEOUT_MS)
+        failed.current.delete(key)
+        setData((d: any) => ({ ...d, [key]: v }))
+        setErrs((e) => { if (!(key in e)) return e; const n = { ...e }; delete n[key]; return n })
+        if (key === 'todos') { setDoneIds(new Set()); setChecking(new Set()) }
+      } catch (e: any) {
+        if (e instanceof AuthError) { onAuthError(); return }
         // Signed out or switched bridge mid-load: keep what the section shows, say nothing.
-        if (isAccountChanged(e)) return [key, dataRef.current[key] ?? null, null]
-        return [key, null, e?.message || String(e)]
+        if (isAccountChanged(e)) return
+        failed.current.add(key)
+        const msg = e?.message || String(e)
+        // A refresh updates in place: a section whose reload fails keeps what it
+        // last showed, and only one that never loaded says it failed. While the
+        // app is still waking, it keeps loading instead: the retry is on its way.
+        if (dataRef.current[key] == null && !isWakeNetworkError(msg)) setErrs((er) => ({ ...er, [key]: msg }))
       }
-    }
-    const results = await Promise.all([
-      run('todos', getTodos),
-      run('habits', () => getHabits(40)),
-      run('cal', () => getCalendar(3)),
-      run('inbox', getInboxCount),
-      run('week', () => getGoals('this_week')),
-      run('month', () => getGoals('this_month')),
-      run('jobs', () => getJobs()),
-      run('assistant', getAssistantUsage),
-      run('prod', getProductivity),
-      run('away', () => getAway()),
-    ])
-    // A refresh updates in place: a section whose reload fails keeps what it last
-    // showed rather than turning into an error card, and only a section that never
-    // loaded says it failed.
-    const prev = dataRef.current
-    const d: any = {}, e: Record<string, string> = {}
-    for (const [k, v, err] of results) {
-      d[k] = err && prev[k] != null ? prev[k] : v
-      if (err && prev[k] == null) e[k] = err
-    }
-    setData(d); setErrs(e); setDoneIds(new Set()); setChecking(new Set()); setLoaded(true); setRefreshing(false); setPulling(false)
+    }))
+    if (gen !== generation.current) return
+    setLoaded(true); setRefreshing(false); setPulling(false)
   }, [])
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    // A cold launch wakes the network too (lib/wake.ts): ask failed sections again.
+    const timers = WAKE_RETRIES_MS.map((ms) => setTimeout(() => { if (failed.current.size) load([...failed.current]) }, ms))
+    return () => timers.forEach(clearTimeout)
+  }, [load])
 
   // Drawer screens stay mounted, so coming back here (or to the app) would show
   // whatever was true when it first opened. Refresh then, if it has gone stale.
   const loadIfStale = useCallback(() => { if (Date.now() - loadedAt.current > STALE_MS) load() }, [load])
   useFocusEffect(loadIfStale)
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (st) => { if (st === 'active') { setNow(new Date()); loadIfStale() } })
-    return () => sub.remove()
-  }, [loadIfStale])
+    let timers: ReturnType<typeof setTimeout>[] = []
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st !== 'active') return
+      setNow(new Date())
+      loadIfStale()
+      timers.forEach(clearTimeout)
+      timers = WAKE_RETRIES_MS.map((ms) => setTimeout(() => {
+        if (AppState.currentState === 'active' && failed.current.size) load([...failed.current])
+      }, ms))
+    })
+    return () => { sub.remove(); timers.forEach(clearTimeout) }
+  }, [loadIfStale, load])
 
   const ask = useCallback((text: string) => {
     const id = send({ text, kind: 'regular' })
@@ -376,7 +417,7 @@ export default function OverviewScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         refreshControl={
-          <RefreshControl refreshing={pulling} onRefresh={() => { setPulling(true); load() }} tintColor={colors.muted} />
+          <RefreshControl refreshing={pulling} onRefresh={() => { setPulling(true); void load() }} tintColor={colors.muted} />
         }
       >
         <View style={st.head}>
@@ -389,10 +430,12 @@ export default function OverviewScreen() {
             </T>
             {summary.length > 0 && <T size={14} color={ov.faint}>{cap(summary.join(', '))}</T>}
           </View>
-          <RefreshButton spinning={refreshing} onPress={load} />
+          <RefreshButton spinning={refreshing} onPress={() => { void load() }} />
         </View>
 
         <AskBox onAsk={ask} />
+
+        <RecentChats />
 
         {attention.length > 0 && (
           <View style={st.attn}>

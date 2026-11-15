@@ -18,7 +18,7 @@ export function threadMenu(t: ChatThread, shelf: Shelf, live: boolean): { action
   const { projects } = getState()
   const inProject = !!(t.projectId && projects.some((p) => p.id === t.projectId))
   const presets = snoozePresets(new Date())
-  const asked = t.messages.some((m) => m.role === 'user')
+  const asked = !!t.firstUserText || t.messages.some((m) => m.role === 'user')
   const roots = projects.filter((p) => !p.parentId)
   const moveRows = roots.flatMap((p) => [{ p, folder: false }, ...projects.filter((f) => f.parentId === p.id).map((f) => ({ p: f, folder: true }))])
 

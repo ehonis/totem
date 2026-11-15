@@ -148,6 +148,10 @@ test('the allow list covers record ids but not their sub-routes', () => {
   assert.ok(etagEligible('GET', '/api/todos/t1'))
   assert.ok(etagEligible('GET', '/api/goals/g1'))
   assert.ok(etagEligible('GET', '/api/lists/l1'))
+  // One chat's window; never a write to it, nor a path below it.
+  assert.ok(etagEligible('GET', '/api/threads/abc-123'))
+  assert.ok(!etagEligible('PUT', '/api/threads/abc-123'))
+  assert.ok(!etagEligible('GET', '/api/threads/abc/x'))
   assert.ok(!etagEligible('GET', '/api/todos/connectors/sheet'))
   assert.ok(!etagEligible('GET', '/api/lists/l1/items'))
   assert.ok(!etagEligible('HEAD', '/api/todos'))

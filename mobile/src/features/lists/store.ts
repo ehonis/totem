@@ -32,8 +32,15 @@ export function useLists(): ListsState {
 }
 
 let inflight: Promise<void> | null = null
+let inflightAt = 0
+let inflightToken = 0
+// A load older than this is treated as stuck (a socket iOS froze in the background
+// never answers): Retry starts a fresh one instead of waiting on it for ever.
+const STUCK_MS = 15_000
 export function loadLists(): Promise<void> {
-  if (inflight) return inflight
+  if (inflight && Date.now() - inflightAt < STUCK_MS) return inflight
+  const token = ++inflightToken
+  inflightAt = Date.now()
   // The first load draws the cached lists at once while the bridge is asked.
   const payload = state.loaded ? undefined : peekLists()
   const board = state.loaded ? undefined : peekTodoBoard({})
@@ -41,12 +48,16 @@ export function loadLists(): Promise<void> {
   inflight = (async () => {
     try {
       const [payload, board] = await Promise.all([getLists(), getTodoBoard({})])
-      setLists({ lists: payload.lists, todos: board.todos, loaded: true })
+      // A stuck load that answers after a newer one began must not overwrite it.
+      if (token === inflightToken) setLists({ lists: payload.lists, todos: board.todos, loaded: true, error: '' })
     } catch (cause) {
-      if (!isAccountChanged(cause)) setLists({ error: cause instanceof Error ? cause.message : 'Lists could not load.' })
+      // A newer load took over: its answer is the one that counts.
+      if (token === inflightToken && !isAccountChanged(cause)) setLists({ error: cause instanceof Error ? cause.message : 'Lists could not load.' })
     } finally {
-      setLists({ loading: false })
-      inflight = null
+      if (token === inflightToken) {
+        setLists({ loading: false })
+        inflight = null
+      }
     }
   })()
   return inflight

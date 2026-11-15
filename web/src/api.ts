@@ -292,7 +292,11 @@ export const toggleMcpConnection = (id: string, enabled: boolean) => sendJSON('/
 export const removeMcpConnection = (id: string) => sendJSON('/api/mcp/remove', 'POST', { id })
 
 // Cross-device chat history, persisted by the bridge.
-export const getThreads = () => getJSON('/api/threads') // { threads: [...] }
+// The list as summaries (chat/history.ts): each chat's last turn as a preview, no history.
+export const getThreadSummaries = () => getJSON<{ threads: any[] }>('/api/threads?view=summary')
+// One chat with a window of its messages: the latest `turns` turns, or those before `before`.
+export const getThreadPage = (id: string, { before, turns = 10 }: { before?: string | null; turns?: number } = {}) =>
+  getJSON<any>(`/api/threads/${encodeURIComponent(id)}?turns=${turns}${before ? `&before=${encodeURIComponent(before)}` : ''}`)
 
 export async function putThread(thread: any) {
   const r = await fetch(`/api/threads/${encodeURIComponent(thread.id)}`, {
