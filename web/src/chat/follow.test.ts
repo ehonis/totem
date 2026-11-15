@@ -52,3 +52,25 @@ describe('following the chat bottom', () => {
     expect(f.following).toBe(true)
   })
 })
+
+describe('gliding to the bottom', () => {
+  it('a smooth scroll down keeps following through its in-between scroll events', () => {
+    const f = createFollow()
+    f.scrolled(900)
+    expect(f.following).toBe(false)
+    f.glide()
+    expect(f.scrolled(600)).toBe(true)
+    expect(f.following).toBe(true)
+    expect(f.scrolled(20)).toBe(true)
+    // Arrived: his scrolling decides again.
+    expect(f.scrolled(300)).toBe(false)
+  })
+
+  it('his own input during a glide hands the decision back to him', () => {
+    const f = createFollow()
+    f.glide()
+    f.interrupt()
+    expect(f.scrolled(500)).toBe(false)
+    expect(f.following).toBe(false)
+  })
+})

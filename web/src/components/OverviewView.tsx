@@ -8,7 +8,7 @@ import { awayStatus, dayKey, upcomingAway, type AwaySpan } from '../away'
 import AwayEditor from './AwayEditor'
 import { useAiUsageLive } from '../useAiUsageLive'
 import { DayModal, HabitCheckButton, HabitMetricInput, HabitMetricSection, QuotaDots, isSyncedSleep, type DaySave } from './HabitsView'
-import { send, setActive } from '../chat/store'
+import { networkText, send, setActive } from '../chat/store'
 import { TI, ProviderLogo } from '../chat/ui'
 import type { NavTarget } from '../router'
 import { pushError } from '../toast'
@@ -236,7 +236,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
       try { return [key, await fn(), null] }
       catch (e: any) {
         if (e instanceof AuthError) { onAuthError(); return [key, null, 'auth'] }
-        return [key, null, e?.message || String(e)]
+        return [key, null, networkText(e)]
       }
     }
     const results = await Promise.all([
@@ -251,11 +251,57 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
       run('prod', getProductivity),
       run('away', () => getAway()),
     ])
-    const d: any = {}, e: Record<string, string> = {}
-    for (const [k, v, err] of results) { d[k] = v; if (err) e[k] = err }
-    setData(d); setErrs(e); setDoneIds(new Set()); setLoaded(true); setRefreshing(false)
+    // A section that loaded before keeps what it showed when a refresh fails (a
+    // wake before the network is back); only one that never loaded says it failed.
+    let failed = false
+    setData((prev: any) => {
+      const d: any = {}
+      for (const [k, v, err] of results) d[k] = err && prev[k] != null ? prev[k] : v
+      return d
+    })
+    setErrs((prevErrs) => {
+      const e: Record<string, string> = {}
+      for (const [k, , err] of results) if (err && (dataRef.current[k] == null || prevErrs[k])) e[k] = err
+      return e
+    })
+    for (const [, , err] of results) if (err && err !== 'auth') failed = true
+    lastLoad.current = Date.now()
+    setDoneIds(new Set()); setLoaded(true); setRefreshing(false)
+    return !failed
   }, [onAuthError])
+  const dataRef = useRef<any>({})
+  dataRef.current = data
+  const lastLoad = useRef(0)
   useEffect(() => { load() }, [load])
+  // Coming back to the page after a while (the tab showing, focus, the network
+  // back): read it again, once for all of those, and again after 3 s and 10 s if
+  // the network was not up yet.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let retries: ReturnType<typeof setTimeout>[] = []
+    const wake = () => {
+      if (document.visibilityState !== 'visible') return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(async () => {
+        timer = null
+        if (Date.now() - lastLoad.current < 30_000) return
+        retries.forEach(clearTimeout)
+        retries = []
+        if (await load()) return
+        retries = [3_000, 10_000].map((ms) => setTimeout(async () => { if (await load()) { retries.forEach(clearTimeout); retries = [] } }, ms))
+      }, 300)
+    }
+    window.addEventListener('focus', wake)
+    window.addEventListener('online', wake)
+    document.addEventListener('visibilitychange', wake)
+    return () => {
+      if (timer) clearTimeout(timer)
+      retries.forEach(clearTimeout)
+      window.removeEventListener('focus', wake)
+      window.removeEventListener('online', wake)
+      document.removeEventListener('visibilitychange', wake)
+    }
+  }, [load])
   // The morning check-in logs from outside this view.
   useEffect(() => {
     const on = () => { load() }

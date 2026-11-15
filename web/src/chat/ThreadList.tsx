@@ -30,7 +30,7 @@ function ThreadMenu({ t, shelf, live, onRename, onSnooze, onMove, onLinkTask, on
         : <button type="button" role="menuitem" onClick={onSnooze}><TI icon={IconClock} size={16} /><span>Snooze…</span></button>}
       <div className="vc-menu-sep" />
       <button type="button" role="menuitem" onClick={() => { onClose(); onRename() }}><TI icon={IconPencil} size={16} /><span>Rename</span></button>
-      {t.messages.some((m) => m.role === 'user') && (
+      {(t.messages.some((m) => m.role === 'user') || !!t.firstUserText) && (
         <button type="button" role="menuitem" onClick={() => { onClose(); regenerateTitle(t.id) }}><TI icon={IconSparkles} size={16} /><span>Regenerate title and icon</span></button>
       )}
       <button type="button" role="menuitem" onClick={() => { onClose(); setPinned(t.id, !t.pinned) }}><TI icon={IconPinned} size={16} /><span>{t.pinned ? 'Unpin' : 'Pin'}</span></button>

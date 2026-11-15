@@ -7,8 +7,10 @@ import {
   useChat, initChat, send, stop, steer, queueMessage, updateQueue, setActive, setThreadModel, keepThread, threadChoice, draftFor, type DraftPick,
   threadTitle, providerById, loadCapabilities, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
   openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead, setMembers,
-  loadFiles, openArtifact, openFile, openResource, takePendingFile, respondToApproval,
+  loadFiles, openArtifact, openFile, openResource, takePendingFile, respondToApproval, openThread, loadEarlier,
 } from '../chat/store'
+import { isLoaded } from '../chat/history'
+import { pickAnchor, readScroll, rowBoxes, rowTop, saveScroll, type ScrollEntry } from '../chat/scrollMemory'
 import { useTotemDirectory } from '../totems/shared'
 import { GroupPicker } from './TotemsView'
 import { isSnoozed, settledAt, wakeDescription } from '../chat/settle'
@@ -36,13 +38,13 @@ import { useViewing } from '../chat/onScreen'
 import { contextVersion, subscribeContext, takeContext } from '../chat/pendingContext'
 import { TI } from '../chat/ui'
 import { IconArrowDown, IconPaperclip } from '../chat/icons'
-import type { Attachment, ModelSettings, QueuedMessage } from '../chat/types'
+import type { Attachment, ChatMessage, ModelSettings, QueuedMessage } from '../chat/types'
 import '../chat/chat.css'
 import { chatGlow } from '../chat/glow'
 import { useSettings } from '../settings'
 import { useOwnerName } from '../useOwnerName'
 import { findLanding, landKey, useLandOn } from '../landing'
-import { createFollow } from '../chat/follow'
+import { AT_BOTTOM_PX, createFollow } from '../chat/follow'
 import ResizeHandle, { SIDE_PANEL_VAR } from './ResizeHandle'
 
 function greeting(name: string) {
@@ -60,6 +62,8 @@ const STARTERS: { text: string; fill?: boolean }[] = [
   { text: 'Remind me to ', fill: true },
 ]
 
+// One empty list for a chat with nothing to draw, so effects keyed on it stay put.
+const NO_MESSAGES: ChatMessage[] = []
 const DRAFTS_KEY = 'totem.chat.drafts'
 function readDrafts(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {} } catch { return {} }
@@ -262,8 +266,15 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   // and an open chat keeps its own model.
   const draft = draftFor(draftPick, draftKey, { open: !!active, projectId: project?.id })
   const choice = threadChoice(active, draft)
-  const messages = active?.messages || []
-  const empty = messages.length === 0
+  // A summary's messages are a preview of its last turn, never the chat: until its
+  // window arrives (history.ts) the log says it is loading.
+  const pending = !!active && !isLoaded(active)
+  const threadLoad = useChat((s) => (activeId ? s.loads[activeId] : undefined))
+  const messages = pending ? NO_MESSAGES : active?.messages || NO_MESSAGES
+  const empty = !pending && messages.length === 0
+  useEffect(() => { if (activeId && pending && !threadLoad) openThread(activeId) }, [activeId, pending, threadLoad])
+  const earlier: 'more' | 'loading' | 'error' | undefined = pending || !active?.history?.hasMore || !active.history.before ? undefined
+    : threadLoad?.earlier === 'loading' ? 'loading' : threadLoad?.earlier === 'error' ? 'error' : 'more'
   const input = drafts[draftKey] || ''
   useEffect(() => { ensureModels(choice.provider) }, [choice.provider])
 
@@ -297,33 +308,136 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
 
   // --- scrolling ---------------------------------------------------------------
   // Follow the reply while you're at the bottom; stop the moment you scroll up to
-  // read something, and offer a way back. Opening a chat always starts at the bottom.
+  // read something, and offer a way back. A chat opens where he left it
+  // (chat/scrollMemory.ts): at the bottom if he left it there, else on the message
+  // that was at the top of the view, held there while the log settles.
   const follow = useRef(createFollow()).current
+  // The chat the scroller is showing, for saving its position.
+  const shownId = useRef<string | null>(null)
+  // A remembered position being restored: until his first input, or 2 s after it first lands.
+  const restore = useRef<{ id: string; entry: ScrollEntry; pages: number; landed: boolean } | null>(null)
+  const saveRaf = useRef(0)
+  const fromBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight
+  const savePosition = () => {
+    const el = scrollRef.current
+    const id = shownId.current
+    if (!el || !el.clientHeight || !id || restore.current) return
+    const rows = rowBoxes(el)
+    if (!rows.length) return
+    const anchor = fromBottom(el) < AT_BOTTOM_PX ? null : pickAnchor(rows, el.scrollTop)
+    saveScroll(id, anchor ? { atEnd: false, ...anchor } : { atEnd: true })
+  }
   const onScroll = () => {
     const el = scrollRef.current
     // Hidden behind another tab there is no layout to judge by.
     if (!el || !el.clientHeight) return
-    const atEnd = follow.scrolled(el.scrollHeight - el.scrollTop - el.clientHeight)
+    const atEnd = follow.scrolled(fromBottom(el))
     if (atEnd !== null) setAtBottom(atEnd)
+    if (!saveRaf.current) saveRaf.current = requestAnimationFrame(() => { saveRaf.current = 0; savePosition() })
   }
   const scrollToBottom = (smooth = true) => {
     const el = scrollRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   }
+  const endRestore = () => {
+    if (!restore.current) return
+    restore.current = null
+    const el = scrollRef.current
+    setAtBottom(follow.endLanding(true, el ? fromBottom(el) : Infinity))
+  }
+  // Put the remembered message back at the top of the view. Its window may still
+  // be on its way, or the message may be on an earlier page (up to five are read).
+  const applyRestore = () => {
+    const r = restore.current
+    const el = scrollRef.current
+    if (!r || !el || r.id !== shownId.current) return
+    const t = getState().threads.find((x) => x.id === r.id)
+    if (!isLoaded(t)) return
+    const top = rowTop(el, r.entry.anchorId!)
+    if (top === null) {
+      if (t.history?.hasMore && r.pages < 5) {
+        if (getState().loads[r.id]?.earlier !== 'loading') { r.pages += 1; void loadEarlier(r.id) }
+        return
+      }
+      // Gone (edited away, or further back than we read): the top of what is here.
+      el.scrollTop = 0
+      endRestore()
+      return
+    }
+    el.scrollTop = top + (r.entry.offset || 0)
+    if (!r.landed) {
+      r.landed = true
+      window.setTimeout(() => { if (restore.current === r) endRestore() }, 2000)
+    }
+  }
+  // His own wheel, touch, key or click: the view is his again.
+  const onUserInput = () => { follow.interrupt(); if (restore.current) endRestore() }
+  // Send and the jump arrow glide down; the glide's own scroll events keep it following.
+  const glideToBottom = () => { endRestore(); follow.glide(); setAtBottom(true); scrollToBottom(true) }
   // The view isn't rendered behind another tab, so showing it is opening the chat too.
-  useLayoutEffect(() => { follow.open(); scrollToBottom(false); setAtBottom(true) }, [activeId, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    shownId.current = activeId
+    const entry = activeId ? readScroll(activeId) : null
+    if (activeId && entry && !entry.atEnd && entry.anchorId) {
+      restore.current = { id: activeId, entry, pages: 0, landed: false }
+      // Following stays off and scroll events are ignored until it has landed (follow.ts).
+      follow.startLanding()
+      setAtBottom(false)
+      applyRestore()
+      return
+    }
+    restore.current = null
+    follow.open()
+    scrollToBottom(false)
+    setAtBottom(true)
+  }, [activeId, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+  // "Load earlier": the message that was first stays where it was on screen.
+  const prepend = useRef<{ id: string; firstId: string; top: number; scrollTop: number } | null>(null)
+  const onLoadEarlier = useCallback(() => {
+    const id = shownId.current
+    const el = scrollRef.current
+    if (!id) return
+    const firstId = getState().threads.find((x) => x.id === id)?.messages[0]?.id
+    const top = el && firstId ? rowTop(el, firstId) : null
+    prepend.current = el && firstId && top !== null ? { id, firstId, top, scrollTop: el.scrollTop } : null
+    void loadEarlier(id)
+  }, [])
+  useLayoutEffect(() => {
+    const p = prepend.current
+    const el = scrollRef.current
+    if (!p || !el || p.id !== activeId || messages[0]?.id === p.firstId) return
+    prepend.current = null
+    const top = rowTop(el, p.firstId)
+    if (top !== null) el.scrollTop = p.scrollTop + (top - p.top)
+  }, [messages]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { if (restore.current) applyRestore() }, [messages]) // eslint-disable-line react-hooks/exhaustive-deps
   const lastContent = messages[messages.length - 1]?.content.length || 0
   const lastParts = messages[messages.length - 1]?.parts?.length || 0
   useLayoutEffect(() => { if (follow.following) scrollToBottom(false) }, [messages.length, lastContent, lastParts, run?.activity]) // eslint-disable-line react-hooks/exhaustive-deps
   // A search hit lands on its message (landing.ts): no following the bottom until it
   // has landed (chat/follow.ts says why); if it never turns up, go back down. The
-  // flash goes on the bubble or the reply's text, not the whole row.
+  // flash goes on the bubble or the reply's text, not the whole row. It wins over
+  // a remembered position.
+  // Earlier pages read while looking for a search hit older than the loaded window.
+  const landingPages = useRef<{ id: string; pages: number } | null>(null)
   useLandOn('msg', {
     ready: visible && messages.length > 0,
-    prepare: () => follow.startLanding(),
+    prepare: () => { restore.current = null; follow.startLanding() },
     find: ({ id }) => {
       const row = findLanding(landKey('msg', id), scrollRef.current ?? document)
-      return row ? row.querySelector<HTMLElement>(':scope > .vc-bubble, :scope > .vc-assistant-body') ?? row : null
+      if (!row) {
+        // Not in the loaded window: read earlier pages for it (up to ten) while the landing waits.
+        if (landingPages.current?.id !== id) landingPages.current = { id, pages: 0 }
+        const t = activeId ? getState().threads.find((x) => x.id === activeId) : null
+        // Not while a read is out or after one failed: no burst of failing reads on a bad link.
+        if (activeId && isLoaded(t) && !t.messages.some((m) => m.id === id) && t.history?.hasMore && t.history.before
+          && landingPages.current.pages < 10 && !getState().loads[activeId]?.earlier) {
+          landingPages.current.pages += 1
+          void loadEarlier(activeId)
+        }
+        return null
+      }
+      return row.querySelector<HTMLElement>(':scope > .vc-bubble, :scope > .vc-assistant-body') ?? row
     },
     onLanded: () => {
       const el = scrollRef.current
@@ -332,15 +446,18 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     onMiss: () => { follow.endLanding(false); scrollToBottom(false); setAtBottom(true) },
   })
   // Code blocks, images and Markdown keep growing the log after its first layout:
-  // stay at the bottom through that while following.
+  // stay at the bottom through that while following, or on the remembered message while restoring.
   useEffect(() => {
     const el = scrollRef.current
     if (!el || typeof ResizeObserver === 'undefined') return undefined
-    const ro = new ResizeObserver(() => { if (follow.following) el.scrollTop = el.scrollHeight })
+    const ro = new ResizeObserver(() => {
+      if (restore.current) applyRestore()
+      else if (follow.following) el.scrollTop = el.scrollHeight
+    })
     ro.observe(el)
     if (el.firstElementChild) ro.observe(el.firstElementChild)
     return () => ro.disconnect()
-  }, [empty, activeId, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [empty, pending, activeId, visible]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- actions -----------------------------------------------------------------
   function newChat(k: 'regular' | 'temporary' = 'regular') {
@@ -363,7 +480,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   useCommand(COMMANDS.chatSettle, () => {
     const id = getState().activeId
     const t = id ? getState().threads.find((x) => x.id === id) : null
-    if (!t || !t.messages.length) return
+    if (!t || !(t.messageCount || t.messages.length)) return
     if (t.settledOverride === 'settled') unsettleThread(t.id)
     else settleThread(t.id)
   })
@@ -376,8 +493,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       setDrafts((d) => { const n = { ...d }; delete n[draftKey]; return n })
       setActive(id)
     }
-    setAtBottom(true)
-    requestAnimationFrame(() => scrollToBottom())
+    requestAnimationFrame(glideToBottom)
   }
 
   // --- the queue (T3 Code's follow-ups) ----------------------------------------
@@ -602,7 +718,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
         </MembersPop>
       )}
 
-      <div className="vc-scroll" ref={scrollRef} onScroll={onScroll}>
+      <div className="vc-scroll" ref={scrollRef} onScroll={onScroll} onWheel={onUserInput} onTouchStart={onUserInput} onPointerDown={onUserInput} onKeyDown={onUserInput}>
         {empty && project ? (
           <ProjectHome projectId={project.id} composer={composerEl} maxUploadBytes={caps?.maxUploadBytes} />
         ) : empty ? (
@@ -637,6 +753,17 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
               </div>
             )}
           </div>
+        ) : pending ? (
+          <div className="vc-log">
+            <div className="vc-history opening">
+              {threadLoad?.latest === 'error' ? (
+                <>
+                  <span role="status">Couldn’t open this chat{threadLoad.error ? ` · ${threadLoad.error}` : ''}.</span>
+                  <button type="button" className="vc-btn sm ghost" onClick={() => { if (activeId) openThread(activeId) }}>Try again</button>
+                </>
+              ) : <span className="vc-history-note vc-shimmer" role="status">Loading the chat…</span>}
+            </div>
+          </div>
         ) : (
           <MessageLog
             threadId={active?.id ?? null}
@@ -647,6 +774,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
             providers={providers}
             models={models}
             onDiscarded={onDiscarded}
+            earlier={earlier}
+            onLoadEarlier={onLoadEarlier}
           />
         )}
       </div>
@@ -654,7 +783,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       {(!empty || (narrow && !project)) && (
         <div className="vc-dock">
           {!empty && !atBottom && (
-            <button type="button" className="vc-jump" onClick={() => scrollToBottom()} aria-label="Scroll to the latest message"><TI icon={IconArrowDown} size={18} /></button>
+            <button type="button" className="vc-jump" onClick={glideToBottom} aria-label="Scroll to the latest message"><TI icon={IconArrowDown} size={18} /></button>
           )}
           {questionFlow ? questionFlow.panel : <>{parkedEl}{pendingHandoff}</>}
           {composerEl}

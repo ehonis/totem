@@ -276,6 +276,18 @@ export interface ChatThread {
   snoozedUntil?: number
   snoozedAt?: number
   messages: ChatMessage[]
+  /**
+   * The bridge sent a summary (GET /api/threads?view=summary): `messages` is only a
+   * preview of the last turn, cut, and must never be drawn as the chat. Opening the
+   * chat reads its latest window (history.ts) and clears it.
+   */
+  summary?: boolean
+  /** How many messages the chat has on the bridge, loaded or not. */
+  messageCount?: number
+  /** The first message's text, when a summary's preview no longer holds it (threadTitle's fallback). */
+  firstUserText?: string
+  /** Older messages not loaded yet: `before` is the id to ask the next page with. */
+  history?: { hasMore: boolean; before: string | null }
   /** Messages waiting for the running reply, first in line first. The bridge owns it. */
   queue?: QueuedMessage[]
   /** The reply before them was stopped or failed: the queue waits for Resume or a new message. */

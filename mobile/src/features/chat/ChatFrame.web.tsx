@@ -6,7 +6,7 @@ import { ScrollView, View, type NativeScrollEvent, type NativeSyntheticEvent } f
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native'
 import type { ChatFrameHandle, ChatFrameProps } from './ChatFrame'
 
-function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, dock, dockBottom, onAtEndChange }: ChatFrameProps<T>, ref: React.Ref<ChatFrameHandle>) {
+function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, dock, dockBottom, onAtEndChange, header }: ChatFrameProps<T>, ref: React.Ref<ChatFrameHandle>) {
   const listRef = useRef<LegendListRef>(null)
   const atEnd = useRef(true)
   useImperativeHandle(ref, () => ({
@@ -34,6 +34,8 @@ function Frame<T>({ listKey, data, keyExtractor, renderItem, extraData, empty, d
           alignItemsAtEnd
           initialScrollAtEnd
           maintainScrollAtEnd
+          maintainVisibleContentPosition={{ data: true }}
+          ListHeaderComponent={header || undefined}
           onScroll={onScroll}
           scrollEventThrottle={32}
           contentContainerStyle={{ paddingTop: 8, paddingBottom: 12 }}

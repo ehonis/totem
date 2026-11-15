@@ -39,6 +39,14 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   (named `AbortError`) rather than answering for the old account; screens and stores drop it silently
   (`isAccountChanged` in `api.ts`). Its tests run under the bridge's `npm test`
   (`src/lib/httpCache.test.mjs`): keep `httpCache.ts` free of React Native imports.
+- Chats load as the web's do (docs/chat.md → Loading chats): the drawer from summaries, a chat's
+  latest window on opening (`loadThread` in `lib/chat/store.ts`, drawn first from the stored answer via
+  `peekThreadPage`), "Load earlier messages" as the list's header, and the scroll position per chat
+  (`lib/chat/scrollMemory.ts`, `ChatFrame`'s `openAt`/`onPosition`). `lib/chat/history.ts` is the
+  web's file byte for byte (`features/chat/history.shared.test.mjs`): change it on the web and copy it.
+  A chat stream silent past 50 s is dropped and re-attached (`lib/chat/api.ts`). The Overview's
+  Recent chats (`features/overview/RecentChats.tsx`, `lib/chat/recents.ts`) puts chats with a composer
+  draft first, then the ones opened (`totem.chat.opened.v1`) or answered last.
 - The approval code (`src/lib/approvalCode.ts`, ported from `web/src/approvalCode.ts`) is kept in the
   keychain beside the secret and sent by `api()` as `x-totem-approval-code`, on the approval routes
   only. The app signs in with the bridge secret, and the bridge refuses that alone on every approval

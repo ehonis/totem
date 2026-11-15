@@ -19,7 +19,8 @@ Composer ── POST /api/chat/uploads ─▶  chatUploads.save                 
 
 The bridge owns threads and messages. The browser renders optimistically while a
 turn starts, then takes the bridge's copy: `start` carries the real message ids,
-`done` the settled reply. localStorage (`chat_threads_v2`) is a paint cache only.
+`done` the settled reply. localStorage (`chat_threads_v3`) is a paint cache only: every
+chat's summary plus the windows of the 12 chats opened last (see Loading chats).
 
 ## The header
 
@@ -95,6 +96,46 @@ a row in ChatHeader's list, and a place in a harness variant.
 
 `/api/threads*` is unchanged in shape, but a PUT of an existing thread now merges
 only `title`, `kind`, `provider`, `modelSettings`, `pinned`.
+
+## Loading chats
+
+Chats load a window at a time, as in T3 Code; the list used to carry every message of
+every chat (tens of MB, sent again every 30 s and on each focus).
+
+| Route | Returns |
+|---|---|
+| `GET /api/threads?view=summary` | `{threads, view}`: every chat without its history (`threadSummary` in `chat/store.mjs`). `summary: true`, `messageCount`, `firstUserText` when the preview no longer holds the first message, and `messages` cut to a preview of the last turn (at most 3 messages, text cut to 400 characters, only parts still pending: inbox, questions, approval; an earlier message holding one comes along as a stub with no text). Cached per file by mtime and size, so a poll re-reads only the chats that changed. |
+| `GET /api/threads/:id?turns=N[&before=<message id>]` | The chat with one window of messages (`threadWindow`): back to the N-th user message (default 10, at most 50), capped at 80 messages and about 1.5 MB, and `history: {hasMore, before}`; `before` asks for the page in front of it. ETag'd, so the iPhone app opens a chat it has seen from disk. |
+| `GET /api/threads`, `GET /api/threads/:id` | As before: every message, for clients older than summaries. |
+
+Both clients merge with one shared file (`web/src/chat/history.ts`, byte for byte at
+`mobile/src/lib/chat/history.ts`): `mergeSummary` takes a summary into the list, keeping
+an opened chat's messages and flagging it `stale` when it changed on the bridge
+(the open chat then reads its window again; never while its run is live, whose `end`
+reads it); `mergeLatest` takes a window, keeping earlier pages it overlaps and the
+object of every unchanged message so rows don't redraw; `mergeEarlier` puts an older
+page in front; `summarize` cuts a loaded chat back to a summary for the paint cache. A summary's `messages` are a preview and never drawn as the chat: until
+its window arrives the chat says it is loading (with Try again on failure). "Load
+earlier messages" at the top of the log reads the page before, holding the screen in
+place. Places that only need the last turn (the chats list, Running chats, Recents,
+pending cards) read summaries.
+
+**Where you left off.** Each chat remembers its scroll position per device
+(`scrollMemory.ts`, localStorage `totem.chat.scroll.v1`, the 100 most recent): at the
+end, or the message at the top of the view and how far into it. Opening a chat left at
+the end follows the end as before; otherwise it opens on that message, held there while
+code blocks and pictures settle, until the first touch, wheel or key (or 2 s), reading
+up to five earlier pages to find it. A search hit wins over a remembered position, and one older than the loaded window reads earlier pages (up to ten) to find its message.
+
+**Waking up.** Focus, the tab showing again and the network coming back make one
+refresh (debounced); if it fails it tries again after 3 s and 10 s. A live run's
+re-attach retries with backoff before letting the run go and syncing. A message whose
+send never reached the bridge stays Not sent with Try again (`POST /api/chat` has no
+idempotency key, so nothing resends on its own), and says "Couldn't reach Totem" or
+"You're offline" rather than the browser's "Load failed". In the iPhone app a chat
+stream silent for 50 s (the bridge pings every 20 s) is dropped and re-attached from its
+last seq, and the Overview's sections load one by one with a 12 s timeout and retry 3 s
+and 10 s after coming back to the app.
 
 ## Stream events
 

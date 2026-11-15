@@ -11,7 +11,7 @@
 // background launch runs the bundle without mounting the app.
 import * as Notifications from 'expo-notifications'
 import * as TaskManager from 'expo-task-manager'
-import { getThreads } from '../lib/api'
+import { getThreadSummaries } from '../lib/api'
 import { getRuns } from '../lib/chat/api'
 import { pendingQuestions } from '../lib/chat/questions'
 import type { ChatThread } from '../lib/chat/types'
@@ -63,7 +63,7 @@ export async function sweepStale() {
   const shown = await Notifications.getPresentedNotificationsAsync()
   const ids = new Set(shown.map((n) => String(tagOf(n) || '')).filter((t) => t.startsWith('chat:')).map((t) => t.slice(5)))
   if (!ids.size) return
-  const [{ threads }, { runs }] = await Promise.all([getThreads() as Promise<{ threads: ChatThread[] }>, getRuns()])
+  const [{ threads }, { runs }] = await Promise.all([getThreadSummaries() as Promise<{ threads: ChatThread[] }>, getRuns()])
   const byId = new Map(threads.map((t) => [t.id, t]))
   const running = new Set(runs.filter((r) => r.status === 'running').map((r) => r.threadId))
   const stale = new Set<string>()

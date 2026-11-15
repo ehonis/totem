@@ -32,20 +32,37 @@ export interface Follow {
    * Returns whether it is following.
    */
   endLanding(found: boolean, fromBottom?: number): boolean
+  /**
+   * A smooth scroll to the bottom has started (send, the jump arrow): follow, and
+   * read its in-between scroll events as still following until it gets there.
+   * Before this they read as "scrolled up", so a log that grew mid-glide stopped
+   * short and stopped following.
+   */
+  glide(): void
+  /** His own wheel, touch or key: a glide is no longer ours, so scroll events decide again. */
+  interrupt(): void
 }
 
 export function createFollow(): Follow {
   let pinned = true
   let landing = false
+  let gliding = false
   return {
     get following() { return pinned && !landing },
-    open() { pinned = true; landing = false },
+    open() { pinned = true; landing = false; gliding = false },
     scrolled(fromBottom) {
       if (landing) return null
+      if (gliding) {
+        if (fromBottom < AT_BOTTOM_PX) gliding = false
+        pinned = true
+        return true
+      }
       pinned = fromBottom < AT_BOTTOM_PX
       return pinned
     },
-    startLanding() { landing = true; pinned = false },
+    glide() { if (!landing) { pinned = true; gliding = true } },
+    interrupt() { gliding = false },
+    startLanding() { landing = true; pinned = false; gliding = false },
     endLanding(found, fromBottom = Infinity) {
       landing = false
       pinned = !found || fromBottom < AT_BOTTOM_PX

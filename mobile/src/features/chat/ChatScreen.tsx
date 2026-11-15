@@ -4,7 +4,7 @@
 // Everything about a chat's data lives in lib/chat/store (one sync loop shared
 // with the drawer); this screen only renders it and turns taps into store calls.
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AppState, ScrollView, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, AppState, ScrollView, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useFocusEffect, useIsFocused, useNavigation } from 'expo-router'
 import { MenuView } from '@react-native-menu/menu'
@@ -12,8 +12,10 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
 import {
   useChat, send, stop, steer, queueMessage, updateQueue, regenerate, editAndResend, setActive, setThreadModel, keepThread, threadChoice, draftFor, type DraftPick,
   threadTitle, providerById, loadCapabilities, retryUnsent, discardUnsent, loadProviders, ensureModels, getState,
-  takeVoiceRequest, openProject, threadProject, projectById, setProjectContext, respondToApproval,
+  takeVoiceRequest, openProject, threadProject, projectById, setProjectContext, respondToApproval, loadThread, loadEarlier,
 } from '../../lib/chat/store'
+import { isLoaded } from '../../lib/chat/history'
+import { createScrollMemory, restorePlan } from '../../lib/chat/scrollMemory'
 import { contextVersion, subscribeContext, takeContext } from '../../lib/chat/pendingContext'
 import { useViewing } from '../../lib/chat/onScreen'
 import { EFFORT_LABELS, visibleModels } from '../../lib/chat/models'
@@ -43,7 +45,7 @@ import { AccessControl, ThinkingControl, hintFor } from './controls'
 import UsageChips from './UsageChips'
 import { AgentsChip } from './AgentsPanel'
 import RunningChats from './RunningChats'
-import ChatFrame, { type ChatFrameHandle } from './ChatFrame'
+import ChatFrame, { type ChatFrameHandle, type OpenAt } from './ChatFrame'
 import { ThreadIcon, ProjectIcon } from './ThreadIcon'
 import ProjectHome from './ProjectHome'
 import { threadMenu } from './threadMenu'
@@ -74,6 +76,8 @@ const STARTERS: { text: string; fill?: boolean }[] = [
 ]
 
 const DRAFTS_KEY = 'totem.chat.drafts'
+// Where he left each chat (lib/chat/scrollMemory.ts).
+const scrollMemory = createScrollMemory(localStorage)
 function readDrafts(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {} } catch { return {} }
 }
@@ -91,6 +95,7 @@ export default function ChatScreen() {
   const providers = useChat((s) => s.providers)
   const models = useChat((s) => s.models)
   const loaded = useChat((s) => s.loaded)
+  const page = useChat((s) => (s.activeId ? s.pages[s.activeId] : undefined))
   const retitling = useChat((s) => !!(s.activeId && s.retitling[s.activeId]))
   const autoSettleDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   const scopeProject = useChat((s) => s.projects.find((p) => p.id === s.projectId))
@@ -188,10 +193,51 @@ export default function ChatScreen() {
   // and an open chat keeps its own model.
   const draft = draftFor(draftPick, draftKey, { open: !!active, projectId: project?.id })
   const choice = threadChoice(active, draft)
-  const messages = active?.messages || []
-  const empty = messages.length === 0
+  // A summary's messages are a cut preview of the last turn: never drawn as the
+  // chat. It waits for the chat's window (loadThread), unless a reply is running.
+  const waiting = !!activeId && !busy && (active ? !isLoaded(active) : !loaded || !!page?.loading)
+  const messages = waiting ? NO_MESSAGES : active?.messages || NO_MESSAGES
+  const empty = !waiting && messages.length === 0
   const input = drafts[draftKey] || ''
   useEffect(() => { ensureModels(choice.provider) }, [choice.provider])
+  // A chat in the list that was opened before its summary arrived: read its window now.
+  useEffect(() => { if (activeId && active && !isLoaded(active) && !page) void loadThread(activeId) }, [activeId, !!active, active && isLoaded(active), !!page]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Where to open this chat: where he left it (scrollMemory), reading older pages
+  // until that message is loaded, or its end. Worked out once per opening.
+  const [openAt, setOpenAt] = useState<{ id: string; at: OpenAt } | null>(null)
+  // Usually known at once (the message is loaded, or it was left at the end); only
+  // a message older than the window waits for pages.
+  const planNow = useMemo<OpenAt | null>(() => {
+    if (!activeId || waiting || openAt?.id === activeId) return null
+    const t = active && isLoaded(active) ? active : null
+    const p = restorePlan(scrollMemory.get(activeId), messages.map((m) => m.id), { hasMore: !!t?.history?.hasMore })
+    return p.mode === 'load' ? null : p
+  }, [activeId, waiting, openAt, messages]) // eslint-disable-line react-hooks/exhaustive-deps
+  const opening = openAt?.id === activeId ? openAt.at : planNow
+  const ready = !!activeId && !waiting && !!opening
+  useEffect(() => {
+    if (!activeId) { setOpenAt(null); return }
+    if (waiting || openAt?.id === activeId) return
+    if (planNow) { setOpenAt({ id: activeId, at: planNow }); return }
+    let cancelled = false
+    let pages = 0
+    const plan = async (): Promise<void> => {
+      const t = getState().threads.find((x) => x.id === activeId)
+      const ids = t ? t.messages.map((m) => m.id) : []
+      const p = restorePlan(scrollMemory.get(activeId), ids, { hasMore: !!t?.history?.hasMore, pagesRead: pages })
+      if (p.mode === 'load') {
+        pages++
+        const ok = await loadEarlier(activeId)
+        if (cancelled) return
+        if (!ok) { setOpenAt({ id: activeId, at: { mode: 'top' } }); return }
+        return plan()
+      }
+      if (!cancelled) setOpenAt({ id: activeId, at: p })
+    }
+    void plan()
+    return () => { cancelled = true }
+  }, [activeId, waiting]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const setInput = useCallback((v: string) => {
     setDrafts((d) => {
@@ -387,12 +433,25 @@ export default function ChatScreen() {
   // holding its end from the request until the flash is over.
   const still = useStill()
   const landing = useLanding('msg')
+  // Earlier pages read while looking for a hit older than the loaded window.
+  const landingPages = useRef<{ id: string; pages: number } | null>(null)
   const landed = useLandOn('msg', {
     ready: focused && messages.length > 0,
     delayMs: 400,
     locate: ({ id }) => {
       const index = messages.findIndex((m) => m.id === id)
-      if (index < 0) return null
+      if (index < 0) {
+        // Not in the window: read earlier pages for it (up to ten) while the landing waits.
+        if (landingPages.current?.id !== id) landingPages.current = { id, pages: 0 }
+        const t = activeId ? getState().threads.find((x) => x.id === activeId) : null
+        // Not while a read is out or after one failed: no burst of failing reads on a bad link.
+        if (activeId && isLoaded(t) && !t.messages.some((m) => m.id === id) && t.history?.hasMore && t.history.before
+          && landingPages.current.pages < 10 && !getState().pages[activeId]?.earlier) {
+          landingPages.current.pages += 1
+          void loadEarlier(activeId)
+        }
+        return null
+      }
       frame.current?.scrollToIndex(index, !still && !farIndex(messages.length - 1, index, 3))
       return id
     },
@@ -431,7 +490,30 @@ export default function ChatScreen() {
     )
   }
 
-  const emptyEl = !empty ? null : project ? (
+  const loadingEl = page?.error && waiting ? (
+    <View style={st.waiting}>
+      <T size={14} color={vc.soft} style={{ textAlign: 'center' }}>Couldn’t load this chat. {page.error}</T>
+      <Press style={st.ghostBtn} onPress={() => { tap(); if (activeId) void loadThread(activeId) }} accessibilityLabel="Try loading this chat again">
+        <T size={13} weight={500} color={colors.text}>Try again</T>
+      </Press>
+    </View>
+  ) : (
+    <View style={st.waiting} accessibilityLabel="Loading this chat"><ActivityIndicator color={vc.faint} /></View>
+  )
+
+  const history = active && isLoaded(active) ? active.history : undefined
+  // No cursor yet (sent to before its window arrived): the run's end reads it, then the control shows.
+  const headerEl = history?.hasMore && history.before ? (
+    <View style={st.earlier}>
+      {page?.earlier === 'loading' ? <ActivityIndicator size="small" color={vc.faint} /> : (
+        <Press style={st.earlierBtn} onPress={() => { tap(); if (activeId) void loadEarlier(activeId) }} accessibilityLabel="Load earlier messages">
+          <T size={13} weight={500} color={vc.soft}>{page?.earlier === 'error' ? 'Couldn’t load earlier messages · Try again' : 'Load earlier messages'}</T>
+        </Press>
+      )}
+    </View>
+  ) : null
+
+  const emptyEl = waiting || (activeId && !empty && !ready) ? loadingEl : !empty ? null : project ? (
     <ProjectHome projectId={project.id} />
   ) : (
     <View style={st.empty}>
@@ -559,6 +641,9 @@ export default function ChatScreen() {
       <ChatFrame
         ref={frame}
         listKey={activeId || 'new'}
+        openAt={opening || undefined}
+        header={headerEl}
+        onPosition={activeId ? (p) => scrollMemory.save(activeId, p) : undefined}
         data={messages}
         keyExtractor={(m: ChatMessage) => m.id}
         renderItem={renderItem}
@@ -628,7 +713,12 @@ export default function ChatScreen() {
   )
 }
 
+const NO_MESSAGES: ChatMessage[] = []
+
 const st = StyleSheet.create({
+  waiting: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingHorizontal: 24, paddingBottom: 60 },
+  earlier: { alignItems: 'center', justifyContent: 'center', minHeight: 44, paddingTop: 4, paddingBottom: 12 },
+  earlierBtn: { height: 32, paddingHorizontal: 14, borderRadius: 999, borderWidth: 1, borderColor: vc.line, alignItems: 'center', justifyContent: 'center' },
   screen: { flex: 1, backgroundColor: colors.bg },
   top: { height: 52, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, zIndex: 3 },
   iconBtn: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },

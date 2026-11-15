@@ -8925,7 +8925,9 @@ const signQueue = (queue) => (queue || []).map((q) => (q.attachments ? { ...q, a
 const signThread = (t) => (t ? { ...t, messages: (t.messages || []).map(signMessage), ...(t.queue ? { queue: signQueue(t.queue) } : {}) } : t)
 
 const listThreads = async () => (await threadStore.list()).map(signThread)
+const listThreadSummaries = async () => (await threadStore.summaries()).map(signThread)
 const readThread = async (id) => signThread(await threadStore.get(id))
+const readThreadPage = async (id, opts) => signThread(await threadStore.page(id, opts))
 const writeThread = async (id, body) => signThread(await threadStore.put(id, body))
 const deleteThread = (id) => threadStore.remove(id)
 
@@ -16260,14 +16262,21 @@ const server = http.createServer(async (req, res) => {
         if (handled !== false) return
       }
       // Cross-device chat history.
+      // `?view=summary` is the list (chat/store.mjs threadSummary); without it every
+      // message of every chat, which clients from before summaries still ask for.
       if (req.method === 'GET' && path === '/api/threads') {
+        if (new URL(req.url, 'http://x').searchParams.get('view') === 'summary') return send(res, 200, { threads: await listThreadSummaries(), view: 'summary' })
         return send(res, 200, { threads: await listThreads() })
       }
       if (path.startsWith('/api/threads/')) {
         const id = path.slice('/api/threads/'.length)
         if (!validThreadId(id)) return send(res, 400, { error: 'bad thread id' })
         if (req.method === 'GET') {
-          const t = await readThread(id)
+          // `?turns=N[&before=<message id>]` reads one window (threadWindow); no query, the whole chat.
+          const q = new URL(req.url, 'http://x').searchParams
+          const paged = q.has('turns') || q.has('before')
+          const turns = Math.min(50, Math.max(1, Number(q.get('turns')) || 10))
+          const t = paged ? await readThreadPage(id, { turns, before: q.get('before') || undefined }) : await readThread(id)
           return t ? send(res, 200, t) : send(res, 404, { error: 'not found' })
         }
         if (req.method === 'PUT') {

@@ -32,12 +32,15 @@ const ETAG_PATHS = new Set([
 // read from a sheet someone else edits, nor /api/todos/issue-states, which is live
 // GitHub state and changes without any write here.
 const ETAG_RECORD = /^\/api\/(todos|goals|lists)\/(?!(?:search|sheet|issue-states)$)[^/]+$/
+// One chat (its latest window, or an older page): the phone draws it from disk
+// before the bridge answers. /api/threads already put every message on disk.
+const ETAG_THREAD = /^\/api\/threads\/[A-Za-z0-9_-]{1,128}$/
 
 // Keep it, but ask the bridge before every use; never in a shared cache.
 const CACHE_CONTROL = 'private, no-cache'
 
 export function etagEligible(method, path) {
-  return method === 'GET' && (ETAG_PATHS.has(path) || ETAG_RECORD.test(path))
+  return method === 'GET' && (ETAG_PATHS.has(path) || ETAG_RECORD.test(path) || ETAG_THREAD.test(path))
 }
 
 export function weakEtag(body) {

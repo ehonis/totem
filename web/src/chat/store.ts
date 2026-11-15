@@ -7,7 +7,7 @@
 // (`start` carries the real ids, `done` the settled reply). localStorage is
 // only an instant-paint cache.
 import { useSyncExternalStore } from 'react'
-import { getThreads, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, ApiError, api, authHeaders } from '../api'
+import { getThreadSummaries, getThreadPage, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, ApiError, api, authHeaders } from '../api'
 import { pushError, pushToast } from '../toast'
 import { applyEvent } from './reduce'
 import {
@@ -18,9 +18,17 @@ import type { QueueAction } from './api'
 import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
 import type { ApprovalDecision, Attachment, BrowserFrame, BrowserHandoff, ChatCapabilities, ChatMessage, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
 import type { RawInput } from './browserInput'
+import { isLoaded, mergeEarlier, mergeLatest, mergeSummary, PAGE_TURNS, summarize, type ThreadPage } from './history'
 import { activeAt, wokeAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
 
-const CACHE_KEY = 'chat_threads_v2'
+// Every chat's summary, plus the loaded windows of the chats opened last
+// (history.ts). chat_threads_v2 held the 60 newest chats whole and is dropped.
+const CACHE_KEY = 'chat_threads_v3'
+const OLD_CACHE_KEY = 'chat_threads_v2'
+/** Chats whose loaded window the cache keeps; the rest are kept as summaries. */
+const CACHE_WINDOWS = 12
+/** About what the cache may take of localStorage's ~5 MB. */
+const CACHE_BYTES = 2_500_000
 const OUTBOX_KEY = 'chat_outbox_v1' // see "outbox" below; up here because the initial state reads it
 const LEGACY_KEY = 'chat_threads_v1'
 const MIGRATED = 'chat_threads_migrated_v1'
@@ -32,9 +40,18 @@ export interface RunState {
   handle: StreamHandle | null
 }
 
+/** Reading a chat's window from the bridge: its latest, or an earlier page. */
+export interface ThreadLoad {
+  latest?: 'loading' | 'error'
+  earlier?: 'loading' | 'error'
+  error?: string
+}
+
 export interface ChatState {
   threads: ChatThread[]
   loaded: boolean
+  /** Chats whose messages are being read, or failed to be (history.ts). */
+  loads: Record<string, ThreadLoad>
   runs: Record<string, RunState>
   providers: ProviderRow[]
   defaultProvider: string
@@ -103,6 +120,7 @@ export interface ChatFiles { root: string; entries: FileEntry[]; truncated: bool
 let state: ChatState = {
   threads: readCache(),
   loaded: false,
+  loads: {},
   runs: {},
   providers: [],
   defaultProvider: 'cursor',
@@ -158,6 +176,12 @@ function outboxPut(threadId: string, entry: OutboxEntry) { const o = readOutbox(
 function outboxDrop(threadId: string) { const o = readOutbox(); if (o[threadId]) { delete o[threadId]; writeOutbox(o) } }
 export const hasUnsent = (threadId: string) => !!readOutbox()[threadId]
 
+/** The bridge's text is the sent text; a summary's preview is cut at a length and ends in an ellipsis. */
+function sameText(remote: string, sent: string, preview: boolean) {
+  if (remote === sent) return true
+  return preview && remote.endsWith('…') && remote.length > 1 && sent.startsWith(remote.slice(0, -1))
+}
+
 /** Put unsent messages back onto the server's copy of their chats (or the chat itself, if the server never saw it). */
 function withOutbox(threads: ChatThread[], sending: Set<string> = new Set()): ChatThread[] {
   const box = readOutbox()
@@ -170,7 +194,7 @@ function withOutbox(threads: ChatThread[], sending: Set<string> = new Set()): Ch
     const t = out[i]
     // It did get through (the response was what got lost): nothing to keep.
     const lastUser = [...t.messages].reverse().find((m) => m.role === 'user')
-    if (lastUser && lastUser.content === e.message.content && (lastUser.createdAt || 0) >= e.at - 60_000) { outboxDrop(id); continue }
+    if (lastUser && sameText(lastUser.content, e.message.content, !!t.summary) && (lastUser.createdAt || 0) >= e.at - 60_000) { outboxDrop(id); continue }
     if (!t.messages.some((m) => m.id === e.message.id)) out[i] = { ...t, messages: [...t.messages.filter((m) => !m.unsent), unsent] }
   }
   return out
@@ -178,23 +202,47 @@ function withOutbox(threads: ChatThread[], sending: Set<string> = new Set()): Ch
 
 // --- cache -----------------------------------------------------------------
 
+// Chats opened, last first: whose windows the cache keeps.
+let opened: string[] = []
+function noteOpened(id: string) { opened = [id, ...opened.filter((x) => x !== id)].slice(0, 50) }
+
 function readCache(): ChatThread[] {
+  try { localStorage.removeItem(OLD_CACHE_KEY) } catch {}
   try {
     const v = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null')
-    if (Array.isArray(v)) return withOutbox(v)
+    if (v && Array.isArray(v.threads)) {
+      if (Array.isArray(v.opened)) opened = v.opened.filter((x: unknown) => typeof x === 'string')
+      return withOutbox(v.threads)
+    }
   } catch {}
   return withOutbox([])
+}
+
+/** What the cache holds: every chat, the last-opened CACHE_WINDOWS with their windows, within CACHE_BYTES. */
+export function cachePayload(threads: ChatThread[], openedIds: string[], { windows = CACHE_WINDOWS, bytes = CACHE_BYTES } = {}) {
+  let keep = new Set(openedIds.slice(0, windows))
+  for (;;) {
+    const list = threads.map((t) => (keep.has(t.id) || !isLoaded(t) ? t : summarize(t)))
+    const json = JSON.stringify({ v: 3, opened: openedIds, threads: list })
+    if (json.length <= bytes || !keep.size) return json.length <= bytes ? json : null
+    // Over: drop the window opened longest ago and try again.
+    const order = [...keep]
+    keep = new Set(order.slice(0, -1))
+  }
 }
 
 let cacheTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleCache() {
   if (cacheTimer) return
   // Streaming touches threads many times a second; the cache is for paint, so
-  // writing it once a second is plenty.
+  // writing it every two seconds is plenty.
   cacheTimer = setTimeout(() => {
     cacheTimer = null
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(state.threads.slice(0, 60))) } catch {}
-  }, 1000)
+    try {
+      const json = cachePayload(state.threads, opened)
+      if (json) localStorage.setItem(CACHE_KEY, json)
+    } catch {}
+  }, 2000)
 }
 
 const now = () => Date.now()
@@ -363,6 +411,100 @@ export function setActive(id: string | null) {
   const scope = t ? (t.projectId && state.projects.some((p) => p.id === t.projectId) ? t.projectId : null) : state.projectId
   set({ activeId: id, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null, projectId: scope, draftTaskId: null })
   if (id && !state.browser[id]) loadBrowser(id)
+  if (id) openThread(id)
+}
+
+// --- a chat's messages, a window at a time (history.ts) -----------------------
+
+function setLoad(id: string, patch: ThreadLoad | null) {
+  set((s) => {
+    const loads = { ...s.loads }
+    if (patch === null) delete loads[id]
+    else loads[id] = { ...(loads[id] || {}), ...patch }
+    return { loads }
+  })
+}
+
+/** Opening a chat: read its latest window, even with one cached (it shows meanwhile). */
+export function openThread(id: string): Promise<void> {
+  noteOpened(id)
+  // A chat started here a moment ago: its run owns it, and its end reads it.
+  if (state.runs[id] && isLoaded(state.threads.find((t) => t.id === id))) return Promise.resolve()
+  return loadLatest(id)
+}
+
+const latestReads = new Map<string, Promise<void>>()
+
+/**
+ * Read a chat's latest window and merge it (mergeLatest). One read per chat at
+ * a time. While the chat's run is live its events own the messages, so a loaded
+ * chat waits for the run's end; a summary is still filled in (a reload mid-reply).
+ */
+export function loadLatest(id: string, { fresh = false } = {}): Promise<void> {
+  const inflight = latestReads.get(id)
+  // A read that went out before the run ended lacks its turn: read again after it.
+  if (inflight) return fresh ? inflight.then(() => loadLatest(id)) : inflight
+  const shown = state.threads.find((t) => t.id === id)
+  if (!isLoaded(shown)) setLoad(id, { latest: 'loading', error: undefined })
+  const job = (async () => {
+    try {
+      const page = await getThreadPage(id, { turns: PAGE_TURNS }) as ThreadPage
+      const local = state.threads.find((t) => t.id === id)
+      // The run's `end` reads it again.
+      if (state.runs[id] && isLoaded(local)) { setLoad(id, { latest: undefined }); return }
+      set((s) => {
+        const existing = s.threads.find((t) => t.id === id)
+        const merged = mergeLatest(existing, page)
+        const rest = s.threads.filter((t) => t.id !== id)
+        const loads = { ...s.loads }
+        if (loads[id]) loads[id] = { ...loads[id], latest: undefined, error: undefined }
+        return { threads: sortThreads(withOutbox([merged, ...rest], new Set(Object.keys(s.runs)))), loads }
+      })
+    } catch (e: any) {
+      if (fail(e)) return
+      setLoad(id, { latest: 'error', error: e?.status === 404 ? 'This chat is gone.' : networkText(e) })
+    } finally {
+      latestReads.delete(id)
+    }
+  })()
+  latestReads.set(id, job)
+  return job
+}
+
+const earlierReads = new Map<string, Promise<boolean>>()
+/** Read the page before the earliest loaded message (mergeEarlier). True when one arrived. */
+export function loadEarlier(id: string): Promise<boolean> {
+  const inflight = earlierReads.get(id)
+  if (inflight) return inflight
+  const t = state.threads.find((x) => x.id === id)
+  if (!isLoaded(t) || !t.history?.hasMore) return Promise.resolve(false)
+  // A chat started here before its window arrived knows there is more, but not from where.
+  if (!t.history.before) return loadLatest(id).then(() => true)
+  const before = t.history.before
+  setLoad(id, { earlier: 'loading', error: undefined })
+  const job = (async () => {
+    try {
+      const page = await getThreadPage(id, { turns: PAGE_TURNS, before }) as ThreadPage
+      patchThread(id, (cur) => (isLoaded(cur) && cur.history?.before === before ? mergeEarlier(cur, page) : cur))
+      setLoad(id, { earlier: undefined })
+      return true
+    } catch (e: any) {
+      if (!fail(e)) setLoad(id, { earlier: 'error', error: networkText(e) })
+      return false
+    } finally {
+      earlierReads.delete(id)
+    }
+  })()
+  earlierReads.set(id, job)
+  return job
+}
+
+/** A fetch that never reached the bridge says so in words; anything else keeps its own. */
+export function networkText(e: any): string {
+  const msg = String(e?.message || '')
+  if (navigator.onLine === false) return 'You’re offline'
+  if (!e?.status && (e instanceof TypeError || /failed to fetch|load failed|network ?error|networkerror|the network connection was lost/i.test(msg))) return 'Couldn’t reach Totem'
+  return msg || 'Couldn’t reach Totem'
 }
 
 /** A new chat for one of the owner's tasks, in the project or folder it belongs to. */
@@ -787,8 +929,19 @@ export function openArtifact(a: Artifact | null) {
   set({ artifact: a, ...(a ? { browserOpen: false, agentsOpen: false, filesOpen: false } : {}) })
 }
 
-/** Pull server history. A thread with a live local run keeps its live copy. */
-export async function syncThreads() {
+// Syncs run in order of asking; an answer older than one already applied is dropped.
+let syncAsked = 0
+let syncApplied = 0
+// At most this many changed chats with loaded windows are read again per sync; the rest go back to summaries.
+const STALE_READS = 6
+
+/**
+ * Pull the list (summaries) and merge it chat by chat (mergeSummary). A thread
+ * with a live local run keeps its live copy. An opened chat that changed on the
+ * bridge reads its latest window again. Resolves false when the bridge was not reached.
+ */
+export async function syncThreads(): Promise<boolean> {
+  const asked = ++syncAsked
   try {
     if (!localStorage.getItem(MIGRATED)) {
       // One-time upload of chats that only ever lived in this browser.
@@ -798,17 +951,32 @@ export async function syncThreads() {
       } catch {}
       localStorage.setItem(MIGRATED, '1')
     }
-    const { threads } = await getThreads()
+    const { threads } = await getThreadSummaries()
+    if (asked < syncApplied) return true
+    syncApplied = asked
+    const stale: string[] = []
     set((s) => {
-      const live = new Map(s.threads.filter((t) => s.runs[t.id]).map((t) => [t.id, t]))
-      const merged = withOutbox((threads as ChatThread[]).map((t) => live.get(t.id) || t), new Set(Object.keys(s.runs)))
+      const local = new Map(s.threads.map((t) => [t.id, t]))
+      let reads = 0
+      const merged = withOutbox((threads as ChatThread[]).map((remote) => {
+        const mine = local.get(remote.id)
+        if (mine && s.runs[remote.id]) return mine
+        const { thread, stale: changed } = mergeSummary(mine, remote)
+        if (!changed) return thread
+        // The open chat always reads again; others while few, else back to a summary.
+        if (remote.id === s.activeId || reads < STALE_READS) { if (remote.id !== s.activeId) reads++; stale.push(remote.id); return thread }
+        return remote
+      }), new Set(Object.keys(s.runs)))
       // A thread created here a moment ago may not have reached the bridge yet.
       for (const t of s.threads) if (s.runs[t.id] && !merged.some((m) => m.id === t.id)) merged.push(t)
       return { threads: sortThreads(merged), loaded: true }
     })
+    for (const id of stale) loadLatest(id)
+    return true
   } catch (e) {
     fail(e)
     set({ loaded: true })
+    return false
   }
 }
 
@@ -816,7 +984,14 @@ export async function syncThreads() {
 export async function resumeRuns() {
   try {
     const { runs } = await getRuns()
-    for (const r of runs) if (r.status === 'running' && !state.runs[r.threadId]) watchRun(r.threadId, 0, r.startedAt)
+    for (const r of runs) {
+      if (r.status !== 'running' || state.runs[r.threadId]) continue
+      // A run's events go onto real messages, never onto a summary's preview.
+      if (!isLoaded(state.threads.find((t) => t.id === r.threadId))) await loadLatest(r.threadId)
+      // Still a summary (the read failed): the next refresh attaches it.
+      if (!isLoaded(state.threads.find((t) => t.id === r.threadId))) continue
+      if (!state.runs[r.threadId]) watchRun(r.threadId, 0, r.startedAt)
+    }
   } catch (e) { fail(e) }
 }
 
@@ -825,21 +1000,42 @@ export function initChat(authError: () => void) {
   onAuthError = authError
   if (started) return
   started = true
+  if (state.activeId) openThread(state.activeId)
   syncThreads().then(resumeRuns)
   loadProjects()
   loadProviders()
   loadCapabilities()
   loadPrefs()
-  const refresh = () => {
+  const refresh = async () => {
     // A run the bridge started from a queue, or from another device, shows live here too.
-    if (!Object.keys(state.runs).length) syncThreads().then(resumeRuns)
-    else resumeRuns()
+    const ok = await syncThreads()
+    resumeRuns()
     loadProjects()
     // The agent edits the memory and adds files while it works; keep the open project's page current.
     if (state.projectId) loadProject(state.projectId)
+    return ok
   }
-  window.addEventListener('focus', refresh)
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { refresh(); resumeRuns() } })
+  // Waking (focus, the tab showing again, the network back) fires several of
+  // these at once: one refresh for all of them. Just after a wake the network is
+  // often not up yet, so a failed refresh tries again after 3 s and 10 s.
+  let wakeTimer: ReturnType<typeof setTimeout> | null = null
+  let retryTimers: ReturnType<typeof setTimeout>[] = []
+  const wake = () => {
+    if (wakeTimer) clearTimeout(wakeTimer)
+    wakeTimer = setTimeout(async () => {
+      wakeTimer = null
+      retryTimers.forEach(clearTimeout)
+      retryTimers = []
+      if (await refresh()) return
+      const again = (ms: number, last: boolean) => setTimeout(async () => {
+        if (await refresh() || last) { retryTimers.forEach(clearTimeout); retryTimers = [] }
+      }, ms)
+      retryTimers = [again(3_000, false), again(10_000, true)]
+    }, 300)
+  }
+  window.addEventListener('focus', wake)
+  window.addEventListener('online', wake)
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake() })
   setInterval(refresh, 30_000)
   setInterval(() => set((s) => ({ threads: sortThreads(s.threads) })), 60_000)
 }
@@ -1002,6 +1198,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
       break
     case 'end': {
       setRun(threadId, null)
+      // The bridge's copy is the settled one (counts, ids); a window that arrived mid-run was put off until now.
+      loadLatest(threadId, { fresh: true })
       // The bridge starts the next queued message itself: pick its run up.
       if (state.threads.find((t) => t.id === threadId)?.queue?.length) watchQueue(threadId)
       const pid = state.threads.find((t) => t.id === threadId)?.projectId
@@ -1033,11 +1231,21 @@ function watchQueue(threadId: string) {
   setTimeout(look, 150)
 }
 
-function watchRun(threadId: string, since: number, startedAt: number) {
+function watchRun(threadId: string, since: number, startedAt: number, attempt = 0) {
   setRun(threadId, { seq: since, activity: '', startedAt })
   const handle = attachRun(threadId, since, (e) => handleEvent(threadId, e), (err) => {
     if (fail(err)) return
+    // Just after a wake the bridge may not be reachable yet: try a few times
+    // (1 s, 3 s, 9 s) before letting the run go and taking the bridge's copy.
+    const status = (err as { status?: number })?.status || 0
+    if (attempt < 3 && state.runs[threadId]?.handle === handle && !(status >= 400 && status < 500)) {
+      const seq = state.runs[threadId].seq
+      setRun(threadId, { handle: null })
+      setTimeout(() => { if (state.runs[threadId] && !state.runs[threadId].handle) watchRun(threadId, seq, startedAt, attempt + 1) }, 1000 * 3 ** attempt)
+      return
+    }
     setRun(threadId, null)
+    syncThreads()
   })
   setRun(threadId, { handle })
   handle.done.then(() => {
@@ -1073,7 +1281,14 @@ export function send(input: SendInput): string {
   let thread = state.threads.find((t) => t.id === threadId) || null
   const projectId = thread ? thread.projectId : (input.projectId || undefined)
   const kind = projectId ? 'regular' : thread?.kind || input.kind || 'regular'
+  // Chosen from the chat as the list has it: a summary's preview still names its last reply's account and model.
   const { provider, row, settings } = threadChoice(thread, { provider: input.provider, modelSettings: input.modelSettings, projectId })
+  // Sent before the chat's window arrived: its preview is no part of the chat. The
+  // new turn stands alone until the run ends and the window is read (history.ts).
+  if (thread?.summary) {
+    const { summary: _s, ...rest } = thread
+    thread = { ...rest, messages: [], history: { hasMore: (thread.messageCount || thread.messages.length) > 0, before: null } }
+  }
   const wire = wireModel(row?.driver || 'cursor', settings)
   const t0 = now()
   const userMessage: ChatMessage = {
@@ -1149,7 +1364,7 @@ function startRun(threadId: string, args: SendArgs) {
     // lost message: that keeps the old error-on-the-reply behaviour.)
     const box = readOutbox()[threadId]
     if (box && !(err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429)) {
-      const reason = navigator.onLine === false ? 'You were offline' : (err.message || 'The connection dropped')
+      const reason = navigator.onLine === false ? 'You were offline' : networkText(err)
       box.message.sendError = reason
       outboxPut(threadId, box)
       patchThread(threadId, (t) => ({
@@ -1256,7 +1471,7 @@ export async function updateQueue(threadId: string, change: Exclude<QueueAction,
 
 export function regenerate(threadId: string, override?: { provider?: string; modelSettings?: Partial<ModelSettings> }) {
   const thread = state.threads.find((t) => t.id === threadId)
-  if (!thread || state.runs[threadId]) return
+  if (!isLoaded(thread) || state.runs[threadId]) return
   if (override) setThreadModel(threadId, override)
   const { provider, row, settings } = threadChoice({ ...thread, ...(override || {}) } as ChatThread)
   const wire = wireModel(row?.driver || 'cursor', settings)
@@ -1275,7 +1490,7 @@ export function regenerate(threadId: string, override?: { provider?: string; mod
 
 export function editAndResend(threadId: string, messageId: string, text: string) {
   const thread = state.threads.find((t) => t.id === threadId)
-  if (!thread || state.runs[threadId]) return
+  if (!isLoaded(thread) || state.runs[threadId]) return
   const at = thread.messages.findIndex((m) => m.id === messageId)
   if (at < 0) return
   const original = thread.messages[at]
@@ -1306,7 +1521,9 @@ function endOfToday() {
 export function threadTitle(t: ChatThread | null | undefined): string {
   if (!t) return 'New chat'
   if (t.title) return t.title
-  const first = t.messages.find((m) => m.role === 'user')?.content?.replace(/\s+/g, ' ').trim()
+  // A summary's preview, or a window that starts part-way, may not hold the first message.
+  const first = (t.firstUserText || (t.summary || t.history?.hasMore ? '' : t.messages.find((m) => m.role === 'user')?.content || '')).replace(/\s+/g, ' ').trim()
+    || t.messages.find((m) => m.role === 'user')?.content?.replace(/\s+/g, ' ').trim()
   if (first) return first.length > 48 ? `${first.slice(0, 48)}…` : first
   return t.kind === 'temporary' ? 'Temporary chat' : 'New chat'
 }

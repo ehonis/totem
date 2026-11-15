@@ -10,7 +10,7 @@
 // it PUT its whole local copy, the server normalised it down to {role, content},
 // and the 30-second sync then replaced the browser's copy with that stripped
 // version — tool rows and the chosen provider vanished from every thread.
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { normalizeAgent } from './subagents.mjs'
@@ -374,6 +374,85 @@ function applyMetadata(thread, body, now) {
   else delete thread.expiresAt
 }
 
+// ---- Summaries and pages -------------------------------------------------
+//
+// A client lists chats from summaries and reads one chat a window at a time, the
+// way T3 Code does: the list used to carry every message of every chat (tens of
+// MB, re-sent every 30 s), which made the app slow to open and re-rendered every
+// open reply on each poll.
+
+// Parts a list needs from a chat it has not opened: what is waiting on the owner.
+const SUMMARY_PART_TYPES = new Set(['inbox', 'questions', 'approval'])
+export const SUMMARY_TAIL = 3
+export const SUMMARY_TEXT = 400
+
+const pendingParts = (m) => (m.parts || []).filter((p) => SUMMARY_PART_TYPES.has(p.type) && p.status === 'pending')
+
+function summaryMessage(m) {
+  const out = { id: m.id, role: m.role, content: m.content.length > SUMMARY_TEXT ? `${m.content.slice(0, SUMMARY_TEXT)}…` : m.content, createdAt: m.createdAt }
+  for (const k of ['status', 'error', 'provider', 'model', 'run', 'mode', 'voice', 'inbox']) if (m[k] !== undefined) out[k] = m[k]
+  if (m.attachments) out.attachments = m.attachments
+  const parts = pendingParts(m)
+  if (parts.length) out.parts = parts
+  return out
+}
+
+/**
+ * A chat without its history: every field but `messages`, which keeps only the
+ * last turn (from the last user message, at most SUMMARY_TAIL messages, text cut to
+ * SUMMARY_TEXT), the parts still waiting on the owner (from any turn, an earlier
+ * one as a stub with no text). `summary: true` tells a
+ * client the messages are a preview, never to be shown as the chat.
+ */
+export function threadSummary(thread) {
+  const { messages = [], ...rest } = thread
+  let from = messages.length
+  while (from > 0 && messages.length - from < SUMMARY_TAIL) {
+    from--
+    if (messages[from].role === 'user') break
+  }
+  // A card from an earlier turn can still wait on the owner (a reply leaves a
+  // proposal open): it comes along as a stub, its parts and no text.
+  const waiting = messages.slice(0, from).filter((m) => pendingParts(m).length)
+    .map((m) => ({ id: m.id, role: m.role, content: '', createdAt: m.createdAt, parts: pendingParts(m) }))
+  const out = { ...rest, summary: true, messageCount: messages.length, messages: [...waiting, ...messages.slice(from).map(summaryMessage)] }
+  const first = messages.find((m) => m.role === 'user')
+  if (first && from > messages.indexOf(first)) out.firstUserText = first.content.replace(/\s+/g, ' ').trim().slice(0, 160)
+  return out
+}
+
+export const PAGE_TURNS = 10
+export const PAGE_MAX_MESSAGES = 80
+export const PAGE_MAX_BYTES = 1_500_000
+
+/**
+ * The latest window of a chat's messages, or the window before `before` (a
+ * message id): back to and including the `turns`-th user message, at most
+ * `maxMessages` messages and about `maxBytes` of JSON, never fewer than one
+ * message. `hasMore` says whether anything is older; `before` is the id to ask
+ * for the next older page with.
+ */
+export function threadWindow(messages, { before, turns = PAGE_TURNS, maxMessages = PAGE_MAX_MESSAGES, maxBytes = PAGE_MAX_BYTES } = {}) {
+  let end = messages.length
+  if (before) {
+    const at = messages.findIndex((m) => m.id === before)
+    end = at < 0 ? 0 : at
+  }
+  let start = end
+  let users = 0
+  let bytes = 0
+  while (start > 0) {
+    const m = messages[start - 1]
+    const size = JSON.stringify(m).length
+    if (start < end && (end - start >= maxMessages || bytes + size > maxBytes)) break
+    start--
+    bytes += size
+    if (m.role === 'user' && ++users >= turns) break
+  }
+  const window = messages.slice(start, end)
+  return { messages: window, hasMore: start > 0, before: start > 0 ? window[0]?.id || null : null }
+}
+
 export function createThreadStore({ dir, log = () => {}, onDelete = async () => {} } = {}) {
   if (!dir) throw new TypeError('createThreadStore requires dir')
   const file = (id) => join(dir, `${id}.json`)
@@ -396,7 +475,12 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
     try { return JSON.parse(await readFile(file(id), 'utf8')) } catch { return null }
   }
 
+  // Summaries by file, kept while the file's mtime and size stay the same. Every
+  // write here drops its entry too, so a write in the same tick is never missed.
+  const summaryCache = new Map()
+
   async function rawWrite(thread) {
+    summaryCache.delete(thread.id)
     await mkdir(dir, { recursive: true })
     const tmp = file(`${thread.id}.${randomUUID()}.tmp`)
     await writeFile(tmp, JSON.stringify(thread))
@@ -429,6 +513,7 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
   async function remove(id) {
     if (!validThreadId(id)) return
     const existing = await rawRead(id)
+    summaryCache.delete(id)
     try { await unlink(file(id)) } catch {}
     if (existing) await onDelete(existing).catch((e) => log('chat: thread cleanup failed', e?.message || e))
   }
@@ -445,6 +530,45 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
       out.push(normalizeThread(t, t.id))
     }
     return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  }
+
+  /** Every chat as a summary (threadSummary), newest first, re-read only where its file changed. */
+  async function summaries() {
+    let names = []
+    try { names = await readdir(dir) } catch { return [] }
+    const out = []
+    const seen = new Set()
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      const id = name.slice(0, -5)
+      if (!validThreadId(id)) continue
+      let st
+      try { st = await stat(file(id)) } catch { continue }
+      seen.add(id)
+      const hit = summaryCache.get(id)
+      let summary = hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size ? hit.summary : null
+      if (!summary) {
+        const t = await rawRead(id)
+        if (!t || t.id !== id) { summaryCache.delete(id); continue }
+        summary = threadSummary(normalizeThread(t, id))
+        summaryCache.set(id, { mtimeMs: st.mtimeMs, size: st.size, summary })
+      }
+      if (isExpired(summary)) { await remove(id); continue }
+      out.push(summary)
+    }
+    for (const id of summaryCache.keys()) if (!seen.has(id)) summaryCache.delete(id)
+    return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  }
+
+  /**
+   * One chat with a window of its messages (threadWindow) and `history:
+   * { hasMore, before }`; every other field as `get` returns it.
+   */
+  async function page(id, opts = {}) {
+    const t = await get(id)
+    if (!t) return null
+    const { messages, hasMore, before } = threadWindow(t.messages, opts)
+    return { ...t, messageCount: t.messages.length, messages, history: { hasMore, before } }
   }
 
   async function get(id) {
@@ -496,5 +620,5 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
     })
   }
 
-  return { list, get, put, update, remove, file }
+  return { list, summaries, get, page, put, update, remove, file }
 }
