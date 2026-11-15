@@ -204,6 +204,13 @@ npm run start:tailscale                            # Metro on the Tailscale IP, 
   native UIButton with a context-menu interaction; a reply's links, tables and code sat inside it, and
   its touch tracking swallowed sideways swipes and some link taps. `ReplyMenu` (Message.tsx) is a
   `Pressable` long press that opens the same items as an action sheet. The bubble keeps `MessageMenu`.
+- **A message's text is selected in a sheet, not in place.** A press on a message opens its menu (the bubble's
+  `MessageMenu`, the reply's `ReplyMenu`), and RN's `<Text selectable>` on iOS offers only Copy for the whole
+  block, so both menus have **Select text**: `features/chat/selectText.ts` hands the text to
+  `SelectTextSheet.tsx` (`/chat/select`), a non-editable multiline `TextInput` (a UITextView: iOS's own
+  selection handles, Copy, Look Up). A reply goes through `lib/chat/plainText.ts` first, so it reads as its
+  words, not its Markdown. Its tests are `lib/chat/plainText.test.mjs` (the root `npm test` runs
+  `mobile/src/lib/*/*.test.mjs` too).
 - **A remote push's `content.data` is only its `body` key.** expo-notifications (iOS) builds
   `notification.request.content.data` from the APNs payload's `body` dictionary and ignores every
   other top-level key, so `notify/apns.mjs` puts `url`, `entryId`, `category` and `tag` under `body`.

@@ -21,6 +21,7 @@ import { authHeaders } from '../../lib/api'
 import { bridgeUrl, getBaseUrl } from '../../lib/connection'
 import { headersFor } from '../../lib/links'
 import { openFile } from './openLink'
+import { openSelectText } from './selectText'
 import { useSmoothText } from '../../lib/chat/smooth'
 import { useTextTicks } from '../../lib/chat/ticks'
 import { POWER_NAMES } from '../../lib/chat/models'
@@ -221,6 +222,7 @@ export const UserMessage = React.memo(function UserMessage({ m, canEdit, onEdit,
   const startEdit = () => { setDraft(m.content); setEditing(true) }
   const items = [
     ...(m.content ? [{ id: 'copy', title: 'Copy', image: 'doc.on.doc', run: doCopy }] : []),
+    ...(m.content ? [{ id: 'select', title: 'Select text', image: 'character.cursor.ibeam', run: () => openSelectText(m.content) }] : []),
     ...(canEdit && m.content && !m.unsent ? [{ id: 'edit', title: 'Edit', image: 'pencil', run: startEdit }] : []),
     ...(onRetry ? [{ id: 'retry', title: 'Try again', image: 'arrow.clockwise', run: onRetry }] : []),
   ]
@@ -506,6 +508,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
   const doCopy = () => { copy(m.content); setCopied(true); clearTimeout(copiedTimer.current); copiedTimer.current = setTimeout(() => setCopied(false), 1200) }
   const items = [
     ...(m.content ? [{ id: 'copy', title: 'Copy', image: 'doc.on.doc', run: doCopy }] : []),
+    ...(m.content ? [{ id: 'select', title: 'Select text', image: 'character.cursor.ibeam', run: () => openSelectText(m.content, { markdown: true }) }] : []),
     ...(isLast && onRegenerate ? [{ id: 'regen', title: 'Regenerate', image: 'arrow.clockwise', run: () => { impact(); onRegenerate() } }] : []),
     ...(meta ? [{ id: 'details', title: details ? 'Hide reply details' : 'Reply details', image: 'info.circle', run: () => setDetails((d) => !d) }] : []),
   ]
