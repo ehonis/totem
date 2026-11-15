@@ -125,15 +125,22 @@ export function generateVapidKeys() {
   ecdh.generateKeys()
   return {
     publicKey: b64url(ecdh.getPublicKey()),
-    privateKey: b64url(ecdh.getPrivateKey()),
+    privateKey: b64url(rawScalar(ecdh.getPrivateKey())),
   }
+}
+
+// getPrivateKey() drops leading zero bytes (1 key in 256 comes out 31 bytes),
+// and a JWK's `d` must be exactly 32, so the scalar is left-padded back.
+function rawScalar(buf) {
+  if (buf.length >= 32) return buf
+  return Buffer.concat([Buffer.alloc(32 - buf.length), buf])
 }
 
 // Node will not sign with 32 raw bytes, so the raw pair becomes a JWK. The public
 // half is required in the JWK, and deriving it from the private key here means a
 // caller only has to keep the one secret.
 function vapidPrivateKeyObject(rawPrivate) {
-  const priv = Buffer.isBuffer(rawPrivate) ? rawPrivate : fromB64url(rawPrivate)
+  const priv = rawScalar(Buffer.isBuffer(rawPrivate) ? rawPrivate : fromB64url(rawPrivate))
   const ecdh = createECDH(CURVE)
   ecdh.setPrivateKey(priv)
   const pub = ecdh.getPublicKey()

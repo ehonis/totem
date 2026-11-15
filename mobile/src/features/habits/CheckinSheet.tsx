@@ -12,7 +12,7 @@ import { success, tap } from '../../ui/haptics'
 import { Hi, CheckIcon, XMarkIcon } from '../../lib/icons'
 import { logHabit } from '../../lib/api'
 import { pushToast } from '../../lib/toast'
-import { answered, checkinItems, type CheckinItem } from '../../lib/habitCheckin'
+import { answered, checkinItems, periodNote, type CheckinItem } from '../../lib/habitCheckin'
 import { Sheet, closeSheet } from './form'
 import { Stepper } from './parts'
 import { toDate, type Entry, type HabitsPayload } from './logic'
@@ -61,6 +61,7 @@ export default function CheckinSheet() {
             key={`${item.habit.id}:${item.date}`}
             item={item}
             entry={data?.entries[item.date]?.[item.habit.id]}
+            note={periodNote(item, data?.entries)}
             busy={Boolean(busy[`${item.habit.id}:${item.date}`])}
             first={i === 0}
             onAnswer={(fields) => { void answer(item, fields) }}
@@ -96,9 +97,10 @@ export default function CheckinSheet() {
   )
 }
 
-function CheckinRow({ item, entry, busy, first, onAnswer }: {
+function CheckinRow({ item, entry, note, busy, first, onAnswer }: {
   item: CheckinItem
   entry: Entry | undefined
+  note: string
   busy: boolean
   first: boolean
   onAnswer: (fields: { count?: number; delta?: number; skipped?: true }) => void
@@ -114,6 +116,7 @@ function CheckinRow({ item, entry, busy, first, onAnswer }: {
       <View style={{ flex: 1, minWidth: 0 }}>
         <T size={15} weight={500} numberOfLines={1} color={yes || no ? colors.muted : colors.text}>{habit.name}</T>
         {item.part === 'yesterday' && habit.when === 'night' ? <T size={11.5} muted style={{ marginTop: 1 }}>last night</T> : null}
+        {note ? <T size={11.5} muted style={{ marginTop: 1 }}>{note}</T> : null}
       </View>
       {multi ? (
         // Eight glasses of water is a count, not a yes: step it, and No still means none.

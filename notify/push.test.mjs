@@ -110,6 +110,16 @@ test('VAPID keys are the raw sizes the push services expect', () => {
   assert.equal(fromB64url(privateKey).length, 32)
 })
 
+// One key in 256 has a leading zero byte, which Node's getPrivateKey() drops.
+test('a private key with a leading zero byte signs, padded or as stored short', () => {
+  const scalar = Buffer.alloc(32, 7)
+  scalar[0] = 0
+  for (const privateKey of [b64url(scalar), b64url(scalar.subarray(1))]) {
+    const jwt = signVapidToken({ endpoint: 'https://push.example/x', subject: 'mailto:owner@example.com', privateKey })
+    assert.equal(jwt.split('.').length, 3)
+  }
+})
+
 test('the VAPID token is a verifiable ES256 JWT with the right claims', () => {
   const { publicKey, privateKey } = generateVapidKeys()
   const now = Date.UTC(2026, 8, 15, 12, 0)
