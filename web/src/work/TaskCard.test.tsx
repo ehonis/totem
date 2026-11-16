@@ -11,6 +11,7 @@ import ToastHost from '../components/ToastHost'
 import type { SheetFeed, Todo } from '../todos/types'
 import TaskCardHost, { PinnedTask } from './TaskCard'
 import TaskBar from './TaskBar'
+import TasksPanel from './TasksPanel'
 import { closeTaskCard, installTaskNav, openTaskCard } from './card'
 import { createTask } from './state'
 
@@ -266,3 +267,20 @@ describe('the chat’s pinned task', () => {
 })
 
 function last<T>(list: T[]) { return list[list.length - 1] }
+
+describe('the chats panel’s task rows', () => {
+  it('snooze a task from its row in one click, with Undo', async () => {
+    const user = userEvent.setup()
+    render(<><TasksPanel onOpenChat={() => {}} /><ToastHost /></>)
+    await user.click(await screen.findByRole('button', { name: 'Snooze “Call the bank”' }))
+    await user.click(await screen.findByRole('menuitem', { name: /Tomorrow/ }))
+    const tomorrow = new Date(2026, 10, 10, 9, 0, 0).toISOString()
+    await waitFor(() => expect(sent('PATCH', /\/api\/todos\/today$/)[0]?.body).toEqual({ snoozedUntil: tomorrow }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Snooze “Call the bank”' })).toBeNull())
+    expect(screen.queryByRole('menu')).toBeNull()
+    await user.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(sent('PATCH', /\/api\/todos\/today$/)[1]?.body).toEqual({ snoozedUntil: null }))
+    // A sheet row cannot be snoozed, so it gets no button.
+    expect(screen.queryByRole('button', { name: /Snooze “Order banner stands”/ })).toBeNull()
+  })
+})
