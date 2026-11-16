@@ -4,7 +4,7 @@
 // so the state moves into a small external store they all read.
 import { useSyncExternalStore } from 'react'
 import {
-  deleteBoardTodo, getIssueStates, getSheetFeed, getTodoBoard, getTodoPreferences, isAccountChanged, peekTodoBoard, peekTodoPreferences,
+  deleteBoardTodo, fileSheetRow as fileSheetRowApi, getIssueStates, getSheetFeed, getTodoBoard, getTodoPreferences, isAccountChanged, peekTodoBoard, peekTodoPreferences,
   restoreBoardTodo, updateBoardTodo,
 } from '../../lib/api'
 import type { IssueState, SheetFeed, Todo, TodoPreferences } from '../../lib/todos/types'
@@ -254,6 +254,22 @@ export function loadSheet({ refresh = false }: { refresh?: boolean } = {}): Prom
   const read: Promise<void> = readSheet(refresh).finally(() => { if (sheetRead === read) sheetRead = null })
   sheetRead = read
   return read
+}
+
+/**
+ * File a sheet row under a chat project or folder (null: Personal), shown at once and
+ * read back from the feed. Throws when the bridge refuses, after reading the feed again.
+ */
+export async function fileSheet(id: string, folderId: string | null) {
+  const feed = state.sheet
+  if (feed?.configured) set({ sheet: { ...feed, items: feed.items.map((item) => (item.id === id ? { ...item, folderId, folderDefault: false } : item)) } })
+  try {
+    await fileSheetRowApi(id, folderId)
+  } finally {
+    // A read already out began before the filing; wait it out, then read the filing back.
+    if (sheetRead) await sheetRead
+    await loadSheet()
+  }
 }
 
 /**

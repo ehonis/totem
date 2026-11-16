@@ -146,6 +146,8 @@ export function tasksContext(tasks: TaskLike[], { open, overdue }: { open: numbe
 
 interface TodoLike extends TaskLike {
   id: string; title: string; description?: string; area?: string; ventureTag?: string | null
+  /** The folder it is filed under, by name ("Work - Northwind / r+d", or "Personal"). */
+  folder?: string | null
   recurrence?: string | null; snoozedUntil?: string | null; outcome?: string | null
   tags?: { name: string }[]; notes?: { body: string; createdAt: string }[]
   lists?: { title: string }[]; externalLinks?: { connector: string; externalUrl: string | null }[]
@@ -153,7 +155,7 @@ interface TodoLike extends TaskLike {
 
 /** One task on the board. */
 export function todoContext(t: TodoLike): ChatContext {
-  const where = t.area === 'Ventures' && t.ventureTag ? `Ventures · ${clip(t.ventureTag, 60)}` : clip(t.area, 60)
+  const where = t.folder ? `in ${clip(t.folder, 80)}` : t.area === 'Ventures' && t.ventureTag ? `Ventures · ${clip(t.ventureTag, 60)}` : ''
   return {
     place: 'todos',
     title: `Task: ${t.title}`,

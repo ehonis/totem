@@ -1296,13 +1296,30 @@ shared task sheet is set up, its action items, each with the chats that work on 
 under it. Action items get worked on in chats; this is where the two meet, and one click
 moves between a task and any of its chats (`web/src/work/`).
 
-- **Folders.** A task is filed under a chat project or folder, or nowhere. The panel groups
-  by them (projects in the panel's order, each folder under its project, then "No folder"),
-  or shows one list. The filing lives on the chat side, `data/task-folders.json`
-  (`chat/task-folders.mjs`, `TASK_FOLDERS_FILE`; `GET /api/chat/task-folders`,
-  `PUT /api/chat/task-folders/<task ref>` with `{ projectId }` or `null`), not in the task
-  database. Reads leave out filings whose project is gone; deleting a folder moves its tasks
-  up to its project, deleting a project unfiles them, as with its chats.
+- **Folders.** A task is filed under a chat project or folder, or nowhere ("Personal"): the
+  same folders the Tasks page shows (`docs/tasks.md` → Folders). The panel groups by them
+  (projects in the panel's order, each folder under its project, then Personal), or shows
+  one list. A local task carries its folder (`folderId`, set with `PATCH /api/todos/:id`);
+  a sheet row's filing lives on the chat side, `data/task-folders.json`
+  (`chat/task-folders.mjs`, `TASK_FOLDERS_FILE`; `PUT /api/chat/task-folders/<row id>` with
+  `{ projectId }`, where `null` stores `none`, Personal on purpose), and every row arrives
+  from `GET /api/todos/sheet` already filed: its own filing, else the sheet's default
+  folder (`docs/task-sheet.md`). Deleting a folder moves its tasks up to its project,
+  deleting a project makes them Personal, as with its chats.
+- **The task card** (`web/src/work/TaskCard.tsx`, `card.ts`). A click on a task opens a
+  floating card at the page's top right, T3 Code's thread card for a task: the check
+  circle and title, then one row per setting with a dropdown (Folder, Due, Priority,
+  Repeat, Snooze), the description, the chats working on it with New chat, Open in Tasks
+  (the Tasks page, scrolled to the task with its pane open) and Delete. Every change saves
+  at once and is drawn put back if refused. A sheet row's card is read-only but for its
+  folder, with Open in the sheet. Esc, × or a click elsewhere closes it; on a phone it is
+  a sheet from the bottom over a scrim. The count beside a task unfolds its chats; the
+  "…" has Edit task…, New chat, Move to folder… and Mark done.
+- **Live with the Tasks page.** The panel and the page keep their own copies of the list,
+  so each tells the other when it changes something (`web/src/todos/bus.ts`:
+  `announcing` wraps every call that writes; `onTasksChanged` reads again, once per burst,
+  unless the change was its own). A chat reply's end counts as a change too, since the
+  agent may have made, filed or finished a task.
 - **Links.** A chat names at most one task, `thread.taskId` (a local task id, or a sheet
   row's `sheet:<gid>:<row>:<hash>`); many chats may name one task. Link from a chat's "…"
   (Link to task…), by dragging a chat onto a task, or by starting a chat from the task (its
@@ -1310,9 +1327,16 @@ moves between a task and any of its chats (`web/src/work/`).
   project of its latest chat) and the first send carries `taskId` (`startTaskDraft`,
   `draftTaskId` in `web/src/chat/store.ts`; `startChatTurn` stores it on a new chat only).
 - **The strip over the composer** (`web/src/work/TaskBar.tsx`) names a linked chat's task
-  with its due day, Done (local tasks), and the link button to change or unlink it; on a
-  new chat from a task it says so, with × for a plain chat instead. The task's title turns
-  every open chats panel to Tasks.
+  with its folder and due day, Done (local tasks), and the link button to change or unlink
+  it; on a new chat from a task it says so, with × for a plain chat instead. The task's
+  title opens its card and turns every open chats panel to Tasks, scrolled to the task.
+  (It used to only turn the panel, which did nothing visible when the panel was already on
+  Tasks, as it is for a chat started there.)
+- **Tasks an agent makes.** `totem_create_task` from a chat run (the gateway names the run,
+  `x-totem-run`; it asks `GET /api/chat/run-context`) files the task in the chat's project
+  or folder unless the agent names one, and links the chat to it if the chat names no
+  task yet (`POST /api/chat/run-context/task`). The result says so (`filedFromChat`,
+  `linkedToChat`).
 - **What the agent is told.** Every turn of a linked chat (not voice) carries a short
   `LINKED TASK.` block (`chat/task-link.mjs`, read fresh each turn by
   `linkedTaskContext`): title, id, open or done, due day, priority, a clipped description,
@@ -1328,6 +1352,9 @@ moves between a task and any of its chats (`web/src/work/`).
   else the task's own last change) or name; show all, only tasks with chats, or only those
   without; the sheet's items can be hidden. Kept per browser (`totem.work.view`), as are
   folded groups and opened tasks.
+- **Scrolling.** The filter and the "Add a task…" line stay at the top; the tasks scroll
+  under them inside `.vc-threads-list`, the scroller the Chats and Totems faces use too. In
+  the phone drawer the whole drawer scrolls as one list instead.
 
 Nothing loads tasks until the Tasks face or a task strip is on screen; while one is, the
 store (`web/src/work/state.ts`) reads the board, the sheet feed (its own two-minute cache)

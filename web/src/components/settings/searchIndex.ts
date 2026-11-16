@@ -83,7 +83,7 @@ const ENTRIES: Partial<Record<SettingsSection, Entry[]>> = {
     ['conn-add', 'Add a connection', 'Connections', 'catalog custom server'],
   ],
   tasks: [
-    ['venture-tags', 'Venture tags', 'Tasks', 'ventures tags projects clients'],
+    ['sheet-task_sheet_folder', 'File sheet rows in', 'Tasks', 'task sheet folder default project file rows'],
     ['task-sheet', 'Task sheet', 'Tasks', 'spreadsheet action items sheet google drive read-only assignees'],
     ['task-retention', 'Retention', 'Tasks', 'archive completed finished recycle bin purge empty delete days time'],
   ],

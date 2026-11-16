@@ -1,29 +1,40 @@
-// The chats panel's Tasks face: the owner's tasks, the shared sheet's action
-// items and which chat folder each is filed under, kept in one small store the
-// panel, the composer's task strip and the pickers all read.
+// The chats panel's Tasks face: the owner's tasks and the shared sheet's action
+// items, each carrying the chat folder it is filed under, kept in one small store
+// the panel, the task card, the composer's task strip and the pickers all read.
 //
-// Read on first use, again every minute while something is watching and when the
-// window comes back into focus. Every change is drawn at once and put back if the
-// bridge says no, as the Tasks page does.
+// Read on first use, again every minute while something is watching, when the
+// window comes back into focus, and whenever the Tasks page or a chat's agent
+// changes a task (todos/bus.ts). Every change is drawn at once, put back if the
+// bridge says no, and told to the Tasks page, which reads again.
 import { useSyncExternalStore } from 'react'
-import { api, AuthError, createBoardTodo, getSheetFeed, getTodo, getTodoBoard, moveBoardTodo } from '../api'
+import * as todoApi from '../api'
+import { AuthError, getSheetFeed, getTodo, getTodoBoard } from '../api'
 import { pushError, pushToast } from '../toast'
 import { getState as chatState } from '../chat/store'
-import type { SheetFeed, Todo } from '../todos/types'
-import { fromSheet, fromTodo, isOpenTodo, resolveFolders, resolveRef, type WorkTask } from './groups'
+import { announcing, onTasksChanged } from '../todos/bus'
+import { wakeLabel } from '../todos/board'
+import type { SheetFeed, Todo, TodoPatch } from '../todos/types'
+import { fromSheet, fromTodo, isOpenTodo, resolveRef, type WorkTask } from './groups'
+
+const createBoardTodo = announcing('work', todoApi.createBoardTodo)
+const updateBoardTodo = announcing('work', todoApi.updateBoardTodo)
+const moveBoardTodo = announcing('work', todoApi.moveBoardTodo)
+const deleteBoardTodo = announcing('work', todoApi.deleteBoardTodo)
+const restoreBoardTodo = announcing('work', todoApi.restoreBoardTodo)
+const fileSheetRow = announcing('work', todoApi.fileSheetRow, { sheet: true })
 
 export interface WorkState {
   /** Local tasks on the board (open, done and snoozed) plus sheet rows, by ref. */
   tasks: WorkTask[]
-  /** Task ref → project or folder id, as stored (a sheet row's ref may have moved since: resolveFolders). */
-  folders: Record<string, string>
   /** The sheet's display name, when one is set up. */
   sheetName: string
+  /** Where the sheet's rows land until filed, or null. */
+  sheetFolder: string | null
   loaded: boolean
   error: string
 }
 
-let state: WorkState = { tasks: [], folders: {}, sheetName: '', loaded: false, error: '' }
+let state: WorkState = { tasks: [], sheetName: '', sheetFolder: null, loaded: false, error: '' }
 const subs = new Set<() => void>()
 let onAuthError: () => void = () => {}
 
@@ -36,6 +47,7 @@ export const getWork = () => state
 
 let watchers = 0
 let timer = 0
+let stopListening: (() => void) | null = null
 const onFocus = () => { void loadWork() }
 
 function subscribe(fn: () => void) {
@@ -45,11 +57,18 @@ function subscribe(fn: () => void) {
     if (!state.loaded) void loadWork()
     timer = window.setInterval(() => { if (document.visibilityState === 'visible') void loadWork() }, 60_000)
     window.addEventListener('focus', onFocus)
+    // The Tasks page or a chat's agent changed something: read again.
+    stopListening = onTasksChanged('work', () => { void loadWork() })
   }
   return () => {
     subs.delete(fn)
     watchers -= 1
-    if (watchers === 0) { window.clearInterval(timer); window.removeEventListener('focus', onFocus) }
+    if (watchers === 0) {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+      stopListening?.()
+      stopListening = null
+    }
   }
 }
 
@@ -70,28 +89,31 @@ function fail(e: unknown, fallback: string) {
 const fetchedExtra = new Set<string>()
 
 let inflight: Promise<void> | null = null
+let again = false
 let changes = 0
 
+const local = (todo: Todo, now = new Date()): WorkTask => ({ ...fromTodo(todo), hidden: todo.status !== 'done' && !isOpenTodo(todo, now) })
+
 export function loadWork(): Promise<void> {
-  if (inflight) return inflight
+  // Asked again while a read is out (a change just landed): one more read after it.
+  if (inflight) { again = true; return inflight }
   inflight = (async () => {
     const before = changes
     try {
-      const [board, sheet, folders] = await Promise.all([
+      const [board, sheet] = await Promise.all([
         getTodoBoard(),
         getSheetFeed().catch(() => null as SheetFeed | null),
-        api<{ folders: Record<string, string> }>('/api/chat/task-folders').catch(() => ({ folders: state.folders })),
       ])
       // A change made while this read was out wins over what it read; read again after it.
-      if (changes !== before) { queueMicrotask(() => { void loadWork() }); return }
+      if (changes !== before) { again = true; return }
       const now = new Date()
-      const local = board.todos.filter((t) => !t.deletedAt).map((t) => ({ ...fromTodo(t), hidden: t.status !== 'done' && !isOpenTodo(t, now) }))
-      const keep = state.tasks.filter((t) => t.kind === 'local' && fetchedExtra.has(t.ref) && !local.some((l) => l.ref === t.ref))
+      const todos = board.todos.filter((t) => !t.deletedAt).map((t) => local(t, now))
+      const keep = state.tasks.filter((t) => t.kind === 'local' && fetchedExtra.has(t.ref) && !todos.some((l) => l.ref === t.ref))
       const rows = sheet?.configured ? sheet.items.map(fromSheet) : []
       set({
-        tasks: [...local, ...keep, ...rows],
-        folders: folders.folders,
+        tasks: [...todos, ...keep, ...rows],
         sheetName: sheet?.configured ? sheet.title || 'Shared sheet' : '',
+        sheetFolder: sheet?.configured ? sheet.defaultFolderId ?? null : null,
         loaded: true,
         error: '',
       })
@@ -100,6 +122,7 @@ export function loadWork(): Promise<void> {
       set({ loaded: true, error: (e instanceof Error && e.message) || 'Tasks could not be read.' })
     } finally {
       inflight = null
+      if (again) { again = false; queueMicrotask(() => { void loadWork() }) }
     }
   })()
   return inflight
@@ -114,7 +137,7 @@ export function findTask(stored: string | undefined | null): WorkTask | null {
   if (state.loaded && !ref.startsWith('sheet:') && !fetchedExtra.has(ref)) {
     fetchedExtra.add(ref)
     getTodo(ref)
-      .then(({ todo }) => { if (!todo.deletedAt) set((s) => ({ tasks: [...s.tasks.filter((t) => t.ref !== ref), { ...fromTodo(todo), hidden: todo.status !== 'done' && !isOpenTodo(todo, new Date()) }] })) })
+      .then(({ todo }) => { if (!todo.deletedAt) set((s) => ({ tasks: [...s.tasks.filter((t) => t.ref !== ref), local(todo)] })) })
       .catch(() => { /* gone: the strip says so */ })
   }
   return null
@@ -125,33 +148,46 @@ function replaceTask(next: WorkTask) {
   set((s) => ({ tasks: s.tasks.some((t) => t.ref === next.ref) ? s.tasks.map((t) => (t.ref === next.ref ? next : t)) : [next, ...s.tasks] }))
 }
 
-/** File a task under a project or folder, or take it out of any with null. */
-export async function setTaskFolder(ref: string, projectId: string | null) {
-  const before = state.folders
-  // A filing stored under a sheet row's old ref would still name this row: drop it too.
-  const moved = Object.keys(before).filter((k) => k !== ref && resolveRef(k, state.tasks) === ref)
-  changes += 1
-  set((s) => {
-    const folders = { ...s.folders }
-    for (const k of moved) delete folders[k]
-    if (projectId) folders[ref] = projectId
-    else delete folders[ref]
-    return { folders }
-  })
-  const put = (key: string, value: string | null) => api<{ folders: Record<string, string> }>(`/api/chat/task-folders/${encodeURIComponent(key)}`, {
-    method: 'PUT', body: JSON.stringify({ projectId: value }),
-  })
+const quote = (title: string) => `“${title.length > 48 ? `${title.slice(0, 47)}…` : title}”`
+
+// Each local task's edit count: a slow answer to an older edit never draws over a newer one.
+const edits = new Map<string, number>()
+
+/**
+ * Change a local task's fields (due date, priority, folder, note…): drawn at once,
+ * put back if the bridge refuses. Returns the saved task, or null.
+ */
+export async function updateTask(ref: string, patch: TodoPatch): Promise<Todo | null> {
+  const before = state.tasks.find((t) => t.ref === ref)
+  if (!before?.todo) return null
+  const seq = (edits.get(ref) ?? 0) + 1
+  edits.set(ref, seq)
+  replaceTask(local({ ...before.todo, ...patch } as Todo))
   try {
-    for (const k of moved) await put(k, null)
-    const r = await put(ref, projectId)
-    set({ folders: r.folders })
+    const { todo } = await updateBoardTodo(ref, patch)
+    if (edits.get(ref) === seq) replaceTask(local(todo))
+    return todo
   } catch (e) {
-    set({ folders: before })
-    fail(e, 'The task could not be filed there.')
+    if (edits.get(ref) === seq) replaceTask(before)
+    fail(e, 'The change was not saved.')
+    return null
   }
 }
 
-const quote = (title: string) => `“${title.length > 48 ? `${title.slice(0, 47)}…` : title}”`
+/** File a task under a project or folder, or make it Personal with null. */
+export async function setTaskFolder(ref: string, projectId: string | null) {
+  const task = state.tasks.find((t) => t.ref === resolveRef(ref, state.tasks))
+  if (!task) return
+  if (task.kind === 'local') { await updateTask(task.ref, { folderId: projectId }); return }
+  replaceTask({ ...task, folderId: projectId, ...(task.sheet ? { sheet: { ...task.sheet, folderId: projectId, folderDefault: false } } : {}) })
+  try {
+    await fileSheetRow(task.ref, projectId)
+    void loadWork()
+  } catch (e) {
+    replaceTask(task)
+    fail(e, 'The task could not be filed there.')
+  }
+}
 
 /** Mark a local task done, with Undo. Sheet rows are finished in the sheet. */
 export async function completeTask(ref: string) {
@@ -160,7 +196,7 @@ export async function completeTask(ref: string) {
   replaceTask({ ...before, done: true })
   try {
     const { todo } = await moveBoardTodo(ref, 'done')
-    replaceTask({ ...fromTodo(todo), done: true })
+    replaceTask({ ...local(todo), done: true })
     pushToast(`Done: ${quote(before.title)}`, 'info', { action: { label: 'Undo', onClick: () => { void reopenTask(ref) } } })
     // A repeating task rolled its next occurrence on the bridge.
     void loadWork()
@@ -176,10 +212,37 @@ export async function reopenTask(ref: string) {
   replaceTask({ ...before, done: false })
   try {
     const { todo } = await moveBoardTodo(ref, 'todo')
-    replaceTask({ ...fromTodo(todo), done: false })
+    replaceTask({ ...local(todo), done: false })
   } catch (e) {
     replaceTask(before)
     fail(e, 'The task could not be reopened.')
+  }
+}
+
+/** Snooze a local task until `until`, or wake it with null; Undo puts the old snooze back. */
+export async function snoozeTask(ref: string, until: Date | null) {
+  const before = state.tasks.find((t) => t.ref === ref)?.todo
+  if (!before) return
+  const saved = await updateTask(ref, { snoozedUntil: until ? until.toISOString() : null })
+  if (saved && until) {
+    pushToast(`Snoozed until ${wakeLabel(until, new Date())}`, 'info', { action: { label: 'Undo', onClick: () => { void updateTask(ref, { snoozedUntil: before.snoozedUntil }) } } })
+  }
+}
+
+/** Move a local task to the recycle bin, with Undo. */
+export async function deleteTask(ref: string) {
+  const before = state.tasks.find((t) => t.ref === ref)
+  if (!before || before.kind !== 'local') return
+  changes += 1
+  set((s) => ({ tasks: s.tasks.filter((t) => t.ref !== ref) }))
+  try {
+    await deleteBoardTodo(ref)
+    pushToast('Moved to the recycle bin', 'info', {
+      action: { label: 'Undo', onClick: () => { void restoreBoardTodo(ref).then(({ todo }) => replaceTask(local(todo))).catch((e) => fail(e, 'The task could not be restored.')) } },
+    })
+  } catch (e) {
+    replaceTask(before)
+    fail(e, 'The task could not be moved to the recycle bin.')
   }
 }
 
@@ -190,10 +253,10 @@ export async function createTask(fields: { title: string; dueDate?: string | nul
       title: fields.title,
       ...(fields.dueDate ? { dueDate: fields.dueDate } : {}),
       ...(fields.priority ? { priority: fields.priority } : {}),
+      ...(projectId ? { folderId: projectId } : {}),
     })
-    const task = fromTodo(todo)
+    const task = local(todo)
     replaceTask(task)
-    if (projectId) await setTaskFolder(task.ref, projectId)
     return task
   } catch (e) {
     fail(e, 'The task could not be added.')
@@ -203,7 +266,7 @@ export async function createTask(fields: { title: string; dueDate?: string | nul
 
 /** The project a new chat for this task opens in: its folder, else where its latest chat is. */
 export function taskHome(ref: string): string | null {
-  const own = resolveFolders(state.folders, state.tasks)[ref]
+  const own = state.tasks.find((t) => t.ref === resolveRef(ref, state.tasks))?.folderId
   const projects = chatState().projects
   if (own && projects.some((p) => p.id === own)) return own
   const latest = chatState().threads.filter((t) => t.taskId && resolveRef(t.taskId, state.tasks) === ref && t.projectId).sort((a, b) => b.updatedAt - a.updatedAt)[0]

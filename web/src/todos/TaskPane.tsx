@@ -20,13 +20,15 @@ import { groupArchive } from './archive'
 import { SHEET_PRIORITY_WORD, sheetName, wakeLabel } from './board'
 import { dateLabel, dueText } from './format'
 import Menu from './Menu'
-import { DueMenu, PRIORITIES, priorityName, SnoozeMenu } from './TaskMenus'
+import { DueMenu, PRIORITIES, priorityName, RepeatMenu, SnoozeMenu } from './TaskMenus'
 import { CheckCircle, issueKey, repeatWords } from './TaskRow'
 import type { TaskBoard } from './useTaskBoard'
-import type { IssueState, SheetFeed, SheetItem, Todo, VentureTagConfig } from './types'
+import type { IssueState, SheetFeed, SheetItem, Todo } from './types'
+import { FolderField } from '../work/FolderField'
+import { TaskChats } from '../work/TaskCard'
+import { folderLabel } from './folders'
+import { useChat } from '../chat/store'
 import { IssueClosedIcon, IssueOpenIcon, RepeatIcon, SheetIcon, SnoozeIcon } from './taskIcons'
-
-const REPEATS = ['', 'daily', 'weekdays', 'weekly', 'monthly', 'yearly'] as const
 
 function when(iso: string) {
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -85,15 +87,15 @@ export interface TaskDetailProps {
   board: TaskBoard
   now: Date
   issue?: IssueState
-  ventureTags: VentureTagConfig[]
   /** Bumped to put the cursor in the note composer (m); each new value focuses it again. */
   focusNotes?: number
   onClose: () => void
   onOpenTask: (id: string) => void
 }
 
-export function TaskDetail({ todo, board, now, issue, ventureTags, focusNotes, onClose, onOpenTask }: TaskDetailProps) {
-  const [menu, setMenu] = useState<null | { kind: 'due' | 'snooze' | 'more' | 'repeat' | 'venture' | 'relate'; anchor: HTMLElement }>(null)
+export function TaskDetail({ todo, board, now, issue, focusNotes, onClose, onOpenTask }: TaskDetailProps) {
+  const projects = useChat((state) => state.projects)
+  const [menu, setMenu] = useState<null | { kind: 'due' | 'snooze' | 'more' | 'repeat' | 'relate'; anchor: HTMLElement }>(null)
   const [savedAt, setSavedAt] = useState(0)
   const done = todo.status === 'done'
   const ticking = board.ticking.has(todo.id)
@@ -124,9 +126,6 @@ export function TaskDetail({ todo, board, now, issue, ventureTags, focusNotes, o
   }, [savedAt])
 
   const snoozed = Boolean(todo.snoozedUntil && new Date(todo.snoozedUntil) > now)
-  const showVentures = ventureTags.length > 0 || todo.area === 'Ventures'
-  const tagOptions = [...ventureTags.map((tag) => tag.name), ...(todo.ventureTag && !ventureTags.some((tag) => tag.name === todo.ventureTag) ? [todo.ventureTag] : [])]
-  const [pickingVenture, setPickingVenture] = useState(false)
 
   return (
     <div className="tk-pane-body" aria-label={`Task: ${todo.title}`} role="region">
@@ -134,7 +133,7 @@ export function TaskDetail({ todo, board, now, issue, ventureTags, focusNotes, o
         <CheckCircle checked={done || ticking} notDoing={done && todo.outcome === 'not_doing'} label={done ? `Reopen ${todo.title}` : `Complete ${todo.title}`} onToggle={() => void (done ? board.reopen(todo) : board.complete(todo))} />
         <span className="tk-pane-state">{done ? (todo.outcome === 'not_doing' ? 'Not doing' : `Done${todo.completedAt ? ` ${when(todo.completedAt)}` : ''}`) : ticking ? 'Done' : snoozed ? `Snoozed until ${wakeLabel(new Date(todo.snoozedUntil!), now)}` : 'Open'}</span>
         <span className={`tk-saved${savedAt ? ' on' : ''}`} role="status" aria-live="polite">{savedAt ? 'Saved' : ''}</span>
-        <button type="button" className="tk-icon-btn" title="Chat about this task" aria-label="Chat about this task" onClick={() => void startChatAbout(todoContext(todo)).catch((cause) => pushError(cause))}><Hi icon={ChatBubbleLeftRightIcon} size={16} /></button>
+        <button type="button" className="tk-icon-btn" title="Chat about this task" aria-label="Chat about this task" onClick={() => void startChatAbout(todoContext({ ...todo, folder: folderLabel(todo.folderId, projects) })).catch((cause) => pushError(cause))}><Hi icon={ChatBubbleLeftRightIcon} size={16} /></button>
         <button type="button" className="tk-icon-btn" aria-label="More actions" aria-haspopup="menu" aria-expanded={menu?.kind === 'more'} onClick={(event) => setMenu({ kind: 'more', anchor: event.currentTarget })}><Hi icon={EllipsisHorizontalIcon} size={17} /></button>
         <button type="button" className="tk-icon-btn" aria-label="Close" title="Close (Esc)" onClick={onClose}><Hi icon={XMarkIcon} size={17} /></button>
       </div>
@@ -179,19 +178,9 @@ export function TaskDetail({ todo, board, now, issue, ventureTags, focusNotes, o
             ))}
           </div>
         </Row>
-        {showVentures && (
-          <Row label="Area">
-            <div className="tk-seg" role="radiogroup" aria-label="Area">
-              <button type="button" role="radio" aria-checked={todo.area === 'Personal' && !pickingVenture} className={`tk-seg-btn${todo.area === 'Personal' && !pickingVenture ? ' on' : ''}`} onClick={() => { setPickingVenture(false); if (todo.area !== 'Personal') void save({ area: 'Personal', ventureTag: null }) }}>Personal</button>
-              <button type="button" role="radio" aria-checked={todo.area === 'Ventures' || pickingVenture} className={`tk-seg-btn${todo.area === 'Ventures' || pickingVenture ? ' on' : ''}`} onClick={() => { if (todo.area !== 'Ventures') { if (tagOptions.length === 1) void save({ area: 'Ventures', ventureTag: tagOptions[0] }); else setPickingVenture(true) } }}>Ventures</button>
-            </div>
-            {(todo.area === 'Ventures' || pickingVenture) && (
-              <button type="button" className={`tk-prop-btn${todo.area === 'Ventures' && todo.ventureTag ? '' : ' is-empty'}`} aria-label={`Venture: ${todo.area === 'Ventures' && todo.ventureTag ? todo.ventureTag : 'none'}`} aria-haspopup="menu" onClick={(event) => setMenu({ kind: 'venture', anchor: event.currentTarget })}>
-                {todo.area === 'Ventures' && todo.ventureTag ? todo.ventureTag : 'Choose a venture'}<Hi icon={ChevronDownIcon} size={12} />
-              </button>
-            )}
-          </Row>
-        )}
+        <Row label="Folder">
+          <FolderField folderId={todo.folderId} title={todo.title} className="tk-prop-btn tk-folder-btn" onPick={(folderId) => void save({ folderId })} />
+        </Row>
         <Row label="Repeat">
           <button type="button" className={`tk-prop-btn${todo.recurrence ? '' : ' is-empty'}`} aria-label={`Repeat: ${todo.recurrence ? repeatWords(todo.recurrence) : 'does not repeat'}`} aria-haspopup="menu" onClick={(event) => setMenu({ kind: 'repeat', anchor: event.currentTarget })}>
             <Hi icon={RepeatIcon} size={14} />{todo.recurrence ? `Every ${repeatWords(todo.recurrence).replace(/^every /, '')}` : 'Does not repeat'}
@@ -222,31 +211,16 @@ export function TaskDetail({ todo, board, now, issue, ventureTags, focusNotes, o
         )}
       </section>
 
+      <TaskChats taskRef={todo.id} />
+
       <Related todo={todo} all={board.todos} onOpen={onOpenTask} onPick={(anchor) => setMenu({ kind: 'relate', anchor })} onRelate={(id, on) => board.relate(todo, id, on)} />
 
       <p className="tk-pane-meta">Added {when(todo.createdAt)}{todo.updatedAt !== todo.createdAt ? ` · changed ${when(todo.updatedAt)}` : ''}</p>
-      <ChatAbout of={() => todoContext(todo)} host=".tk-pane-body" />
+      <ChatAbout of={() => todoContext({ ...todo, folder: folderLabel(todo.folderId, projects) })} host=".tk-pane-body" />
 
       {menu?.kind === 'due' && <DueMenu anchor={menu.anchor} now={now} dueDate={todo.dueDate} title={todo.title} idKey={`pane-${todo.id}`} onClose={() => setMenu(null)} onDue={(dueDate) => void save({ dueDate })} />}
       {menu?.kind === 'snooze' && <SnoozeMenu anchor={menu.anchor} now={now} todo={todo} onClose={() => setMenu(null)} onSnooze={(until) => void board.snooze(todo, until)} onWake={() => void board.wake(todo)} />}
-      {menu?.kind === 'repeat' && (
-        <Menu
-          anchor={menu.anchor} label={`Repeat ${todo.title}`} onClose={() => setMenu(null)} width={220}
-          items={[{ heading: 'Repeat' }, ...[...REPEATS, ...(todo.recurrence && !REPEATS.includes(todo.recurrence as typeof REPEATS[number]) ? [todo.recurrence] : [])].map((value) => ({
-            key: value || 'none', label: value ? `Every ${repeatWords(value).replace(/^every /, '')}` : 'Does not repeat',
-            checked: (todo.recurrence ?? '') === value, onSelect: () => { if ((todo.recurrence ?? '') !== value) void save({ recurrence: value || null }) },
-          }))]}
-        />
-      )}
-      {menu?.kind === 'venture' && (
-        <Menu
-          anchor={menu.anchor} label={`Venture for ${todo.title}`} onClose={() => { setMenu(null); setPickingVenture(false) }} width={220}
-          items={[{ heading: 'Venture' }, ...tagOptions.map((name) => ({
-            key: name, label: name, checked: todo.area === 'Ventures' && todo.ventureTag === name,
-            onSelect: () => { setPickingVenture(false); if (!(todo.area === 'Ventures' && todo.ventureTag === name)) void save({ area: 'Ventures', ventureTag: name }) },
-          }))]}
-        />
-      )}
+      {menu?.kind === 'repeat' && <RepeatMenu anchor={menu.anchor} recurrence={todo.recurrence} title={todo.title} onClose={() => setMenu(null)} onRepeat={(recurrence) => void save({ recurrence })} />}
       {menu?.kind === 'relate' && (
         <Menu
           anchor={menu.anchor} label={`Relate a task to ${todo.title}`} onClose={() => setMenu(null)} width={300}
@@ -378,7 +352,7 @@ function Related({ todo, all, onOpen, onPick, onRelate }: { todo: Todo; all: Tod
   )
 }
 
-export function SheetDetail({ item, feed, now, onClose }: { item: SheetItem; feed: SheetFeed | null; now: Date; onClose: () => void }) {
+export function SheetDetail({ item, feed, now, onClose, onFile }: { item: SheetItem; feed: SheetFeed | null; now: Date; onClose: () => void; onFile: (folderId: string | null) => void }) {
   const source = sheetName(feed)
   const prio = item.priority ? SHEET_PRIORITY_WORD[item.priority] : 'None'
   return (
@@ -396,8 +370,13 @@ export function SheetDetail({ item, feed, now, onClose }: { item: SheetItem; fee
         <Row label="Status"><span className="tk-prop-static">{item.status || '—'}</span></Row>
         <Row label="Who"><span className="tk-prop-static">{item.who || '—'}</span></Row>
         <Row label="Row"><span className="tk-prop-static">{item.row}</span></Row>
+        <Row label="Folder">
+          <FolderField folderId={item.folderId} title={item.title} className="tk-prop-btn tk-folder-btn" onPick={onFile} />
+          {item.folderDefault && <p className="tk-hint">Where {source}'s rows go until you file them (Settings → Tasks).</p>}
+        </Row>
       </div>
       {item.notes && <section className="tk-pane-section" aria-label="Notes and links"><h3>Notes &amp; links</h3><p className="tk-sheet-notes">{item.notes}</p></section>}
+      <TaskChats taskRef={item.id} />
       <a className="btn primary tk-open-sheet" href={item.url} target="_blank" rel="noreferrer"><Hi icon={ArrowTopRightOnSquareIcon} size={15} /> Open in sheet</a>
       <p className="tk-pane-meta">Totem only reads this sheet. Change the row there; it shows here within two minutes.</p>
     </div>
@@ -517,7 +496,7 @@ export function ShelfPane({ kind, board, onClose }: { kind: 'archive' | 'deleted
           {kind === 'archive' && <Row label="Outcome"><span className="tk-prop-static">{open.outcome === 'not_doing' ? 'Not doing' : 'Done'}</span></Row>}
           <Row label="Due"><span className="tk-prop-static">{open.dueDate ? dateLabel(open.dueDate) : 'No date'}</span></Row>
           <Row label="Priority"><span className="tk-prop-static">{priorityName(open.priority)}</span></Row>
-          {open.area === 'Ventures' && <Row label="Venture"><span className="tk-prop-static">{open.ventureTag ?? '—'}</span></Row>}
+          <ArchivedFolder folderId={open.folderId} />
         </div>
         {open.notes.length > 0 && (
           <section className="tk-pane-section" aria-label="Notes">
@@ -551,4 +530,9 @@ export function ShelfPane({ kind, board, onClose }: { kind: 'archive' | 'deleted
       {kind === 'deleted' && <p className="tk-pane-meta">Retention is set in Settings → Tasks.</p>}
     </div>
   )
+}
+
+function ArchivedFolder({ folderId }: { folderId: string | null | undefined }) {
+  const projects = useChat((state) => state.projects)
+  return <Row label="Folder"><span className="tk-prop-static">{folderLabel(folderId, projects)}</span></Row>
 }

@@ -8,8 +8,12 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  DONE_BEAT_MS, isFiltering, leftToday, linkParts, listRows, sheetAsTaskPriority, nextDue, orderNeighbours, sheetName, sheetNote, sheetOnlyEmpty, spokenState, swipeRight, taskQuery, visibleSheet,
+  DONE_BEAT_MS, isFiltering, leftToday, linkParts, listRows, scopedTodos, sheetAsTaskPriority, nextDue, orderNeighbours, sheetName, sheetNote, sheetOnlyEmpty, spokenState, swipeRight, taskQuery, visibleSheet,
 } from './list.ts'
+import {
+  folderActions, folderLabel, folderNames, folderOrder, folderPicked, inScope, liveScope, rowFolder, scopeChips, scopeFolder,
+} from './folders.ts'
+import { parseQuickAdd } from '../../lib/todos/parse.ts'
 import { UNDO_MS, UNDO_READER_MS, once, undoLineTimeout, undoText } from './undo.ts'
 import { freshRead } from './freshRead.ts'
 import { askOncePerKey, createIssueStatesLoader, readIssueLink, sameStates, shouldAskIssueState } from './issueLink.ts'
@@ -130,13 +134,13 @@ test('next due is the earliest upcoming date, a sheet row’s included', () => {
 /* ------------------------------------------------------------------ */
 
 test('the task filter a list query stands for; the sheet alone shows no tasks', () => {
-  assert.deepEqual(taskQuery({ search: 'bank', scope: 'Ventures', priority: 4, due: 'today' }), { search: 'bank', area: 'Ventures', ventureTag: '', priority: 4, due: 'today' })
+  assert.deepEqual(taskQuery({ search: 'bank', scope: 'personal', priority: 4, due: 'today' }), { search: 'bank', priority: 4, due: 'today' })
   assert.equal(taskQuery({ scope: 'sheet' }), null)
   assert.equal(isFiltering({}), false)
   assert.equal(isFiltering({ scope: 'sheet' }), true)
 })
 
-test('sheet rows follow search, priority and due, and leave when an area or venture is chosen', () => {
+test('sheet rows follow search, priority, due and the folder scope', () => {
   const rows = [row({ title: 'Order chalk', priority: 1, dueDate: '2026-11-04' }), row({ title: 'Call the landlord', notes: 'lease', dueDate: null }), row({ title: 'Late', dueDate: '2026-11-01', priority: 3 })]
   assert.deepEqual(visibleSheet(rows, { search: 'LEASE' }, NOW).map((r) => r.title), ['Call the landlord'])
   // By meaning: nothing on the sheet is P1 Urgent; High is P2 High; Medium and Low are found under P3; blank is P4.
@@ -147,9 +151,83 @@ test('sheet rows follow search, priority and due, and leave when an area or vent
   assert.deepEqual([1, 2, 3, null].map(sheetAsTaskPriority), [3, 2, 2, 1])
   assert.deepEqual(visibleSheet(rows, { due: 'none' }, NOW).map((r) => r.title), ['Call the landlord'])
   assert.deepEqual(visibleSheet(rows, { due: 'overdue' }, NOW).map((r) => r.title), ['Late'])
-  assert.deepEqual(visibleSheet(rows, { scope: 'Personal' }, NOW), [])
-  assert.deepEqual(visibleSheet(rows, { ventureTag: 'Anything' }, NOW), [])
+  // Unfiled rows are Personal's; none is filed in a project.
+  assert.equal(visibleSheet(rows, { scope: 'personal' }, NOW).length, 3)
+  assert.deepEqual(visibleSheet(rows, { scope: 'folder:p1' }, NOW, PROJECTS), [])
   assert.equal(visibleSheet(rows, { scope: 'sheet' }, NOW).length, 3)
+})
+
+/* ------------------------------------------------------------------ */
+/* Folders                                                             */
+/* ------------------------------------------------------------------ */
+
+const PROJECTS = [
+  { id: 'p1', name: 'Work - Acme' },
+  { id: 'f1', name: 'Site', parentId: 'p1' },
+  { id: 'p2', name: 'Climbing' },
+]
+
+test('a task is filed in a project or folder; unfiled, or filed in a deleted one, is Personal', () => {
+  assert.equal(folderLabel('f1', PROJECTS), 'Work - Acme / Site')
+  assert.equal(folderLabel('p2', PROJECTS), 'Climbing')
+  assert.equal(folderLabel(null, PROJECTS), 'Personal')
+  assert.equal(folderLabel('gone', PROJECTS), 'Personal')
+  assert.deepEqual(folderOrder([PROJECTS[2], PROJECTS[1], PROJECTS[0]]).map((p) => p.id), ['p2', 'p1', 'f1'])
+  assert.deepEqual(folderNames(PROJECTS)[1], { id: 'f1', name: 'Site', parentId: 'p1' })
+})
+
+test('the scope chips: All, Personal, each project with something open (its folders count), the sheet', () => {
+  const items = [
+    { kind: 'task', todo: todo({ folderId: 'f1' }) },
+    { kind: 'task', todo: todo({ folderId: 'p1' }) },
+    { kind: 'task', todo: todo({ folderId: null }) },
+    { kind: 'task', todo: todo({ folderId: 'gone' }) },
+    { kind: 'sheet', item: row({ folderId: 'p1', folderDefault: true }) },
+  ]
+  const chips = scopeChips(items, PROJECTS, '', { name: 'Ops Board', count: 1 })
+  assert.deepEqual(chips.map((c) => [c.id, c.label, c.count]), [['', 'All', 5], ['personal', 'Personal', 2], ['folder:p1', 'Work - Acme', 3], ['sheet', 'Ops Board', 1]])
+  // A picked project keeps its chip with nothing in it.
+  assert.ok(scopeChips([], PROJECTS, 'folder:p2', null).some((c) => c.id === 'folder:p2'))
+  assert.equal(inScope(items[0], 'folder:p1', PROJECTS), true)
+  assert.equal(inScope(items[4], 'folder:p1', PROJECTS), true)
+  assert.equal(inScope(items[3], 'personal', PROJECTS), true)
+  assert.equal(inScope(items[4], 'sheet', PROJECTS), true)
+  assert.equal(inScope(items[0], 'sheet', PROJECTS), false)
+  assert.deepEqual(scopedTodos(items.filter((i) => i.kind === 'task').map((i) => i.todo), { scope: 'folder:p1' }, PROJECTS).length, 2)
+  assert.deepEqual(scopedTodos([todo()], { scope: 'sheet' }, PROJECTS), [])
+  assert.equal(scopeFolder('folder:p1'), 'p1')
+  assert.equal(liveScope('folder:gone', PROJECTS, true), '')
+  assert.equal(liveScope('folder:gone', [], false), 'folder:gone')
+  assert.equal(liveScope('folder:f1', PROJECTS, true), '')
+})
+
+test('a row names its folder, except where its chip already does', () => {
+  assert.equal(rowFolder('f1', PROJECTS, ''), 'Work - Acme / Site')
+  assert.equal(rowFolder(null, PROJECTS, ''), null, 'an unfiled task says nothing, as on the web')
+  assert.equal(rowFolder(null, PROJECTS, 'personal'), null)
+  assert.equal(rowFolder('p1', PROJECTS, 'folder:p1'), null)
+  assert.equal(rowFolder('f1', PROJECTS, 'folder:p1'), 'Site')
+})
+
+test('the folder picker: Personal, then each project with its folders in one level', () => {
+  const actions = folderActions(PROJECTS, 'f1')
+  assert.equal(actions[0].id, 'folder:none')
+  assert.equal(actions[0].state, 'off')
+  const work = actions.find((a) => a.id === 'group:p1')
+  assert.deepEqual(work.subactions.map((a) => [a.id, a.state]), [['folder:p1', 'off'], ['folder:f1', 'on']])
+  // Nothing nests past one submenu (Fabric drops deeper levels).
+  assert.ok(actions.every((a) => (a.subactions ?? []).every((sub) => !sub.subactions)))
+  assert.equal(folderActions(PROJECTS, 'gone')[0].state, 'on')
+  assert.equal(folderPicked('folder:none'), null)
+  assert.equal(folderPicked('folder:f1'), 'f1')
+  assert.equal(folderPicked('due:pick'), undefined)
+})
+
+test('#folder in the composer reads the chat projects', () => {
+  const parsed = parseQuickAdd('Ship the page #site p1', { now: NOW, folders: folderNames(PROJECTS) })
+  assert.equal(parsed.folderId, 'f1')
+  assert.equal(parsed.title, 'Ship the page')
+  assert.equal(parseQuickAdd('Fix #nothing', { now: NOW, folders: folderNames(PROJECTS) }).folderId, null)
 })
 
 test('one name for the source: the feed’s title, else "Task sheet"', () => {

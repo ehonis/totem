@@ -92,10 +92,17 @@ export default function ComboPicker(props: ComboPickerProps) {
     setHi(at >= 0 ? at : 0)
     requestAnimationFrame(() => input.current?.focus({ preventScroll: true }))
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (open) setHi(0) }, [query]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Only when the query changes: on mount this ran after the effect above and put the
+  // highlight back on the first row, away from the chosen one.
+  const lastQuery = useRef(query)
+  useEffect(() => {
+    if (lastQuery.current === query) return
+    lastQuery.current = query
+    if (open) setHi(0)
+  }, [query]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    list.current?.querySelector<HTMLElement>(`[data-row="${hi}"]`)?.scrollIntoView({ block: 'nearest' })
+    list.current?.querySelector<HTMLElement>(`[data-row="${hi}"]`)?.scrollIntoView?.({ block: 'nearest' })
   }, [hi])
 
   if (!open || !placement) return null

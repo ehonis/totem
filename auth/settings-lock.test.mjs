@@ -14,7 +14,7 @@ test('the task sheet settings name no file the server reads', () => {
   const start = bridge.indexOf('const INTEGRATION_KEYS = [')
   const keys = bridge.slice(start, bridge.indexOf('\n]', start))
   assert.deepEqual([...keys.matchAll(/name: '(TASK_SHEET_\w+)'/g)].map((m) => m[1]),
-    ['TASK_SHEET_ID', 'TASK_SHEET_TAB', 'TASK_SHEET_ASSIGNEES', 'TASK_SHEET_TITLE', 'TASK_SHEET_ACCOUNT'])
+    ['TASK_SHEET_ID', 'TASK_SHEET_TAB', 'TASK_SHEET_ASSIGNEES', 'TASK_SHEET_TITLE', 'TASK_SHEET_ACCOUNT', 'TASK_SHEET_FOLDER'])
   // The service-account sync and its credentials file were retired.
   assert.doesNotMatch(bridge, /GOOGLE_SHEETS_CREDENTIALS_FILE|credentialsFile/)
 })

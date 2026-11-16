@@ -10,7 +10,8 @@ import ChatAbout from '../chat/about/ChatAbout'
 import { todoContext } from '../chat/about/context'
 import { SHEET_PRIORITY_WORD, sheetAsTaskPriority, wakeLabel, type SectionKey } from './board'
 import { dateLabel, dueText } from './format'
-import { priorityLabel, type IssueState, type SheetItem, type Todo, type VentureTagConfig } from './types'
+import { priorityLabel, type IssueState, type SheetItem, type Todo } from './types'
+import { FolderChip } from '../work/FolderField'
 import { FlagSolidIcon, IssueClosedIcon, IssueOpenIcon, RepeatIcon, SheetIcon, SnoozeIcon } from './taskIcons'
 
 /** Where a row is drawn: a due group, the snoozed fold, or Completed. */
@@ -65,14 +66,15 @@ export function CheckCircle({ checked, notDoing, label, onToggle }: { checked: b
 }
 
 export function TaskRow({
-  todo, place, ticking, issue, ventureTags, selectMode, selected, onToggle, onSelect, onTools,
+  todo, place, ticking, issue, folderLabel, selectMode, selected, onToggle, onSelect, onTools,
   active, open, now, rowRef, onFocusRow, onOpen, flash,
 }: RowCommon & {
   todo: Todo
   place: RowPlace
   ticking: boolean
   issue?: IssueState
-  ventureTags: VentureTagConfig[]
+  /** The folder's name to show on the row ("Personal" when unfiled), or null when the view is that folder already. */
+  folderLabel: string | null
   selectMode: boolean
   selected: boolean
   onToggle: () => void
@@ -85,11 +87,9 @@ export function TaskRow({
   const notDoing = done && todo.outcome === 'not_doing'
   const due = dueMark(todo.dueDate, place, now)
   const prio = todo.priority > 1 ? priorityLabel(todo.priority) : null
-  const venture = todo.area === 'Ventures' && todo.ventureTag ? todo.ventureTag : null
-  const ventureColor = venture ? ventureTags.find((tag) => tag.name === venture)?.color ?? null : null
   const link = todo.issueLink
   const back = place === 'snoozed' && todo.snoozedUntil ? wakeLabel(new Date(todo.snoozedUntil), now) : null
-  const spoken = [todo.title, due?.text, prio, venture, todo.recurrence ? `repeats ${repeatWords(todo.recurrence)}` : null, back ? `back ${back}` : null].filter(Boolean).join(', ')
+  const spoken = [todo.title, due?.text, prio, folderLabel, todo.recurrence ? `repeats ${repeatWords(todo.recurrence)}` : null, back ? `back ${back}` : null].filter(Boolean).join(', ')
 
   return (
     <div
@@ -116,7 +116,7 @@ export function TaskRow({
         {back && <span className="tk-mark"><Hi icon={SnoozeIcon} size={13} />{back}</span>}
         {due && <span className={`tk-mark tk-due ${due.tone}`}>{due.text}</span>}
         {prio && <span className={`tk-mark tk-prio tk-prio-${prio.slice(1)}`} title={`${prio} priority`}><Hi icon={FlagSolidIcon} size={12} />{prio}</span>}
-        {venture && <span className="tk-mark tk-venture" style={ventureColor ? { '--tag': ventureColor } as React.CSSProperties : undefined}><i aria-hidden="true" />{venture}</span>}
+        {folderLabel !== null && <FolderChip folderId={todo.folderId} className="tk-mark tk-folder-mark" />}
         {todo.recurrence && <span className="tk-mark" title={`Repeats ${repeatWords(todo.recurrence)}`}><Hi icon={RepeatIcon} size={13} /><span className="sr-only">Repeats</span></span>}
         {todo.notes.length > 0 && <span className="tk-mark" title={`${todo.notes.length} note${todo.notes.length === 1 ? '' : 's'}`}><Hi icon={ChatBubbleLeftIcon} size={12} />{todo.notes.length}</span>}
         {link && (
@@ -136,14 +136,16 @@ export function TaskRow({
           <button type="button" tabIndex={-1} aria-label={`Due date for ${todo.title}`} title="Due date (d)" onClick={(event) => { event.stopPropagation(); onTools('due', event.currentTarget) }}><Hi icon={CalendarDaysIcon} size={15} /></button>
         </span>
       )}
-      <ChatAbout of={() => todoContext(todo)} host=".tk-row" />
+      <ChatAbout of={() => todoContext({ ...todo, folder: folderLabel ?? undefined })} host=".tk-row" />
     </div>
   )
 }
 
-export function SheetRow({ item, place, source, active, open, now, rowRef, onFocusRow, onOpen, selectMode }: RowCommon & {
+export function SheetRow({ item, place, source, active, open, now, rowRef, onFocusRow, onOpen, selectMode, showFolder = true }: RowCommon & {
   item: SheetItem
   place: RowPlace
+  /** Whether to show the row's folder (not when the view is that folder already). */
+  showFolder?: boolean
   /** The feed's name for itself (say "Partner HQ"), else "Task sheet". */
   source: string
   selectMode: boolean
@@ -168,6 +170,7 @@ export function SheetRow({ item, place, source, active, open, now, rowRef, onFoc
       <span role="gridcell" className="tk-marks">
         {due && <span className={`tk-mark tk-due ${due.tone}`}>{due.text}</span>}
         {prio && <span className={`tk-mark tk-prio ${prioTone}`} title={`${prio} priority`}><Hi icon={FlagSolidIcon} size={12} />{prio}</span>}
+        {showFolder && <FolderChip folderId={item.folderId} className="tk-mark tk-folder-mark" />}
       </span>
       {!selectMode && (
         <span className="tk-tools" role="gridcell">

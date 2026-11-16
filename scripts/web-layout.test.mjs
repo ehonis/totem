@@ -109,12 +109,13 @@ const usageSnapshot = (providers) => {
   return { type: 'snapshot', generatedAt: now, accounts: all.map((x) => x[0]), pools: all.map((x) => x[1]) }
 }
 
-async function serveHarness() {
+/** Bundles a harness page (a web/src …harness.tsx) and serves it with the real CSS; `api` answers its /api/ reads. */
+async function serveHarness({ entry = 'chat/ChatHeader.harness.tsx', styles = ['styles.css', 'shell.css', 'chat/chat.css'], api = () => null } = {}) {
   const built = await esbuild.build({
-    entryPoints: [fileURLToPath(new URL('src/chat/ChatHeader.harness.tsx', WEB))],
+    entryPoints: [fileURLToPath(new URL(`src/${entry}`, WEB))],
     bundle: true, write: false, format: 'esm', jsx: 'automatic', target: 'es2022', logLevel: 'silent',
     loader: { '.css': 'empty', '.png': 'dataurl', '.svg': 'dataurl' },
-    define: { 'process.env.NODE_ENV': '"production"', __TOTEM_VERSION__: '"test"', 'import.meta.env': '{}' },
+    define: { 'process.env.NODE_ENV': '"production"', __TOTEM_VERSION__: JSON.stringify({ version: 'test', date: '2026-01-01', commit: '' }), 'import.meta.env': '{}' },
     // Vite's `?raw` imports (the Totems glyph's SVG), as text.
     plugins: [{
       name: 'raw',
@@ -124,11 +125,14 @@ async function serveHarness() {
       },
     }],
   })
-  const css = await Promise.all(['styles.css', 'shell.css', 'chat/chat.css'].map((p) => readFile(new URL(`src/${p}`, WEB), 'utf8')))
+  const css = await Promise.all(styles.map((p) => readFile(new URL(`src/${p}`, WEB), 'utf8')))
   const html = `<!doctype html><meta charset="utf-8"><style>${css.join('\n')}\nbody{margin:0}</style><div id="root"></div><script type="module" src="/harness.js"></script>`
   const server = createServer((req, res) => {
     if (req.url === '/harness.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end(built.outputFiles[0].text) }
-    if (req.url.startsWith('/api/')) { res.writeHead(404); return res.end('{}') }
+    if (req.url.startsWith('/api/')) {
+      const body = api(req.url)
+      res.writeHead(body ? 200 : 404, { 'content-type': 'application/json' }); return res.end(JSON.stringify(body || {}))
+    }
     res.writeHead(200, { 'content-type': 'text/html' }); res.end(html)
   })
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
@@ -473,4 +477,71 @@ test('a canvas widened at 1366 keeps its width while held and from its saved wid
     m = await measure()
     assert.deepEqual([Math.round(m.chats), Math.round(m.term), Math.round(m.side)], [400, 500, 340])
   } finally { await browser.close() }
+})
+
+// The chats panel has three faces (chat/ProjectNav.tsx): Chats, Totems and Tasks.
+// Each must scroll inside the panel, or a list longer than the window is cut off
+// with no way down (the desktop app has no page scroll to fall back on): the Tasks
+// and Totems faces once put their rows straight into the non-scrolling .vc-threads.
+// This draws the real SidePanel and MobileDrawer around each face
+// (web/src/chat/ChatsPanel.harness.tsx) with fictional chats, totems and tasks,
+// and scrolls with the mouse wheel, as the owner does. On a phone the drawer stays
+// one scroll, with no list scrolling on its own inside it.
+const ago = (h) => new Date(Date.now() - h * 3600e3).toISOString()
+const panelApi = (url) => {
+  const path = url.split('?')[0]
+  if (path === '/api/threads') {
+    // Minutes apart, so none is old enough to settle on its own.
+    return { threads: Array.from({ length: 60 }, (_, i) => {
+      const at = Date.now() - (i + 1) * 60e3
+      return { id: `c${i}`, kind: 'regular', title: `Fictional chat ${i}`, createdAt: at, updatedAt: at, messages: [{ id: `c${i}-u`, role: 'user', content: 'Fictional.', createdAt: at }], messageCount: 1, summary: true }
+    }) }
+  }
+  if (path === '/api/jobs') return { jobs: Array.from({ length: 40 }, (_, i) => ({ id: `t${i}`, name: `Fictional totem ${String(i).padStart(2, '0')}`, enabled: false, prompt: 'Fictional.', schedule: { type: 'daily', time: '07:00' } })) }
+  if (path === '/api/todos/board') {
+    return { counts: { archived: 0, snoozed: 0, deleted: 0 }, todos: Array.from({ length: 45 }, (_, i) => ({
+      id: `k${i}`, title: `Fictional task ${String(i).padStart(2, '0')}`, description: '', area: 'Personal', ventureTag: null, status: 'todo', priority: 1, dueDate: null, recurrence: null,
+      snoozedUntil: null, position: i, createdAt: ago(48), updatedAt: ago(1), completedAt: null, outcome: null, archivedAt: null, deletedAt: null,
+      tags: [], notes: [], relations: [], lists: [], externalLinks: [], issueLink: null,
+    })) }
+  }
+  return null
+}
+
+test('every face of the chats panel scrolls to its last row, and the phone drawer stays one scroll', { skip: !executablePath || !esbuild }, async () => {
+  const served = await serveHarness({ entry: 'chat/ChatsPanel.harness.tsx', styles: ['styles.css', 'shell.css', 'chat/chat.css', 'work/work.css'], api: panelApi })
+  const browser = await chromium.launch({ executablePath })
+  // Rows per face, and the last one's title (Totems lists group chats first, then totems by name).
+  const faces = { chats: 'Fictional chat 59', totems: 'Fictional totem 39', tasks: 'Fictional task 44' }
+  try {
+    for (const [face, lastTitle] of Object.entries(faces)) {
+      for (const layout of [{ name: 'desktop' }, { name: 'macOS app', desktop: 'macos' }, { name: 'Windows app', desktop: 'windows' }, { name: 'phone', phone: true }]) {
+        const page = await browser.newPage({ viewport: layout.phone ? { width: 390, height: 700 } : { width: 1200, height: 600 } })
+        await page.goto(`${served.url}?face=${face}${layout.phone ? '&phone=1' : ''}${layout.desktop ? `&desktop=${layout.desktop}` : ''}`)
+        const frame = layout.phone ? '.sh-drawer' : '.sh-panel'
+        const where = `${face} face, ${layout.name}`
+        await page.waitForFunction(([frame, lastTitle]) => [...document.querySelectorAll(`${frame} .vc-thread-title`)].some((e) => e.textContent === lastTitle), [frame, lastTitle], { timeout: 10000 })
+          .catch(async () => assert.fail(`${where}: the harness never drew "${lastTitle}" (drew ${JSON.stringify(await page.evaluate((frame) => [...document.querySelectorAll(`${frame} .vc-thread-title`)].map((e) => e.textContent).slice(-3), frame))})`))
+        const box = await page.locator(frame).boundingBox()
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.75)
+        for (let i = 0; i < 40; i++) await page.mouse.wheel(0, 300)
+        await page.waitForTimeout(150)
+        const got = await page.evaluate(([frame, lastTitle]) => {
+          const f = document.querySelector(frame).getBoundingClientRect()
+          const last = [...document.querySelectorAll(`${frame} .vc-thread-title`)].find((e) => e.textContent === lastTitle).getBoundingClientRect()
+          const scrollers = [...document.querySelectorAll(`${frame} *`)].filter((e) => e.scrollHeight > e.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(e).overflowY)).map((e) => e.className)
+          const filter = document.querySelector(`${frame} .wk-search`)?.getBoundingClientRect()
+          return { frameTop: f.top, frameBottom: f.bottom, lastTop: last.top, lastBottom: last.bottom, scrollers, filterTop: filter ? filter.top : null, pageGrew: document.documentElement.scrollHeight > innerHeight }
+        }, [frame, lastTitle])
+        assert.ok(got.lastTop >= got.frameTop && got.lastBottom <= got.frameBottom + 1, `${where}: the wheel brings "${lastTitle}" into view (row ${got.lastTop}–${got.lastBottom}, panel ${got.frameTop}–${got.frameBottom})`)
+        assert.equal(got.pageGrew, false, `${where}: the page itself does not grow`)
+        if (layout.phone) assert.deepEqual(got.scrollers, ['sh-drawer-scroll'], `${where}: the drawer is the only scroller`)
+        else if (face === 'tasks') assert.ok(got.filterTop !== null && got.filterTop >= got.frameTop && got.filterTop < got.frameTop + 300, `${where}: the filter stays at the top while the tasks scroll (${got.filterTop})`)
+        await page.close()
+      }
+    }
+  } finally {
+    await browser.close()
+    served.close()
+  }
 })

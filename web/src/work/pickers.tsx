@@ -3,7 +3,7 @@ import ComboPicker, { type ComboItem } from './ComboPicker'
 import { useChat, createProject, rootProject, projectById } from '../chat/store'
 import ProjectIcon from '../chat/ProjectIcon'
 import { TI } from '../chat/ui'
-import { IconFolderPlus, IconHome, IconInbox, IconPlus, IconLinkOff, IconCircle, IconTable } from '../chat/icons'
+import { IconFolderPlus, IconHome, IconInbox, IconPlus, IconLinkOff, IconCircle, IconTable, IconUser } from '../chat/icons'
 import { pushError } from '../toast'
 import { folderOrder, dueLabel, resolveRef, type WorkTask } from './groups'
 import { useWork, createTask } from './state'
@@ -20,10 +20,10 @@ export interface FolderPickerProps {
   /** The project or folder it is in now; null for none. */
   value: string | null
   onPick: (projectId: string | null) => void
-  /** What "none" means here: "Home" for a chat, "No folder" for a task. */
+  /** What "none" means here: "Home" for a chat, "Personal" for a task. */
   noneLabel: string
-  /** Its icon: a house for a chat's Home, an inbox for a task filed nowhere. */
-  noneIcon?: 'home' | 'inbox'
+  /** Its icon: a house for a chat's Home, a person for a task's Personal. */
+  noneIcon?: 'home' | 'inbox' | 'person'
   label?: string
   align?: 'start' | 'end'
 }
@@ -32,7 +32,7 @@ export interface FolderPickerProps {
 export function FolderPicker({ open, anchor, onClose, value, onPick, noneLabel, noneIcon = 'home', label = 'Choose a folder', align }: FolderPickerProps) {
   const projects = useChat((s) => s.projects)
   const items = useMemo<ComboItem[]>(() => [
-    { key: HOME, label: noneLabel, icon: <TI icon={noneIcon === 'inbox' ? IconInbox : IconHome} size={16} />, muted: true },
+    { key: HOME, label: noneLabel, icon: <TI icon={noneIcon === 'person' ? IconUser : noneIcon === 'inbox' ? IconInbox : IconHome} size={16} />, muted: true },
     ...folderOrder(projects).map((p) => {
       const parent = p.parentId ? projects.find((x) => x.id === p.parentId) : undefined
       return {

@@ -1,7 +1,8 @@
 // The chats panel's Tasks face, as data: the owner's open tasks and the shared
 // sheet's action items, each with the chats linked to it, sorted and grouped by
-// the chat project or folder it is filed under. Pure, so the panel and its tests
-// read the same rules.
+// the chat project or folder it is filed under (the task's `folderId`; a sheet
+// row's comes filed by the bridge). Pure, so the panel and its tests read the
+// same rules.
 import type { ChatThread, Project } from '../chat/types'
 import type { SheetItem, Todo } from '../todos/types'
 
@@ -24,6 +25,12 @@ export interface WorkTask {
   url?: string
   /** When it last changed (local tasks); sheet rows have no clock. */
   updatedAt: number
+  /** The chat project or folder it is filed under; null is Personal. */
+  folderId: string | null
+  /** The task itself, for a local one (the task card edits it). */
+  todo?: Todo
+  /** The row itself, for a sheet item. */
+  sheet?: SheetItem
 }
 
 export type WorkSort = 'due' | 'priority' | 'activity' | 'title'
@@ -39,7 +46,7 @@ export interface WorkRow {
 }
 
 export interface WorkGroup {
-  /** The project or folder id, or '' for tasks filed nowhere. */
+  /** The project or folder id, or '' for tasks filed nowhere (Personal). */
   key: string
   project: Project | null
   /** A folder's project, so the header can say where it is. */
@@ -60,6 +67,7 @@ export function fromTodo(t: Todo): WorkTask {
   return {
     ref: t.id, kind: 'local', title: t.title, dueDate: t.dueDate, priority: t.priority,
     done: t.status === 'done', status: '', updatedAt: Date.parse(t.updatedAt) || 0,
+    folderId: t.folderId ?? null, todo: t,
   }
 }
 
@@ -67,6 +75,7 @@ export function fromSheet(i: SheetItem): WorkTask {
   return {
     ref: i.id, kind: 'sheet', title: i.title, dueDate: i.dueDate, priority: i.priority ? SHEET_PRIORITY[i.priority] : 1,
     done: false, status: i.status, url: i.url, updatedAt: 0,
+    folderId: i.folderId ?? null, sheet: i,
   }
 }
 
@@ -89,16 +98,6 @@ export function resolveRef(ref: string, tasks: readonly WorkTask[]): string {
   if (!m) return ref
   const same = tasks.filter((t) => { const n = t.kind === 'sheet' && SHEET_REF.exec(t.ref); return !!n && n[1] === m[1] && n[2] === m[2] })
   return same.length === 1 ? same[0].ref : ref
-}
-
-/** Filings keyed by the refs they name now; a current key wins over a moved one. */
-export function resolveFolders(folders: Record<string, string>, tasks: readonly WorkTask[]): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [ref, project] of Object.entries(folders)) {
-    const now = resolveRef(ref, tasks)
-    if (now === ref || !(now in folders)) out[now] = project
-  }
-  return out
 }
 
 /** Every thread linked to each task, latest first. Empty drafts are not chats yet. */
@@ -132,8 +131,8 @@ export function folderOrder(projects: readonly Project[]): Project[] {
 }
 
 /** A task's folder, if that project still exists. */
-export function folderOf(ref: string, folders: Record<string, string>, projects: readonly Project[]): Project | null {
-  const id = folders[ref]
+export function folderOf(task: Pick<WorkTask, 'folderId'>, projects: readonly Project[]): Project | null {
+  const id = task.folderId
   return (id && projects.find((p) => p.id === id)) || null
 }
 
@@ -146,18 +145,16 @@ function matches(task: WorkTask, chats: ChatThread[], query: string): boolean {
 
 /**
  * The panel's groups: by folder (projects in panel order, each folder after its
- * project, then "No folder"), or one group of everything. Groups with nothing in
+ * project, then Personal), or one group of everything. Groups with nothing in
  * them are left out.
  */
 export function buildWork(
   tasks: readonly WorkTask[],
   threads: readonly ChatThread[],
   projects: readonly Project[],
-  folders: Record<string, string>,
   opts: WorkOptions,
 ): WorkGroup[] {
   const linked = chatsByTask(threads, tasks)
-  const filed = resolveFolders(folders, tasks)
   const rows: Array<WorkRow & { folder: Project | null }> = []
   for (const task of tasks) {
     if (task.done || task.hidden) continue
@@ -165,7 +162,7 @@ export function buildWork(
     if (opts.show === 'linked' && !chats.length) continue
     if (opts.show === 'unlinked' && chats.length) continue
     if (!matches(task, chats, opts.query)) continue
-    rows.push({ task, chats, lastActivity: Math.max(task.updatedAt, chats[0]?.updatedAt || 0), folder: folderOf(task.ref, filed, projects) })
+    rows.push({ task, chats, lastActivity: Math.max(task.updatedAt, chats[0]?.updatedAt || 0), folder: folderOf(task, projects) })
   }
   const cmp = compareRows(opts.sort)
   const strip = ({ folder: _f, ...row }: WorkRow & { folder: Project | null }): WorkRow => row

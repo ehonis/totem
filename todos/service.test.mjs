@@ -402,6 +402,7 @@ test('returns canonical DTOs and supports core list filters', () => {
     description: 'Details',
     area: 'Ventures',
     ventureTag: 'Globex',
+    folderId: null,
     status: 'todo',
     priority: 4,
     dueDate: '2026-09-20',

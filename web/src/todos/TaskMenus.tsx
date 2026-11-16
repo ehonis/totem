@@ -6,6 +6,7 @@ import Menu, { type MenuEntry } from './Menu'
 import { dueDateChoices, localDateTimeKey, snoozeTimes } from './format'
 import { wakeLabel } from './board'
 import { priorityLabel, type Todo } from './types'
+import { repeatWords } from './TaskRow'
 
 interface Common { anchor: HTMLElement | null; onClose: () => void; now: Date }
 
@@ -86,6 +87,27 @@ export function PriorityMenu({ priority, title, anchor, onClose, onPriority }: O
           checked: priority === value, onSelect: () => onPriority(value),
         })),
       ]}
+    />
+  )
+}
+
+export const REPEATS = ['', 'daily', 'weekdays', 'weekly', 'monthly', 'yearly'] as const
+
+/** How often a task repeats, or not at all; a rule the menu does not list is kept as a choice. */
+export function RepeatMenu({ recurrence, title, anchor, onClose, onRepeat }: Omit<Common, 'now'> & {
+  recurrence: string | null
+  title: string
+  onRepeat: (recurrence: string | null) => void
+}) {
+  const current = recurrence ?? ''
+  const values: string[] = [...REPEATS, ...(current && !(REPEATS as readonly string[]).includes(current) ? [current] : [])]
+  return (
+    <Menu
+      anchor={anchor} label={`Repeat ${title}`} onClose={onClose} width={220}
+      items={[{ heading: 'Repeat' }, ...values.map((value) => ({
+        key: value || 'none', label: value ? `Every ${repeatWords(value).replace(/^every /, '')}` : 'Does not repeat',
+        checked: current === value, onSelect: () => { if (current !== value) onRepeat(value || null) },
+      }))]}
     />
   )
 }

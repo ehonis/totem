@@ -1,8 +1,10 @@
 // One row of the shared task sheet, opened from the list (the task route, todo/[id],
 // with the row's "sheet:…" id). Read-only: Totem never writes to the sheet (a partner
-// shares it), so everything here is the sheet's own words, and the one action is Open
-// in sheet, which opens that row in the browser or the Sheets app.
-import React from 'react'
+// shares it), so everything here is the sheet's own words, and the one action on the
+// row itself is Open in sheet, which opens that row in the browser or the Sheets app.
+// The one thing kept in Totem is where the row is filed (a chat project or folder, or
+// Personal), set from the Folder row (PUT /api/chat/task-folders/<row id>).
+import React, { useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { router } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -12,21 +14,28 @@ import IconUser from '@tabler/icons-react-native/dist/esm/icons/IconUser.mjs'
 import { colors, fonts } from '../../theme'
 import { T } from '../../ui/Text'
 import { Btn, IconBtn } from '../../ui/kit'
-import { Hi, ArrowTopRightOnSquareIcon, CalendarDaysIcon, FlagIcon, XMarkIcon, type IconType } from '../../lib/icons'
+import { Hi, ArrowTopRightOnSquareIcon, CalendarDaysIcon, FlagIcon, FolderIcon, UserIcon, XMarkIcon, type IconType } from '../../lib/icons'
 import { openUrl } from '../../lib/siblingApps'
 import type { SheetItem } from '../../lib/todos/types'
 import { dueText, dueTone } from './format'
 import { SHEET_PRIORITY_WORD, linkParts } from './list'
-import { PropertyGroup } from './detail/PropertyRow'
+import { PropertyGroup, PropertyRow } from './detail/PropertyRow'
 import { SHEET_GREEN } from './SheetCard'
 import { sheetPriorityColor } from './compose/labels'
-import { tone } from './ui'
+import { InlineError, tone } from './ui'
+import { folderActions, folderFor, folderLabel, folderPicked } from './folders'
+import { useFolders } from './useFolders'
+import { fileSheet } from './store'
+import { ProjectIcon } from '../chat/ThreadIcon'
+import { tap, warn } from '../../ui/haptics'
 
 /** A task route's id that names a sheet row rather than a task. */
 export const isSheetId = (id: string | undefined) => typeof id === 'string' && id.startsWith('sheet:')
 
 export default function SheetItemPage({ item, source, fetchedAt }: { item: SheetItem | null; source: string; fetchedAt: string | null }) {
   const insets = useSafeAreaInsets()
+  const { projects } = useFolders()
+  const [fileError, setFileError] = useState('')
   const now = new Date()
   const head = (
     <View style={st.head}>
@@ -52,6 +61,14 @@ export default function SheetItemPage({ item, source, fetchedAt }: { item: Sheet
       </View>
     )
   }
+  const filedIn = folderFor(item.folderId, projects)
+  const onFolder = (id: string) => {
+    const folder = folderPicked(id)
+    if (folder === undefined) return
+    tap()
+    setFileError('')
+    fileSheet(item.id, folder).catch((cause) => { warn(); setFileError(cause instanceof Error && cause.message ? cause.message : 'The row could not be filed there.') })
+  }
   const due = item.dueDate ? dueTone(item.dueDate, now, 'todo') : ''
   const dueColor = due === 'overdue' ? tone.red.color : due === 'today' ? tone.amber.color : colors.text
   return (
@@ -64,7 +81,16 @@ export default function SheetItemPage({ item, source, fetchedAt }: { item: Sheet
           <Info icon={FlagIcon} label="Priority" value={item.priority ? SHEET_PRIORITY_WORD[item.priority] : 'None'} color={item.priority ? sheetPriorityColor(item.priority) : undefined} />
           <Info icon={CalendarDaysIcon} label="Due" value={item.dueDate ? dueText(item.dueDate, now) : 'None'} color={item.dueDate ? dueColor : undefined} />
           <Info icon={IconUser} stroke={1.6} label="Who" value={item.who || '—'} />
+          <PropertyRow icon={FolderIcon} label="Folder" value={folderLabel(filedIn?.id, projects)}
+            adornment={filedIn ? <ProjectIcon p={filedIn} size={15} /> : <Hi icon={UserIcon} size={14} color={colors.muted} />}
+            valueColor={filedIn ? colors.text : undefined}
+            actions={folderActions(projects, filedIn?.id ?? null)} onAction={onFolder} menuTitle="File under"
+            hint="Files the row in Totem; the sheet is unchanged" />
         </PropertyGroup>
+        {item.folderDefault && filedIn ? (
+          <T size={12.5} muted lineHeight={18}>{`Where ${source}’s rows go until you file them (Settings → Tasks).`}</T>
+        ) : null}
+        {fileError ? <InlineError>{fileError}</InlineError> : null}
         {item.notes ? (
           <View style={st.notes}>
             <T size={15} weight={600}>Notes & links</T>

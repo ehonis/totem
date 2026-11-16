@@ -1,6 +1,6 @@
 // One task on the list (web/src/todos/TodoCard.tsx), rebuilt for a thumb: a check
 // target on the left, the title, and one quiet line of marks under it (due, priority,
-// venture, the linked GitHub issue and its live state, repeats, tags). Everything else
+// its folder, the linked GitHub issue and its live state, repeats, tags). Everything else
 // the web's popovers held is one native "…" menu, which a long press also opens as
 // action sheets (a MenuView wrapped round the whole card swallowed its taps on a phone).
 // A list card swipes: right is the circle (done, or reopen a finished one), left for
@@ -24,9 +24,11 @@ import { Press } from '../../ui/kit'
 import { showActionTree } from '../../ui/menu'
 import { success, tap } from '../../ui/haptics'
 import {
-  Hi, ArrowUturnLeftIcon, CalendarDaysIcon, ChatBubbleLeftIcon, CheckIcon, EllipsisHorizontalIcon, FlagIcon, SunIcon, TrashIcon,
+  Hi, ArrowUturnLeftIcon, CalendarDaysIcon, ChatBubbleLeftIcon, CheckIcon, EllipsisHorizontalIcon, FlagIcon, SunIcon, TrashIcon, UserIcon,
 } from '../../lib/icons'
-import { useVentureTags } from '../../lib/todos/ventureTags'
+import type { Project } from '../../lib/chat/types'
+import { ProjectIcon } from '../chat/ThreadIcon'
+import { folderNameNow } from './useFolders'
 import { priorityLabel, priorityMarks, type IssueState, type Todo, type TodoStatus } from '../../lib/todos/types'
 import { dateKey, dateLabel, dueDateChoices, dueText, dueTone, snoozeTimes } from './format'
 import { PickWhenSheet } from './ui'
@@ -65,6 +67,8 @@ export interface TodoCardProps {
   issue?: IssueState | null
   /** Just added: drawn with an accent edge for a moment, so the eye finds it. */
   fresh?: boolean
+  /** The folder it is filed under, as the row says it (folders.ts rowFolder); null where the chip already says it. */
+  folder?: { label: string; project: Pick<Project, 'icon' | 'image' | 'imageUrl'> | null } | null
 }
 
 /** The text and icon on the green Done swipe: dark, like the check inside a ticked circle. */
@@ -104,7 +108,7 @@ function snoozeActions(todo: Todo, now: Date, nested = false): MenuAction[] {
 
 export default function TodoCard({
   todo, onOpen, onAddNote, onMove, onReorder, reorder, onSnooze, onDueDate, onNotDoing, onPriority, onDelete,
-  now = () => new Date(), selected, onSelect, swipeable, dim, dueSection, issue, fresh,
+  now = () => new Date(), selected, onSelect, swipeable, dim, dueSection, issue, fresh, folder,
 }: TodoCardProps) {
   const link = issueLinkOf(todo)
   const latestNote = todo.notes.reduce<Todo['notes'][number] | null>((latest, item) => (
@@ -121,13 +125,11 @@ export default function TodoCard({
   const swipe = useRef<SwipeableMethods>(null)
   const reduced = useReducedMotion()
   const leave = useSharedValue(0)
-  const ventureTags = useVentureTags()
   const today = now()
   const toneNow = dueTone(todo.dueDate, today, todo.status)
   const notDoing = todo.outcome === 'not_doing'
   const done = todo.status === 'done'
   const label = priorityLabel(todo.priority)
-  const ventureColor = todo.area === 'Ventures' ? ventureTags.find((tag) => tag.name === todo.ventureTag)?.color : null
   const glow = useSharedValue(fresh ? 1 : 0)
   useEffect(() => {
     if (!fresh) return
@@ -233,7 +235,7 @@ export default function TodoCard({
     if (id === 'note') return onAddNote?.(todo)
     if (id === 'notdoing') return void onNotDoing?.(todo)
     if (id === 'edit') return onOpen?.(todo)
-    if (id === CHAT_ABOUT_ACTION.id) return chatAbout(() => todoContext(todo))
+    if (id === CHAT_ABOUT_ACTION.id) return chatAbout(() => todoContext({ ...todo, folder: folderNameNow(todo.folderId) }))
     if (id === 'delete') return void onDelete?.(todo)
   }
 
@@ -267,11 +269,12 @@ export default function TodoCard({
       </View>,
     )
   }
-  if (todo.area === 'Ventures' && todo.ventureTag) {
+  if (folder) {
+    // A project's own icon (or picture); Personal, unfiled, sits back.
     marks.push(
-      <View key="venture" style={st.mark}>
-        <View style={[st.dot, { backgroundColor: ventureColor || colors.accent2 }]} />
-        <T size={12.5} lineHeight={17} muted numberOfLines={1}>{todo.ventureTag}</T>
+      <View key="folder" style={[st.mark, st.folder]}>
+        {folder.project ? <ProjectIcon p={folder.project} size={13} /> : <Hi icon={UserIcon} size={12} color={colors.muted} />}
+        <T size={12.5} lineHeight={17} color={folder.project ? '#b0b6c4' : colors.muted} numberOfLines={1} style={{ flexShrink: 1 }}>{folder.label}</T>
       </View>,
     )
   }
@@ -299,7 +302,7 @@ export default function TodoCard({
     todo.title,
     todo.dueDate ? (toneNow === 'overdue' ? `overdue, ${dateLabel(todo.dueDate)}` : `due ${dueText(todo.dueDate, today, todo.status)}`) : null,
     label !== 'P4' ? `${label} priority` : null,
-    todo.area === 'Ventures' && todo.ventureTag ? todo.ventureTag : null,
+    folder ? `in ${folder.label}` : null,
     link ? `issue ${link.number}${issue ? `, ${issue.state}` : ''}` : null,
     todo.recurrence ? 'repeats' : null,
     spokenState(todo),
@@ -475,6 +478,7 @@ const st = StyleSheet.create({
   marks: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 12, rowGap: 3, marginTop: 2 },
   mark: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%' },
   dot: { width: 7, height: 7, borderRadius: 4 },
+  folder: { maxWidth: 200 },
   more: { width: 44, height: 44, marginTop: 6, alignItems: 'center', justifyContent: 'center' },
   swipeLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, borderRadius: 12, marginRight: -12 },
   swipeRight: { flexDirection: 'row', gap: 6, paddingLeft: 8 },

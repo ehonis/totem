@@ -113,6 +113,7 @@ export {
   TrashIcon,
   TrophyIcon,
   UserGroupIcon,
+  UserIcon,
   VideoCameraIcon,
   ViewColumnsIcon,
   WrenchIcon,

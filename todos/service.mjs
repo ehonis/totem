@@ -25,6 +25,7 @@ const UPDATE_FIELDS = new Set([
   'description',
   'area',
   'ventureTag',
+  'folderId',
   'priority',
   'dueDate',
   'recurrence',
@@ -191,6 +192,21 @@ function classification(area, ventureTag, allowed = null, current = null) {
   return { area, ventureTag };
 }
 
+// A chat project id (chat/projects.mjs validProjectId). Whether the project still
+// exists is the bridge's to say (`folderExists`); a task filed under one that was
+// deleted reads as unfiled in every client.
+const FOLDER_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+function folderId(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || !FOLDER_ID_RE.test(value)) {
+    throw domainError('INVALID_FOLDER', 'folderId must be a chat project or folder id, or null.', {
+      details: { folderId: value },
+    });
+  }
+  return value;
+}
+
 function fieldValue(input, defaults, field, fallback) {
   if (Object.hasOwn(input, field) && input[field] !== undefined) return input[field];
   if (Object.hasOwn(defaults, field)) return defaults[field];
@@ -222,6 +238,7 @@ function normalizedTodo(input, defaults = {}, allowedVentureTags = null) {
     description: description(fieldValue(input, defaults, 'description', '')),
     area,
     ventureTag,
+    folderId: folderId(fieldValue(input, defaults, 'folderId', null)),
     status: status(fieldValue(input, defaults, 'status', 'todo')),
     priority: priority(fieldValue(input, defaults, 'priority', 1)),
     dueDate,
@@ -331,6 +348,9 @@ export function createTodoService({
   // task: none. Leftovers of a retired one must not keep a task "pending" for ever.
   // (An empty `IN ()` is valid SQLite, so the queries below still run.)
   syncingConnectors = [],
+  // Whether a chat project or folder exists, for a task being filed under it. Left
+  // out (the gateway, tests), any well-formed id is taken.
+  folderExists = null,
 } = {}) {
   const COMPLETION_OWNERS = new Set(completionOwners);
   const SYNCING_CONNECTORS = [...syncingConnectors];
@@ -461,6 +481,7 @@ export function createTodoService({
       description: row.description,
       area: row.area,
       ventureTag: row.venture_tag,
+      folderId: row.folder_id ?? null,
       status: storedStatus(row.status),
       priority: row.priority,
       dueDate: row.due_date,
@@ -532,6 +553,13 @@ export function createTodoService({
       if (query[field] !== undefined && query[field] !== null && query[field] !== '') {
         where.push(`todos.${column} = ?`);
         parameters.push(query[field]);
+      }
+    }
+    if (query.folderId !== undefined && query.folderId !== null && query.folderId !== '') {
+      if (query.folderId === 'none') where.push('todos.folder_id IS NULL');
+      else {
+        where.push('todos.folder_id = ?');
+        parameters.push(folderId(query.folderId));
       }
     }
     if (query.source) {
@@ -628,10 +656,10 @@ export function createTodoService({
   function insertTodo(input, timestamps, { rolledFrom = null } = {}) {
     return db.prepare(`
       INSERT INTO todos (
-        id, title, description, area, venture_tag, status, priority, due_date,
+        id, title, description, area, venture_tag, folder_id, status, priority, due_date,
         recurrence, snoozed_until, position, created_at, updated_at, completed_at,
         archived_at, deleted_at, rolled_from
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (rolled_from) WHERE rolled_from IS NOT NULL DO NOTHING
     `).run(
       timestamps.id,
@@ -639,6 +667,7 @@ export function createTodoService({
       input.description,
       input.area,
       input.ventureTag,
+      input.folderId ?? null,
       input.status,
       input.priority,
       input.dueDate,
@@ -654,8 +683,19 @@ export function createTodoService({
     ).changes > 0;
   }
 
+  function assertFolderExists(id, current = null) {
+    if (!id || id === current || typeof folderExists !== 'function') return;
+    if (!folderExists(id)) {
+      throw domainError('UNKNOWN_FOLDER', 'There is no chat project or folder with that id.', {
+        status: 400,
+        details: { folderId: id },
+      });
+    }
+  }
+
   function create(input = {}, context) {
     const normalized = normalizedTodo(input, {}, ventureTagNames());
+    assertFolderExists(normalized.folderId);
     const tags = normalizedTags(input.tags) ?? [];
     const at = currentTimestamp();
     const id = requiredString(makeId(), 'id');
@@ -790,6 +830,7 @@ export function createTodoService({
     }
     const before = requireTodo(id);
     const normalized = normalizedTodo(patch, before, ventureTagNames());
+    assertFolderExists(normalized.folderId, before.folderId);
     const tags = normalizedTags(patch.tags);
     return { before, normalized, tags };
   }
@@ -806,7 +847,7 @@ export function createTodoService({
     }, () => {
       db.prepare(`
         UPDATE todos SET
-          title = ?, description = ?, area = ?, venture_tag = ?, priority = ?,
+          title = ?, description = ?, area = ?, venture_tag = ?, folder_id = ?, priority = ?,
           due_date = ?, recurrence = ?, snoozed_until = ?, position = ?, updated_at = ?
         WHERE id = ?
       `).run(
@@ -814,6 +855,7 @@ export function createTodoService({
         normalized.description,
         normalized.area,
         normalized.ventureTag,
+        normalized.folderId,
         normalized.priority,
         normalized.dueDate,
         normalized.recurrence,
@@ -873,6 +915,7 @@ export function createTodoService({
       description: todo.description,
       area: todo.area,
       ventureTag: todo.ventureTag,
+      folderId: todo.folderId,
       status: 'todo',
       priority: todo.priority,
       dueDate: nextOccurrence({
@@ -1596,6 +1639,60 @@ export function createTodoService({
     return [...seen.values()];
   }
 
+  /**
+   * A chat project or folder was deleted: its tasks move to `to` (the parent
+   * project of a deleted folder) or become unfiled. One audit line for the lot.
+   */
+  function refileFolder(from, to = null, context) {
+    const source = folderId(from);
+    const target = folderId(to);
+    if (!source) return 0;
+    const ids = db.prepare('SELECT id FROM todos WHERE folder_id = ?').all(source).map(row => row.id);
+    if (!ids.length) return 0;
+    const at = currentTimestamp();
+    mutate({
+      action: 'todo.folder.refile',
+      target: source,
+      context,
+      summary: `Moved ${ids.length} task(s) out of a removed folder`,
+      result: 'updated',
+    }, () => {
+      db.prepare('UPDATE todos SET folder_id = ?, updated_at = ? WHERE folder_id = ?').run(target, at, source);
+      return ids.length;
+    });
+    return ids.length;
+  }
+
+  /**
+   * The one-time move from areas to folders (adoptTaskFolders in bridge.mjs):
+   * file each { id, folderId } whose task is still unfiled, and record that it ran
+   * under `marker`, in one transaction. Returns how many tasks were filed, or null
+   * when it already ran.
+   */
+  function adoptFolders(entries, marker, context) {
+    const key = requiredString(marker, 'marker');
+    if (db.prepare('SELECT 1 FROM todo_preferences WHERE key = ?').get(key)) return null;
+    const at = currentTimestamp();
+    return mutate({
+      action: 'todo.folder.adopt',
+      target: key,
+      context,
+      summary: count => `Filed ${count} task(s) under chat folders`,
+      result: 'updated',
+    }, () => {
+      const statement = db.prepare('UPDATE todos SET folder_id = ?, updated_at = ? WHERE id = ? AND folder_id IS NULL');
+      let count = 0;
+      for (const entry of Array.isArray(entries) ? entries : []) {
+        const target = folderId(entry?.folderId);
+        if (!target || typeof entry.id !== 'string') continue;
+        count += statement.run(target, at, entry.id).changes;
+      }
+      db.prepare('INSERT INTO todo_preferences (key, value_json, updated_at) VALUES (?, ?, ?)')
+        .run(key, JSON.stringify({ at, filed: count }), at);
+      return count;
+    });
+  }
+
   /** How many tasks sit off the board, counted rather than listed. */
   function counts() {
     const at = currentTimestamp();
@@ -1643,6 +1740,8 @@ export function createTodoService({
     setIssueLink,
     issueLinks,
     counts,
+    refileFolder,
+    adoptFolders,
   };
 }
 

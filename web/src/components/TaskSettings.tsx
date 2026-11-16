@@ -1,21 +1,59 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, AuthError, getSheetFeed, getTodoPreferences, purgeDeletedTodos, updateTodoPreferences, type IntegrationField } from '../api'
+import { AuthError, getSheetFeed, getTodoPreferences, purgeDeletedTodos, updateTodoPreferences, type IntegrationField } from '../api'
 import type { SheetFeed, TodoPreferences } from '../todos/types'
-import { loadVentureTags, saveVentureTags } from '../todos/ventureTags'
+import { folderLabel, useFolders } from '../todos/folders'
+import { folderOrder } from '../work/groups'
 import { IntegrationSection } from './IntegrationsSettings'
 import { sheetFeedLine } from './sheetFeedLine'
 import { SettingsPage, SettingsRow, SettingsSection } from './settings/ui'
 
 /*
- * Settings -> Tasks: the venture tags this install uses, and the shared task
- * sheet, read-only through the Drive sign-in (IntegrationsSettings.tsx,
- * docs/task-sheet.md). Tasks are Personal, or
- * Ventures with exactly one of these tags. With no tags, Ventures does not appear
- * anywhere on the board. Renaming a tag renames it on every task; a tag still on a
- * task cannot be removed until those tasks move.
+ * Settings -> Tasks: the shared task sheet, read-only through the Drive sign-in
+ * (IntegrationsSettings.tsx, docs/task-sheet.md), with the folder its rows land
+ * in, and retention. Tasks are organised by chat folder, so there is nothing to
+ * configure for that here (venture tags were retired).
  */
 
-type Row = { key: string; name: string; color: string; previousName?: string }
+/**
+ * Settings -> Tasks › Task sheet › File rows in: the chat project or folder the
+ * sheet's rows land in until one is filed by hand. Automatic picks the project the
+ * sheet's name starts with ("Gizmo Labs" for "Gizmo Labs HQ"); Personal leaves them unfiled.
+ */
+function SheetFolderRow({ field, save, saving, onAuthError }: {
+  field?: IntegrationField
+  save: (patch: Record<string, string | null>) => Promise<boolean>
+  saving: boolean
+  onAuthError: () => void
+}) {
+  const { projects } = useFolders()
+  const [auto, setAuto] = useState<string | null>(null)
+  const authError = useRef(onAuthError)
+  authError.current = onAuthError
+  const value = field?.masked || ''
+  // What Automatic picks now, from the feed (which applies the setting).
+  useEffect(() => {
+    getSheetFeed().then((feed) => setAuto(feed.configured && !value ? feed.defaultFolderId ?? null : null))
+      .catch((e) => { if (e instanceof AuthError) authError.current() })
+  }, [value])
+  if (!field) return null
+  const fromEnv = field.source === 'env'
+  return (
+    <SettingsRow
+      id="sheet-task_sheet_folder"
+      title="File rows in"
+      description={fromEnv ? <>Set by <code>TASK_SHEET_FOLDER</code> in the environment.</> : 'Where the sheet’s rows land until you file one yourself.'}
+      control={(
+        <select className="s-input" aria-label="Folder for the sheet's rows" disabled={fromEnv || saving} value={value}
+          onChange={(e) => void save({ TASK_SHEET_FOLDER: e.target.value || null })}>
+          <option value="">Automatic{auto ? ` (${folderLabel(auto, projects)})` : value ? '' : ' (none matches)'}</option>
+          <option value="none">Personal (unfiled)</option>
+          {folderOrder(projects).map((p) => <option key={p.id} value={p.id}>{p.parentId ? `— ${p.name}` : p.name}</option>)}
+          {value && value !== 'none' && !projects.some((p) => p.id === value) && <option value={value}>A removed folder</option>}
+        </select>
+      )}
+    />
+  )
+}
 
 /** Settings -> Tasks › Task sheet: the feed's state, and a button that reads it again. */
 function SheetFeedStatus({ fields, onAuthError }: { fields: IntegrationField[]; onAuthError: () => void }) {
@@ -110,91 +148,21 @@ function RetentionSection({ onAuthError }: { onAuthError: () => void }) {
   )
 }
 
-let nextKey = 0
-const keyed = (name: string, color: string | null): Row => ({ key: `t${nextKey++}`, name, color: color || '', previousName: name })
-
 export default function TaskSettings({ onAuthError }: { onAuthError: () => void }) {
-  const [rows, setRows] = useState<Row[] | null>(null)
-  const [error, setError] = useState('')
-  const [note, setNote] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState('')
-  const snapshot = (list: Row[]) => JSON.stringify(list.map((r) => [r.name.trim(), r.color, r.previousName]))
-
-  function fail(e: unknown) {
-    if (e instanceof AuthError) return onAuthError()
-    setError(e instanceof ApiError ? e.message : String(e))
-  }
-
-  useEffect(() => {
-    loadVentureTags(true).then((tags) => { const list = tags.map((t) => keyed(t.name, t.color)); setRows(list); setSaved(snapshot(list)) }).catch(fail)
-  }, [])
-
-  const update = (key: string, patch: Partial<Row>) =>
-    setRows((list) => list && list.map((r) => (r.key === key ? { ...r, ...patch } : r)))
-
-  async function save() {
-    if (!rows) return
-    setSaving(true)
-    setError('')
-    setNote('')
-    try {
-      const savedTags = await saveVentureTags(rows.map((r) => ({
-        name: r.name.trim(),
-        color: r.color || null,
-        ...(r.previousName ? { previousName: r.previousName } : {}),
-      })))
-      const list = savedTags.map((t) => keyed(t.name, t.color))
-      setRows(list)
-      setSaved(snapshot(list))
-      setNote('Saved.')
-    } catch (e) {
-      fail(e)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const dirty = rows !== null && snapshot(rows) !== saved
   return (
     <SettingsPage>
-      <SettingsSection
-        id="venture-tags"
-        title="Venture tags"
-        description="Every task is Personal, or Ventures with one of these tags: a tag per project, client or side business. With none, the board only uses Personal."
-        action={rows && <button className="btn compact" type="button" onClick={() => setRows((list) => [...(list || []), { key: `t${nextKey++}`, name: '', color: '' }])}>Add tag</button>}
-      >
-        {rows === null && <p className={error ? 's-error' : 'muted'}>{error || 'Loading…'}</p>}
-        {rows?.length === 0 && <p className="muted">No venture tags yet.</p>}
-        {rows?.map((r) => (
-          <div className="tag-row" key={r.key}>
-            <input type="color" className="tag-color" aria-label={`Colour for ${r.name || 'tag'}`} value={r.color || '#8b8b8b'}
-              onChange={(e) => update(r.key, { color: e.target.value })} />
-            <input className="s-input" aria-label="Tag name" value={r.name} maxLength={40}
-              onChange={(e) => update(r.key, { name: e.target.value })} placeholder="Tag name" />
-            {r.previousName && r.name.trim() !== r.previousName && <span className="muted tag-renames">Renames “{r.previousName}” on its tasks</span>}
-            <span className="tag-row-actions">
-              {r.color && <button className="btn compact" type="button" onClick={() => update(r.key, { color: '' })}>No colour</button>}
-              <button className="btn compact danger" type="button" onClick={() => setRows((list) => list && list.filter((x) => x.key !== r.key))}>Remove</button>
-            </span>
-          </div>
-        ))}
-        {rows && (dirty || note || error) && (
-          <div className="tag-save">
-            {error ? <span className="s-error">{error}</span> : note && !dirty ? <span className="muted">{note}</span> : <span className="muted">Unsaved changes. A tag still on a task cannot be removed until those tasks move.</span>}
-            {dirty && <button className="btn primary" type="button" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save tags'}</button>}
-          </div>
-        )}
-      </SettingsSection>
-
       <IntegrationSection
         id="task-sheet"
         which="sheet"
         title="Task sheet"
         description="Show the open rows assigned to you from a shared spreadsheet of action items. Read-only: Totem never writes to it."
         onAuthError={onAuthError}
+        custom={['TASK_SHEET_FOLDER']}
       >
-        {(info) => <SheetFeedStatus fields={info.fields} onAuthError={onAuthError} />}
+        {(info, edit) => <>
+          <SheetFolderRow field={info.fields.find((f) => f.name === 'TASK_SHEET_FOLDER')} {...edit} onAuthError={onAuthError} />
+          <SheetFeedStatus fields={info.fields} onAuthError={onAuthError} />
+        </>}
       </IntegrationSection>
 
       <RetentionSection onAuthError={onAuthError} />

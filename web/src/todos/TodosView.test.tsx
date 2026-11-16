@@ -27,6 +27,13 @@ function task(input: Partial<Todo> & Pick<Todo, 'id' | 'title'>): Todo {
   }
 }
 
+// The owner's chat projects: a task's folder is one of them.
+const PROJECTS = [
+  { id: 'acme', name: 'Acme', instructions: '', fileCount: 0, chatCount: 0, createdAt: 0, updatedAt: 0 },
+  { id: 'acme-site', name: 'Website', parentId: 'acme', instructions: '', fileCount: 0, chatCount: 0, createdAt: 0, updatedAt: 0 },
+  { id: 'home', name: 'Home reno', instructions: '', fileCount: 0, chatCount: 0, createdAt: 0, updatedAt: 0 },
+]
+
 const SHEET: SheetFeed = {
   configured: true, title: 'Team HQ', url: 'https://docs.example.test/sheet', fetchedAt: NOW.toISOString(), stale: false, error: null,
   items: [{ id: 'sheet:0:7:abcd1234', row: 7, title: 'Order banner stands', who: 'Owner', priority: 1, status: 'In Progress', dueDate: '2026-11-09', notes: 'Two of them', url: 'https://docs.example.test/sheet#gid=0&range=B7' }],
@@ -43,7 +50,7 @@ function route(url: string, method: string, body: any): Response {
   if (path === '/api/todos/board' && method === 'GET' && url.includes('archived=true')) return json({ todos: fake.archived ?? [], counts: fake.counts })
   if (path === '/api/todos/board' && method === 'GET') return json({ todos: fake.todos, counts: fake.counts ?? { archived: 0, snoozed: 0, deleted: 0 } })
   if (path === '/api/todos/board' && method === 'POST') {
-    const created = task({ id: 'new-1', title: body.title, dueDate: body.dueDate ?? null, priority: body.priority ?? 1, area: body.area ?? 'Personal', ventureTag: body.ventureTag ?? null })
+    const created = task({ id: 'new-1', title: body.title, dueDate: body.dueDate ?? null, priority: body.priority ?? 1, folderId: body.folderId ?? null })
     fake.todos = [...fake.todos, created]
     return json({ todo: created })
   }
@@ -64,7 +71,12 @@ function route(url: string, method: string, body: any): Response {
   if (path === '/api/todos/completed') return json({ todos: fake.recent ?? [] })
   const note = /^\/api\/todos\/([^/]+)\/notes$/.exec(path)
   if (note) return json({ note: { id: 'n-new', body: body.body, createdAt: NOW.toISOString() } })
-  if (path === '/api/todos/venture-tags') return json({ ventureTags: [{ name: 'Acme', color: null }] })
+  if (path === '/api/chat/projects') return json({ projects: PROJECTS })
+  if (path.startsWith('/api/chat/task-folders/') && method === 'PUT') {
+    const id = decodeURIComponent(path.slice('/api/chat/task-folders/'.length))
+    fake.sheet = { ...fake.sheet, items: fake.sheet.items.map((item) => (item.id === id ? { ...item, folderId: body.projectId } : item)) } as SheetFeed
+    return json({ folders: {} })
+  }
   if (path === '/api/todos/issue-states') return json({ fetchedAt: NOW.toISOString(), states: { 'acme/app#12': { state: 'open', title: 'Crash on save', url: 'https://github.com/acme/app/issues/12' } } })
   const move = /^\/api\/todos\/([^/]+)\/move$/.exec(path)
   if (move) {
@@ -119,7 +131,7 @@ const BOARD = () => [
   task({ id: 'late', title: 'Pay the invoice', dueDate: '2026-11-05', priority: 4 }),
   task({ id: 'today', title: 'Call the bank', dueDate: '2026-11-09' }),
   task({ id: 'soon', title: 'Book flights', dueDate: '2026-11-10', recurrence: 'weekly' }),
-  task({ id: 'whenever', title: 'Sort the garage', area: 'Ventures', ventureTag: 'Acme', issueLink: { connector: 'github', repo: 'acme/app', number: 12, url: 'https://github.com/acme/app/issues/12' } }),
+  task({ id: 'whenever', title: 'Sort the garage', folderId: 'acme', issueLink: { connector: 'github', repo: 'acme/app', number: 12, url: 'https://github.com/acme/app/issues/12' } }),
   task({ id: 'asleep', title: 'Renew passport', snoozedUntil: '2026-11-10T09:00:00.000Z' }),
   task({ id: 'finished', title: 'Water plants', status: 'done', outcome: 'completed', completedAt: '2026-11-09T08:00:00.000Z' }),
 ]
@@ -148,9 +160,10 @@ describe('Tasks page', () => {
     expect(within(row('Pay the invoice')).getByText('Nov 5')).toBeVisible()
     expect(within(row('Pay the invoice')).getByText('P1')).toBeVisible()
     expect(within(row('Book flights')).getByText('Tomorrow')).toBeVisible()
-    // No P4 flag, no "Personal" on every row.
+    // No P4 flag, no "Personal" on every row; a filed task names its folder.
     expect(within(row('Call the bank')).queryByText(/^P\d$/)).toBeNull()
     expect(screen.queryByText('Personal', { selector: '.tk-mark, .tk-mark *' })).toBeNull()
+    expect(await within(row('Sort the garage')).findByText('Acme', { selector: '.tk-mark *' })).toBeVisible()
     // The issue link carries its live state.
     await waitFor(() => expect(within(row('Sort the garage')).getByRole('link', { name: /#12/ })).toHaveClass('open'))
     // The live line counts the sheet's row too.
@@ -190,7 +203,8 @@ describe('Tasks page', () => {
     await user.type(input, 'Renew registration tomorrow p2')
     expect(screen.getByText('Tomorrow', { selector: '.tk-chip' })).toBeVisible()
     await user.keyboard('{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toMatchObject({ title: 'Renew registration', dueDate: '2026-11-10', priority: 3, area: 'Personal' }))
+    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toMatchObject({ title: 'Renew registration', dueDate: '2026-11-10', priority: 3 }))
+    expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).not.toHaveProperty('folderId')
     const added = await waitFor(() => row('Renew registration'))
     expect(added).toHaveClass('active')
     expect(input).toHaveValue('')
@@ -555,14 +569,50 @@ describe('Tasks page', () => {
     expect(title).not.toHaveFocus()
   })
 
-  it('adds a Ventures task from the Ventures scope and stays there', async () => {
+  it('adds a task from a folder’s chip into that folder and stays there', async () => {
     const user = await mount(BOARD())
-    await user.click(screen.getByRole('radio', { name: /Ventures/ }))
+    await user.click(await screen.findByRole('radio', { name: /^Acme/ }))
+    expect(screen.queryByText('Call the bank')).toBeNull()
+    expect(screen.getByText('Sort the garage')).toBeVisible()
     await user.click(screen.getByRole('textbox', { name: 'Add a task' }))
     await user.keyboard('Draft the pitch{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toMatchObject({ title: 'Draft the pitch', area: 'Ventures', ventureTag: 'Acme' }))
+    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toMatchObject({ title: 'Draft the pitch', folderId: 'acme' }))
     expect(await screen.findByText('Draft the pitch')).toBeVisible()
-    expect(screen.getByRole('radio', { name: /Ventures/ })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: /^Acme/ })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('files a quick-added task by #folder, and Personal shows only the unfiled', async () => {
+    const user = await mount(BOARD())
+    await screen.findByRole('radio', { name: /^Acme/ })
+    await user.click(screen.getByRole('textbox', { name: 'Add a task' }))
+    await user.keyboard('Pick tiles #home tomorrow')
+    expect(screen.getByText('Home reno', { selector: '.tk-chip' })).toBeVisible()
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toMatchObject({ title: 'Pick tiles', folderId: 'home', dueDate: '2026-11-10' }))
+    await user.click(screen.getByRole('radio', { name: /^Personal/ }))
+    expect(screen.getByText('Call the bank')).toBeVisible()
+    expect(screen.queryByText('Sort the garage')).toBeNull()
+    expect(screen.queryByText('Pick tiles')).toBeNull()
+  })
+
+  it('moves a task to another folder from its pane', async () => {
+    const user = await mount(BOARD())
+    await screen.findByRole('radio', { name: /^Acme/ })
+    await user.click(screen.getByText('Call the bank'))
+    const pane = await screen.findByRole('region', { name: 'Task: Call the bank' })
+    await user.click(within(pane).getByRole('button', { name: /^Folder: Personal/ }))
+    await user.click(await screen.findByRole('option', { name: /Website/ }))
+    await waitFor(() => expect(sent('PATCH', /\/api\/todos\/today$/)[0]?.body).toEqual({ folderId: 'acme-site' }))
+    expect(await within(row('Call the bank')).findByText('Acme / Website', { selector: '.tk-mark *' })).toBeVisible()
+  })
+
+  it('groups by folder from the … menu, Personal last', async () => {
+    const user = await mount(BOARD())
+    await screen.findByRole('radio', { name: /^Acme/ })
+    await user.click(screen.getByRole('button', { name: 'More' }))
+    await user.click(await screen.findByRole('menuitemradio', { name: /Group by folder/ }))
+    const heads = screen.getAllByRole('columnheader').map((el) => el.textContent)
+    expect(heads.slice(0, 2)).toEqual(['Acme1', 'Personal4'])
   })
 
   it('puts back only the refused field, and names it', async () => {

@@ -15,6 +15,7 @@ import * as rolledFromMigration from './migrations/009-rolled-from.mjs';
 import * as recsMigration from './migrations/010-recs.mjs';
 import * as noDoingMigration from './migrations/011-no-doing.mjs';
 import * as retireSheetSyncMigration from './migrations/012-retire-sheet-sync.mjs';
+import * as foldersMigration from './migrations/013-folders.mjs';
 
 const FORMAT_VERSION = 4;
 // Older formats a restore still accepts. A table added since (`since` on TABLES)
@@ -104,7 +105,7 @@ const DELETE_ORDER = [
 const MIGRATIONS = [
   initialMigration, exhaustedOutboxMigration, goalsMigration, outcomeMigration,
   goalAbandonedMigration, listsMigration, goalWeekMondayMigration, freeVentureTagsMigration,
-  rolledFromMigration, recsMigration, noDoingMigration, retireSheetSyncMigration,
+  rolledFromMigration, recsMigration, noDoingMigration, retireSheetSyncMigration, foldersMigration,
 ];
 
 function enableWal(db) {

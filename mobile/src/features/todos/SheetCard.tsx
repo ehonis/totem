@@ -14,6 +14,8 @@ import { tap } from '../../ui/haptics'
 import { Hi, CalendarDaysIcon, FlagIcon } from '../../lib/icons'
 import { openUrl } from '../../lib/siblingApps'
 import type { SheetItem } from '../../lib/todos/types'
+import type { Project } from '../../lib/chat/types'
+import { ProjectIcon } from '../chat/ThreadIcon'
 import { dateLabel, dueText, dueTone } from './format'
 import { SHEET_PRIORITY_WORD } from './list'
 import { openTodo } from './nav'
@@ -22,7 +24,7 @@ import { sheetPriorityColor } from './compose/labels'
 // The sheet's own word, in the colour of the task priority it ranks with (sheetPriorityColor).
 export const SHEET_GREEN = '#79cf91'
 
-export default function SheetCard({ item, source, now, dueSection, dim }: {
+export default function SheetCard({ item, source, now, dueSection, dim, folder }: {
   item: SheetItem
   /** The sheet's name (the feed's title). */
   source: string
@@ -31,6 +33,8 @@ export default function SheetCard({ item, source, now, dueSection, dim }: {
   dueSection?: 'overdue' | 'today' | 'upcoming' | 'nodate'
   /** While selecting tasks: a sheet row cannot be selected. */
   dim?: boolean
+  /** The project or folder the row is filed under, when the row should say it (not under its own chip, not Personal). */
+  folder?: { label: string; project: Pick<Project, 'icon' | 'image' | 'imageUrl'> } | null
 }) {
   const tone = item.dueDate ? dueTone(item.dueDate, now, 'todo') : ''
   const dueColor = tone === 'overdue' ? '#ff7f95' : tone === 'today' ? '#efc765' : colors.muted
@@ -40,6 +44,14 @@ export default function SheetCard({ item, source, now, dueSection, dim }: {
       <T size={12.5} lineHeight={17} color={SHEET_GREEN} numberOfLines={1}>{source}</T>
     </View>,
   ]
+  if (folder) {
+    marks.push(
+      <View key="folder" style={[st.mark, { maxWidth: 200 }]}>
+        <ProjectIcon p={folder.project} size={13} />
+        <T size={12.5} lineHeight={17} color="#b0b6c4" numberOfLines={1} style={{ flexShrink: 1 }}>{folder.label}</T>
+      </View>,
+    )
+  }
   if (item.dueDate && !(dueSection === 'today' && tone === 'today')) {
     const text = dueSection === 'overdue' && tone === 'overdue' ? dateLabel(item.dueDate) : dueText(item.dueDate, now)
     marks.push(
@@ -61,6 +73,7 @@ export default function SheetCard({ item, source, now, dueSection, dim }: {
   const spoken = [
     item.title,
     `from ${source}, read only`,
+    folder ? `in ${folder.label}` : null,
     item.dueDate ? (tone === 'overdue' ? `overdue, ${dateLabel(item.dueDate)}` : `due ${dueText(item.dueDate, now)}`) : null,
     item.priority ? `${SHEET_PRIORITY_WORD[item.priority]} priority` : null,
     item.who ? `assigned to ${item.who}` : null,

@@ -64,7 +64,7 @@ function seed(db) {
 
 const snapshot = (db) => Object.fromEntries(TABLES.map((t) => [
   t,
-  db.prepare(`SELECT * FROM ${t} ORDER BY 1, 2`).all().map((row) => ({ ...row })),
+  db.prepare(`SELECT * FROM ${t} ORDER BY 1, 2`).all().map(({ folder_id, ...row }) => row), // folder_id: a later migration (013)
 ]))
 const counts = (db) => Object.fromEntries(TABLES.map((t) => [t, db.prepare(`SELECT count(*) AS n FROM ${t}`).get().n]))
 
