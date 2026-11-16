@@ -1,4 +1,4 @@
-// The task page's compact rows (status, priority, due, repeat, snooze, area): an
+// The task page's compact rows (status, priority, due, repeat, snooze, folder): an
 // icon, a name, the value, and a native menu behind the whole row. Grouped in one
 // card like a Settings list, so six fields read as one block instead of six forms.
 import React from 'react'
@@ -22,15 +22,15 @@ export function PropertyGroup({ children }: { children: React.ReactNode }) {
   )
 }
 
-export function PropertyRow({ icon, iconStroke, label, value, valueColor, swatch, actions, onAction, menuTitle, disabled, hint }: {
+export function PropertyRow({ icon, iconStroke, label, value, valueColor, adornment, actions, onAction, menuTitle, disabled, hint }: {
   icon: IconType
   /** Tabler glyphs draw heavier than Heroicons at the same size; pass 1.6 to match. */
   iconStroke?: number
   label: string
   value: string
   valueColor?: string
-  /** A small colour dot before the value (a venture's colour). */
-  swatch?: string | null
+  /** Drawn before the value (a project's icon). */
+  adornment?: React.ReactNode
   actions: MenuAction[]
   /** Picks its own haptic: a tick for a change, the success buzz for a completion. */
   onAction: (id: string) => void
@@ -50,7 +50,7 @@ export function PropertyRow({ icon, iconStroke, label, value, valueColor, swatch
       <Hi icon={icon} size={18} color={colors.muted} strokeWidth={iconStroke} />
       <T size={15} style={st.label}>{label}</T>
       <View style={st.value}>
-        {swatch ? <View style={[st.swatch, { backgroundColor: swatch }]} /> : null}
+        {adornment}
         <T size={15} numberOfLines={1} color={valueColor ?? colors.muted} style={{ flexShrink: 1 }}>{value}</T>
         {disabled ? null : <Hi icon={ChevronDownIcon} size={13} color={colors.muted} />}
       </View>
@@ -76,5 +76,4 @@ const st = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingHorizontal: 14 },
   label: { width: 78 },
   value: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, minWidth: 0 },
-  swatch: { width: 8, height: 8, borderRadius: 4 },
 })

@@ -3,8 +3,9 @@
 // groups (Overdue, Today, Upcoming, No date), ordered by due day, priority, tasks
 // before sheet rows, then manual position; and Completed folded into one row. A task
 // is open or done. No React Native, so node's test runner loads it as is.
-import type { SheetFeed, SheetItem, Todo, TodoArea, TodoQuery, VentureTag } from '../../lib/todos/types'
+import type { SheetFeed, SheetItem, Todo, TodoQuery } from '../../lib/todos/types'
 import { trimUrl } from './issueLink.ts'
+import { inScope, type Folder, type TaskScope } from './folders.ts'
 import {
   SECTION_TITLE, buildList, clearScope, completedRows, dayKey, sectionFor, sheetAsTaskPriority, sheetName, urgency,
   type BoardRow, type ListItem, type SectionKey,
@@ -26,38 +27,46 @@ export type Row =
 const TONE: Record<SectionKey, SectionTone> = { overdue: 'overdue', today: 'today', upcoming: 'upcoming', nodate: 'quiet' }
 
 /**
- * What the list shows. `scope` narrows to one area or to the sheet alone; the rest
- * are the task filters (state.ts filterTodos), which the sheet's rows follow where
- * they mean something for a row (search, priority, due).
+ * What the list shows. `scope` narrows to Personal, one project (with its folders)
+ * or the sheet alone (folders.ts); the rest are the task filters (state.ts
+ * filterTodos), which the sheet's rows follow where they mean something for a row
+ * (search, priority, due).
  */
-export type ListScope = '' | TodoArea | 'sheet'
+export type ListScope = TaskScope
 export interface ListQuery {
   search?: string
   scope?: ListScope
-  ventureTag?: VentureTag | ''
   /** A task's stored priority: 4 is P1. */
   priority?: Todo['priority'] | null
   due?: TodoQuery['due']
 }
 
 export const isFiltering = (query: ListQuery) =>
-  Boolean(query.search?.trim() || query.scope || query.ventureTag || query.priority || query.due)
+  Boolean(query.search?.trim() || query.scope || query.priority || query.due)
 
 /** The task filter (state.ts filterTodos) a list query stands for, or null when it shows the sheet alone and no task at all. */
 export function taskQuery(query: ListQuery): TodoQuery | null {
   if (query.scope === 'sheet') return null
-  return { search: query.search, area: query.scope || '', ventureTag: query.ventureTag || '', priority: query.priority ?? null, due: query.due || '' }
+  return { search: query.search, priority: query.priority ?? null, due: query.due || '' }
+}
+
+/** The tasks a query's scope keeps (Personal, a project and its folders); the other filters are taskQuery's. */
+export function scopedTodos(todos: readonly Todo[], query: ListQuery, projects: readonly Folder[]): Todo[] {
+  if (query.scope === 'sheet') return []
+  if (!query.scope) return [...todos]
+  return todos.filter((todo) => inScope({ kind: 'task', todo }, query.scope, projects))
 }
 
 /**
- * The sheet's rows under a query. A sheet row has no area or venture, so narrowing to
- * either hides them all; the priority filter matches by sheetAsTaskPriority (lib/todos/board.ts).
+ * The sheet's rows under a query. A row is filed like a task (its own filing, else the
+ * sheet's default folder), so Personal and a project's chip keep the rows filed there;
+ * the priority filter matches by sheetAsTaskPriority (lib/todos/board.ts).
  */
-export function visibleSheet(items: readonly SheetItem[], query: ListQuery, now: Date): SheetItem[] {
-  if (query.scope === 'Personal' || query.scope === 'Ventures' || query.ventureTag) return []
+export function visibleSheet(items: readonly SheetItem[], query: ListQuery, now: Date, projects: readonly Folder[] = []): SheetItem[] {
   const needle = query.search?.trim().toLocaleLowerCase()
   const today = dayKey(now)
   return items.filter((item) => {
+    if (query.scope && !inScope({ kind: 'sheet', item }, query.scope, projects)) return false
     if (query.priority && sheetAsTaskPriority(item.priority) !== query.priority) return false
     if (query.due) {
       const section = sectionFor(item.dueDate, today)

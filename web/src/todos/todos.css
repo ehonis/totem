@@ -79,7 +79,8 @@
   background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); font-size: 11.5px;
 }
 .tk-chip-priority { background: color-mix(in srgb, var(--amber) 18%, transparent); }
-.tk-chip-venture { background: color-mix(in srgb, var(--accent-2) 20%, transparent); }
+.tk-chip-folder { background: color-mix(in srgb, var(--accent-2) 20%, transparent); }
+.tk-chip .vc-proj-icon { flex: none; }
 .tk-chip-pick { border: 0; padding: 0 8px; font: inherit; font-size: 11.5px; color: var(--text); cursor: pointer; }
 button.tk-chip-pick { padding-right: 6px; }
 .tk-note.tk-sheet-note { display: flex; align-items: flex-start; gap: 7px; margin: 2px 8px 6px; }
@@ -169,7 +170,7 @@ button.tk-chip-pick { padding-right: 6px; }
 .tk-prio-2 { color: var(--amber); }
 .tk-prio-3 { color: var(--accent); }
 .tk-prio-low { color: var(--muted); }
-.tk-venture i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--tag, var(--accent-2)); }
+.tk-folder-mark { max-width: 200px; }
 .tk-issue { color: var(--muted); text-decoration: none; border-radius: 4px; }
 .tk-issue:hover { color: var(--text); }
 .tk-issue.open svg { color: var(--green); }

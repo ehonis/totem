@@ -39,6 +39,8 @@ import ShortcutOverlay from './components/ShortcutOverlay'
 import NotificationCenter from './components/NotificationCenter'
 import { getNotificationHistory } from './push'
 import ToastHost from './components/ToastHost'
+import TaskCardHost from './work/TaskCard'
+import { installTaskNav } from './work/card'
 import HabitCheckin from './components/HabitCheckin'
 import RunningChats from './chat/RunningChats'
 import {
@@ -342,6 +344,7 @@ export default function App() {
   useEffect(() => installLinkRouting(), [])
   // "Chat about this" on any card opens the chat through the same router.
   useEffect(() => installChatAbout({ navigate, onAuthError }), [navigate, onAuthError])
+  useEffect(() => installTaskNav({ navigate }), [navigate])
   // The chats panel's Tasks face signs out on a 401 like everything else.
   useEffect(() => installWorkAuth(onAuthError), [onAuthError])
 
@@ -508,6 +511,8 @@ export default function App() {
       />
       {/* Chats answering out of sight, bottom-right; a click opens one in the panel and the chat. */}
       <RunningChats onOpenChat={openChat} onShowPanel={showPanel} narrow={narrow} />
+      {/* A task's settings, floating at the page's top right (chats panel, task strip, Tasks page). */}
+      <TaskCardHost />
       <ShortcutOverlay chord={chord} />
       <ToastHost />
       <DownloadActivity />

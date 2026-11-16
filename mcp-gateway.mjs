@@ -25,7 +25,7 @@
 
 import { spawn } from 'node:child_process'
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -43,6 +43,7 @@ import { createListService } from './lists/service.mjs'
 import { createRecMcpClient, REC_PROMPT_RULE } from './recs/mcp.mjs'
 import { createRecService } from './recs/service.mjs'
 import { createTodoService } from './todos/service.mjs'
+import { createProjectStore, validProjectId } from './chat/projects.mjs'
 
 const HERE = import.meta.dirname
 const MANIFEST_FILE = process.env.MCP_MANIFEST_FILE || join(HERE, 'data', 'mcp-manifest.json')
@@ -549,19 +550,52 @@ function defaultTaskClient() {
   })
   // Whichever process opens the file first runs its migrations; their notes go to the log.
   const db = openTodoDatabase({ file: databaseFile, actionLog })
-  const service = createTodoService({ db, actionLog })
+  // A task's folder is one of the owner's chat projects, read from the same files the bridge keeps.
+  const projectsDir = process.env.CHAT_PROJECTS_DIR || join(HERE, 'data', 'chat-projects')
+  const service = createTodoService({
+    db,
+    actionLog,
+    folderExists: (id) => validProjectId(id) && existsSync(join(projectsDir, id, 'project.json')),
+  })
   const commands = createTodoCommands({
     service,
     sheet: unavailableConnector('Google Sheet'),
     maintenance: { async purgeDeleted() { throw new Error('Task maintenance is unavailable through MCP') } },
   })
-  const client = createTodoMcpClient({ service, commands })
+  const client = createTodoMcpClient({ service, commands, folders: gatewayTaskFolders(projectsDir) })
   const close = client.close.bind(client)
   client.close = () => {
     close()
     closeTodoDatabase(db)
   }
   return client
+}
+
+// Inside a chat run, the chat a task tool call came from: the bridge answers for
+// the run token (/api/chat/run-context), so a task made there is filed in the
+// chat's folder and linked to it. Outside a run there is no chat.
+export function gatewayTaskFolders(projectsDir, { env = process.env, fetchImpl = fetch } = {}) {
+  const store = createProjectStore({ dir: projectsDir })
+  async function call(path, init = {}) {
+    const run = runHeader(env)
+    const creds = bridgeCredentials()
+    if (!run['x-totem-run'] || !creds) return null
+    const url = creds.url.replace(/\/mcp$/, path)
+    const res = await fetchImpl(url, {
+      ...init,
+      headers: { authorization: `Bearer ${creds.secret}`, 'content-type': 'application/json', ...run },
+      signal: AbortSignal.timeout(5000),
+    })
+    return res.ok ? res.json() : null
+  }
+  return {
+    list: () => store.list(),
+    chat: () => call('/api/chat/run-context'),
+    async linkChat(_session, _chat, taskId) {
+      const r = await call('/api/chat/run-context/task', { method: 'POST', body: JSON.stringify({ taskId }) })
+      if (!r) throw new Error('the chat could not be linked')
+    },
+  }
 }
 
 function defaultGoalClient() {
@@ -937,7 +971,7 @@ export class Gateway {
             instructions:
               'Aggregated app tools from the Totem gateway. Tools are namespaced as ' +
               '"<app>__<tool>" (e.g. tasks__create_task, google-calendar__list-events). ' +
-              'Use tasks__* for Totem\'s local Personal and Ventures tasks; nothing syncs a task ' +
+              'Use tasks__* for Totem\'s local tasks, each filed under one of the owner\'s chat projects or folders (unfiled is Personal); nothing syncs a task ' +
               'out, and the shared task sheet is read-only. strava__* tools are ' +
               'Totem\'s own Strava connector (rides, runs, mileage, gear odometers); every ' +
               'quantity carries both unit systems and dates are the athlete\'s local date. ' +

@@ -1,12 +1,17 @@
 import { assertSyncTarget, TodoDomainError } from './errors.mjs';
 import { normalizeStatus } from './service.mjs';
 import { compatibilityTodo, normalizeTodoInput, projectList } from './http.mjs';
+import { folderList, folderPath, resolveFolder } from './folders.mjs';
 
-// Venture tags are configured per install, so the schema takes any string and the
-// service checks it against the list totem_get_projects returns.
+// Areas and venture tags were replaced by folders; they are still accepted from
+// older callers but organise nothing the owner sees.
 const S_VENTURE_TAG = Object.freeze({
   type: 'string',
-  description: 'One of the venture tags configured on this install (see totem_get_projects). Requires area "Ventures".',
+  description: 'Retired: tasks are organised by folder now. Accepted from older callers only.',
+});
+const S_FOLDER = Object.freeze({
+  type: ['string', 'null'],
+  description: 'The folder to file the task under: one of the owner\'s chat projects or folders, by name ("Gizmo Labs"), path ("Work - Northwind / r+d") or id (see totem_get_projects). "Personal" or null leaves it unfiled, which the owner sees as Personal.',
 });
 
 const ANN_READ_LOCAL = Object.freeze({
@@ -115,51 +120,97 @@ function daysValue(value) {
   return days;
 }
 
-function matchesReadFilters(todo, input) {
+// A task filed under a project that was since deleted is Personal, as every client shows it.
+const liveFolder = (todo, projects) => (todo.folderId && projects.some(p => p.id === todo.folderId) ? todo.folderId : null);
+
+function matchesReadFilters(todo, input, projects = []) {
   // `doing` was retired: a filter on it means open (normalizeStatus).
   if (input.status && todo.status !== normalizeStatus(input.status)) return false;
   if (input.outcome && todo.outcome !== input.outcome) return false;
   if (input.area && todo.area !== input.area) return false;
   if (input.ventureTag && todo.ventureTag !== input.ventureTag) return false;
+  if (Object.hasOwn(input, 'folderId') && input.folderId !== undefined && liveFolder(todo, projects) !== input.folderId) return false;
   if (input.source === 'local' && todo.externalLinks.length !== 0) return false;
   if (input.source && input.source !== 'local' && !todo.externalLinks.some(link => link.connector === input.source)) return false;
   return true;
 }
 
-function mcpTodo(todo) {
+function mcpTodo(todo, projects = []) {
+  // A folder that was deleted reads as unfiled, as it does in every client.
+  const folder = folderPath(projects, todo.folderId);
   return {
     ...todo,
     ...compatibilityTodo(todo),
+    folderId: folder ? todo.folderId : null,
+    folder: folder ?? 'Personal',
     source: todo.externalLinks[0]?.connector ?? 'local',
   };
 }
 
-function openTodos(service, input) {
+function openTodos(service, input, projects) {
   return service.list({ snoozed: false, sort: 'manual' })
     .filter(todo => todo.status === 'todo')
-    .filter(todo => matchesReadFilters(todo, input))
-    .map(mcpTodo);
+    .filter(todo => matchesReadFilters(todo, input, projects))
+    .map(todo => mcpTodo(todo, projects));
 }
 
-function completedTodos(service, days, now, input) {
+function completedTodos(service, days, now, input, projects) {
   const cutoff = new Date(new Date(now).getTime() - days * 86_400_000).toISOString();
   return service.list({ status: 'done', includeArchived: true })
     .filter(todo => todo.completedAt && todo.completedAt >= cutoff)
-    .filter(todo => matchesReadFilters(todo, { ...input, status: 'done' }))
+    .filter(todo => matchesReadFilters(todo, { ...input, status: 'done' }, projects))
     .sort((left, right) => right.completedAt.localeCompare(left.completedAt))
-    .map(todo => ({ ...mcpTodo(todo), completed: true, completedAt: todo.completedAt }));
+    .map(todo => ({ ...mcpTodo(todo, projects), completed: true, completedAt: todo.completedAt }));
 }
 
-export function createTodoMcpTools({ service, commands, fetchedAt = () => new Date().toISOString() } = {}) {
+/**
+ * `folders` (optional) knows the owner's chat projects and the chat a call came
+ * from: { list(): projects, chat(session): { threadId, projectId, taskId } | null,
+ * linkChat(session, chat, taskId) }. Without it every task reads as Personal and
+ * a `folder` name cannot be resolved (an id still can).
+ */
+export function createTodoMcpTools({ service, commands, folders = null, fetchedAt = () => new Date().toISOString() } = {}) {
   if (!service || !commands) throw new TypeError('createTodoMcpTools requires service and commands');
+  async function projects() {
+    if (!folders?.list) return [];
+    try { return folderList(await folders.list()); } catch { return []; }
+  }
+  async function chatOf(session) {
+    if (!folders?.chat) return null;
+    try { return await folders.chat(session); } catch { return null; }
+  }
+  // `folder` (a name) and `folderId` both become `folderId`; a name that fits no
+  // folder, or several, is refused with the names that do exist.
+  function applyFolder(input, fields, list) {
+    if (!Object.hasOwn(input, 'folder')) return;
+    const found = resolveFolder(list, input.folder);
+    if (!found || found.ambiguous) {
+      const names = list.map(p => folderPath(list, p.id));
+      throw new TodoDomainError(
+        found?.ambiguous ? 'AMBIGUOUS_FOLDER' : 'FOLDER_NOT_FOUND',
+        found?.ambiguous
+          ? `"${input.folder}" fits several folders: ${found.ambiguous.join(', ')}. Name one by its path.`
+          : `There is no folder called "${input.folder}". Folders: ${names.length ? names.join(', ') : 'none yet'}; "Personal" leaves a task unfiled.`,
+        { details: { folder: input.folder } },
+      );
+    }
+    if (Object.hasOwn(fields, 'folderId') && (fields.folderId || null) !== found.id) {
+      conflict('folder and folderId disagree.', { fields: ['folder', 'folderId'] });
+    }
+    fields.folderId = found.id;
+  }
   return {
     async totem_get_tasks(input = {}) {
       const now = fetchedAt();
-      const todos = openTodos(service, input);
+      const list = await projects();
+      const filters = { ...input };
+      delete filters.folder;
+      if (Object.hasOwn(input, 'folder')) applyFolder(input, filters, list);
+      const todos = openTodos(service, filters, list);
       const result = { todos, count: todos.length };
       if (input.includeCompleted) {
         const days = daysValue(input.days);
-        const completed = completedTodos(service, days, now, input);
+        const completed = completedTodos(service, days, now, filters, list);
         Object.assign(result, {
           completed,
           completedCount: completed.length,
@@ -169,19 +220,44 @@ export function createTodoMcpTools({ service, commands, fetchedAt = () => new Da
       return { ...result, fetchedAt: now };
     },
     async totem_get_projects() {
-      return { projects: projectList(service.listVentureTags()), fetchedAt: fetchedAt() };
+      const list = await projects();
+      return {
+        folders: [
+          { id: null, name: 'Personal', path: 'Personal', note: 'Unfiled: a task with no folder.' },
+          ...list.map(p => ({ id: p.id, name: p.name, path: folderPath(list, p.id), parentId: p.parentId })),
+        ],
+        projects: projectList(service.listVentureTags()),
+        fetchedAt: fetchedAt(),
+      };
     },
     async totem_create_task(input = {}, session) {
-      const todo = await commands.create(
-        normalizeAliases(input),
-        contextFor(session, 'create task'),
-      );
-      return { ok: true, todo: mcpTodo(todo), fetchedAt: fetchedAt() };
+      const list = await projects();
+      const fields = normalizeAliases(input);
+      applyFolder(input, fields, list);
+      // A task made from a chat lands in that chat's folder, unless one was named.
+      const chat = await chatOf(session);
+      const filedFromChat = !Object.hasOwn(fields, 'folderId') && !!chat?.projectId && list.some(p => p.id === chat.projectId);
+      if (filedFromChat) fields.folderId = chat.projectId;
+      const todo = await commands.create(fields, contextFor(session, 'create task'));
+      // ...and the chat names it, when it names no task yet (a chat names at most one).
+      let linkedToChat = false;
+      if (chat?.threadId && !chat.taskId && folders?.linkChat) {
+        try { await folders.linkChat(session, chat, todo.id); linkedToChat = true; } catch { /* the task stands */ }
+      }
+      return {
+        ok: true,
+        todo: mcpTodo(todo, list),
+        ...(filedFromChat ? { filedFromChat: true } : {}),
+        ...(linkedToChat ? { linkedToChat: true } : {}),
+        fetchedAt: fetchedAt(),
+      };
     },
     async totem_update_task(input = {}, session) {
       if (!input.id) throw new TodoDomainError('MISSING_TODO_ID', 'id is required.');
       const { id } = input;
+      const list = await projects();
       const fields = normalizeAliases(input, { update: true });
+      applyFolder(input, fields, list);
       // Before any change: a refused share (github, sheet, anything unknown) must not
       // leave the task renamed or completed behind an error.
       assertSyncTarget(fields.syncTarget);
@@ -226,7 +302,7 @@ export function createTodoMcpTools({ service, commands, fetchedAt = () => new Da
       const result = {
         ok: true,
         updated: changedFields || (statusChanged && !Object.hasOwn(input, 'complete')),
-        todo: mcpTodo(todo),
+        todo: mcpTodo(todo, list),
         fetchedAt: fetchedAt(),
       };
       if (requestedStatus === 'done') result.completed = true;
@@ -246,8 +322,10 @@ const CREATE_PROPERTIES = {
   priority: { type: 'number', minimum: 1, maximum: 4 },
   labels: { type: 'array', items: S_STR },
   tags: { type: 'array', items: S_STR },
-  projectId: { type: 'string' },
-  area: { type: 'string', enum: ['Personal', 'Ventures'] },
+  folder: S_FOLDER,
+  folderId: { type: ['string', 'null'], description: 'A folder id from totem_get_projects; prefer folder.' },
+  projectId: { type: 'string', description: 'Retired (area/venture tag). Use folder.' },
+  area: { type: 'string', enum: ['Personal', 'Ventures'], description: 'Retired. Use folder.' },
   ventureTag: S_VENTURE_TAG,
   source: { type: 'string' },
   status: {
@@ -267,7 +345,7 @@ export const TODO_MCP_TOOL_DEFINITIONS = Object.freeze([
   {
     name: 'totem_get_tasks',
     title: 'Read tasks',
-    description: 'Read Totem tasks. Returns open tasks by default and optionally recent completions — including archived ones, since completed work is swept into the archive at the end of each day. Each finished task carries `outcome`: "completed" if it happened, "not_doing" if he decided against it.',
+    description: 'Read Totem tasks. Returns open tasks by default and optionally recent completions — including archived ones, since completed work is swept into the archive at the end of each day. Each task carries `folder` (the chat project or folder it is filed under, or "Personal" when unfiled). Each finished task carries `outcome`: "completed" if it happened, "not_doing" if he decided against it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -279,7 +357,8 @@ export const TODO_MCP_TOOL_DEFINITIONS = Object.freeze([
           enum: ['completed', 'not_doing'],
           description: 'Filter completions by how they ended. Only meaningful with includeCompleted.',
         },
-        area: { type: 'string', enum: ['Personal', 'Ventures'] },
+        folder: { ...S_FOLDER, description: 'Only tasks filed under this folder (name, path or id); "Personal" for unfiled ones.' },
+        area: { type: 'string', enum: ['Personal', 'Ventures'], description: 'Retired. Use folder.' },
         ventureTag: S_VENTURE_TAG,
         source: { type: 'string', enum: ['local', 'github', 'sheet'] },
       },
@@ -296,21 +375,24 @@ export const TODO_MCP_TOOL_DEFINITIONS = Object.freeze([
   },
   {
     name: 'totem_get_projects',
-    title: 'Read task areas',
-    description: 'List Totem task areas and the venture tags configured on this install. New work tasks are intentionally unsupported.',
+    title: 'Read task folders',
+    description: 'List the folders tasks are filed under: the owner\'s chat projects and the folders inside them, by name, path and id. An unfiled task is Personal. `projects` is the retired area list, kept for older callers.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: ANN_READ_LOCAL,
-    outputSchema: out({ projects: S_LIST('Personal, Ventures, and each configured venture tag.') }, ['fetchedAt', 'projects']),
+    outputSchema: out({
+      folders: S_LIST('Personal (unfiled), then each chat project and folder: id, name, path, parentId.'),
+      projects: S_LIST('Retired: Personal, Ventures, and each venture tag.'),
+    }, ['fetchedAt', 'folders', 'projects']),
   },
   {
     name: 'totem_create_task',
     title: 'Create a task',
-    description: 'Create a Totem task. Tasks stay local; the shared task sheet is read-only.',
+    description: 'Create a Totem task. Pass folder to file it under one of the owner\'s chat projects or folders. Created from a chat in a project, it is filed there when no folder is named, and linked to that chat if the chat has no task yet. Tasks stay local; the shared task sheet is read-only.',
     inputSchema: {
       type: 'object', properties: CREATE_PROPERTIES, anyOf: [{ required: ['content'] }, { required: ['title'] }], additionalProperties: false,
     },
     annotations: ANN_WRITE_OPEN,
-    outputSchema: out({ ok: S_BOOL, todo: S_OBJ }, ['fetchedAt', 'ok', 'todo']),
+    outputSchema: out({ ok: S_BOOL, todo: S_OBJ, filedFromChat: S_BOOL, linkedToChat: S_BOOL }, ['fetchedAt', 'ok', 'todo']),
   },
   {
     name: 'totem_update_task',

@@ -1,48 +1,48 @@
 import { describe, expect, it } from 'vitest'
-import { buildWork, chatsByTask, dueLabel, folderOrder, fromSheet, fromTodo, isOpenTodo, resolveFolders, resolveRef, type WorkTask } from './groups'
+import { buildWork, chatsByTask, dueLabel, folderOrder, fromSheet, fromTodo, isOpenTodo, resolveRef, type WorkTask } from './groups'
 import { filterItems } from './ComboPicker'
 import type { ChatThread, Project } from '../chat/types'
 import type { Todo } from '../todos/types'
 
 const project = (id: string, name: string, parentId?: string): Project => ({ id, name, ...(parentId ? { parentId } : {}) } as Project)
-const task = (ref: string, title: string, extra: Partial<WorkTask> = {}): WorkTask => ({ ref, kind: 'local', title, dueDate: null, priority: 1, done: false, status: '', updatedAt: 0, ...extra })
+const task = (ref: string, title: string, extra: Partial<WorkTask> = {}): WorkTask => ({ ref, kind: 'local', title, dueDate: null, priority: 1, done: false, status: '', updatedAt: 0, folderId: null, ...extra })
 const chat = (id: string, taskId: string | undefined, updatedAt: number, extra: Partial<ChatThread> = {}): ChatThread => ({
   id, kind: 'regular', taskId, createdAt: updatedAt, updatedAt, messages: [{ id: 'm', role: 'user', content: 'hi', createdAt: updatedAt }], ...extra,
 } as ChatThread)
 const OPTS = { sort: 'due', groupBy: 'folder', show: 'all', query: '' } as const
 
 describe('work groups', () => {
-  const projects = [project('p1', 'Cresco'), project('p2', 'Totem'), project('f1', 'Work tab', 'p2')]
+  const projects = [project('p1', 'Globex'), project('p2', 'Totem'), project('f1', 'Work tab', 'p2')]
 
   it('folders follow their project, in panel order', () => {
     expect(folderOrder([project('f1', 'Folder', 'p2'), project('p1', 'A'), project('p2', 'B')]).map((p) => p.id)).toEqual(['p1', 'p2', 'f1'])
   })
 
-  it('groups by folder, projects in order, then No folder; empty groups are left out', () => {
-    const tasks = [task('a', 'Lease'), task('b', 'Picker'), task('c', 'Loose'), task('d', 'Cert')]
-    const groups = buildWork(tasks, [], projects, { a: 'p1', b: 'f1', d: 'p1', x: 'gone' }, OPTS)
+  it('groups by folder, projects in order, then Personal; empty groups are left out', () => {
+    const tasks = [task('a', 'Lease', { folderId: 'p1' }), task('b', 'Picker', { folderId: 'f1' }), task('c', 'Loose'), task('d', 'Cert', { folderId: 'p1' })]
+    const groups = buildWork(tasks, [], projects, OPTS)
     expect(groups.map((g) => g.key)).toEqual(['p1', 'f1', ''])
     expect(groups[1].parent?.id).toBe('p2')
     expect(groups[0].rows.map((r) => r.task.ref)).toEqual(['d', 'a'])
   })
 
   it('a filing whose project is gone reads as no folder', () => {
-    const groups = buildWork([task('a', 'A')], [], projects, { a: 'deleted' }, OPTS)
+    const groups = buildWork([task('a', 'A', { folderId: 'deleted' })], [], projects, OPTS)
     expect(groups).toHaveLength(1)
     expect(groups[0].key).toBe('')
   })
 
   it('sorts by due day, undated last, then priority', () => {
     const tasks = [task('a', 'No date', { priority: 4 }), task('b', 'Later', { dueDate: '2026-11-20' }), task('c', 'Soon', { dueDate: '2026-11-14' }), task('d', 'Soon urgent', { dueDate: '2026-11-14', priority: 4 })]
-    const [g] = buildWork(tasks, [], [], {}, { ...OPTS, groupBy: 'none' })
+    const [g] = buildWork(tasks, [], [], { ...OPTS, groupBy: 'none' })
     expect(g.rows.map((r) => r.task.ref)).toEqual(['d', 'c', 'b', 'a'])
   })
 
   it('sorts by priority and by recent chat activity', () => {
     const tasks = [task('a', 'A', { priority: 2 }), task('b', 'B', { priority: 4 }), task('c', 'C', { priority: 3 })]
-    expect(buildWork(tasks, [], [], {}, { ...OPTS, groupBy: 'none', sort: 'priority' })[0].rows.map((r) => r.task.ref)).toEqual(['b', 'c', 'a'])
+    expect(buildWork(tasks, [], [], { ...OPTS, groupBy: 'none', sort: 'priority' })[0].rows.map((r) => r.task.ref)).toEqual(['b', 'c', 'a'])
     const threads = [chat('t1', 'a', 300), chat('t2', 'c', 100), chat('t3', 'a', 50)]
-    const [g] = buildWork(tasks, threads, [], {}, { ...OPTS, groupBy: 'none', sort: 'activity' })
+    const [g] = buildWork(tasks, threads, [], { ...OPTS, groupBy: 'none', sort: 'activity' })
     expect(g.rows.map((r) => r.task.ref)).toEqual(['a', 'c', 'b'])
     expect(g.rows[0].chats.map((c) => c.id)).toEqual(['t1', 't3'])
   })
@@ -50,13 +50,13 @@ describe('work groups', () => {
   it('shows only tasks with or without chats, and filters by task or chat title', () => {
     const tasks = [task('a', 'Lease abstract'), task('b', 'Renew cert')]
     const threads = [chat('t1', 'b', 10, { title: 'Certbot on the VM' })]
-    expect(buildWork(tasks, threads, [], {}, { ...OPTS, show: 'linked' }).flatMap((g) => g.rows.map((r) => r.task.ref))).toEqual(['b'])
-    expect(buildWork(tasks, threads, [], {}, { ...OPTS, show: 'unlinked' }).flatMap((g) => g.rows.map((r) => r.task.ref))).toEqual(['a'])
-    expect(buildWork(tasks, threads, [], {}, { ...OPTS, query: 'certbot' }).flatMap((g) => g.rows.map((r) => r.task.ref))).toEqual(['b'])
+    expect(buildWork(tasks, threads, [], { ...OPTS, show: 'linked' }).flatMap((g) => g.rows.map((r) => r.task.ref))).toEqual(['b'])
+    expect(buildWork(tasks, threads, [], { ...OPTS, show: 'unlinked' }).flatMap((g) => g.rows.map((r) => r.task.ref))).toEqual(['a'])
+    expect(buildWork(tasks, threads, [], { ...OPTS, query: 'certbot' }).flatMap((g) => g.rows.map((r) => r.task.ref))).toEqual(['b'])
   })
 
   it('leaves out done tasks and empty drafts', () => {
-    const groups = buildWork([task('a', 'A', { done: true }), task('b', 'B')], [chat('t', 'b', 1, { messages: [] })], [], {}, OPTS)
+    const groups = buildWork([task('a', 'A', { done: true }), task('b', 'B')], [chat('t', 'b', 1, { messages: [] })], [], OPTS)
     expect(groups[0].rows.map((r) => r.task.ref)).toEqual(['b'])
     expect(groups[0].rows[0].chats).toEqual([])
     expect(chatsByTask([chat('x', undefined, 1)]).size).toBe(0)
@@ -95,22 +95,21 @@ describe('sheet rows that moved', () => {
     expect(resolveRef('local', tasks)).toBe('local')
   })
 
-  it('chats and filings follow a moved row; a current filing wins over a moved one', () => {
-    expect(resolveFolders({ 'sheet:0:4:aaaa': 'p1' }, tasks)).toEqual({ 'sheet:0:9:aaaa': 'p1' })
-    expect(resolveFolders({ 'sheet:0:4:aaaa': 'p1', 'sheet:0:9:aaaa': 'p2' }, tasks)).toEqual({ 'sheet:0:9:aaaa': 'p2' })
-    const groups = buildWork(tasks, [chat('c', 'sheet:0:4:aaaa', 5)], [project('p1', 'P')], { 'sheet:0:4:aaaa': 'p1' }, OPTS)
+  it('chats follow a moved row; the row brings its folder from the bridge', () => {
+    const filed = tasks.map((t) => (t.ref === 'sheet:0:9:aaaa' ? { ...t, folderId: 'p1' } : t))
+    const groups = buildWork(filed, [chat('c', 'sheet:0:4:aaaa', 5)], [project('p1', 'P')], OPTS)
     expect(groups[0].key).toBe('p1')
     expect(groups[0].rows[0].chats.map((c) => c.id)).toEqual(['c'])
   })
 
   it('a snoozed task is off the panel but not done', () => {
-    const groups = buildWork([task('a', 'Snoozed', { hidden: true }), task('b', 'Open')], [], [], {}, OPTS)
+    const groups = buildWork([task('a', 'Snoozed', { hidden: true }), task('b', 'Open')], [], [], OPTS)
     expect(groups[0].rows.map((r) => r.task.ref)).toEqual(['b'])
   })
 })
 
 describe('combo picker filter', () => {
-  const items = [{ key: 'a', label: 'Cresco portal' }, { key: 'b', label: 'Work tab', keywords: 'Totem' }, { key: 'c', label: 'Café notes' }]
+  const items = [{ key: 'a', label: 'Globex portal' }, { key: 'b', label: 'Work tab', keywords: 'Totem' }, { key: 'c', label: 'Café notes' }]
   it('matches every word, keywords included, ignoring case and accents', () => {
     expect(filterItems(items, '').map((i) => i.key)).toEqual(['a', 'b', 'c'])
     expect(filterItems(items, 'totem work').map((i) => i.key)).toEqual(['b'])

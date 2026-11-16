@@ -95,6 +95,7 @@ test('legacy list/create/update/close/delete/projects/completed shapes stay comp
     labels: ['home'],
     projectId: 'personal',
     project: 'Personal',
+    folderId: null,
     url: null,
   });
   assert.deepEqual((await request('GET', '/api/todos')).body.todos, [created.body.todo]);

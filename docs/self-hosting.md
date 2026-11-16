@@ -235,8 +235,8 @@ docker compose) always wins and is shown as read-only.
 | Approval code | Settings -> Security, or `npm run approval-code` | hash in `data/approval-code.json` |
 | Default AI provider and model, accounts | Settings -> Providers | `data/provider-config.json` |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CURSOR_API_KEY` | Settings -> Providers › API keys | `data/ai-settings.json` |
-| `PUBLIC_URL`; task sheet ID/tab/assignees/title/account; CLIProxy | Settings -> General; Settings -> Tasks; Settings -> Providers | `data/integrations.json` |
-| Venture tags | Settings -> Tasks | `data/todos.db` (`todo_preferences`) |
+| `PUBLIC_URL`; task sheet ID/tab/assignees/title/account/folder; CLIProxy | Settings -> General; Settings -> Tasks; Settings -> Providers | `data/integrations.json` |
+| Task folders | A task's pane or card; a sheet row's pane or card | `data/todos.db` (`folder_id`); `data/task-folders.json` for sheet rows |
 | MCP servers | Settings -> Connections | `data/mcp-manifest.json` |
 | Connection icons | Settings -> Connections, a row's Icon | `data/connection-icons.json` (`CONNECTION_ICONS_FILE`); pictures are chat uploads |
 | Which folder each task is filed under | Chats panel -> Tasks | `data/task-folders.json` (`TASK_FOLDERS_FILE`) |

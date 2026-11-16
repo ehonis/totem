@@ -41,6 +41,7 @@ export function compatibilityTodo(todo) {
     labels: todo.tags.map(tag => tag.name),
     projectId: todo.area.toLowerCase(),
     project: todo.area,
+    folderId: todo.folderId ?? null,
     url: link?.externalUrl ?? null,
   };
 }
@@ -99,6 +100,7 @@ export function normalizeTodoInput(input = {}, { update = false } = {}) {
   if (Object.hasOwn(input, 'snoozedUntil')) result.snoozedUntil = input.snoozedUntil;
   if (Object.hasOwn(input, 'position')) result.position = input.position;
   if (Object.hasOwn(input, 'syncTarget')) result.syncTarget = input.syncTarget;
+  if (Object.hasOwn(input, 'folderId')) result.folderId = input.folderId;
   if (!update && !Object.hasOwn(result, 'title')) throw bad('INVALID_TODO_FIELD', 'content or title is required.');
   return result;
 }
@@ -123,7 +125,7 @@ async function readJson(req, maxBodyBytes) {
 function queryFrom(url) {
   const params = url.searchParams;
   const result = {};
-  for (const key of ['search', 'area', 'ventureTag', 'source', 'status', 'sort', 'due']) {
+  for (const key of ['search', 'area', 'ventureTag', 'folderId', 'source', 'status', 'sort', 'due']) {
     if (params.has(key)) result[key] = params.get(key);
   }
   if (params.has('priority')) result.priority = Number(params.get('priority'));
@@ -135,7 +137,9 @@ function queryFrom(url) {
 
 // `sheetFeed`: the shared task sheet, read-only (connectors/task-sheet-feed.mjs).
 // `issueStates`: the live state of linked GitHub issues (issue-states.mjs).
-export function createTodoHttpHandler({ service, commands, sheetFeed = null, issueStates = null, now = () => new Date().toISOString(), maxBodyBytes = 1_000_000 } = {}) {
+// `sheetFolders`: gives each sheet row the folder it is filed under (`folderId`),
+// its own filing or the sheet's default (fileSheetItems in bridge.mjs).
+export function createTodoHttpHandler({ service, commands, sheetFeed = null, issueStates = null, sheetFolders = null, now = () => new Date().toISOString(), maxBodyBytes = 1_000_000 } = {}) {
   if (!service || !commands) throw new TypeError('createTodoHttpHandler requires service and commands');
   return async function todoHttpHandler(req, res, suppliedUrl) {
     const url = suppliedUrl instanceof URL ? suppliedUrl : new URL(req.url, 'http://localhost');
@@ -183,9 +187,10 @@ export function createTodoHttpHandler({ service, commands, sheetFeed = null, iss
       }
       // Before /api/todos/:id, which would read "sheet" as a task id.
       if (req.method === 'GET' && path === '/api/todos/sheet') {
-        send(res, 200, sheetFeed
+        const feed = sheetFeed
           ? await sheetFeed.read({ refresh: url.searchParams.get('refresh') === '1' })
-          : { configured: false, items: [], reason: 'The task sheet is not available on this server.' });
+          : { configured: false, items: [], reason: 'The task sheet is not available on this server.' };
+        send(res, 200, sheetFolders && Array.isArray(feed?.items) ? await sheetFolders(feed) : feed);
         return true;
       }
       if (req.method === 'GET' && path === '/api/todos/venture-tags') {

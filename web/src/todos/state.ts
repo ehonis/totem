@@ -27,6 +27,7 @@ export function filterTodos(todos: readonly Todo[], query: TodoQuery = {}, now =
   return todos.filter(todo => {
     if (query.area && todo.area !== query.area) return false
     if (query.ventureTag && todo.ventureTag !== query.ventureTag) return false
+    if (query.folderId && (todo.folderId ?? 'none') !== query.folderId) return false
     if (query.priority && todo.priority !== query.priority) return false
     if (query.due && !matchesDue(todo, query.due, today)) return false
     if (query.source && todoSource(todo) !== query.source) return false

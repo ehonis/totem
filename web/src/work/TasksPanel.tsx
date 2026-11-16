@@ -6,21 +6,24 @@ import { ThreadItem } from '../chat/ThreadList'
 import { TI, useDismiss, usePopoverPlacement } from '../chat/ui'
 import {
   IconArrowsSort, IconChevronDown, IconChevronRight, IconCircle, IconCircleCheck, IconDots, IconEdit, IconExternalLink,
-  IconFolder, IconInbox, IconPlus, IconSearch, IconTable, IconX, IconCheck,
+  IconFolder, IconPlus, IconSearch, IconTable, IconX, IconCheck, IconUser, IconAdjustmentsHorizontal,
 } from '../chat/icons'
 import { useThreadTaskDrop } from '../chat/dnd'
 import { pushToast } from '../toast'
 import { parseQuickAdd } from '../todos/parse'
-import { buildWork, dueLabel, resolveFolders, type WorkGroup, type WorkGroupBy, type WorkRow, type WorkShow, type WorkSort } from './groups'
+import { buildWork, dueLabel, folderOf, type WorkGroup, type WorkGroupBy, type WorkRow, type WorkShow, type WorkSort } from './groups'
 import { FolderPicker } from './pickers'
 import { completeTask, createTask, findTask, setTaskFolder, taskHome, useWork } from './state'
+import { openTaskCard, useTaskCard } from './card'
+import { folderNames, PERSONAL } from '../todos/folders'
 import './work.css'
 
 // The chats panel's third face, beside Chats and Totems: the owner's open tasks
 // and the shared sheet's action items, grouped by the chat project or folder each
-// is filed under, each with the chats that work on it right below. A chat is one
-// click away from its task and the other way round, which is the point: action
-// items get worked on in chats, and this is where the two meet.
+// is filed under (the same folders the Tasks page shows; unfiled is Personal),
+// each with the chats that work on it right below. A click on a task opens its
+// card (TaskCard.tsx), where every setting is edited; the count beside it unfolds
+// its chats.
 
 const VIEW_KEY = 'totem.work.view'
 const FOLDED_KEY = 'totem.work.folded'
@@ -107,8 +110,8 @@ function QuickAdd({ projectId, placeholder = 'Add a task…', autoFocus = false,
     const raw = text.trim()
     if (!raw || saving) { if (!raw) onDone?.(); return }
     setSaving(true)
-    const parsed = parseQuickAdd(raw, { now: new Date(), kinds: ['due', 'priority'] })
-    const task = await createTask({ title: parsed.title || raw, dueDate: parsed.dueDate, priority: parsed.priority }, projectId)
+    const parsed = parseQuickAdd(raw, { now: new Date(), folders: folderNames(getState().projects) })
+    const task = await createTask({ title: parsed.title || raw, dueDate: parsed.dueDate, priority: parsed.priority }, parsed.folderId ?? projectId)
     setSaving(false)
     if (task) { setText(''); onDone?.() }
   }
@@ -125,7 +128,7 @@ function QuickAdd({ projectId, placeholder = 'Add a task…', autoFocus = false,
   )
 }
 
-function RowMenu({ row, anchor, onClose, onNewChat, onFile }: { row: WorkRow; anchor: React.RefObject<HTMLElement>; onClose: () => void; onNewChat: () => void; onFile: () => void }) {
+function RowMenu({ row, anchor, onClose, onNewChat, onFile, onEdit }: { row: WorkRow; anchor: React.RefObject<HTMLElement>; onClose: () => void; onNewChat: () => void; onFile: () => void; onEdit: () => void }) {
   const pop = useRef<HTMLDivElement>(null)
   useDismiss(true, [pop, anchor] as React.RefObject<HTMLElement>[], onClose)
   const placement = usePopoverPlacement(true, anchor, { width: 220, height: 220, gap: 2, align: 'end', narrow: 0, fit: true, minHeight: 120 })
@@ -133,8 +136,9 @@ function RowMenu({ row, anchor, onClose, onNewChat, onFile }: { row: WorkRow; an
   const { task } = row
   return createPortal(
     <div ref={pop} className="vc-menu wk-row-menu" style={placement.style} role="menu">
+      <button type="button" role="menuitem" onClick={() => { onClose(); onEdit() }}><TI icon={IconAdjustmentsHorizontal} size={16} /><span>{row.task.kind === 'local' ? 'Edit task…' : 'Details…'}</span></button>
       <button type="button" role="menuitem" onClick={() => { onClose(); onNewChat() }}><TI icon={IconEdit} size={16} /><span>New chat for this task</span></button>
-      <button type="button" role="menuitem" onClick={() => { onClose(); onFile() }}><TI icon={IconFolder} size={16} /><span>File in folder…</span></button>
+      <button type="button" role="menuitem" onClick={() => { onClose(); onFile() }}><TI icon={IconFolder} size={16} /><span>Move to folder…</span></button>
       {task.kind === 'local'
         ? <button type="button" role="menuitem" onClick={() => { onClose(); void completeTask(task.ref) }}><TI icon={IconCircleCheck} size={16} /><span>Mark done</span></button>
         : task.url && <button type="button" role="menuitem" onClick={() => { onClose(); window.open(task.url, '_blank', 'noopener') }}><TI icon={IconExternalLink} size={16} /><span>Open in the sheet</span></button>}
@@ -152,7 +156,11 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
   const moreRef = useRef<HTMLButtonElement>(null)
   // The folder picker hangs off the row: the "…" it came from hides once the menu closes.
   const rowRef = useRef<HTMLDivElement>(null)
-  const folder = useWork((s) => resolveFolders(s.folders, s.tasks)[task.ref] || null)
+  const projects = useChat((s) => s.projects)
+  const folder = folderOf(task, projects)?.id ?? null
+  const carded = useTaskCard() === task.ref
+  // A card opened from elsewhere (the composer's task strip) brings its row into view.
+  useEffect(() => { if (carded) rowRef.current?.scrollIntoView?.({ block: 'nearest' }) }, [carded])
   const draftFor = useChat((s) => (!s.activeId ? s.draftTaskId : null))
   const now = new Date()
   const due = dueLabel(task.dueDate, now)
@@ -168,7 +176,7 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
   const openChat = (id: string) => { setActive(id); onOpenChat() }
   return (
     <div className={`wk-task ${open ? 'open' : ''} ${drop.over ? 'drop-over' : ''}`} {...drop.props}>
-      <div ref={rowRef} className={`vc-thread wk-task-row ${holdsActive && !open ? 'active' : ''} ${draftFor === task.ref ? 'active' : ''} ${menu ? 'menu-open' : ''}`}>
+      <div ref={rowRef} className={`vc-thread wk-task-row ${holdsActive && !open ? 'active' : ''} ${draftFor === task.ref || carded ? 'active' : ''} ${menu ? 'menu-open' : ''}`}>
         {task.kind === 'local'
           ? (
             <button type="button" className={`wk-check prio-${task.priority}`} onClick={() => completeTask(task.ref)} aria-label={`Mark “${task.title}” done`} title="Mark done">
@@ -177,21 +185,25 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
             </button>
           )
           : <span className="wk-check sheet" title={task.status || 'On the shared sheet'}><TI icon={IconTable} size={15} /></span>}
-        <button type="button" className="vc-thread-main wk-task-main" onClick={chats.length ? onToggle : newChat} title={chats.length ? `${task.title}: ${open ? 'hide' : 'show'} its chats` : `${task.title}: start a chat for it`} aria-expanded={chats.length ? open : undefined}>
+        <button type="button" className="vc-thread-main wk-task-main" onClick={() => openTaskCard(task.ref)} title={`${task.title}: show its settings and chats`} aria-haspopup="dialog" aria-expanded={carded}>
           <span className="vc-thread-title">{task.title}</span>
           {live ? <span className="vc-live-dot" aria-label="A chat is answering" /> : waiting ? <span className="vc-reply-dot" aria-label="A chat is waiting on you" /> : null}
           {due && <span className={`wk-due ${due.tone}`}>{due.text}</span>}
-          {chats.length > 0 && !open && <span className="wk-count" aria-label={`${chats.length} chats`}>{chats.length}</span>}
         </button>
+        {chats.length > 0 && (
+          <button type="button" className="wk-count" onClick={onToggle} aria-expanded={open} aria-label={`${chats.length} chats: ${open ? 'hide' : 'show'} them`} title={open ? 'Hide its chats' : 'Show its chats'}>
+            <TI icon={open ? IconChevronDown : IconChevronRight} size={11} />{chats.length}
+          </button>
+        )}
         <div className="wk-task-acts">
           <button type="button" className="vc-thread-act wk-act-new" onClick={newChat} aria-label="New chat for this task" title="New chat for this task"><TI icon={IconPlus} size={15} /></button>
           <button ref={moreRef} type="button" className="vc-thread-act" onClick={() => setMenu((v) => !v)} aria-label="More" title="More"><TI icon={IconDots} size={15} /></button>
         </div>
       </div>
-      {menu && <RowMenu row={row} anchor={moreRef} onClose={() => setMenu(false)} onNewChat={newChat} onFile={() => setFiling(true)} />}
+      {menu && <RowMenu row={row} anchor={moreRef} onClose={() => setMenu(false)} onNewChat={newChat} onFile={() => setFiling(true)} onEdit={() => openTaskCard(task.ref)} />}
       {filing && <FolderPicker
         open anchor={rowRef} onClose={() => setFiling(false)}
-        value={folder} noneLabel="No folder" noneIcon="inbox" label={`File “${task.title}”`}
+        value={folder} noneLabel={PERSONAL} noneIcon="person" label={`File “${task.title}”`}
         onPick={(id) => { void setTaskFolder(task.ref, id) }}
       />}
       {open && chats.length > 0 && (
@@ -205,13 +217,13 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
 
 function GroupHead({ group, folded, onFold, count, nested }: { group: WorkGroup; folded: boolean; onFold: () => void; count: number; nested: boolean }) {
   const [adding, setAdding] = useState(false)
-  const name = group.project ? group.project.name : 'No folder'
+  const name = group.project ? group.project.name : PERSONAL
   return (
     <>
       <div className="wk-group-head">
         <button type="button" className="wk-group-fold" onClick={onFold} aria-expanded={!folded} title={group.parent ? `${group.parent.name} / ${name}` : name}>
           <TI icon={folded ? IconChevronRight : IconChevronDown} size={12} className="wk-group-chev" />
-          {group.project ? <ProjectIcon p={group.project} size={14} /> : <TI icon={IconInbox} size={14} className="vc-proj-icon" />}
+          {group.project ? <ProjectIcon p={group.project} size={14} /> : <TI icon={IconUser} size={14} className="vc-proj-icon" />}
           <span className="wk-group-name">{name}</span>
           {group.parent && !nested && <span className="wk-group-parent">{group.parent.name}</span>}
           <span className="wk-group-count">{count}</span>
@@ -227,7 +239,6 @@ function GroupHead({ group, folded, onFold, count, nested }: { group: WorkGroup;
 
 export default function TasksPanel({ onOpenChat }: { onOpenChat: () => void }) {
   const tasks = useWork((s) => s.tasks)
-  const folders = useWork((s) => s.folders)
   const loaded = useWork((s) => s.loaded)
   const error = useWork((s) => s.error)
   const sheetName = useWork((s) => s.sheetName)
@@ -243,8 +254,8 @@ export default function TasksPanel({ onOpenChat }: { onOpenChat: () => void }) {
 
   const shown = useMemo(() => (view.sheet ? tasks : tasks.filter((t) => t.kind !== 'sheet')), [tasks, view.sheet])
   const groups = useMemo(
-    () => buildWork(shown, threads, projects, folders, { sort: view.sort, groupBy: view.groupBy, show: view.show, query }),
-    [shown, threads, projects, folders, view, query],
+    () => buildWork(shown, threads, projects, { sort: view.sort, groupBy: view.groupBy, show: view.show, query }),
+    [shown, threads, projects, view, query],
   )
   // The open chat's task unfolds, so switching chats keeps you oriented.
   const activeStored = useChat((s) => s.threads.find((t) => t.id === s.activeId)?.taskId || null)
@@ -271,27 +282,30 @@ export default function TasksPanel({ onOpenChat }: { onOpenChat: () => void }) {
         <ViewMenu view={view} onView={setView} hasSheet={!!sheetName} sheetName={sheetName} />
       </div>
       <QuickAdd projectId={null} />
-      {!loaded && <div className="vc-nav-note">Reading your tasks…</div>}
-      {loaded && error && <div className="vc-nav-note wk-error">{error}</div>}
-      {loaded && !error && !total && (
-        <div className="vc-nav-note">{searching ? 'Nothing matches.' : view.show === 'linked' ? 'No task has a chat yet. Start one with + on a task.' : 'No open tasks. Add one above.'}</div>
-      )}
-      {groups.map((g, i) => {
-        const isFolded = !searching && view.groupBy === 'folder' && folded.has(g.key || '__none__')
-        // A folder straight after its project's group reads as inside it.
-        const nested = !!g.parent && groups[i - 1]?.key === g.parent.id
-        return (
-          <div key={g.key || '__none__'} className={`wk-group ${nested ? 'nested' : ''}`}>
-            {view.groupBy === 'folder' && <GroupHead group={g} folded={isFolded} onFold={() => fold(g.key || '__none__')} count={g.rows.length} nested={nested} />}
-            {!isFolded && g.rows.map((row) => (
-              <TaskRow
-                key={row.task.ref} row={row} runs={runs} activeId={activeId} onOpenChat={onOpenChat}
-                open={openRows.has(row.task.ref) || (searching && row.chats.length > 0)} onToggle={() => toggleRow(row.task.ref)}
-              />
-            ))}
-          </div>
-        )
-      })}
+      {/* Filter and quick-add stay pinned above the scroller. */}
+      <div className="vc-threads-list">
+        {!loaded && <div className="vc-nav-note">Reading your tasks…</div>}
+        {loaded && error && <div className="vc-nav-note wk-error">{error}</div>}
+        {loaded && !error && !total && (
+          <div className="vc-nav-note">{searching ? 'Nothing matches.' : view.show === 'linked' ? 'No task has a chat yet. Start one with + on a task.' : 'No open tasks. Add one above.'}</div>
+        )}
+        {groups.map((g, i) => {
+          const isFolded = !searching && view.groupBy === 'folder' && folded.has(g.key || '__none__')
+          // A folder straight after its project's group reads as inside it.
+          const nested = !!g.parent && groups[i - 1]?.key === g.parent.id
+          return (
+            <div key={g.key || '__none__'} className={`wk-group ${nested ? 'nested' : ''}`}>
+              {view.groupBy === 'folder' && <GroupHead group={g} folded={isFolded} onFold={() => fold(g.key || '__none__')} count={g.rows.length} nested={nested} />}
+              {!isFolded && g.rows.map((row) => (
+                <TaskRow
+                  key={row.task.ref} row={row} runs={runs} activeId={activeId} onOpenChat={onOpenChat}
+                  open={openRows.has(row.task.ref) || (searching && row.chats.length > 0)} onToggle={() => toggleRow(row.task.ref)}
+                />
+              ))}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

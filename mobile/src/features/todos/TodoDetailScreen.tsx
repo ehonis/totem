@@ -23,7 +23,7 @@ import { CHAT_ABOUT_ACTION, chatAbout } from '../../ui/chatAbout'
 import { pushError } from '../../lib/toast'
 import { todoContext } from '../../lib/chat/about/context'
 import {
-  Hi, BriefcaseIcon, CalendarDaysIcon, ClockIcon, EllipsisHorizontalIcon, FlagIcon, XMarkIcon,
+  Hi, CalendarDaysIcon, ClockIcon, EllipsisHorizontalIcon, FlagIcon, FolderIcon, UserIcon, XMarkIcon,
 } from '../../lib/icons'
 import {
   addTodoNote, getTodo, linkRelatedTodo, moveBoardTodo, setIssueLink, unlinkRelatedTodo, updateBoardTodo,
@@ -31,8 +31,10 @@ import {
 import {
   priorityLabel, priorityMarks, type IssueState, type Todo, type TodoOutcome, type TodoPatch, type TodoStatus,
 } from '../../lib/todos/types'
-import { useVentureTags } from '../../lib/todos/ventureTags'
 import { acceptTodo, findTodo, getBoard, loadBoard, loadIssueStates, loadSheet, removeTodo, useBoard } from './store'
+import { folderActions, folderFor, folderLabel, folderPicked } from './folders'
+import { useFolders } from './useFolders'
+import { ProjectIcon } from '../chat/ThreadIcon'
 import { afterDone, rollsOnCompletion } from './board'
 import { undoText } from './undo'
 import { dateKey, dueDateChoices, dueText, dueTone, snoozeTimes } from './format'
@@ -131,7 +133,7 @@ function TaskPage({ original, allTodos, issueStates, initialFocus }: {
   original: Todo; allTodos: Todo[]; issueStates: Record<string, IssueState>; initialFocus: 'details' | 'notes'
 }) {
   const insets = useSafeAreaInsets()
-  const ventureTags = useVentureTags()
+  const { projects } = useFolders()
   const [todo, setTodoState] = useState(original)
   const todoRef = useRef(original)
   const [title, setTitle] = useState(original.title)
@@ -176,10 +178,8 @@ function TaskPage({ original, allTodos, issueStates, initialFocus }: {
   const binned = Boolean(todo.deletedAt)
   // A binned or archived task is restored from its panel first; moving it here would skip that.
   const parked = binned || Boolean(todo.archivedAt)
-  const showVentures = ventureTags.length > 0 || todo.area === 'Ventures'
-  // A task may carry a tag that has since left the list; keep it selectable.
-  const ventureTagNames = [...ventureTags.map((tag) => tag.name), ...(todo.ventureTag && !ventureTags.some((tag) => tag.name === todo.ventureTag) ? [todo.ventureTag] : [])]
-  const ventureColor = todo.area === 'Ventures' ? ventureTags.find((tag) => tag.name === todo.ventureTag)?.color ?? null : null
+  // Unfiled, or filed in a project since deleted: Personal.
+  const filedIn = folderFor(todo.folderId, projects)
 
   /** Show a newer version of the task, here and on the board. */
   function accept(next: Todo, { keepDrafts = false } = {}) {
@@ -348,16 +348,7 @@ function TaskPage({ original, allTodos, issueStates, initialFocus }: {
       ],
     },
   ]
-  const areaActions: MenuAction[] = [
-    { id: 'area:Personal', title: 'Personal', state: todo.area === 'Personal' ? 'on' : 'off' },
-    ...(showVentures ? [{
-      id: 'area-ventures', title: 'Ventures', subtitle: todo.area === 'Ventures' ? todo.ventureTag ?? undefined : undefined,
-      state: todo.area === 'Ventures' ? 'on' as const : 'off' as const,
-      subactions: ventureTagNames.length
-        ? ventureTagNames.map((name): MenuAction => ({ id: `venture:${name}`, title: name, state: todo.area === 'Ventures' && todo.ventureTag === name ? 'on' : 'off' }))
-        : [{ id: 'venture-none', title: 'Add venture tags in Settings → Tasks', attributes: { disabled: true } }],
-    }] : []),
-  ]
+  const folderMenu: MenuAction[] = folderActions(projects, todo.folderId)
   const moreActions: MenuAction[] = [
     CHAT_ABOUT_ACTION,
     ...(!done && !parked ? [{ id: 'notdoing', title: 'Not doing this', image: 'nosign' }] : []),
@@ -397,13 +388,13 @@ function TaskPage({ original, allTodos, issueStates, initialFocus }: {
       if (option) void snooze(option.value.toISOString())
       return
     }
-    if (id === 'area:Personal') return void patch({ area: 'Personal', ventureTag: null })
-    if (id.startsWith('venture:')) return void patch({ area: 'Ventures', ventureTag: id.slice(8) })
+    const folder = folderPicked(id)
+    if (folder !== undefined && folder !== (filedIn?.id ?? null)) return void patch({ folderId: folder }, 'fields', 'The task could not be moved to that folder.')
   }
 
   async function onMore(id: string) {
     tap()
-    if (id === CHAT_ABOUT_ACTION.id) return chatAbout(() => todoContext(todoRef.current))
+    if (id === CHAT_ABOUT_ACTION.id) return chatAbout(() => todoContext({ ...todoRef.current, folder: folderLabel(todoRef.current.folderId, projects) }))
     if (id === 'notdoing') return void setNotDoing()
     if (id === 'delete') {
       const ok = await confirm('Move to the recycle bin?', { message: todoRef.current.title, confirmLabel: 'Move to recycle bin' })
@@ -498,9 +489,10 @@ function TaskPage({ original, allTodos, issueStates, initialFocus }: {
             <PropertyRow icon={ClockIcon} label="Snooze" value={snoozedUntil ? `Until ${whenLabel(snoozedUntil)}` : 'Not snoozed'}
               valueColor={snoozedUntil ? tone.amber.color : undefined} actions={snoozeActions} onAction={onRow} menuTitle="Snooze until" />
           ) : null}
-          <PropertyRow icon={BriefcaseIcon} label="Area" value={todo.area === 'Ventures' ? todo.ventureTag || 'Ventures' : 'Personal'}
-            swatch={ventureColor} valueColor={todo.area === 'Ventures' ? ventureColor || colors.text : colors.text}
-            actions={areaActions} onAction={onRow} menuTitle="Area" />
+          <PropertyRow icon={FolderIcon} label="Folder" value={folderLabel(filedIn?.id, projects)}
+            adornment={filedIn ? <ProjectIcon p={filedIn} size={15} /> : <Hi icon={UserIcon} size={14} color={colors.muted} />}
+            valueColor={filedIn ? colors.text : undefined}
+            actions={folderMenu} onAction={onRow} menuTitle="File under" />
         </PropertyGroup>
         {feedback('fields', 'status')}
 

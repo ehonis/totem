@@ -1,5 +1,6 @@
+// Retired: tasks are organised by folder (`folderId`) now. The bridge still sends
+// both, for older clients; nothing here draws them.
 export type TodoArea = 'Personal' | 'Ventures'
-// Configured per install (Settings -> Tasks); any non-empty name.
 export type VentureTag = string
 export interface VentureTagConfig { name: string; color: string | null }
 // A task is open or done. The bridge still accepts 'doing' on input for old clients
@@ -77,6 +78,8 @@ export interface Todo {
   description: string
   area: TodoArea
   ventureTag: VentureTag | null
+  /** The chat project or folder the task is filed under; null is unfiled, shown as "Personal". */
+  folderId?: string | null
   status: TodoStatus
   priority: 1 | 2 | 3 | 4
   dueDate: string | null
@@ -106,6 +109,8 @@ export interface TodoQuery {
   outcome?: TodoOutcome | ''
   area?: TodoArea | ''
   ventureTag?: VentureTag | ''
+  /** A folder id, or "none" for unfiled tasks. */
+  folderId?: string
   priority?: Todo['priority'] | null
   due?: TodoDueFilter | ''
   source?: TodoSource | ''
@@ -119,7 +124,7 @@ export interface TodoQuery {
 export type TodoPatch = Partial<Pick<Todo,
   'title' | 'description' | 'area' | 'ventureTag' | 'priority' | 'dueDate' |
   'recurrence' | 'snoozedUntil' | 'position'
->> & { tags?: string[] }
+>> & { tags?: string[]; folderId?: string | null }
 
 export interface TodoConflict {
   id?: string
@@ -164,6 +169,10 @@ export interface SheetItem {
   notes: string
   /** The row in the sheet ("…#gid=<gid>&range=B<row>"). */
   url: string
+  /** The chat project or folder the row is filed under: its own filing, else the sheet's default. */
+  folderId?: string | null
+  /** Set when `folderId` is the sheet's default rather than a filing of this row. */
+  folderDefault?: boolean
 }
 
 /** GET /api/todos/sheet. A failed read keeps the last good items, `stale: true`, with a scrubbed `error`. */
@@ -178,6 +187,8 @@ export type SheetFeed =
     stale: boolean
     error: string | null
     items: SheetItem[]
+    /** Where rows land until filed (Settings -> Tasks › Task sheet), or null. */
+    defaultFolderId?: string | null
   }
   | {
     configured: false

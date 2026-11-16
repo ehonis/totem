@@ -22,6 +22,7 @@ Code: `todos/connectors/task-sheet-feed.mjs`. Route: `GET /api/todos/sheet` (in 
 | `TASK_SHEET_TAB` | The tab to read. Default `Action Items`; matched exactly, then case-insensitively. |
 | `TASK_SHEET_TITLE` | What Totem calls the sheet. Default: the spreadsheet's own title. |
 | `TASK_SHEET_ACCOUNT` | Which Drive account reads it (its label or address). Needed only when more than one Drive account is connected. |
+| `TASK_SHEET_FOLDER` | The chat project or folder the rows are filed under until you file one yourself ("File rows in", a picker). Empty is Automatic: the top-level project whose name the sheet's name starts with ("Gizmo Labs" for "Gizmo Labs HQ"), if any. `none` leaves them Personal. |
 
 They can also be set in `.env`; a value there wins and shows read-only in Settings. They are read
 on every fetch, so no restart is needed. The Status row under them says whether the feed is set

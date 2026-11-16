@@ -1,9 +1,11 @@
 // The bar above the list (web/src/todos/TodoToolbar.tsx) at its phone size: search,
-// then Filter and "…" as 44pt icon buttons. The web's popovers are native menus, each
-// filter a submenu with its options checked, and what is on still shows as chips.
-// There is no sort: the list's order is the shared one (due day, priority, tasks
-// before sheet rows, then the order you put them in). "Show" narrows to an area or to
-// the task sheet alone. The "…" holds Select (bulk actions) and the lifecycle panels
+// then Filter and "…" as 44pt icon buttons, and under them the scope chips (the web's
+// tk-scopes): All, Personal, one per chat project with something open in it (its
+// folders' tasks and sheet rows count), and the task sheet alone once it is set up
+// (folders.ts scopeChips). The web's popovers are native menus, each filter a submenu
+// with its options checked, and what is on still shows as chips. There is no sort: the
+// list's order is the shared one (due day, priority, tasks before sheet rows, then the
+// order you put them in). The "…" holds Select (bulk actions) and the lifecycle panels
 // (snoozed, archive, recycle bin, retention), each with its count.
 import React from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
@@ -13,51 +15,30 @@ import { T } from '../../ui/Text'
 import { Input, Press } from '../../ui/kit'
 import { confirm, prompt, showMenu } from '../../ui/menu'
 import { tap } from '../../ui/haptics'
-import { Hi, AdjustmentsHorizontalIcon, EllipsisHorizontalIcon, MagnifyingGlassIcon, XMarkIcon } from '../../lib/icons'
-import { useVentureTags } from '../../lib/todos/ventureTags'
+import IconTable from '@tabler/icons-react-native/dist/esm/icons/IconTable.mjs'
+import { Hi, AdjustmentsHorizontalIcon, EllipsisHorizontalIcon, MagnifyingGlassIcon, UserIcon, XMarkIcon } from '../../lib/icons'
+import type { Project } from '../../lib/chat/types'
+import { ProjectIcon } from '../chat/ThreadIcon'
+import type { ScopeChip, TaskScope } from './folders'
 import type { ListQuery } from './list'
 
 export type LifecyclePanel = 'snoozed' | 'deleted' | 'archive' | 'retention'
 
-type FilterKey = 'scope' | 'ventureTag' | 'priority' | 'due'
+type FilterKey = 'priority' | 'due'
 type FilterOption = { value: string; label: string; note?: string; disabled?: boolean }
 type Filter = { key: FilterKey; label: string; all: string; options: readonly FilterOption[] }
 
 // One description of each filter, shared by the menu and the chips, so a filter
 // can never read one way when you set it and another way once it is on.
-const BASE_FILTERS: readonly Filter[] = [
-  // Filled with the areas and the task sheet; see filtersFor().
-  { key: 'scope', label: 'Show', all: 'Everything', options: [] },
-  // Filled from the install's venture tags; see filtersFor().
-  { key: 'ventureTag', label: 'Venture', all: 'All ventures', options: [] },
+const FILTERS: readonly Filter[] = [
   { key: 'priority', label: 'Priority', all: 'All priorities', options: [{ value: '4', label: 'P1' }, { value: '3', label: 'P2' }, { value: '2', label: 'P3' }, { value: '1', label: 'P4' }] },
   { key: 'due', label: 'Due', all: 'Any due date', options: [{ value: 'overdue', label: 'Overdue' }, { value: 'today', label: 'Today' }, { value: 'upcoming', label: 'Upcoming' }, { value: 'none', label: 'No date' }] },
 ]
 
-/**
- * The venture filter lists the configured tags, and disappears (along with the
- * Ventures option) when there are none. Show offers the task sheet by its own name;
- * one that is not set up is listed greyed, saying so.
- */
-function filtersFor(tags: { name: string }[], sheet: { name: string; configured: boolean | null }): Filter[] {
-  const scope: FilterOption[] = [
-    { value: 'Personal', label: 'Personal tasks' },
-    ...(tags.length ? [{ value: 'Ventures', label: 'Ventures tasks' }] : []),
-    sheet.configured === false
-      ? { value: 'sheet', label: sheet.name, note: 'Not set up · Settings → Tasks', disabled: true }
-      : { value: 'sheet', label: sheet.name },
-  ]
-  return BASE_FILTERS
-    .filter((filter) => filter.key !== 'ventureTag' || tags.length > 0)
-    .map((filter) => filter.key === 'scope' ? { ...filter, options: scope }
-      : filter.key === 'ventureTag' ? { ...filter, options: tags.map((tag) => ({ value: tag.name, label: tag.name })) }
-        : filter)
-}
-
 interface Props {
   query: ListQuery
-  /** The task sheet, by the feed's name; `configured` is null until it has been read. */
-  sheet: { name: string; configured: boolean | null }
+  /** The scope chips, the picked one by `query.scope`. */
+  scopes: ScopeChip<Project>[]
   bulkMode: boolean
   selectedCount: number
   /** Counts for the "…" menu's lifecycle rows. */
@@ -68,8 +49,8 @@ interface Props {
   onLifecycle: (panel: LifecyclePanel) => void
 }
 
-export default function TodoToolbar({ query, sheet, bulkMode, selectedCount, lifecycle, onQuery, onBulkMode, onBulk, onLifecycle }: Props) {
-  const FILTERS = filtersFor(useVentureTags(), sheet)
+export default function TodoToolbar({ query, scopes, bulkMode, selectedCount, lifecycle, onQuery, onBulkMode, onBulk, onLifecycle }: Props) {
+  const scope: TaskScope = query.scope || ''
 
   // Priority is the one filter the query holds as a number; everything else is the
   // option value as typed, so the menu and the chips can treat all four as strings.
@@ -165,6 +146,27 @@ export default function TodoToolbar({ query, sheet, bulkMode, selectedCount, lif
         </MenuView>
       </View>
 
+      {scopes.length > 2 || scope ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.scopes} accessibilityRole="radiogroup" accessibilityLabel="Show">
+          {scopes.map((chip) => {
+            const on = scope === chip.id
+            const tint = on ? colors.text : colors.muted
+            return (
+              <Press haptic key={chip.id || 'all'} style={[st.scope, on && st.scopeOn]} hitSlop={{ top: 6, bottom: 6 }}
+                onPress={() => onQuery({ ...query, scope: chip.id })}
+                accessibilityRole="radio" accessibilityState={{ checked: on }}
+                accessibilityLabel={`${chip.label}${chip.count ? `, ${chip.count.toLocaleString()} open` : ''}`}>
+                {chip.project ? <ProjectIcon p={chip.project} size={14} color={tint} />
+                  : chip.id === 'personal' ? <Hi icon={UserIcon} size={13} color={tint} />
+                    : chip.id === 'sheet' ? <IconTable size={13} color={tint} strokeWidth={2} /> : null}
+                <T size={13} weight={on ? 600 : 400} color={tint} numberOfLines={1} style={{ maxWidth: 160 }}>{chip.label}</T>
+                {chip.count > 0 ? <T size={12} muted>{chip.count.toLocaleString()}</T> : null}
+              </Press>
+            )
+          })}
+        </ScrollView>
+      ) : null}
+
       {active.length > 0 ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, alignItems: 'center', minHeight: 44 }}>
           {active.map((filter) => (
@@ -220,6 +222,12 @@ const st = StyleSheet.create({
     position: 'absolute', top: -3, right: -3, minWidth: 17, height: 17, paddingHorizontal: 4, borderRadius: 999,
     alignItems: 'center', justifyContent: 'center', backgroundColor: '#4d77d9',
   },
+  scopes: { gap: 6, alignItems: 'center', minHeight: 40 },
+  scope: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 32, paddingHorizontal: 11,
+    borderWidth: 1, borderColor: colors.line, borderRadius: 999, backgroundColor: colors.bg2,
+  },
+  scopeOn: { borderColor: alpha(colors.accent, 0.55), backgroundColor: alpha(colors.accent, 0.14) },
   chip: {
     flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 30, paddingHorizontal: 8,
     borderWidth: 1, borderColor: alpha(colors.accent, 0.45), borderRadius: 999, backgroundColor: alpha(colors.accent, 0.12),

@@ -9,6 +9,7 @@
 import { useSyncExternalStore } from 'react'
 import { getThreadSummaries, getThreadPage, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, ApiError, api, authHeaders } from '../api'
 import { pushError, pushToast } from '../toast'
+import { announceTasks } from '../todos/bus'
 import { applyEvent } from './reduce'
 import {
   sendChat, attachRun, stopChat, steerChat, decideApproval, changeQueue, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi, projectFaviconApi,
@@ -1208,6 +1209,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
       break
     case 'end': {
       setRun(threadId, null)
+      // The agent may have made, filed or finished a task: the task views read again.
+      announceTasks('chat')
       // The bridge's copy is the settled one (counts, ids); a window that arrived mid-run was put off until now.
       loadLatest(threadId, { fresh: true })
       // The bridge starts the next queued message itself: pick its run up.

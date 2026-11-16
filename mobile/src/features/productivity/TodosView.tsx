@@ -1,6 +1,8 @@
 // Productivity → Tasks (web/src/components/TodosView.tsx + todos/TodoBoard.tsx), led
 // by the phone rather than copied from the web's phone width (#176): one list that
-// answers "what now?". A task is open or done. Open tasks and the shared task sheet's
+// answers "what now?". A task is open or done, and filed under one of the chat
+// projects or their folders, or Personal (features/todos/folders.ts): the scope chips
+// pick one, and each row says which. Open tasks and the shared task sheet's
 // rows sit in one set of groups (Overdue, Today, Upcoming, No date), in the shared
 // order (lib/todos/board.ts buildList: due day, priority, tasks before sheet rows,
 // then manual position), and Completed is one folded row (features/todos/list.ts). A
@@ -22,17 +24,19 @@ import { Hi, PlusIcon } from '../../lib/icons'
 import { bulkBoardTodos } from '../../lib/api'
 import { filterTodos } from '../../lib/todos/state'
 import type { Todo } from '../../lib/todos/types'
-import { loadVentureTags } from '../../lib/todos/ventureTags'
+import { loadProjects } from '../../lib/chat/store'
 import { FAB_CLEARANCE } from '../../shell/Screen'
 import TodoCard from '../todos/TodoCard'
 import SheetCard from '../todos/SheetCard'
 import TodoToolbar, { type LifecyclePanel } from '../todos/TodoToolbar'
 import { boardActions } from '../todos/boardActions'
-import { afterDone, byWake, doneToday, nextWake, wakeLabel } from '../todos/board'
+import { afterDone, buildList, byWake, doneToday, nextWake, wakeLabel } from '../todos/board'
 import {
-  isFiltering, issueKey, issueLinkOf, leftToday, listRows, nextDue, orderNeighbours, sheetName, sheetNote, sheetOnlyEmpty, taskQuery, visibleSheet,
+  isFiltering, issueKey, issueLinkOf, leftToday, listRows, nextDue, orderNeighbours, scopedTodos, sheetName, sheetNote, sheetOnlyEmpty, taskQuery, visibleSheet,
   type ListQuery, type Row,
 } from '../todos/list'
+import { folderFor, liveScope, rowFolder, scopeChips, scopeFolder, type TaskScope } from '../todos/folders'
+import { useFolders } from '../todos/useFolders'
 import { quote, undoText, type UndoKind } from '../todos/undo'
 import { ArchiveLink, BoardSkeleton, ClearNote, EmptyBoard, LoadError, SectionHeader, SheetLine, ShowMore, StatusLine } from '../todos/BoardParts'
 import { UndoLine, type UndoState } from '../todos/detail/bits'
@@ -50,14 +54,15 @@ const LIST_FOOT = FAB_CLEARANCE + 48
 // How long a just-added task wears its accent edge.
 const FRESH_MS = 1800
 
-// Whether Completed is open: this phone's choice, kept across launches.
+// Whether Completed is open, and which scope chip is picked: this phone's choice, kept across launches.
 const VIEW_KEY = 'totem.todos.boardView'
-interface BoardView { completedOpen: boolean }
+interface BoardView { completedOpen: boolean; scope: TaskScope }
 function readView(): BoardView {
   try {
-    const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null') as Partial<BoardView> | null
-    return { completedOpen: saved?.completedOpen === true }
-  } catch { return { completedOpen: false } }
+    const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null') as (Omit<Partial<BoardView>, 'scope'> & { scope?: unknown }) | null
+    const scope = typeof saved?.scope === 'string' && (saved.scope === 'personal' || saved.scope === 'sheet' || saved.scope.startsWith('folder:')) ? saved.scope as TaskScope : ''
+    return { completedOpen: saved?.completedOpen === true, scope }
+  } catch { return { completedOpen: false, scope: '' } }
 }
 function writeView(view: BoardView) {
   try { localStorage.setItem(VIEW_KEY, JSON.stringify(view)) } catch { /* a convenience; the list works without it */ }
@@ -67,8 +72,14 @@ export default function TodosView({ active }: { active: boolean }) {
   const board = useBoard()
   const insets = useSafeAreaInsets()
   const reduced = useReducedMotion()
-  const [query, setQuery] = useState<ListQuery>({})
   const [view, setView] = useState<BoardView>(readView)
+  const [query, setQueryState] = useState<ListQuery>(() => ({ scope: view.scope }))
+  // The scope is the one part of the query this phone keeps.
+  const setQuery = useCallback((next: ListQuery) => {
+    setQueryState(next)
+    setView((current) => (current.scope === (next.scope || '') ? current : { ...current, scope: next.scope || '' }))
+  }, [])
+  const { projects } = useFolders()
   const [bulkMode, setBulkMode] = useState(false)
   const [selection, setSelection] = useState(new Set<string>())
   const [showAllDone, setShowAllDone] = useState(false)
@@ -88,7 +99,7 @@ export default function TodosView({ active }: { active: boolean }) {
   // Load the first time the page is shown, and again whenever it comes back into view.
   useEffect(() => {
     if (active && !wasActive.current) {
-      void loadBoard(); void loadSheet(); void loadVentureTags().catch(() => {}); setNow(new Date())
+      void loadBoard(); void loadSheet(); void loadProjects(); setNow(new Date())
     }
     wasActive.current = active
   }, [active])
@@ -110,12 +121,24 @@ export default function TodosView({ active }: { active: boolean }) {
   const sheet = board.sheet
   const sheetItems = useMemo(() => sheet?.items ?? [], [sheet])
   const source = sheetName(sheet)
-  const filtering = isFiltering(query)
+  // A saved scope whose chip is gone (its project deleted, the sheet no longer set up) shows everything.
+  const scope: TaskScope = query.scope === 'sheet' && sheet && !sheet.configured ? '' : liveScope(query.scope || '', projects, projects.length > 0)
+  const shown = useMemo<ListQuery>(() => ({ ...query, scope }), [query, scope])
+  const filtering = isFiltering(shown)
   const visible = useMemo(() => {
-    const tasks = taskQuery(query)
-    return tasks ? filterTodos(board.todos, tasks, now) : []
-  }, [board.todos, query, now])
-  const visibleRows = useMemo(() => visibleSheet(sheetItems, query, now), [sheetItems, query, now])
+    const tasks = taskQuery(shown)
+    return tasks ? scopedTodos(filterTodos(board.todos, tasks, now), shown, projects) : []
+  }, [board.todos, shown, now, projects])
+  const visibleRows = useMemo(() => visibleSheet(sheetItems, shown, now, projects), [sheetItems, shown, now, projects])
+  // The chips count what is open, whatever else is filtered.
+  const scopes = useMemo(() => {
+    const open = buildList(board.todos, sheetItems, { now }).sections.flatMap((section) => section.items)
+    return scopeChips(open, projects, scope, sheet?.configured ? { name: source, count: sheetItems.length } : null)
+  }, [board.todos, sheetItems, now, projects, scope, sheet, source])
+  const folderOf = useCallback((folderId: string | null | undefined) => {
+    const label = rowFolder(folderId, projects, scope)
+    return label === null ? null : { label, project: folderFor(folderId, projects) }
+  }, [projects, scope])
   const rows = useMemo(() => listRows(visible, visibleRows, {
     now, completedOpen: view.completedOpen, showAllDone, archiveCount: board.archiveCount, filtered: filtering,
   }), [visible, visibleRows, now, view.completedOpen, showAllDone, board.archiveCount, filtering])
@@ -260,7 +283,11 @@ export default function TodosView({ active }: { active: boolean }) {
     if (row.kind === 'clear') return <ClearNote scope={row.scope} doneToday={finishedToday} next={row.scope === 'all' ? upcoming : nextUp} />
     if (row.kind === 'more') return <ShowMore count={row.count} onPress={() => setShowAllDone(true)} />
     if (row.kind === 'archive') return <ArchiveLink count={row.count} onPress={() => openPanel('archive')} />
-    if (row.kind === 'sheet') return <SheetCard item={row.item} source={source} now={now} dueSection={row.section} dim={bulkMode} />
+    if (row.kind === 'sheet') {
+      // A sheet row names its folder only when filed in a project: Personal on every row would be noise beside the sheet's name.
+      const folder = folderOf(row.item.folderId)
+      return <SheetCard item={row.item} source={source} now={now} dueSection={row.section} dim={bulkMode} folder={folder?.project ? { label: folder.label, project: folder.project } : null} />
+    }
     const todo = row.todo
     const pair = row.section !== 'done' ? near.get(todo.id) : undefined
     const up = pair?.up ?? null
@@ -285,6 +312,7 @@ export default function TodosView({ active }: { active: boolean }) {
           dueSection={row.section === 'overdue' || row.section === 'today' ? row.section : undefined}
           issue={link ? board.issueStates[issueKey(link)] ?? null : null}
           fresh={freshId === todo.id}
+          folder={folderOf(todo.folderId)}
           selected={bulkMode ? selection.has(todo.id) : undefined}
           onSelect={bulkMode ? select : undefined}
         />
@@ -307,7 +335,7 @@ export default function TodosView({ active }: { active: boolean }) {
         itemLayoutAnimation={reduced ? undefined : LinearTransition.duration(220)}
         onScrollToIndexFailed={() => { scrollFailed.current = true; list.current?.scrollToEnd({ animated: !reduced }) }}
         keyExtractor={(row) => row.key}
-        extraData={{ selection, freshId, landed, issues: board.issueStates, source }}
+        extraData={{ selection, freshId, landed, issues: board.issueStates, source, folderOf }}
         contentContainerStyle={[st.list, { paddingBottom: LIST_FOOT + insets.bottom }]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
@@ -325,7 +353,7 @@ export default function TodosView({ active }: { active: boolean }) {
             kind={todos.length || sheetItems.length || filtering ? 'filtered' : 'nothing'}
             snoozedNote={filtering ? null : snoozedNote}
             onClear={clearFilters}
-            sheetOnly={query.scope === 'sheet' ? sheetOnlyEmpty(source, sheet?.configured ?? null, board.sheetError) : undefined}
+            sheetOnly={scope === 'sheet' ? sheetOnlyEmpty(source, sheet?.configured ?? null, board.sheetError) : undefined}
           />
         )}
         renderItem={renderRow}
@@ -336,7 +364,7 @@ export default function TodosView({ active }: { active: boolean }) {
   return (
     <View style={st.view}>
       <TodoToolbar
-        query={query} sheet={{ name: source, configured: sheet ? sheet.configured : null }} bulkMode={bulkMode} selectedCount={selection.size}
+        query={shown} scopes={scopes} bulkMode={bulkMode} selectedCount={selection.size}
         lifecycle={{ snoozed: board.snoozed.length, nextWake: wakeText, deleted: board.deleted.length, archived: board.archiveCount }}
         onQuery={setQuery}
         onBulkMode={(value) => { setBulkMode(value); if (!value) setSelection(new Set()) }}
@@ -363,7 +391,8 @@ export default function TodosView({ active }: { active: boolean }) {
       {/* New task sits beside the chat buttons, where a thumb already is (.todo-new-task). */}
       <Press
         accessibilityLabel="New task"
-        onPress={() => { impact(); router.push('/todo/new') }}
+        // Added while a project's chip is picked, a task is filed there (the composer's #folder still wins).
+        onPress={() => { impact(); const folder = scopeFolder(scope); router.push(folder ? { pathname: '/todo/new', params: { folder } } : '/todo/new') }}
         style={[st.newTask, { bottom: fabBottom }]}
       >
         <Hi icon={PlusIcon} size={20} color={colors.white} />

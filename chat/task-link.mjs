@@ -34,16 +34,16 @@ const SHEET_PRIORITY = { 1: 'high priority', 2: 'medium priority', 3: 'low prior
 
 /**
  * The prompt block for a linked task, or '' when there is none to describe.
- * `task` is a task service record; `sheetItem` a row of the shared sheet feed.
+ * `task` is a task service record (`folder`: its folder's path, if filed); `sheetItem` a row of the shared sheet feed.
  */
-export function linkedTaskBlock({ task = null, sheetItem = null } = {}) {
+export function linkedTaskBlock({ task = null, sheetItem = null, folder = null } = {}) {
   if (task) {
     const facts = [
       `id ${task.id}`,
       task.status === 'done' ? `already ${task.outcome === 'not_doing' ? 'closed as not doing' : 'done'}` : 'open',
       task.dueDate ? `due ${String(task.dueDate).slice(0, 10)}` : '',
       PRIORITY[task.priority] || '',
-      task.area === 'Ventures' && task.ventureTag ? `Ventures · ${clip(task.ventureTag, 40)}` : '',
+      folder ? `in ${clip(folder, 80)}` : '',
     ].filter(Boolean)
     const lines = [
       `LINKED TASK. The owner linked this chat to their task "${clip(task.title, 160)}" (${facts.join(', ')}). The work here is toward it.`,

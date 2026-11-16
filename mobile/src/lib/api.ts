@@ -497,6 +497,12 @@ export const purgeDeletedTodos = (olderThan: string) => sendJSON('/api/todos/pur
 /** Cached on the server for two minutes; `refresh` reads the sheet again (at most once per 10 s). */
 export const getSheetFeed = ({ refresh = false }: { refresh?: boolean } = {}) =>
   getJSON<SheetFeed>(`/api/todos/sheet${refresh ? '?refresh=1' : ''}`)
+/**
+ * File a sheet row under a chat project or folder. Null files it nowhere ("Personal"),
+ * even when the sheet has a default folder. A local task's folder is `folderId` on it.
+ */
+export const fileSheetRow = (id: string, folderId: string | null) =>
+  sendJSON(`/api/chat/task-folders/${encodeURIComponent(id)}`, 'PUT', { projectId: folderId }) as Promise<{ folders: Record<string, string> }>
 /** Set a task's GitHub issue link (https://github.com/<owner>/<repo>/issues/<n>), or clear it with null. */
 export const setIssueLink = (id: string, url: string | null) =>
   sendJSON(`/api/todos/${encodeURIComponent(id)}/issue-link`, 'PUT', { url }) as Promise<{ todo: Todo }>
@@ -813,7 +819,3 @@ export const getIntegrations = () => api<IntegrationsPayload>('/api/integrations
 export const saveIntegrations = (values: Record<string, string | null>) =>
   api<IntegrationsPayload>('/api/integrations', { method: 'PUT', body: JSON.stringify({ values }) })
 
-// ---- Venture tags (Settings -> Tasks) -----------------------------------------
-export const getVentureTags = () => api<{ ventureTags: { name: string; color: string | null }[] }>('/api/todos/venture-tags')
-export const saveVentureTagList = (ventureTags: { name: string; color: string | null; previousName?: string }[]) =>
-  api<{ ventureTags: { name: string; color: string | null }[] }>('/api/todos/venture-tags', { method: 'PUT', body: JSON.stringify({ ventureTags }) })

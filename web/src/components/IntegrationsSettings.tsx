@@ -117,15 +117,18 @@ export function IntegrationFieldRow({ id, field, description, placeholder, savin
 
 /**
  * One integration (the task sheet, CLIProxy) as a section of rows. `children` are
- * extra rows after the fields; as a function they get the integration as shown.
+ * extra rows after the fields; as a function they get the integration as shown and
+ * its save, for a field drawn with its own control (named in `custom`, so it is not
+ * drawn as a text box too).
  */
-export function IntegrationSection({ id, which, title, description, onAuthError, children }: {
+export function IntegrationSection({ id, which, title, description, onAuthError, custom = [], children }: {
   id?: string
   which: IntegrationInfo['id']
   title: string
   description?: React.ReactNode
   onAuthError: () => void
-  children?: React.ReactNode | ((info: IntegrationInfo) => React.ReactNode)
+  custom?: string[]
+  children?: React.ReactNode | ((info: IntegrationInfo, edit: { save: (patch: Record<string, string | null>) => Promise<boolean>; saving: boolean }) => React.ReactNode)
 }) {
   const { data, error, saving, save } = useIntegrations(onAuthError)
   const info = data?.integrations.find((i) => i.id === which)
@@ -138,10 +141,10 @@ export function IntegrationSection({ id, which, title, description, onAuthError,
       description={description}
       action={<span className={`pill ${info.configured ? 'pill-ok' : ''}`}>{info.configured ? 'Connected' : 'Not connected'}</span>}
     >
-      {info.fields.map((f) => (
+      {info.fields.filter((f) => !custom.includes(f.name)).map((f) => (
         <IntegrationFieldRow key={f.name} id={`${which}-${f.name.toLowerCase()}`} field={f} saving={saving} onSave={(v) => save({ [f.name]: v })} />
       ))}
-      {typeof children === 'function' ? children(info) : children}
+      {typeof children === 'function' ? children(info, { save, saving }) : children}
       {(info.blurb || info.docs) && (
         <p className="muted">
           {info.blurb}

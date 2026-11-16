@@ -87,6 +87,7 @@ import { fetchFavicon } from './chat/favicon.mjs'
 import { createConnectionIconStore, validConnectionId } from './connections/icons.mjs'
 import { createProjectStore, moveMemoryEntries, validProjectId } from './chat/projects.mjs'
 import { createTaskFolderStore } from './chat/task-folders.mjs'
+import { fileSheetItems as fileSheetFolders, folderAdoption, folderPath, resolveFolder, SHEET_UNFILED } from './todos/folders.mjs'
 import { linkedTaskBlock, findSheetItem } from './chat/task-link.mjs'
 import { createChatRuns } from './chat/runs.mjs'
 import { QUEUE_LIMIT, moveQueued, queueAfterRun } from './chat/queue.mjs'
@@ -403,6 +404,10 @@ const INTEGRATION_KEYS = [
   { name: 'TASK_SHEET_ASSIGNEES', label: 'Your names in the Who column (comma-separated)', secret: false, group: 'sheet' },
   { name: 'TASK_SHEET_TITLE', label: 'Display name (optional)', secret: false, group: 'sheet' },
   { name: 'TASK_SHEET_ACCOUNT', label: 'Google Drive account (optional)', secret: false, group: 'sheet' },
+  // The chat project or folder a row is filed under until the owner files it
+  // himself: empty picks the project the sheet's name starts with, "none" leaves
+  // rows unfiled (fileSheetItems).
+  { name: 'TASK_SHEET_FOLDER', label: 'File rows in', secret: false, group: 'sheet' },
   // CLIProxyAPI, holding the Claude and Codex logins the agent CLIs spend
   // (docs/cliproxy.md). Read on every call, so no restart. Give Totem a scoped
   // management key, not the proxy's root key.
@@ -715,7 +720,7 @@ const GATEWAY_RULES =
   'APP TOOLS: Totem tasks plus real-world integrations (Google Calendar, Plaud, and any other ' +
   'connected app) are all available through the Totem MCP gateway. Their tools are namespaced ' +
   'as "<app>__<tool>" — e.g. tasks__create_task, tasks__get_tasks, and google-calendar__list-events. ' +
-  'Use tasks__* for Personal and Ventures commitments. A task always stays private/local: nothing shares one out (tasks no longer create GitHub issues or sync to a sheet). The shared task sheet is read-only: Totem shows its rows and never writes to it. When a request touches one of these apps, call the matching gateway ' +
+  'Use tasks__* for commitments, filed under the owner\'s chat projects or folders (pass folder; unfiled is Personal). A task always stays private/local: nothing shares one out (tasks no longer create GitHub issues or sync to a sheet). The shared task sheet is read-only: Totem shows its rows and never writes to it. When a request touches one of these apps, call the matching gateway ' +
   'tool directly rather than assuming the capability is missing. The gateway also exposes Totem\'s own ' +
   'Strava connector as strava__* (strava__get_activities, strava__get_mileage, strava__get_gear, …) when ' +
   'Strava is connected.'
@@ -6224,11 +6229,18 @@ async function actionInboxItem(item, today, actor = OWNER_ACTOR, mode = 'accept'
   }
   const dispatching = () => prepared.dispatching?.()
   if (item.kind === 'todo' || item.kind === 'sheet') {
+    const command = todoCommandFromInboxProposal(item)
+    // `folder:` names a chat project or folder; a venture tag finds the project of
+    // the same name. Neither found leaves the task unfiled (Personal).
+    const projects = await projectStore.list()
+    const named = item.meta.folder || (command.area === 'Ventures' ? command.ventureTag : '')
+    const found = named ? resolveFolder(projects, named) : null
+    if (found?.id) command.folderId = found.id
     const todo = await todoCommands.create(
-      todoCommandFromInboxProposal(item),
+      command,
       { actor, reason: `Accepted inbox proposal ${item.id}`, correlationId: item.id },
     )
-    const dest = item.meta.project || item.meta.area || 'Personal'
+    const dest = folderPath(projects, todo.folderId) || 'Personal'
     return `confirmed ${today} → Totem task ${todo.id} (${dest})`
   }
   if (item.kind === 'calendar') {
@@ -9514,7 +9526,8 @@ async function linkedTaskContext(taskId) {
     return linkedTaskBlock({ sheetItem: findSheetItem(feed?.items, taskId) })
   }
   const task = todoService.get(taskId)
-  return task && !task.deletedAt ? linkedTaskBlock({ task }) : ''
+  if (!task || task.deletedAt) return ''
+  return linkedTaskBlock({ task, folder: task.folderId ? folderPath(await projectStore.list(), task.folderId) : null })
 }
 
 async function chatProjectContext(projectId, driver) {
@@ -10564,6 +10577,7 @@ async function handleChatApi(req, res, path) {
   if (req.method === 'POST' && path === '/api/chat') return handleChatSend(req, res)
   if (path.startsWith('/api/chat/projects')) return handleChatProjectsApi(req, res, path)
   if (path === '/api/chat/task-folders' || path.startsWith('/api/chat/task-folders/')) return handleTaskFoldersApi(req, res, path)
+  if (path === '/api/chat/run-context' || path === '/api/chat/run-context/task') return handleRunContextApi(req, res, path)
   if (req.method === 'GET' && path === '/api/chat/runs') return send(res, 200, { runs: chatRuns.list() })
   const runMatch = /^\/api\/chat\/runs\/([A-Za-z0-9_-]{1,128})\/stream$/.exec(path)
   if (req.method === 'GET' && runMatch) {
@@ -10992,13 +11006,68 @@ async function dropUnusedUploads(ids) {
   for (const id of ids) if (!used.has(id) && !kept.has(id)) await chatUploads.remove(id)
 }
 
-// The project or folder each task is filed under (chat/task-folders.mjs). The
-// read leaves out filings whose project is gone, so a stale row never shows.
+// The filings kept on the chat side (chat/task-folders.mjs): sheet rows', since
+// the row is not ours. A local task carries its own (`folderId`), and the sheet
+// feed arrives already filed, so only a dashboard loaded before that change reads
+// this. Filings whose project is gone are left out.
 async function taskFoldersPayload() {
   const projects = new Set((await projectStore.list()).map((p) => p.id))
   const folders = {}
   for (const [task, project] of Object.entries(await taskFolders.all())) if (projects.has(project)) folders[task] = project
   return { folders }
+}
+
+// Each sheet row gets the folder it is filed under: its own filing, else the
+// sheet's default (TASK_SHEET_FOLDER, or the project the sheet's name starts with).
+// todos/folders.mjs fileSheetItems.
+async function fileSheetItems(feed) {
+  return fileSheetFolders(feed, await taskFolders.all(), await projectStore.list(), process.env.TASK_SHEET_FOLDER)
+}
+
+// Areas and venture tags gave way to folders. Once per install: tasks the chats
+// panel had filed (data/task-folders.json) take that folder, and a Ventures task
+// takes the project named like its venture tag, if there is one. Personal tasks
+// stay unfiled, which is what "Personal" means now (todos/folders.mjs folderAdoption).
+// The file's entries for local tasks are left where they are: nothing reads them
+// now, and a rollback to code that does still finds them.
+async function adoptTaskFolders() {
+  const todos = [...todoService.list({ includeArchived: true }), ...todoService.list({ deleted: true })]
+  const { entries } = folderAdoption(await taskFolders.all(), todos, await projectStore.list())
+  const filed = todoService.adoptFolders(entries, 'foldersAdopted', { actor: 'system', reason: 'tasks are organised by chat folder' })
+  if (filed != null) log(`task folders: filed ${filed} task(s) under chat folders`)
+}
+
+// What the task tools know of the chat a call came from (session.chat on /mcp, or
+// the gateway asking /api/chat/run-context with its run token).
+const taskFolderContext = {
+  list: () => projectStore.list(),
+  async chat(session) {
+    const threadId = session?.chat?.threadId
+    if (!threadId) return null
+    const thread = await threadStore.get(threadId).catch(() => null)
+    return thread ? { threadId, projectId: thread.projectId || null, taskId: thread.taskId || null } : null
+  },
+  async linkChat(_session, chat, taskId) {
+    await threadStore.update(chat.threadId, (x) => { if (!x.taskId) x.taskId = taskId })
+  },
+}
+
+async function handleRunContextApi(req, res, path) {
+  // Only a chat run's grant names a chat: a totem's browser grant (no runId) or
+  // its ask grant must not file tasks into, or link them to, a chat.
+  const run = agentBrowserAccess.get(String(req.headers['x-totem-run'] || ''))
+  if (!run?.threadId || !run.runId) return send(res, 404, { error: 'no chat run' })
+  const session = { chat: { threadId: run.threadId, runId: run.runId } }
+  const chat = await taskFolderContext.chat(session)
+  if (!chat) return send(res, 404, { error: 'no chat' })
+  if (path === '/api/chat/run-context' && req.method === 'GET') return send(res, 200, chat)
+  if (path === '/api/chat/run-context/task' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    if (!validTaskRef(body.taskId) || body.taskId.startsWith('sheet:') || !todoService.get(body.taskId)) return send(res, 400, { error: 'not a task' })
+    await taskFolderContext.linkChat(session, chat, body.taskId)
+    return send(res, 200, await taskFolderContext.chat(session))
+  }
+  return send(res, 405, { error: 'method not allowed' })
 }
 
 async function handleTaskFoldersApi(req, res, path) {
@@ -11011,7 +11080,16 @@ async function handleTaskFoldersApi(req, res, path) {
   const body = await readJsonBody(req)
   const projectId = body.projectId == null || body.projectId === '' ? null : body.projectId
   if (projectId && !(validProjectId(projectId) && await projectStore.get(projectId))) return send(res, 404, { error: 'project not found' })
-  try { await taskFolders.set(task, projectId) } catch (e) { return send(res, e.status || 500, { error: e.message }) }
+  // A local task carries its folder. A dashboard still open from before this
+  // change (it reloads itself within minutes) files tasks here: put it on the task.
+  if (!task.startsWith('sheet:') && todoService.get(task)) {
+    try { await todoCommands.update(task, { folderId: projectId }, { actor: 'http', reason: 'PUT /api/chat/task-folders' }) } catch (e) { return send(res, e.status || 500, { error: e.message }) }
+    // The file's copy too, so that dashboard redraws what it chose (and a rollback finds it).
+    try { await taskFolders.set(task, projectId) } catch { /* the task holds it */ }
+    return send(res, 200, await taskFoldersPayload())
+  }
+  // A sheet row filed nowhere is kept as 'none', so the sheet's default folder does not take it back.
+  try { await taskFolders.set(task, projectId || (task.startsWith('sheet:') ? SHEET_UNFILED : null)) } catch (e) { return send(res, e.status || 500, { error: e.message }) }
   return send(res, 200, await taskFoldersPayload())
 }
 
@@ -11076,7 +11154,11 @@ async function handleChatProjectsApi(req, res, path) {
         moved++
       }
       // Tasks filed there move the same way.
-      for (const g of gone) await taskFolders.reassign(g, project.parentId || null)
+      for (const g of gone) {
+        await taskFolders.reassign(g, project.parentId || null)
+        // The project is already gone; a task left naming it reads as Personal, so a failure here is only logged.
+        try { todoService.refileFolder(g, project.parentId || null, { actor: 'http', reason: 'chat project removed' }) } catch (e) { log(`task folders: could not move tasks out of a removed project (${e.message})`) }
+      }
       await dropUnusedUploads([project, ...folders].flatMap((p) => [...p.files.map((f) => f.id), ...(p.image ? [p.image] : [])]))
       return send(res, 200, { ok: true, movedChats: moved, removedFolders: folders.length })
     }
@@ -16776,7 +16858,13 @@ const actionLog = createActionLog({ file: ACTION_LOG_FILE, log })
 // the two-way sheet sync (012) were retired. The shared task sheet is a read-only
 // feed (taskSheetFeed).
 const todoDatabase = openTodoDatabase({ file: TODO_DATABASE_FILE, actionLog })
-const todoService = createTodoService({ db: todoDatabase, actionLog, tz: MORNING_BRIEFING_TZ })
+const todoService = createTodoService({
+  db: todoDatabase,
+  actionLog,
+  tz: MORNING_BRIEFING_TZ,
+  // A task's folder is a chat project or folder (todos/folders.mjs).
+  folderExists: (id) => validProjectId(id) && existsSync(join(CHAT_PROJECTS_DIR, id, 'project.json')),
+})
 const todoMaintenance = createTodoMaintenance({
   db: todoDatabase,
   service: todoService,
@@ -16792,8 +16880,9 @@ const todoCommands = createTodoCommands({
 // keeps it out of Settings -> Connections.
 sourceRuns.forget('github-tasks')
 const todoIssueStates = createIssueStates({ links: (o) => todoService.issueLinks(o), run: ghCapture })
-todoHttpHandler = createTodoHttpHandler({ service: todoService, commands: todoCommands, sheetFeed: taskSheetFeed, issueStates: todoIssueStates })
-todoMcpTools = createTodoMcpTools({ service: todoService, commands: todoCommands })
+todoHttpHandler = createTodoHttpHandler({ service: todoService, commands: todoCommands, sheetFeed: taskSheetFeed, issueStates: todoIssueStates, sheetFolders: fileSheetItems })
+todoMcpTools = createTodoMcpTools({ service: todoService, commands: todoCommands, folders: taskFolderContext })
+adoptTaskFolders().catch((e) => log(`task folders: the move from areas to folders failed (${e.message}); it runs again at the next start`))
 
 // Goals share the task database so a goal can link a real task by foreign key, and take
 // the Strava client so a metric can read its own number out of the activity cache. Strava

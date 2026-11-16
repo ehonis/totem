@@ -1,7 +1,9 @@
 // Productivity → Tasks on the web: one grouped list of what needs doing (yours and
 // the shared task sheet's), a detail pane beside it, and a keyboard map. The list is
 // buildList's (todos/board.ts, shared byte for byte with the iPhone app): Overdue,
-// Today, Upcoming, No date, then Snoozed and Completed folded at the foot. Rows tick
+// Today, Upcoming, No date, then Snoozed and Completed folded at the foot; or, from
+// the "…" menu, one group per folder (todos/byFolder.ts). Every task is filed under
+// one of the chat folders or is Personal: the chips pick one, the row says which. Rows tick
 // off in one click, x or Space, with Undo; everything else about a task is edited in
 // the pane, in place, with nothing to save. Below ~1100 px the pane slides over the
 // list; at phone width it fills the screen. docs/tasks.md has the keys.
@@ -13,7 +15,11 @@ import { buildList, byWake, nextWake, sectionFor, sheetName as nameOfSheet, wake
 import { dateKey } from '../todos/format'
 import { filterTodos } from '../todos/state'
 import type { SheetItem, Todo } from '../todos/types'
-import { useVentureTags } from '../todos/ventureTags'
+import { useFolders, folderFor, folderLabel } from '../todos/folders'
+import { groupByFolder, inScope, itemFolder, projectChips, scopeFolder, subfolderChips } from '../todos/byFolder'
+import ProjectIcon from '../chat/ProjectIcon'
+import { FolderIcon } from '../work/FolderField'
+import { FolderOpenIcon, UserIcon } from '../icons'
 import { useTaskBoard } from '../todos/useTaskBoard'
 import Menu, { type MenuEntry } from '../todos/Menu'
 import { DueMenu, PriorityMenu, PRIORITIES, priorityName, SnoozeMenu } from '../todos/TaskMenus'
@@ -29,13 +35,17 @@ type Pane = { kind: 'task'; id: string; notes?: number } | { kind: 'sheet'; id: 
 type RowMenu = { kind: 'snooze' | 'due' | 'priority'; id: string; anchor: HTMLElement | null }
 
 const VIEW_KEY = 'totem.tasks.view'
-interface SavedView { scope: Scope; snoozedOpen: boolean; completedOpen: boolean }
+interface SavedView { scope: Scope; sub: string | null; groupBy: 'date' | 'folder'; snoozedOpen: boolean; completedOpen: boolean }
 function readView(): SavedView {
-  const fallback: SavedView = { scope: 'all', snoozedOpen: false, completedOpen: false }
+  const fallback: SavedView = { scope: 'all', sub: null, groupBy: 'date', snoozedOpen: false, completedOpen: false }
   try {
-    const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null') as Partial<SavedView> | null
+    const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null') as (Omit<Partial<SavedView>, 'scope'> & { scope?: string }) | null
+    const scope: string | undefined = saved?.scope
     return {
-      scope: saved?.scope === 'Personal' || saved?.scope === 'Ventures' || saved?.scope === 'sheet' ? saved.scope : 'all',
+      // "Personal" and "Ventures" were the old area chips; Personal is the unfiled folder now.
+      scope: scope === 'sheet' || scope === 'personal' || (typeof scope === 'string' && scope.startsWith('folder:')) ? scope as Scope : scope === 'Personal' ? 'personal' : 'all',
+      sub: typeof saved?.sub === 'string' ? saved.sub : null,
+      groupBy: saved?.groupBy === 'folder' ? 'folder' : 'date',
       snoozedOpen: saved?.snoozedOpen === true,
       completedOpen: saved?.completedOpen === true,
     }
@@ -89,7 +99,7 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
     return () => clearInterval(timer)
   }, [])
   const board = useTaskBoard({ onAuthError, now: () => clockRef.current(), beatMs })
-  const ventureTags = useVentureTags()
+  const { projects, names: folderNames } = useFolders()
   const overlay = useOverlay()
 
   const [view, setView] = useState<SavedView>(readView)
@@ -118,29 +128,37 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   const sheetOn = feed?.configured === true
   const sheetName = nameOfSheet(feed)
   const sheetItems = useMemo(() => (feed?.items ?? []), [feed])
-  const hasVentures = ventureTags.length > 0 || board.todos.some((todo) => todo.area === 'Ventures')
-  // A saved scope whose chip is gone (no sheet set up, no ventures left) shows everything.
-  const scope: Scope = (view.scope === 'sheet' && feed && !sheetOn) || (view.scope === 'Ventures' && board.loaded && !hasVentures) ? 'all' : view.scope
+  // A saved scope whose chip is gone (no sheet set up, its project deleted) shows everything.
+  const savedFolder = scopeFolder(view.scope)
+  const scope: Scope = (view.scope === 'sheet' && feed && !sheetOn) || (savedFolder && projects.length && !folderFor(savedFolder, projects)) ? 'all' : view.scope
+  const project = scopeFolder(scope)
+  const sub = project && view.sub && folderFor(view.sub, projects)?.parentId === project ? view.sub : null
+  const shows = useCallback((item: ListItem) => inScope(item, scope, sub, projects), [scope, sub, projects])
 
   // Everything, for the live line and the summary: what the day holds, whatever is filtered.
   const full = useMemo(() => buildList(board.todos, sheetItems, { now }), [board.todos, sheetItems, now])
+  const fullItems = useMemo(() => full.sections.flatMap((section) => section.items), [full])
   const needle = search.trim().toLocaleLowerCase()
   const todos = useMemo(() => {
     if (scope === 'sheet') return []
-    const scoped = scope === 'all' ? board.todos : board.todos.filter((todo) => todo.area === scope)
+    const scoped = scope === 'all' ? board.todos : board.todos.filter((todo) => shows({ kind: 'task', todo }))
     return needle ? filterTodos(scoped, { search: needle }, now) : scoped
-  }, [board.todos, scope, needle, now])
+  }, [board.todos, scope, shows, needle, now])
   const sheet = useMemo(() => {
-    if (scope === 'Personal' || scope === 'Ventures') return []
-    return needle ? sheetItems.filter((item) => sheetMatches(item, needle)) : sheetItems
-  }, [sheetItems, scope, needle])
+    const scoped = sheetItems.filter((item) => shows({ kind: 'sheet', item }))
+    return needle ? scoped.filter((item) => sheetMatches(item, needle)) : scoped
+  }, [sheetItems, shows, needle])
   const list = useMemo(() => buildList(todos, sheet, { now }), [todos, sheet, now])
+  // What is drawn: the day groups, or (from the "…" menu) one group per folder.
+  const drawn = useMemo(() => (view.groupBy === 'folder'
+    ? groupByFolder(list.sections, projects).map((group) => ({ key: `f:${group.key}`, folder: group, items: group.items, place: null }))
+    : list.sections.map((section) => ({ key: section.key, folder: null, items: section.items, place: section.key }))), [list, view.groupBy, projects])
   const snoozed = useMemo(() => byWake(todos.filter((todo) => todo.status !== 'done' && todo.snoozedUntil && new Date(todo.snoozedUntil) > now)), [todos, now])
   const allSnoozed = useMemo(() => board.todos.filter((todo) => todo.status !== 'done' && todo.snoozedUntil && new Date(todo.snoozedUntil) > now), [board.todos, now])
   const today = dateKey(now)
   const completed = list.completed
   // Which headings are drawn: the sticky observer below re-runs only when this changes.
-  const drawnHeadings = `${board.loaded}:${list.sections.map((section) => section.key).join(',')}:${snoozed.length > 0}:${completed.length > 0}`
+  const drawnHeadings = `${board.loaded}:${drawn.map((section) => section.key).join(',')}:${snoozed.length > 0}:${completed.length > 0}`
 
   // A section heading is drawn bare at rest and gets its band only while stuck to the
   // top of the list, so the glow is not cut into slabs. A 1 px sentinel above each
@@ -163,11 +181,11 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   // Rows in the order they are drawn: the keyboard walks this.
   const order = useMemo(() => {
     const keys: string[] = []
-    for (const section of list.sections) for (const item of section.items) keys.push(keyOf(item))
+    for (const section of drawn) for (const item of section.items) keys.push(keyOf(item))
     if (view.snoozedOpen) for (const todo of snoozed) keys.push(todo.id)
     if (view.completedOpen) for (const todo of completed) keys.push(todo.id)
     return keys
-  }, [list, snoozed, completed, view.snoozedOpen, view.completedOpen])
+  }, [drawn, snoozed, completed, view.snoozedOpen, view.completedOpen])
 
   const todoById = useMemo(() => new Map(board.todos.map((todo) => [todo.id, todo])), [board.todos])
   const sheetById = useMemo(() => new Map(sheetItems.map((item) => [item.id, item])), [sheetItems])
@@ -258,7 +276,7 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
     board.clearReveal()
     const todo = todoById.get(id)
     if (todo) {
-      if (view.scope !== 'all' && (view.scope === 'sheet' || view.scope !== todo.area)) setView((current) => ({ ...current, scope: 'all' }))
+      if (!shows({ kind: 'task', todo })) setView((current) => ({ ...current, scope: 'all', sub: null }))
       if (needle && !filterTodos([todo], { search: needle }, now).length) setSearch('')
     }
     setActiveKey(id)
@@ -277,12 +295,13 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
       const isSnoozed = todo.status !== 'done' && !!todo.snoozedUntil && new Date(todo.snoozedUntil) > now
       setView((current) => ({
         ...current,
-        scope: current.scope !== 'all' && (current.scope === 'sheet' || current.scope !== todo.area) ? 'all' : current.scope,
+        ...(shows({ kind: 'task', todo }) ? {} : { scope: 'all' as Scope, sub: null }),
         snoozedOpen: current.snoozedOpen || isSnoozed,
         completedOpen: current.completedOpen || todo.status === 'done',
       }))
       if (needle && !filterTodos([todo], { search: needle }, now).length) setSearch('')
       setActiveKey(id)
+      setPane({ kind: 'task', id })
     },
     find: ({ id }) => rows.current.get(id) ?? null,
   })
@@ -445,6 +464,15 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   }
   const openId = pane && (pane.kind === 'task' || pane.kind === 'sheet') ? pane.id : null
 
+  // A row says its folder, except where the heading or the chip already does. An
+  // unfiled one says nothing: "Personal" on most rows would be noise (its chip finds them).
+  const rowFolder = (folderId: string | null | undefined) => {
+    if (view.groupBy === 'folder') return null
+    const own = folderFor(folderId, projects)?.id ?? null
+    if (!own) return null
+    if (project && (own === project || (sub && own === sub))) return null
+    return folderLabel(own, projects)
+  }
   const drawTask = (todo: Todo, place: RowPlace) => (
     <TaskRow
       key={todo.id}
@@ -456,7 +484,7 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
       flash={flashId === todo.id}
       ticking={board.ticking.has(todo.id)}
       issue={todo.issueLink ? board.issues?.states[issueKey(todo.issueLink)] : undefined}
-      ventureTags={ventureTags}
+      folderLabel={rowFolder(todo.folderId)}
       selectMode={selectMode}
       selected={selection.has(todo.id)}
       rowRef={rowRef(todo.id)}
@@ -473,6 +501,7 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
       item={item.item}
       place={place}
       source={sheetName}
+      showFolder={rowFolder(item.item.folderId) !== null}
       now={now}
       active={active === item.item.id}
       open={openId === item.item.id}
@@ -484,11 +513,11 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   )
 
   const filtering = Boolean(needle) || scope !== 'all'
-  const nothing = !list.sections.length && !snoozed.length && !completed.length
+  const nothing = !drawn.length && !snoozed.length && !completed.length
 
   // The sheet's state, once and quietly, wherever its rows would be drawn: the read
   // failed (rows gone, or the last good rows shown stale), or nothing is assigned.
-  const sheetShown = scope === 'all' || scope === 'sheet'
+  const sheetShown = scope === 'all' || scope === 'sheet' || sheet.length > 0
   let sheetNote: { text: string; retry: boolean } | null = null
   if (sheetShown) {
     if (board.sheetError) {
@@ -504,12 +533,13 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
     } else if (scope === 'sheet' && feed?.configured && !feed.items.length) sheetNote = { text: `Nothing in ${sheetName} is assigned to you.`, retry: false }
   }
 
-  const chips: Array<{ id: Scope; label: string; count: number }> = [
-    { id: 'all', label: 'All', count: full.sections.reduce((n, section) => n + section.items.length, 0) },
-    { id: 'Personal', label: 'Personal', count: full.sections.reduce((n, section) => n + section.items.filter((item) => item.kind === 'task' && item.todo.area === 'Personal').length, 0) },
-    ...(hasVentures ? [{ id: 'Ventures' as Scope, label: 'Ventures', count: full.sections.reduce((n, section) => n + section.items.filter((item) => item.kind === 'task' && item.todo.area === 'Ventures').length, 0) }] : []),
+  const chips: Array<{ id: Scope; label: string; count: number; icon?: React.ReactNode }> = [
+    { id: 'all', label: 'All', count: fullItems.length },
+    { id: 'personal', label: 'Personal', icon: <Hi icon={UserIcon} size={13} />, count: fullItems.filter((item) => itemFolder(item, projects) === null).length },
+    ...projectChips(fullItems, projects, scope).map((chip) => ({ ...chip, icon: <ProjectIcon p={chip.project} size={13} /> })),
     ...(sheetOn ? [{ id: 'sheet' as Scope, label: sheetName, count: sheetItems.length }] : []),
   ]
+  const subChips = subfolderChips(fullItems, projects, project)
 
   const headItems: MenuEntry[] = [
     { key: 'select', label: selectMode ? 'Stop selecting' : 'Select tasks', icon: CheckCircleIcon, onSelect: () => (selectMode ? endSelect() : setSelectMode(true)) },
@@ -517,6 +547,8 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
     { key: 'snoozed', label: 'Snoozed', detail: allSnoozed.length.toLocaleString(), icon: SnoozeIcon, onSelect: () => { setView((current) => ({ ...current, snoozedOpen: true })); requestAnimationFrame(() => { snoozedHead.current?.scrollIntoView?.({ block: 'start' }); snoozedHead.current?.focus() }) } },
     { key: 'archive', label: 'Archive', detail: board.counts.archived.toLocaleString(), icon: ArchiveBoxIcon, onSelect: () => setPane({ kind: 'shelf', shelf: 'archive' }) },
     { key: 'deleted', label: 'Recycle bin', detail: board.counts.deleted.toLocaleString(), icon: TrashIcon, onSelect: () => setPane({ kind: 'shelf', shelf: 'deleted' }) },
+    'separator',
+    { key: 'group', label: 'Group by folder', icon: FolderOpenIcon, checked: view.groupBy === 'folder', onSelect: () => setView((current) => ({ ...current, groupBy: current.groupBy === 'folder' ? 'date' : 'folder' })) },
     'separator',
     ...(sheetOn ? [{ key: 'sheet', label: `Read ${sheetName} again`, icon: ArrowPathIcon, onSelect: () => void board.loadSheet(true) }] : []),
     { key: 'settings', label: 'Task settings', icon: AdjustmentsHorizontalIcon, onSelect: () => openSettings('') },
@@ -533,14 +565,13 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
         board={board}
         now={now}
         issue={paneTodo.issueLink ? board.issues?.states[issueKey(paneTodo.issueLink)] : undefined}
-        ventureTags={ventureTags}
         focusNotes={pane?.kind === 'task' && pane.notes}
         onClose={closePane}
         onOpenTask={(id) => { if (todoById.has(id)) { setActiveKey(id); setPane({ kind: 'task', id }) } }}
       />
     )
   } else if (paneSheet) {
-    paneBody = <SheetDetail key={paneSheet.id} item={paneSheet} feed={feed} now={now} onClose={closePane} />
+    paneBody = <SheetDetail key={paneSheet.id} item={paneSheet} feed={feed} now={now} onClose={closePane} onFile={(folderId) => void board.fileSheet(paneSheet.id, folderId)} />
   } else if (pane?.kind === 'shelf') {
     paneBody = <ShelfPane key={pane.shelf} kind={pane.shelf} board={board} onClose={closePane} />
   } else if (!overlay) {
@@ -571,11 +602,21 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
 
       <div className="tk-scopes" role="radiogroup" aria-label="Show">
         {chips.map((chip) => (
-          <button key={chip.id} type="button" role="radio" aria-checked={scope === chip.id} className={`tk-scope${scope === chip.id ? ' on' : ''}`} onClick={() => setView((current) => ({ ...current, scope: chip.id }))}>
-            {chip.label}{chip.count > 0 && <span>{chip.count.toLocaleString()}</span>}
+          <button key={chip.id} type="button" role="radio" aria-checked={scope === chip.id} className={`tk-scope${scope === chip.id ? ' on' : ''}`} onClick={() => setView((current) => ({ ...current, scope: chip.id, sub: null }))}>
+            {chip.icon}{chip.label}{chip.count > 0 && <span>{chip.count.toLocaleString()}</span>}
           </button>
         ))}
       </div>
+      {subChips.length > 0 && (
+        <div className="tk-scopes tk-subscopes" role="radiogroup" aria-label={`Folders in ${folderLabel(project, projects)}`}>
+          <button type="button" role="radio" aria-checked={!sub} className={`tk-scope${!sub ? ' on' : ''}`} onClick={() => setView((current) => ({ ...current, sub: null }))}>All in {folderLabel(project, projects)}</button>
+          {subChips.map((chip) => (
+            <button key={chip.id} type="button" role="radio" aria-checked={sub === chip.id} className={`tk-scope${sub === chip.id ? ' on' : ''}`} onClick={() => setView((current) => ({ ...current, sub: chip.id }))}>
+              <ProjectIcon p={chip.project} size={13} />{chip.project.name}<span>{chip.count.toLocaleString()}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="tk-body">
         <div className="tk-scroll" ref={scroller}>
@@ -589,7 +630,7 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
               <button type="button" className="btn compact tk-bulk-end" onClick={endSelect}>Cancel</button>
             </div>
           ) : (
-            <QuickAdd ref={quickAdd} now={now} scope={scope} ventureTags={ventureTags.map((tag) => tag.name)} onCreate={board.create} />
+            <QuickAdd ref={quickAdd} now={now} folders={folderNames} projects={projects} defaultFolder={sub ?? project} onCreate={board.create} />
           )}
 
           {sheetNote && (
@@ -611,11 +652,18 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
               // it. A focused row that unmounts fires no blur, so that case keeps it.
               onBlur={(event) => { if (!grid.current?.contains(event.relatedTarget as Node | null)) listFocused.current = false }}
             >
-              {list.sections.map((section) => (
-                <div role="rowgroup" key={section.key} className={`tk-section tk-section-${section.key}`} aria-labelledby={`tk-h-${section.key}`}>
+              {drawn.map((section) => (
+                <div role="rowgroup" key={section.key} className={`tk-section tk-section-${section.place ?? 'folder'}`} aria-labelledby={`tk-h-${section.key}`}>
                   <div className="tk-sentinel" aria-hidden="true" />
-                  <div role="row" className="tk-section-head"><span role="columnheader" id={`tk-h-${section.key}`}>{SECTION_TITLE[section.key]}<span className="tk-count">{section.items.length}</span></span></div>
-                  {section.items.map((item) => drawItem(item, section.key))}
+                  <div role="row" className="tk-section-head">
+                    <span role="columnheader" id={`tk-h-${section.key}`}>
+                      {section.folder
+                        ? <span className="tk-folder-head"><FolderIcon project={section.folder.project} size={13} />{section.folder.project ? section.folder.project.name : 'Personal'}{section.folder.parent && <span className="tk-folder-parent">{section.folder.parent.name}</span>}</span>
+                        : SECTION_TITLE[section.place!]}
+                      <span className="tk-count">{section.items.length}</span>
+                    </span>
+                  </div>
+                  {section.items.map((item) => drawItem(item, section.place ?? sectionFor(item.kind === 'task' ? item.todo.dueDate : item.item.dueDate, today)))}
                 </div>
               ))}
 
@@ -653,11 +701,11 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
           {board.loaded && !board.error && nothing && (
             <div className="tk-empty">
               {filtering
-                ? <><p>Nothing here{needle ? ` matches “${search.trim()}”` : ''}.</p><button type="button" className="btn compact" onClick={() => { setSearch(''); setView((current) => ({ ...current, scope: 'all' })) }}>Show everything</button></>
+                ? <><p>Nothing here{needle ? ` matches “${search.trim()}”` : ''}.</p><button type="button" className="btn compact" onClick={() => { setSearch(''); setView((current) => ({ ...current, scope: 'all', sub: null })) }}>Show everything</button></>
                 : <p>{board.doneTodayCount ? `All clear. ${plural(board.doneTodayCount, 'task')} done today.` : 'Nothing to do. Add a task above.'}</p>}
             </div>
           )}
-          {board.loaded && !nothing && !list.sections.length && !filtering && (
+          {board.loaded && !nothing && !drawn.length && !filtering && (
             <p className="tk-clear">{board.doneTodayCount ? `All clear. ${plural(board.doneTodayCount, 'task')} done today.` : 'Nothing open right now.'}</p>
           )}
         </div>

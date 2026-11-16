@@ -11,6 +11,8 @@ import { ExclamationTriangleIcon as ExclamationTriangleSolidIcon } from '@heroic
 // 24px outline set - default for nav, buttons, and inline UI chrome.
 export {
   AdjustmentsHorizontalIcon,
+  FolderOpenIcon,
+  UserIcon,
   ArchiveBoxIcon,
   ArrowDownIcon,
   ArrowRightIcon,

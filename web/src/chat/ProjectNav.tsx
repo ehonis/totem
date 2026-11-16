@@ -150,33 +150,35 @@ function TotemsPanel({ onOpen }: { onOpen: (id?: string) => void }) {
   const openChat = () => onOpen()
   return (
     <div className="vc-threads">
-      <div className="vc-threads-head">
-        <span>Group chats</span>
-        <button type="button" className="vc-icon-btn sm" onClick={() => setGrouping((v) => !v)} aria-label="New group chat" title="New group chat with your totems">
-          <TI icon={IconPlus} size={15} />
-        </button>
-      </div>
-      {grouping && (
-        <div className="vc-nav-group-pick">
-          <GroupPicker jobs={jobs} named onCancel={() => setGrouping(false)} onDone={async (ids, name) => { await startGroupChat(ids, name, openChat); setGrouping(false) }} />
+      <div className="vc-threads-list">
+        <div className="vc-threads-head">
+          <span>Group chats</span>
+          <button type="button" className="vc-icon-btn sm" onClick={() => setGrouping((v) => !v)} aria-label="New group chat" title="New group chat with your totems">
+            <TI icon={IconPlus} size={15} />
+          </button>
         </div>
-      )}
-      {groups.map((t) => <ThreadItem key={t.id} t={t} active={t.id === activeId} live={!!runs[t.id]} onOpen={(id) => { setActive(id); openChat() }} />)}
-      {!groups.length && !grouping && (
-        <button type="button" className="vc-proj-empty" onClick={() => setGrouping(true)}>
-          <TI icon={IconUsersGroup} size={16} /><span>Start a group chat</span>
-        </button>
-      )}
-      <div className="vc-threads-head">
-        <span>Totems</span>
-        <button type="button" className="vc-icon-btn sm" onClick={() => goTotemsTab()} aria-label="All totems" title="The Totems page: new totems, drafts, settings">
-          <TI icon={IconLayoutList} size={15} />
-        </button>
+        {grouping && (
+          <div className="vc-nav-group-pick">
+            <GroupPicker jobs={jobs} named onCancel={() => setGrouping(false)} onDone={async (ids, name) => { await startGroupChat(ids, name, openChat); setGrouping(false) }} />
+          </div>
+        )}
+        {groups.map((t) => <ThreadItem key={t.id} t={t} active={t.id === activeId} live={!!runs[t.id]} onOpen={(id) => { setActive(id); openChat() }} />)}
+        {!groups.length && !grouping && (
+          <button type="button" className="vc-proj-empty" onClick={() => setGrouping(true)}>
+            <TI icon={IconUsersGroup} size={16} /><span>Start a group chat</span>
+          </button>
+        )}
+        <div className="vc-threads-head">
+          <span>Totems</span>
+          <button type="button" className="vc-icon-btn sm" onClick={() => goTotemsTab()} aria-label="All totems" title="The Totems page: new totems, drafts, settings">
+            <TI icon={IconLayoutList} size={15} />
+          </button>
+        </div>
+        {rows.map((r) => (
+          <TotemNavItem key={r.job.id} row={r} active={!!r.thread && r.thread.id === activeId} onOpen={() => openTotemChat(r.job, openChat)} />
+        ))}
+        {!rows.length && <div className="vc-nav-note">No totems yet. Make one on the Totems page.</div>}
       </div>
-      {rows.map((r) => (
-        <TotemNavItem key={r.job.id} row={r} active={!!r.thread && r.thread.id === activeId} onOpen={() => openTotemChat(r.job, openChat)} />
-      ))}
-      {!rows.length && <div className="vc-nav-note">No totems yet. Make one on the Totems page.</div>}
     </div>
   )
 }

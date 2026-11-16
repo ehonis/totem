@@ -135,7 +135,7 @@ test('the runner applies 012 once, after a backup, and the archived tasks restor
 
   const opened = openTodoDatabase({ file, now: () => AT })
   try {
-    assert.deepEqual(rows(opened, 'SELECT version FROM schema_migrations ORDER BY version').map((r) => r.version), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    assert.deepEqual(rows(opened, 'SELECT version FROM schema_migrations ORDER BY version').map((r) => r.version), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
     // The runner runs 011 too, which drops the GitHub connector's unsent row (012 leaves it).
     assert.deepEqual(ids(opened, 'sync_outbox'), [])
     assert.deepEqual(opened.prepare('PRAGMA foreign_key_check').all(), [])

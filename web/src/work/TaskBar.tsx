@@ -6,11 +6,15 @@ import { IconCircleCheck, IconChecklist, IconLink, IconX, IconTable } from '../c
 import { dueLabel } from './groups'
 import { TaskPicker } from './pickers'
 import { completeTask, findTask, useWork } from './state'
+import { openTaskCard } from './card'
+import { FolderChip } from './FolderField'
 import './work.css'
 
 // The strip over the composer that says which task a chat is for, drawn like the
-// queue's drawer: the task (a click shows it in the chats panel's Tasks face), its
-// due day, Mark done, and the link to change or drop it. On a new chat started
+// queue's drawer: the task (a click opens its card, TaskCard.tsx, to edit it, and
+// shows it in the chats panel's Tasks face), its folder and due day, Mark done,
+// and the link to change or drop it. The click used to only turn the panel to
+// Tasks, which did nothing visible when it was already there. On a new chat started
 // from a task it says so, with × to start a plain chat instead.
 
 /** Ask the chats panel to turn to its Tasks face (ProjectNav listens). */
@@ -39,15 +43,15 @@ function TaskStrip({ thread, projectId, onShowPanel, taskRef: ref }: Props & { t
   const [picking, setPicking] = useState(false)
   const anchor = useRef<HTMLButtonElement>(null)
   const due = task && !task.done ? dueLabel(task.dueDate, new Date()) : null
-  const reveal = () => { showTasksPanel(); onShowPanel?.() }
   const title = task?.title || (loaded ? 'A task that is no longer on your list' : 'Reading the task…')
   return (
     <div className="wk-taskbar" role="group" aria-label="Linked task">
       <TI icon={task?.kind === 'sheet' ? IconTable : IconChecklist} size={14} className="wk-taskbar-icon" />
       <span className="wk-taskbar-label">{thread ? 'Task' : 'New chat for'}</span>
-      <button type="button" className={`wk-taskbar-title ${task ? '' : 'gone'}`} onClick={task ? reveal : undefined} title={task ? `${task.title}: show it in the Tasks panel` : undefined}>
+      <button type="button" className={`wk-taskbar-title ${task ? '' : 'gone'}`} onClick={task ? () => { openTaskCard(task.ref); showTasksPanel(); onShowPanel?.() } : undefined} title={task ? `${task.title}: edit it` : undefined} aria-haspopup={task ? 'dialog' : undefined}>
         {title}{task?.done ? ' (done)' : ''}
       </button>
+      {task && <FolderChip folderId={task.folderId} short className="wk-taskbar-folder" />}
       {due && <span className={`wk-due ${due.tone}`}>{due.text}</span>}
       {thread && task?.kind === 'local' && !task.done && (
         <button type="button" className="wk-taskbar-btn" onClick={() => completeTask(task.ref)} title="Mark the task done">

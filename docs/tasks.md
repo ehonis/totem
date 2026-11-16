@@ -14,13 +14,23 @@ mirrored byte for byte to `mobile/src/lib/todos/`.
 
 - **Header**: "Tasks", a live line (`2 overdue · 4 today · 3 done today`), search (`/`),
   `New task` (focuses the quick-add line) and a "…" menu: Select tasks, Snoozed, Archive,
-  Recycle bin (with their counts), read the task sheet again, Task settings.
-- **Scope chips**: All, Personal, Ventures (only with venture tags), and the task sheet by
-  its own name (only once it is set up), each with its open count.
-- **Quick add**: the line at the top. `parseQuickAdd` turns "Renew passport fri p1 #Acme"
-  into a title plus due date, priority and venture, shown as chips under the line; a chip's
-  × keeps the word as text. In the Ventures scope the new task is a Ventures task: the
-  venture typed as `#tag`, else the scope's chip (the only tag, or the one picked from it).
+  Recycle bin (with their counts), Group by folder, read the task sheet again, Task settings.
+- **Folders.** Every task is filed under one of the owner's chat projects or the folders
+  inside them (`folderId` on the task, a chat project id), or under none, which every
+  client calls **Personal**. They replaced Personal/Ventures and venture tags (migration
+  013; see "From areas to folders" below). The chats panel's Tasks face groups by the same
+  folders, and a change in either place shows in the other at once (`web/src/todos/bus.ts`).
+- **Scope chips**: All, Personal (the unfiled), one per top-level project with something
+  open in it (its own tasks, its folders' tasks and sheet rows filed there), and the task
+  sheet by its own name (only once it is set up), each with its open count. A project
+  with folders in use gets a second row: "All in <project>" and one chip per folder
+  (`web/src/todos/byFolder.ts`).
+- **Quick add**: the line at the top. `parseQuickAdd` turns "Renew passport fri p1 #home"
+  into a title plus due date, priority and folder, shown as chips under the line; a chip's
+  × keeps the word as text. `#folder` takes a project's or folder's name, the name run
+  together (`#worknorthwind`), its path (`#Work - Northwind / r+d`) or a whole word of a
+  project's name (`#northwind`); a word that fits several folders stays text. Looking at a
+  folder's chip, the new task is filed there unless another `#folder` is typed.
   Enter adds through `POST /api/todos/board` (the canonical shape; words typed after the sent
   text while it is out stay on the line as the next task, and a line edited any other
   way is left as it is), keeps focus on the
@@ -28,11 +38,14 @@ mirrored byte for byte to `mobile/src/lib/todos/`.
   only if the task falls outside them.
 - **Groups** come from `buildList(todos, sheetItems, { now })`: Overdue, Today, Upcoming,
   No date, with sticky headings and counts; then Snoozed (with when the next one is back)
-  and Completed (today) folded at the foot. Which folds are open and the scope are kept
-  per browser (`totem.tasks.view` in localStorage).
+  and Completed (today) folded at the foot. "Group by folder" (the "…" menu) draws one
+  group per folder instead, projects in the chats panel's order with each folder after its
+  project, then Personal, keeping the day order inside each (`groupByFolder`). Which folds
+  are open, the scope and the grouping are kept per browser (`totem.tasks.view`).
 - **Rows** are about 40 px: a check circle, the title, and right-aligned marks drawn only
   when they say something: the due word unless the group already says it (`dueText`), a
-  P1–P3 flag (nothing for P4), the venture, repeat, a note count, and the GitHub issue link
+  P1–P3 flag (nothing for P4), the folder (its icon and path; not for Personal, nor where the
+  chip or the group heading already says it), repeat, a note count, and the GitHub issue link
   with its live open/closed state (`GET /api/todos/issue-states`). Snooze and due-date
   buttons appear on hover and on keyboard focus. At phone width the marks drop under the
   title, as the app draws them.
@@ -65,17 +78,33 @@ mirrored byte for byte to `mobile/src/lib/todos/`.
   wakes it. **Not doing** and **delete** (Delete/Backspace) offer Undo too.
 - **The pane** opens the selected row on the right (Enter or a click) and follows the
   keyboard cursor. Everything saves as it changes, with no Save button: title (Enter or
-  leaving the field), description, Due, Priority, Area/Venture, Repeat, Snooze, the issue
-  link (`PUT /api/todos/:id/issue-link`), notes (composer on top, newest first; an unsent
-  note is kept per task until sent), related tasks, and Chat about this. Esc in the title
+  leaving the field), description, Due, Priority, Folder (the chats panel's folder picker,
+  with Personal first), Repeat, Snooze, the issue link (`PUT /api/todos/:id/issue-link`),
+  notes (composer on top, newest first; an unsent note is kept per task until sent), the
+  chats linked to the task with New chat, related tasks, and Chat about this. Esc in the title
   or description puts the saved text back and saves nothing. A refused change puts back
   only the fields it touched, names them in the toast, and never draws over a later edit. A sheet row opens
-  read-only with Open in sheet. With nothing selected the pane is today's summary and the
+  read-only with Open in sheet, except its Folder, which files it (`PUT /api/chat/task-folders/<row id>`). With nothing selected the pane is today's summary and the
   keys. Below ~1100 px the pane slides over the list; at phone width it fills the screen.
 - **Archive and recycle bin** open in the pane from the "…" menu and are read only then;
   a task opened from either is shown read-only there, with Unarchive or Restore;
   the page counts them from the board's `counts`, never by downloading them. Retention
   (archive hour, archive age, recycle-bin purge) is in Settings → Tasks.
+
+## From areas to folders
+
+Tasks used to be Personal or Ventures with a venture tag. Migration 013 adds `folder_id`
+(NULL = Personal); the bridge's `adoptTaskFolders` runs once per install (marker
+`foldersAdopted` in `todo_preferences`): a task the chats panel had filed in
+`data/task-folders.json` takes that folder, and a Ventures task takes the top-level project
+named like its venture tag (`folderAdoption` in `todos/folders.mjs`); everything else is
+Personal. `area` and `venture_tag` stay in the database and the API for older clients and
+exports, and nothing draws them. The bridge refuses a `folderId` that is not an existing
+chat project (`UNKNOWN_FOLDER`); a task whose project is deleted later moves to that
+folder's project, or becomes Personal (`refileFolder`). Agents read and set the folder by
+name (`totem_get_tasks`, `totem_create_task`, `totem_update_task`; `totem_get_projects`
+lists the folders), and a task an agent creates from a chat in a project lands in that
+project and is linked to the chat (`docs/chat.md` → Tasks panel).
 
 ## Keys
 

@@ -71,10 +71,13 @@ button.wk-check:hover .wk-check-on { opacity: 1; transform: none; }
 .wk-due { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; padding: 1px 5px; border-radius: 6px; color: var(--muted); background: #ffffff0a; }
 .wk-due.overdue { color: #ff9aac; background: #f0506e1f; }
 .wk-due.today { color: #f3c969; background: #e3b3411c; }
+/* How many chats a task has: a button that unfolds them under it. */
 .wk-count {
-  flex: none; padding: 0 4px 0 2px; font-size: 11.5px; font-variant-numeric: tabular-nums;
+  display: inline-flex; align-items: center; gap: 1px; flex: none; height: 22px; margin-right: 2px; padding: 0 5px 0 3px;
+  border: 0; border-radius: 6px; background: none; font: inherit; font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: pointer;
   color: color-mix(in srgb, var(--muted) 85%, transparent);
 }
+.wk-count:hover, .wk-count[aria-expanded="true"] { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
 .wk-task-acts { display: none; align-items: center; gap: 1px; padding-right: 3px; flex: none; }
 .wk-task-row:hover .wk-task-acts, .wk-task-row:focus-within .wk-task-acts, .wk-task-row.menu-open .wk-task-acts { display: flex; }
 .wk-task-row:hover .wk-due, .wk-task-row:focus-within .wk-due, .wk-task-row.menu-open .wk-due { display: none; }
@@ -156,3 +159,92 @@ button.wk-check:hover .wk-check-on { opacity: 1; transform: none; }
   .wk-taskbar-label { display: none; }
   .wk-taskbar-btn { height: 32px; min-width: 32px; }
 }
+
+/* --- a task's folder: the chip on a row, the field that changes it (FolderField.tsx) --- */
+.wk-folder-chip {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 220px; height: 20px; padding: 0 7px 0 5px;
+  border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent); color: color-mix(in srgb, var(--text) 78%, transparent);
+  font-size: 11.5px; line-height: 20px; white-space: nowrap;
+}
+.wk-folder-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wk-folder-chip .vc-proj-icon, .wk-folder-chip .ti { flex: none; color: color-mix(in srgb, var(--text) 60%, transparent); }
+.wk-folder-chip.personal { background: none; color: color-mix(in srgb, var(--muted) 80%, transparent); padding-left: 2px; }
+.wk-folder-field {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 28px; padding: 0 8px;
+  border: 0; border-radius: 7px; background: none; color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.wk-folder-field:hover, .wk-folder-field[aria-expanded="true"] { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.wk-folder-field-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-folder-field .vc-proj-icon, .wk-folder-field .ti { flex: none; color: color-mix(in srgb, var(--text) 62%, transparent); }
+.wk-folder-field-chev { opacity: .55; }
+
+/* --- the floating task card (TaskCard.tsx), T3 Code's thread card ------------------- */
+.wk-card {
+  position: fixed; z-index: 72; width: min(340px, calc(100vw - 24px)); max-height: calc(100vh - 80px); overflow-y: auto;
+  display: flex; flex-direction: column; color: var(--text); background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 14px;
+  box-shadow: 0 22px 50px -20px #000d, 0 2px 10px #0007; animation: vc-pop-down .14s ease-out;
+}
+.wk-card .ti { display: block; flex: none; }
+.wk-card-head { display: flex; align-items: flex-start; gap: 6px; padding: 12px 10px 10px 8px; border-bottom: 1px solid var(--line-2); }
+.wk-card-head .wk-check { margin: 1px 0 0; width: 28px; height: 28px; }
+.wk-card-head .wk-check.done .wk-check-on { opacity: 1; transform: none; }
+.wk-card-head .wk-check.done .wk-check-off { opacity: 0; }
+.wk-card-title {
+  flex: 1; min-width: 0; margin: 0; padding: 4px 4px; border: 0; border-radius: 6px; resize: none; overflow: hidden; field-sizing: content;
+  background: none; color: var(--text); font: inherit; font-size: 15px; font-weight: 600; line-height: 1.35;
+}
+.wk-card-title:focus { outline: none; background: color-mix(in srgb, var(--text) 5%, transparent); }
+.wk-card-title.static { font-size: 15px; }
+.wk-card-close { flex: none; margin-top: 2px; }
+.wk-card-rows { display: flex; flex-direction: column; padding: 6px 6px; border-bottom: 1px solid var(--line-2); }
+.wk-card-row { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 2px 0 8px; }
+.wk-card-label { display: inline-flex; align-items: center; gap: 8px; flex: none; width: 88px; color: var(--muted); font-size: 13px; }
+.wk-card-label .ti { color: color-mix(in srgb, var(--muted) 85%, transparent); }
+.wk-card-value {
+  display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; flex: 1; min-width: 0; height: 28px; padding: 0 8px;
+  margin-left: auto; border: 0; border-radius: 7px; background: none; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; text-align: right;
+}
+.wk-card-value > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-card-value:hover, .wk-card-value[aria-expanded="true"] { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.wk-card-value.is-empty { color: color-mix(in srgb, var(--muted) 90%, transparent); }
+.wk-card-value.tk-prio-1 { color: #ff7a8f; }
+.wk-card-value.tk-prio-2 { color: var(--amber); }
+.wk-card-value.tk-prio-3 { color: #7fa6ff; }
+.wk-card-row .wk-folder-field.wk-card-value { justify-content: flex-end; }
+.wk-card-static { flex: 1; min-width: 0; text-align: right; padding: 0 8px; font-size: 13px; color: color-mix(in srgb, var(--text) 85%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-card-desc {
+  margin: 8px 8px 0; padding: 7px 8px; min-height: 52px; border: 1px solid transparent; border-radius: 8px; resize: none; field-sizing: content; max-height: 200px;
+  background: color-mix(in srgb, var(--text) 3%, transparent); color: var(--text); font: inherit; font-size: 13px; line-height: 1.45;
+}
+.wk-card-desc:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.wk-card-desc::placeholder { color: color-mix(in srgb, var(--muted) 85%, transparent); }
+.wk-card-notes { margin: 8px 16px 0; font-size: 13px; line-height: 1.45; color: color-mix(in srgb, var(--text) 82%, transparent); white-space: pre-wrap; }
+.wk-card-section { padding: 10px 6px 6px; }
+.wk-card-section-head { display: flex; align-items: center; gap: 8px; padding: 0 4px 4px 8px; color: var(--muted); font-size: 12.5px; }
+.wk-card-section-head > span { flex: 1; }
+.wk-card-count { margin-left: 6px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--muted) 75%, transparent); }
+.wk-card-chats .vc-thread-main { height: 32px; font-size: 13px; }
+.wk-card-empty { margin: 2px 8px 4px; font-size: 12.5px; color: color-mix(in srgb, var(--muted) 85%, transparent); }
+.wk-card-foot { display: flex; align-items: center; gap: 4px; padding: 6px 8px 8px; border-top: 1px solid var(--line-2); }
+.wk-card-foot .danger { margin-left: auto; }
+.wk-card-link {
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; border: 0; border-radius: 7px; background: none;
+  color: color-mix(in srgb, var(--text) 82%, transparent); font: inherit; font-size: 12.5px; text-decoration: none; cursor: pointer;
+}
+.wk-card-link:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.wk-card-link.danger:hover { color: #ff9aac; background: #f0506e1a; }
+/* On a phone it rises from the bottom over a scrim. */
+.wk-card-scrim { position: fixed; inset: 0; z-index: 72; background: #0008; display: flex; align-items: flex-end; animation: vc-fade .15s ease-out; }
+.wk-card.sheet {
+  position: relative; width: 100%; max-height: 82vh; border-radius: 16px 16px 0 0; border-bottom: 0;
+  padding-bottom: env(safe-area-inset-bottom); animation: wk-rise .2s ease-out;
+}
+.wk-card.sheet .wk-card-row { min-height: 44px; }
+.wk-card.sheet .wk-card-value, .wk-card.sheet .wk-card-link { height: 36px; font-size: 14.5px; }
+.wk-card.sheet .wk-card-title { font-size: 17px; }
+.wk-card.sheet .wk-card-desc { font-size: 15px; }
+@keyframes wk-rise { from { transform: translateY(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .wk-card, .wk-card.sheet, .wk-card-scrim { animation: none; } }
+:root.reduce-motion .wk-card, :root.reduce-motion .wk-card-scrim { animation: none; }
+.wk-taskbar-folder { flex: none; max-width: 140px; height: 18px; line-height: 18px; font-size: 11px; }
+@media (max-width: 720px) { .wk-taskbar-folder { display: none; } }

@@ -126,3 +126,11 @@ export { default as IconLink } from '@tabler/icons-react/dist/esm/icons/IconLink
 export { default as IconLinkOff } from '@tabler/icons-react/dist/esm/icons/IconLinkOff.mjs'
 export { default as IconInbox } from '@tabler/icons-react/dist/esm/icons/IconInbox.mjs'
 export { default as IconTable } from '@tabler/icons-react/dist/esm/icons/IconTable.mjs'
+// The task card and folder labels (work/TaskCard.tsx, todos/FolderChip).
+export { default as IconUser } from '@tabler/icons-react/dist/esm/icons/IconUser.mjs'
+export { default as IconCalendar } from '@tabler/icons-react/dist/esm/icons/IconCalendar.mjs'
+export { default as IconFlag } from '@tabler/icons-react/dist/esm/icons/IconFlag.mjs'
+export { default as IconRepeat } from '@tabler/icons-react/dist/esm/icons/IconRepeat.mjs'
+export { default as IconZzz } from '@tabler/icons-react/dist/esm/icons/IconZzz.mjs'
+export { default as IconArrowUpRight } from '@tabler/icons-react/dist/esm/icons/IconArrowUpRight.mjs'
+export { default as IconAdjustmentsHorizontal } from '@tabler/icons-react/dist/esm/icons/IconAdjustmentsHorizontal.mjs'

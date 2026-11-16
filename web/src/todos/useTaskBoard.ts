@@ -8,12 +8,10 @@
 // no; the reversible ones (complete, not doing, snooze, delete) offer Undo in the
 // dashboard's toast deck.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  AuthError, addTodoNote, createBoardTodo, deleteBoardTodo, getIssueStates, getRecentCompletions,
-  getSheetFeed, getTodoBoard, linkRelatedTodo, moveBoardTodo, restoreBoardTodo, setIssueLink,
-  unlinkRelatedTodo, updateBoardTodo, bulkBoardTodos,
-} from '../api'
+import * as todoApi from '../api'
+import { AuthError, getIssueStates, getRecentCompletions, getSheetFeed, getTodoBoard } from '../api'
 import { pushError, pushToast } from '../toast'
+import { announcing, onTasksChanged } from './bus'
 import { afterDone, rollsOnCompletion, wakeLabel } from './board'
 import { dateKey, dateLabel } from './format'
 import type { IssueStatesResponse, SheetFeed, Todo, TodoBoardCounts, TodoOutcome, TodoPatch } from './types'
@@ -23,9 +21,22 @@ export const DONE_BEAT_MS = 650
 const UNDO_MS = 6000
 const NO_COUNTS: TodoBoardCounts = { archived: 0, snoozed: 0, deleted: 0 }
 
+// Every change this page makes is told to the chats panel (todos/bus.ts), which reads again.
+const addTodoNote = announcing('board', todoApi.addTodoNote)
+const createBoardTodo = announcing('board', todoApi.createBoardTodo)
+const deleteBoardTodo = announcing('board', todoApi.deleteBoardTodo)
+const linkRelatedTodo = announcing('board', todoApi.linkRelatedTodo)
+const moveBoardTodo = announcing('board', todoApi.moveBoardTodo)
+const restoreBoardTodo = announcing('board', todoApi.restoreBoardTodo)
+const setIssueLink = announcing('board', todoApi.setIssueLink)
+const unlinkRelatedTodo = announcing('board', todoApi.unlinkRelatedTodo)
+const updateBoardTodo = announcing('board', todoApi.updateBoardTodo)
+const bulkBoardTodos = announcing('board', todoApi.bulkBoardTodos)
+const fileSheetRow = announcing('board', todoApi.fileSheetRow, { sheet: true })
+
 const FIELD: Record<string, string> = {
   title: 'title', description: 'description', dueDate: 'due date', priority: 'priority', area: 'area',
-  ventureTag: 'venture', recurrence: 'repeat', snoozedUntil: 'snooze', position: 'order', tags: 'tags',
+  ventureTag: 'venture', folderId: 'folder', recurrence: 'repeat', snoozedUntil: 'snooze', position: 'order', tags: 'tags',
 }
 /** "due date", or "change" for several fields at once. */
 export const fieldName = (keys: readonly string[]) => (keys.length === 1 ? FIELD[keys[0]] ?? 'change' : keys.includes('area') ? 'area' : 'change')
@@ -137,6 +148,9 @@ export function useTaskBoard({ onAuthError, now = () => new Date(), beatMs = DON
   }, [loadBoard, loadSheet])
 
   useEffect(() => { void load() }, [load])
+
+  // A change made in the chats panel, its task card or by a chat's agent: read again.
+  useEffect(() => onTasksChanged('board', (change) => { void loadBoard(); if (change.sheet || change.origin === 'chat') void loadSheet() }), [loadBoard, loadSheet])
 
   // Being present means the list is today's: read again when the window comes back.
   useEffect(() => {
@@ -300,6 +314,19 @@ export function useTaskBoard({ onAuthError, now = () => new Date(), beatMs = DON
     }
   }, [replace])
 
+  /** File a sheet row under a folder (null: Personal, even when the sheet has a default). */
+  const fileSheet = useCallback(async (id: string, folderId: string | null) => {
+    const feed = latest.current.sheet
+    if (feed?.configured) set({ sheet: { ...feed, items: feed.items.map((item) => (item.id === id ? { ...item, folderId, folderDefault: false } : item)) } })
+    try {
+      await fileSheetRow(id, folderId)
+      await loadSheet()
+    } catch (cause) {
+      fail(cause, 'The row could not be filed there.')
+      void loadSheet()
+    }
+  }, [fail, loadSheet, set])
+
   /** The note being typed for each task, kept across switching tasks and closing the pane. */
   const noteDrafts = useRef(new Map<string, string>())
   const noteDraft = useCallback((id: string) => noteDrafts.current.get(id) ?? '', [])
@@ -397,7 +424,7 @@ export function useTaskBoard({ onAuthError, now = () => new Date(), beatMs = DON
     ...state, ticking, revealId, doneTodayCount,
     clearReveal: () => setRevealId(null),
     load, loadBoard, loadSheet,
-    complete, reopen, notDoing, snooze, wake, remove, restore, update, create, linkIssue, addNote, relate, bulk,
+    complete, reopen, notDoing, snooze, wake, remove, restore, update, create, linkIssue, addNote, relate, bulk, fileSheet,
     noteDraft, setNoteDraft,
   }
 }
