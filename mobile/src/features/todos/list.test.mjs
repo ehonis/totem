@@ -451,3 +451,11 @@ function sources() {
   const files = [...walk(join(features, 'todos')), join(features, 'productivity/TodosView.tsx'), ...walk(app)]
   return files.filter((file) => !relative(features, file).includes('.test.'))
 }
+
+test('the left-swipe buttons keep their width (flex: 1 collapsed Tomorrow and Delete to nothing)', () => {
+  const card = read(join(features, 'todos/TodoCard.tsx'))
+  const style = card.match(/^\s*swipeBtn: \{([^}]*)\}/m)?.[1]
+  assert.ok(style, 'TodoCard has a swipeBtn style')
+  assert.match(style, /\bwidth: \d+/)
+  assert.doesNotMatch(style, /\bflex(Grow|Basis)?:/)
+})

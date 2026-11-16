@@ -429,7 +429,7 @@ export default function TodoCard({
               themeVariant="dark"
               onPressAction={({ nativeEvent }) => { swipe.current?.close(); act(nativeEvent.event) }}
             >
-              <View style={[st.swipeBtn, { backgroundColor: colors.amber }]} accessibilityRole="button" accessibilityLabel={`Snooze ${todo.title}`}>
+              <View style={[st.swipeBtn, st.swipeMenuBtn, { backgroundColor: colors.amber }]} accessibilityRole="button" accessibilityLabel={`Snooze ${todo.title}`}>
                 <IconZzz size={20} color="#1d1606" strokeWidth={2.2} />
                 <T size={12} weight={600} color="#1d1606">Snooze</T>
               </View>
@@ -478,5 +478,9 @@ const st = StyleSheet.create({
   more: { width: 44, height: 44, marginTop: 6, alignItems: 'center', justifyContent: 'center' },
   swipeLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, borderRadius: 12, marginRight: -12 },
   swipeRight: { flexDirection: 'row', gap: 6, paddingLeft: 8 },
-  swipeBtn: { width: 72, flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4, borderRadius: 12 },
+  // A fixed width and the row's stretch for height, never flex: flex's zero basis in this
+  // content-sized row left Tomorrow and Delete 0 wide, their icons spilling over Snooze.
+  swipeBtn: { width: 72, alignItems: 'center', justifyContent: 'center', gap: 4, borderRadius: 12 },
+  // The menu wraps Snooze in a view of its own, so the button fills that view's height.
+  swipeMenuBtn: { flex: 1 },
 })
