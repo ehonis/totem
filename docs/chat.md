@@ -1322,6 +1322,16 @@ moves between a task and any of its chats (`web/src/work/`).
   from `GET /api/todos/sheet` already filed: its own filing, else the sheet's default
   folder (`docs/task-sheet.md`). Deleting a folder moves its tasks up to its project,
   deleting a project makes them Personal, as with its chats.
+- **Adding.** The "Add a task…" line at the top ends in a folder button: any project or
+  folder (a new one can be typed into the picker), or Personal, whether or not it has open
+  tasks and so a group of its own. The line remembers the last one chosen on this device
+  (`totem.work.addFolder`; a folder deleted since reads as Personal). A group's + opens the
+  same line starting on that group's folder, without changing the remembered one.
+  `tomorrow` and `p1` in the title show as chips under the line, with × to keep the word
+  as text (the Tasks page's parser, `web/src/todos/parse.ts`). A typed `#folder` shows on
+  the button instead, tinted, and wins for that task; choosing on the button after typing
+  it keeps the word as text (`web/src/work/AddTask.tsx`). A new task's folder group
+  unfolds, and a toast says so only when the filter hides the task.
 - **The task card** (`web/src/work/TaskCard.tsx`, `card.ts`), T3 Code's thread card for a
   task: the check circle and title, then one row per setting with a dropdown (Folder, Due,
   Priority, Repeat, Snooze), the description, the chats working on it with New chat, Open

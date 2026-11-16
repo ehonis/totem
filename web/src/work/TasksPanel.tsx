@@ -10,14 +10,14 @@ import {
 } from '../chat/icons'
 import { useThreadTaskDrop } from '../chat/dnd'
 import { pushToast } from '../toast'
-import { parseQuickAdd } from '../todos/parse'
 import { SnoozeMenu } from '../todos/TaskMenus'
 import '../todos/todos.css'
-import { buildWork, dueLabel, folderOf, type WorkGroup, type WorkGroupBy, type WorkRow, type WorkShow, type WorkSort } from './groups'
+import { buildWork, dueLabel, folderOf, matches, type WorkGroup, type WorkGroupBy, type WorkRow, type WorkShow, type WorkSort, type WorkTask } from './groups'
 import { FolderPicker } from './pickers'
-import { completeTask, createTask, findTask, setTaskFolder, snoozeTask, taskHome, useWork } from './state'
+import AddTask from './AddTask'
+import { completeTask, findTask, setTaskFolder, snoozeTask, taskHome, useWork } from './state'
 import { openTaskCard, useTaskCard } from './card'
-import { folderNames, PERSONAL } from '../todos/folders'
+import { folderLabel, PERSONAL } from '../todos/folders'
 import './work.css'
 
 // The chats panel's third face, beside Chats and Totems: the owner's open tasks
@@ -30,6 +30,7 @@ import './work.css'
 const VIEW_KEY = 'totem.work.view'
 const FOLDED_KEY = 'totem.work.folded'
 const OPEN_KEY = 'totem.work.open'
+const ADD_FOLDER_KEY = 'totem.work.addFolder'
 
 interface View { sort: WorkSort; groupBy: WorkGroupBy; show: WorkShow; sheet: boolean }
 const DEFAULT_VIEW: View = { sort: 'due', groupBy: 'folder', show: 'all', sheet: true }
@@ -101,32 +102,6 @@ function ViewMenu({ view, onView, hasSheet, sheetName }: { view: View; onView: (
         document.body,
       )}
     </>
-  )
-}
-
-/** "Add a task…": Enter adds it, with "tomorrow" or "p1" read the way the Tasks page reads them. */
-function QuickAdd({ projectId, placeholder = 'Add a task…', autoFocus = false, onDone }: { projectId: string | null; placeholder?: string; autoFocus?: boolean; onDone?: () => void }) {
-  const [text, setText] = useState('')
-  const [saving, setSaving] = useState(false)
-  async function add() {
-    const raw = text.trim()
-    if (!raw || saving) { if (!raw) onDone?.(); return }
-    setSaving(true)
-    const parsed = parseQuickAdd(raw, { now: new Date(), folders: folderNames(getState().projects) })
-    const task = await createTask({ title: parsed.title || raw, dueDate: parsed.dueDate, priority: parsed.priority }, parsed.folderId ?? projectId)
-    setSaving(false)
-    if (task) { setText(''); onDone?.() }
-  }
-  return (
-    <label className="wk-add">
-      <TI icon={IconPlus} size={15} />
-      <input
-        value={text} disabled={saving} placeholder={placeholder} aria-label={placeholder} autoFocus={autoFocus}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') void add(); if (e.key === 'Escape') { setText(''); onDone?.() } }}
-        onBlur={() => { if (!text.trim()) onDone?.() }}
-      />
-    </label>
   )
 }
 
@@ -224,7 +199,7 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
   )
 }
 
-function GroupHead({ group, folded, onFold, count, nested }: { group: WorkGroup; folded: boolean; onFold: () => void; count: number; nested: boolean }) {
+function GroupHead({ group, folded, onFold, count, nested, onAdded }: { group: WorkGroup; folded: boolean; onFold: () => void; count: number; nested: boolean; onAdded: (task: WorkTask) => void }) {
   const [adding, setAdding] = useState(false)
   const name = group.project ? group.project.name : PERSONAL
   return (
@@ -241,7 +216,7 @@ function GroupHead({ group, folded, onFold, count, nested }: { group: WorkGroup;
           <TI icon={IconPlus} size={14} />
         </button>
       </div>
-      {adding && !folded && <QuickAdd projectId={group.project?.id || null} placeholder={`Add a task to ${name}…`} autoFocus onDone={() => setAdding(false)} />}
+      {adding && !folded && <AddTask folderId={group.project?.id || null} placeholder="New task…" autoFocus onAdded={onAdded} onDone={() => setAdding(false)} />}
     </>
   )
 }
@@ -260,6 +235,16 @@ export default function TasksPanel({ onOpenChat }: { onOpenChat: () => void }) {
   const [query, setQuery] = useState('')
   const [folded, fold] = useStoredSet(FOLDED_KEY)
   const [openRows, toggleRow] = useStoredSet(OPEN_KEY)
+  // Where the top line files a new task: the folder last chosen on it (Personal at first).
+  const [addFolder, setAddFolderState] = useState<string | null>(() => readJson<string | null>(ADD_FOLDER_KEY, null))
+  const setAddFolder = (id: string | null) => { setAddFolderState(id); writeJson(ADD_FOLDER_KEY, id) }
+  // A new task shows where it went: its folder's group unfolds, and a filter that hides it says so.
+  const added = (task: WorkTask) => {
+    const group = folderOf(task, getState().projects)?.id || '__none__'
+    if (folded.has(group)) fold(group, false)
+    // A new task has no chats yet.
+    if (view.show === 'linked' || !matches(task, [], query)) pushToast(`Added “${task.title}” to ${folderLabel(task.folderId, getState().projects)}. The filter hides it.`, 'info')
+  }
 
   const shown = useMemo(() => (view.sheet ? tasks : tasks.filter((t) => t.kind !== 'sheet')), [tasks, view.sheet])
   const groups = useMemo(
@@ -290,7 +275,7 @@ export default function TasksPanel({ onOpenChat }: { onOpenChat: () => void }) {
         </label>
         <ViewMenu view={view} onView={setView} hasSheet={!!sheetName} sheetName={sheetName} />
       </div>
-      <QuickAdd projectId={null} />
+      <AddTask folderId={addFolder} onFolder={setAddFolder} onAdded={added} />
       {/* Filter and quick-add stay pinned above the scroller. */}
       <div className="vc-threads-list">
         {!loaded && <div className="vc-nav-note">Reading your tasks…</div>}
@@ -304,7 +289,7 @@ export default function TasksPanel({ onOpenChat }: { onOpenChat: () => void }) {
           const nested = !!g.parent && groups[i - 1]?.key === g.parent.id
           return (
             <div key={g.key || '__none__'} className={`wk-group ${nested ? 'nested' : ''}`}>
-              {view.groupBy === 'folder' && <GroupHead group={g} folded={isFolded} onFold={() => fold(g.key || '__none__')} count={g.rows.length} nested={nested} />}
+              {view.groupBy === 'folder' && <GroupHead group={g} folded={isFolded} onFold={() => fold(g.key || '__none__')} count={g.rows.length} nested={nested} onAdded={added} />}
               {!isFolded && g.rows.map((row) => (
                 <TaskRow
                   key={row.task.ref} row={row} runs={runs} activeId={activeId} onOpenChat={onOpenChat}

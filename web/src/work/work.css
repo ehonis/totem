@@ -14,14 +14,41 @@
 .wk-search-clear { display: grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 5px; background: none; color: var(--muted); padding: 0; }
 .wk-search-clear:hover { color: var(--text); background: #ffffff10; }
 
-.wk-add {
-  display: flex; align-items: center; gap: 8px; height: 32px; margin: 4px 4px 2px; padding: 0 8px 0 13px; border-radius: 9px;
-  color: var(--muted); cursor: text;
-}
+.wk-add { margin: 4px 4px 2px; border-radius: 9px; color: var(--muted); cursor: text; }
 .wk-add:hover, .wk-add:focus-within { background: var(--bg-3); }
 .wk-add:focus-within { color: var(--text); }
-.wk-add input { flex: 1; min-width: 0; border: 0; outline: none; background: none; color: var(--text); font: inherit; font-size: 13.5px; }
-.wk-add input::placeholder { color: color-mix(in srgb, var(--muted) 90%, transparent); }
+.wk-add-line { display: flex; align-items: flex-start; gap: 8px; min-height: 32px; padding: 4px 3px 4px 13px; }
+.wk-add-plus { flex: none; margin-top: 4.5px; }
+/* One line that grows with a long title (field-sizing), up to five. */
+.wk-add textarea {
+  flex: 1; min-width: 0; min-height: 24px; max-height: 104px; padding: 2px 0; border: 0; outline: none; resize: none; overflow-y: auto;
+  field-sizing: content; background: none; color: var(--text); font: inherit; font-size: 13.5px; line-height: 20px;
+}
+.wk-add textarea::placeholder { color: color-mix(in srgb, var(--muted) 90%, transparent); }
+/* Where the task goes: always shown, so a folder with no open tasks (and so no group) is still one click away. */
+.wk-add-folder {
+  display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 52%; height: 24px; padding: 0 5px 0 6px;
+  border: 0; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: color-mix(in srgb, var(--text) 80%, transparent); font: inherit; font-size: 12px; cursor: pointer;
+}
+.wk-add-folder:hover, .wk-add-folder[aria-expanded="true"] { background: color-mix(in srgb, var(--text) 11%, transparent); color: var(--text); }
+.wk-add-folder:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wk-add-folder.personal { background: none; color: color-mix(in srgb, var(--muted) 92%, transparent); }
+.wk-add-folder.personal:hover, .wk-add-folder.personal[aria-expanded="true"] { background: color-mix(in srgb, var(--text) 7%, transparent); }
+/* Filed by a #folder in the title, as that word's chip is coloured. */
+.wk-add-folder.typed { background: color-mix(in srgb, var(--accent-2) 20%, transparent); color: var(--text); }
+.wk-add-folder .vc-proj-icon, .wk-add-folder .ti { flex: none; }
+.wk-add-folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-add-folder-chev { opacity: .55; }
+/* A phone gets a 44px hit area around the compact button. */
+@media (max-width: 720px) {
+  .wk-add-line { min-height: 44px; padding-top: 8px; padding-bottom: 8px; }
+  .wk-add-plus { margin-top: 6.5px; }
+  .wk-add textarea { min-height: 28px; font-size: 16px; line-height: 24px; }
+  .wk-add-folder { position: relative; height: 32px; }
+  .wk-add-folder::after { content: ''; position: absolute; inset: -6px -4px; }
+}
+.wk-add-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 8px 7px 36px; }
 
 .wk-view-menu { position: fixed; z-index: 75; min-width: 0; }
 .wk-view-menu > button { min-height: 34px; font-size: 13.5px; }

@@ -136,7 +136,8 @@ export function folderOf(task: Pick<WorkTask, 'folderId'>, projects: readonly Pr
   return (id && projects.find((p) => p.id === id)) || null
 }
 
-function matches(task: WorkTask, chats: ChatThread[], query: string): boolean {
+/** Whether the panel's filter keeps a task: its title, status or one of its chats' titles. */
+export function matches(task: WorkTask, chats: ChatThread[], query: string): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return true
   if (task.title.toLowerCase().includes(q) || task.status.toLowerCase().includes(q)) return true
