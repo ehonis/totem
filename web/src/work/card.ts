@@ -1,7 +1,12 @@
-// Which task the floating task card shows (work/TaskCard.tsx), and the ways out of
-// it that need App's router: a chat, a new chat for the task, the Tasks page.
+// Which task the task dialog shows (work/TaskCard.tsx), and the ways out of it
+// that need App's router: a chat, a new chat for the task, the Tasks page.
 // App installs the router once; the card, the chats panel, the composer's task
 // strip and the Tasks page's pane all go through here.
+//
+// The open chat's own task is not a dialog: it is pinned at the chat's top right
+// for as long as the chat is on screen (PinnedTask). Opening that task from
+// anywhere (its strip, its row in the chats panel) unfolds and flashes the pinned
+// panel instead of stacking a dialog over it.
 import { useSyncExternalStore } from 'react'
 import { setActive, startTaskDraft } from '../chat/store'
 import { requestLanding } from '../landing'
@@ -11,7 +16,21 @@ let open: string | null = null
 const subs = new Set<() => void>()
 const emit = () => subs.forEach((fn) => fn())
 
-export function openTaskCard(ref: string) { open = ref; emit() }
+// Pinned task ref -> how to bring its panel forward.
+const pinned = new Map<string, () => void>()
+
+/** The chat on screen pins its task while mounted; the returned function unpins it. */
+export function pinTask(ref: string, reveal: () => void): () => void {
+  pinned.set(ref, reveal)
+  return () => { if (pinned.get(ref) === reveal) pinned.delete(ref) }
+}
+
+export function openTaskCard(ref: string) {
+  const reveal = pinned.get(ref)
+  if (reveal) { reveal(); return }
+  open = ref
+  emit()
+}
 export function closeTaskCard() { if (open !== null) { open = null; emit() } }
 export function useTaskCard(): string | null {
   return useSyncExternalStore((fn) => { subs.add(fn); return () => { subs.delete(fn) } }, () => open)
