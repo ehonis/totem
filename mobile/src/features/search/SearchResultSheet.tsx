@@ -5,12 +5,12 @@ import { ScrollView, StyleSheet, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { AuthError, getSearchDoc, type SearchHit } from '../../lib/api'
-import { ArrowTopRightOnSquareIcon } from '../../lib/icons'
+import { ArrowTopRightOnSquareIcon, XMarkIcon } from '../../lib/icons'
 import { pushError } from '../../lib/toast'
 import Markdown from '../../ui/Markdown'
 import { colors, fonts } from '../../theme'
 import { T } from '../../ui/Text'
-import { Btn, Spinner } from '../../ui/kit'
+import { Btn, IconBtn, Spinner } from '../../ui/kit'
 import { AddToChatMenu, KindLabel, Marked, openHit, recallHit } from './shared'
 
 export default function SearchResultSheet() {
@@ -34,15 +34,21 @@ export default function SearchResultSheet() {
     return () => { alive = false }
   }, [id])
 
+  // The title and Close sit above the scroller: a drag there (and on the grabber over
+  // it) always moves the sheet, so it closes from anywhere in a long document.
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg2 }}>
-      <ScrollView contentContainerStyle={{ padding: 20, paddingTop: 24, paddingBottom: insets.bottom + 28 }}>
-        {hit ? <KindLabel kind={hit.kind} /> : null}
-        <T size={19} weight={700} lineHeight={25} style={{ marginTop: 6 }} selectable>
-          {hit ? <Marked text={hit.titleMarked || hit.title} /> : ''}
-        </T>
-        {hit?.date ? <T size={12} muted style={{ marginTop: 4, fontVariant: ['tabular-nums'] }}>{hit.date}</T> : null}
-
+      <View style={st.head}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          {hit ? <KindLabel kind={hit.kind} /> : null}
+          <T size={19} weight={700} lineHeight={25} numberOfLines={4} style={{ marginTop: 6 }} selectable>
+            {hit ? <Marked text={hit.titleMarked || hit.title} /> : ''}
+          </T>
+          {hit?.date ? <T size={12} muted style={{ marginTop: 4, fontVariant: ['tabular-nums'] }}>{hit.date}</T> : null}
+        </View>
+        <IconBtn icon={XMarkIcon} size={20} box={44} label="Close" onPress={() => router.back()} style={{ marginTop: -8, marginRight: -10 }} />
+      </View>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 4, paddingBottom: insets.bottom + 28 }}>
         {hit ? (
           <View style={st.actions}>
             <Btn compact title="Open" icon={ArrowTopRightOnSquareIcon} onPress={() => { router.back(); openHit(hit) }} />
@@ -66,7 +72,8 @@ export default function SearchResultSheet() {
 }
 
 const st = StyleSheet.create({
-  actions: { flexDirection: 'row', gap: 8, marginTop: 14, flexWrap: 'wrap' },
+  head: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingHorizontal: 20, paddingTop: 24, paddingBottom: 12 },
+  actions: { flexDirection: 'row', gap: 8, marginTop: 6, flexWrap: 'wrap' },
   // .search-hit-full
   full: { marginTop: 16, paddingVertical: 12, paddingHorizontal: 14, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.line, borderRadius: 10 },
 })

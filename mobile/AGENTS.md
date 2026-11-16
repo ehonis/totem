@@ -212,6 +212,17 @@ npm run start:tailscale                            # Metro on the Tailscale IP, 
   native UIButton with a context-menu interaction; a reply's links, tables and code sat inside it, and
   its touch tracking swallowed sideways swipes and some link taps. `ReplyMenu` (Message.tsx) is a
   `Pressable` long press that opens the same items as an action sheet. The bubble keeps `MessageMenu`.
+- **A sideways scroller inside a touchable needs its content to take the touch.** On iOS a ScrollView
+  refuses to start a drag while a view above it is the JS responder (`_shouldDisableScrollInteraction` in
+  RN's `RCTScrollViewComponentView`), so `ReplyMenu`'s Pressable stopped every table and code block in a
+  reply scrolling sideways. Their content claims the touch itself (`OWN_TOUCHES` in `ui/Markdown.tsx`),
+  over the whole content, padding included; that is also why tables are drawn by the app (`MdTable`)
+  rather than by `react-native-nitro-markdown`. Any new horizontal ScrollView inside a Pressable needs
+  the same.
+- **A sheet you read in keeps its header out of the scroller.** In a formSheet, a drag on a scroll view
+  only moves the sheet once the scroll view is at its top, so a header inside the scroller (sticky or
+  not) left nothing to grab halfway down a document. `FileSheet` and `SearchResultSheet` put the title,
+  buttons and Close above a `flex: 1` ScrollView, as `SheetFrame` does.
 - **A message's text is selected in a sheet, not in place.** A press on a message opens its menu (the bubble's
   `MessageMenu`, the reply's `ReplyMenu`), and RN's `<Text selectable>` on iOS offers only Copy for the whole
   block, so both menus have **Select text**: `features/chat/selectText.ts` hands the text to

@@ -8,7 +8,7 @@
 // showed Access's login page).
 import React, { useEffect, useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
-import { useLocalSearchParams } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Clipboard from 'expo-clipboard'
 import { authHeaders } from '../../lib/api'
@@ -20,7 +20,7 @@ import { Press, Spinner } from '../../ui/kit'
 import { success, tap } from '../../ui/haptics'
 import { colors, fonts } from '../../theme'
 import { TI, vc } from './ui'
-import { IconCopy, IconDownload } from './icons'
+import { IconCopy, IconDownload, IconX } from './icons'
 import { refusal, shareFile } from './openLink'
 import { bridgePath, uploadPath } from '../../lib/links'
 
@@ -57,52 +57,50 @@ export default function FileSheet() {
   }, [src, name])
   const kind = /markdown/.test(mime) || /\.(md|markdown)$/i.test(name) ? 'markdown' : /csv|tab-separated/.test(mime) || /\.(csv|tsv)$/i.test(name) ? 'table' : 'text'
   const rows = kind === 'table' && text != null ? parseDelimited(text, /\.tsv$/i.test(name) || /tab-separated/.test(mime) ? '\t' : ',') : []
-  // One scroller for the whole sheet (the header pinned), so it sits right at
-  // either detent and a drag on the text expands the sheet first.
+  // The header sits above the scroller, not in it: a drag on it (and on the grabber
+  // over it) always moves the sheet, so the file closes from wherever it was read
+  // to. Inside the scroller, a downward drag only scrolled back up until the top.
   return (
-    <ScrollView
-      style={{ backgroundColor: colors.bg }}
-      stickyHeaderIndices={[0]}
-      contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
-    >
-      {/* A sticky header's own style is moved to RN's wrapper (ScrollViewStickyHeader gives the child
-          flex: 1 instead), which dropped the row: the buttons stacked under the title. The row sits inside. */}
-      <View style={{ backgroundColor: colors.bg }}>
-        <View style={st.head}>
-          <T size={15} weight={600} numberOfLines={1} style={{ flex: 1 }}>{name}</T>
-          {text != null ? (
-            <Press style={st.btn} onPress={() => { Clipboard.setStringAsync(text).catch(() => {}); success() }} accessibilityLabel="Copy">
-              <TI icon={IconCopy} size={18} color={colors.text} />
-            </Press>
-          ) : null}
-          {!error ? (
-            <Press style={st.btn} onPress={() => { tap(); if (src) shareFile(src, name).catch((e) => pushError(e?.message || `Couldn’t download ${name}.`)) }} accessibilityLabel="Save or share">
-              <TI icon={IconDownload} size={18} color={colors.text} />
-            </Press>
-          ) : null}
-        </View>
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      <View style={st.head}>
+        <T size={15} weight={600} numberOfLines={1} style={{ flex: 1 }}>{name}</T>
+        {text != null ? (
+          <Press style={st.btn} onPress={() => { Clipboard.setStringAsync(text).catch(() => {}); success() }} accessibilityLabel="Copy">
+            <TI icon={IconCopy} size={18} color={colors.text} />
+          </Press>
+        ) : null}
+        {!error ? (
+          <Press style={st.btn} onPress={() => { tap(); if (src) shareFile(src, name).catch((e) => pushError(e?.message || `Couldn’t download ${name}.`)) }} accessibilityLabel="Save or share">
+            <TI icon={IconDownload} size={18} color={colors.text} />
+          </Press>
+        ) : null}
+        <Press style={st.btn} onPress={() => { tap(); router.back() }} accessibilityLabel="Close">
+          <TI icon={IconX} size={18} color={colors.text} />
+        </Press>
       </View>
-      {error ? <T muted style={{ padding: 20 }}>{error}</T> : text == null ? <View style={{ paddingTop: 40 }}><Spinner /></View> : kind === 'table' ? (
-        <ScrollView horizontal contentContainerStyle={{ padding: 16 }}>
-          <View>
-            {rows.map((r, i) => (
-              <View key={i} style={{ flexDirection: 'row' }}>
-                {r.map((c, j) => <T key={j} size={13.5} weight={i === 0 ? 600 : 400} style={[st.cell, i === 0 && { backgroundColor: '#1a1d26' }]} numberOfLines={3}>{c}</T>)}
-              </View>
-            ))}
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}>
+        {error ? <T muted style={{ padding: 20 }}>{error}</T> : text == null ? <View style={{ paddingTop: 40 }}><Spinner /></View> : kind === 'table' ? (
+          <ScrollView horizontal contentContainerStyle={{ padding: 16 }}>
+            <View>
+              {rows.map((r, i) => (
+                <View key={i} style={{ flexDirection: 'row' }}>
+                  {r.map((c, j) => <T key={j} size={13.5} weight={i === 0 ? 600 : 400} style={[st.cell, i === 0 && { backgroundColor: '#1a1d26' }]} numberOfLines={3}>{c}</T>)}
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        ) : (
+          <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
+            {kind === 'markdown' ? <Markdown text={text} size={16} /> : <T selectable style={{ fontFamily: fonts.mono, fontSize: 13, lineHeight: 20, color: '#cfd4de' }}>{text}</T>}
           </View>
-        </ScrollView>
-      ) : (
-        <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
-          {kind === 'markdown' ? <Markdown text={text} size={16} /> : <T selectable style={{ fontFamily: fonts.mono, fontSize: 13, lineHeight: 20, color: '#cfd4de' }}>{text}</T>}
-        </View>
-      )}
-    </ScrollView>
+        )}
+      </ScrollView>
+    </View>
   )
 }
 
 const st = StyleSheet.create({
-  head: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 18, paddingBottom: 8, paddingHorizontal: 16, backgroundColor: colors.bg },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 18, paddingBottom: 10, paddingHorizontal: 16, backgroundColor: colors.bg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: vc.line },
   btn: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: vc.line, alignItems: 'center', justifyContent: 'center' },
   cell: { borderWidth: StyleSheet.hairlineWidth, borderColor: vc.line, paddingHorizontal: 10, paddingVertical: 6, minWidth: 90, maxWidth: 240 },
 })
