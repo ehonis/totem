@@ -14,6 +14,19 @@ import { parseTitleReply, cleanIcon, THREAD_ICONS } from './thread-icons.mjs'
 
 const tmp = () => mkdtemp(join(tmpdir(), 'totem-chat-'))
 
+test('doneAt (mark_chat_done) is kept by the store but never set by a client PUT', async () => {
+  const dir = await tmp()
+  const store = createThreadStore({ dir })
+  await store.update('d1', (t) => { t.doneAt = 1234 }, { create: { kind: 'regular' } })
+  assert.equal((await store.get('d1')).doneAt, 1234)
+  assert.equal((await store.summaries())[0].doneAt, 1234)
+  await store.put('d1', { doneAt: 99, title: 'x' })
+  assert.equal((await store.get('d1')).doneAt, 1234)
+  await store.put('fresh', { doneAt: 99, messages: [] })
+  assert.equal((await store.get('fresh')).doneAt, undefined)
+  await rm(dir, { recursive: true, force: true })
+})
+
 test('a client PUT of an existing thread merges metadata and keeps server messages', async () => {
   const dir = await tmp()
   const store = createThreadStore({ dir })

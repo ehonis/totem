@@ -1179,6 +1179,19 @@ so its settle has no Undo toast; Un-settle in the sheet puts a chat back.
   never written, so changing the setting re-sorts every list. Pinned chats, running
   chats, and chats the owner un-settled by hand (`settledOverride: 'active'`, which lasts
   until his next message) are left alone.
+- **Done, from the agent**: a one-off request ("add a task for X") ends with the agent
+  calling `mark_chat_done` (`chat/done.mjs`, on each chat run's `/agent-mcp` beside
+  `ask_questions`; `browser__mark_chat_done` through the gateway; never in a totem's
+  chat). It only sets `doneAt` on the thread. While the reply is unread the row shows a
+  green **Settle** chip in plain sight (web and app; `offersSettle`, in place of the reply
+  dot), and once it is read the chat settles by itself at its last activity (`settledAt`),
+  except while it is the chat on screen (`open`, `shelve`'s `openId`), so it never jumps
+  away under him; one he opened from the Settled shelf stays there (`openedSettled`,
+  recorded by `setActive`, and `keptOpenId`). The same rules as auto-settle otherwise: not pinned, running, snoozed,
+  un-settled by hand, or with auto-settle set to never. A reply that fails or is stopped
+  drops the mark (the run's final save), and so do his words: a steer mid-reply or his next
+  message (`startChatTurn` and both stores' `startRun`). Clients cannot set it, not even on
+  a new thread's PUT.
 - **Snooze** (the clock on hover, or the menu) offers In 1 hour, In 3 hours, This evening
   (18:00, while that is over an hour away), Tomorrow (9:00), Next week (Monday 9:00,
   left out on Sundays) and Custom… (a date and time, or a duration). Snoozed rows show
@@ -1189,7 +1202,8 @@ so its settle has no Undo toast; Un-settle in the sheet puts a chat back.
   the browser. Pinning does too.
 
 The thread fields are `settledOverride` (`'settled'` | `'active'`), `settledAt`,
-`unsettledAt` (coming off the shelf counts as activity), `snoozedUntil` and `snoozedAt`.
+`unsettledAt` (coming off the shelf counts as activity), `snoozedUntil` and `snoozedAt`,
+plus `doneAt`, which only the bridge writes.
 The browser sends every field a change touches (`null` clears one), and `PUT
 /api/threads/:id` stores them as given, with no side effects, so Undo can put back
 exactly what was there.

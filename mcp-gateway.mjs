@@ -517,7 +517,7 @@ const BUILTIN_SERVERS = {
   // run: the bridge hands each run a token in TOTEM_BROWSER_TOKEN, which binds the
   // tools to that chat. Claude and Codex get /agent-mcp directly; this is how
   // Cursor and OpenCode, which take no per-run MCP flag, reach the same tools.
-  browser: { filter: /^(preview_|ask_questions$|change_(start|finish)$|html_(preview|render)$)/, strip: '', description: "The chat's browser, questions for the owner, inline charts and changes to Totem itself, via the Totem bridge" },
+  browser: { filter: /^(preview_|ask_questions$|mark_chat_done$|change_(start|finish)$|html_(preview|render)$)/, strip: '', description: "The chat's browser, questions for the owner, inline charts and changes to Totem itself, via the Totem bridge" },
 }
 
 // Inside a chat run, which run is calling: a proposal it stages through the

@@ -19,7 +19,7 @@ import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec,
 import type { ApprovalDecision, Attachment, BrowserFrame, BrowserHandoff, ChatCapabilities, ChatMessage, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
 import type { RawInput } from './browserInput'
 import { isLoaded, mergeEarlier, mergeLatest, mergeSummary, PAGE_TURNS, summarize, type ThreadPage } from './history'
-import { activeAt, wokeAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
+import { activeAt, wokeAt, settledAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
 
 // Every chat's summary, plus the loaded windows of the chats opened last
 // (history.ts). chat_threads_v2 held the 60 newest chats whole and is dropped.
@@ -60,6 +60,8 @@ export interface ChatState {
   caps: ChatCapabilities | null
   /** The open chat, or null for a new one. Lives here so the app sidebar can highlight it. */
   activeId: string | null
+  /** The open chat when he opened it from the Settled shelf: it stays settled while open (settle.ts keptOpenId). */
+  openedSettled: string | null
   /** The file open in the canvas panel beside the chat. */
   artifact: Artifact | null
   /** Settings → Chat (chat titles, auto-settle). */
@@ -128,6 +130,7 @@ let state: ChatState = {
   models: {},
   caps: null,
   activeId: new URLSearchParams(window.location.search).get('thread'),
+  openedSettled: null,
   artifact: null,
   browser: {},
   browserOpen: false,
@@ -409,7 +412,8 @@ export function setActive(id: string | null) {
   // The panel follows the chat: opening a project's chat shows that project.
   const t = id ? state.threads.find((x) => x.id === id) : null
   const scope = t ? (t.projectId && state.projects.some((p) => p.id === t.projectId) ? t.projectId : null) : state.projectId
-  set({ activeId: id, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null, projectId: scope, draftTaskId: null })
+  const openedSettled = t && settledAt(t, now(), state.prefs.autoSettleDays ?? 3, !!state.runs[t.id]) ? t.id : null
+  set({ activeId: id, openedSettled, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null, projectId: scope, draftTaskId: null })
   if (id && !state.browser[id]) loadBrowser(id)
   if (id) openThread(id)
 }
@@ -707,6 +711,12 @@ export function settleThread(id: string) {
 export function unsettleThread(id: string) {
   const t = state.threads.find((x) => x.id === id)
   if (t) writeSettle(id, unsettleChange(now()))
+  backInPlay(id)
+}
+
+/** Off the shelf while open (un-settled, or written in): it keeps its place from now on (settle.ts keptOpenId). */
+function backInPlay(id: string) {
+  if (state.openedSettled === id) set({ openedSettled: null })
 }
 
 export function snoozeThread(id: string, until: number) {
@@ -1354,8 +1364,9 @@ function startRun(threadId: string, args: SendArgs) {
   setRun(threadId, { seq: 0, activity: '', startedAt: now() })
   // Replying (or regenerating, or editing) is what clears "waiting on you".
   // So does writing in a settled or snoozed chat, which brings it back (the bridge does the same).
-  patchThread(threadId, (t) => (t.needsReply || t.settledOverride || t.snoozedUntil
-    ? { ...t, needsReply: undefined, keepUnread: undefined, settledOverride: undefined, settledAt: undefined, snoozedUntil: undefined, snoozedAt: undefined, ...(t.settledOverride === 'settled' ? { unsettledAt: now() } : {}) }
+  backInPlay(threadId)
+  patchThread(threadId, (t) => (t.needsReply || t.settledOverride || t.snoozedUntil || t.doneAt
+    ? { ...t, needsReply: undefined, keepUnread: undefined, settledOverride: undefined, settledAt: undefined, snoozedUntil: undefined, snoozedAt: undefined, doneAt: undefined, ...(t.settledOverride === 'settled' ? { unsettledAt: now() } : {}) }
     : t))
   const handle = sendChat(args, (e) => handleEvent(threadId, e), (err: any) => {
     if (fail(err)) { setRun(threadId, null); return }

@@ -98,6 +98,8 @@ export default function ChatScreen() {
   const page = useChat((s) => (s.activeId ? s.pages[s.activeId] : undefined))
   const retitling = useChat((s) => !!(s.activeId && s.retitling[s.activeId]))
   const autoSettleDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
+  // Opened from the Settled shelf, it stays settled while open; otherwise it keeps its place (settle.ts keptOpenId).
+  const openedSettled = useChat((s) => s.openedSettled)
   const scopeProject = useChat((s) => s.projects.find((p) => p.id === s.projectId))
   // Home's new chat offers the projects to start in, most recently used first.
   const allProjects = useChat((s) => s.projects)
@@ -403,7 +405,7 @@ export default function ChatScreen() {
         </View>
       )
     }
-    if (!settledAt(active, at, autoSettleDays)) return null
+    if (!settledAt(active, at, autoSettleDays, false, active.id !== openedSettled)) return null
     return (
       <View style={st.parked}>
         <T size={13} color={vc.soft} style={{ flex: 1 }}>This chat is settled. Send a message to bring it back.</T>
@@ -545,7 +547,7 @@ export default function ChatScreen() {
   )
 
   const titleText = active && !empty ? threadTitle(active) : temporary ? 'Temporary chat' : 'New chat'
-  const titleMenu = active && !empty ? threadMenu(active, shelfOf(active, Date.now(), autoSettleDays, busy), busy) : null
+  const titleMenu = active && !empty ? threadMenu(active, shelfOf(active, Date.now(), autoSettleDays, busy, active.id !== openedSettled), busy) : null
   const titleEl = (
     <View style={st.titleRow}>
       {active && !empty ? <ThreadIcon t={active} size={17} busy={retitling} /> : null}

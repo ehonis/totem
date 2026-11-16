@@ -280,6 +280,8 @@ export interface ChatThread {
   /** Hidden in Snoozed until then. A past time that's still set means it woke and hasn't been opened since. */
   snoozedUntil?: number
   snoozedAt?: number
+  /** The agent marked the request finished (mark_chat_done): Settle is offered, and it settles once read. Cleared by his next message. */
+  doneAt?: number
   messages: ChatMessage[]
   /**
    * The bridge sent a summary (GET /api/threads?view=summary): `messages` is only a

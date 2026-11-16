@@ -40,6 +40,8 @@ export function shelfOf(t, { now = Date.now(), autoSettleDays = 3, running = fal
   if (t.snoozedUntil && t.snoozedUntil > now) return 'snoozed'
   if (t.settledOverride === 'settled') return 'settled'
   if (t.settledOverride === 'active' || t.pinned || running || !autoSettleDays) return 'active'
+  // Marked done by its agent (chat/done.mjs) and read: settled.
+  if (t.doneAt && !t.needsReply) return 'settled'
   const at = Math.max(t.updatedAt || 0, t.unsettledAt || 0, t.snoozedUntil || 0)
   return now - at >= autoSettleDays * DAY_MS ? 'settled' : 'active'
 }

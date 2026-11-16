@@ -109,7 +109,7 @@ export default function ChatPane() {
         <Row
           id="auto-settle"
           title="Settle quiet chats"
-          description="A chat with no activity for this long moves to its list’s Settled shelf. Pinned chats, and ones you un-settle by hand, stay put."
+          description="A chat with no activity for this long moves to its list’s Settled shelf, and a one-off the agent marked done moves once you’ve read it; Never stops both. Pinned chats, and ones you un-settle by hand, stay put."
           control={
             <Picker
               label="Settle quiet chats"

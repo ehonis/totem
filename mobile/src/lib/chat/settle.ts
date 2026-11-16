@@ -32,28 +32,47 @@ export const wokeAt = (t: ChatThread, now: number) => (t.snoozedUntil && t.snooz
 /** The chat's last activity: a message, coming off the shelf, or waking up. */
 export const activeAt = (t: ChatThread, now: number) => Math.max(t.updatedAt || 0, t.unsettledAt || 0, wokeAt(t, now))
 
-/** When the chat settled (by hand, or the activity it auto-settled after); 0 if it isn't settled. */
-export function settledAt(t: ChatThread, now: number, autoDays: number, live = false): number {
+/**
+ * When the chat settled (by hand, or the activity it auto-settled after); 0 if it isn't settled.
+ * A chat its agent marked done (`doneAt`, chat/done.mjs on the bridge) settles as soon as the
+ * owner has read the reply and moved off it (`open`: it is the chat on screen, which stays put
+ * under him); turning auto-settle off ("Never") turns that off too.
+ */
+export function settledAt(t: ChatThread, now: number, autoDays: number, live = false, open = false): number {
   if (t.settledOverride === 'settled') return t.settledAt || t.updatedAt || 1
   if (t.settledOverride === 'active' || t.pinned || live || !autoDays || isSnoozed(t, now)) return 0
   const at = activeAt(t, now)
+  if (t.doneAt && !t.needsReply) return open ? 0 : Math.max(at, t.doneAt)
   return now - at >= autoDays * DAY_MS ? at : 0
 }
 
+/**
+ * The agent marked this chat done and it hasn't settled yet (the reply is still unread, or
+ * auto-settle is off): its row offers Settle in plain sight rather than behind a hover or swipe.
+ */
+export const offersSettle = (t: ChatThread, shelf: Shelf, live = false) =>
+  shelf === 'active' && !!t.doneAt && !live && !t.pinned && t.settledOverride !== 'active'
+
+/**
+ * The open chat that keeps its place while it's on screen (settledAt's `open`): any open chat but
+ * one he opened from the Settled shelf (`openedSettled`, recorded by setActive), which stays there.
+ */
+export const keptOpenId = (activeId: string | null, openedSettled: string | null) => (activeId && activeId !== openedSettled ? activeId : null)
+
 /** Snoozed wins over settled, as in T3. */
-export function shelfOf(t: ChatThread, now: number, autoDays: number, live = false): Shelf {
+export function shelfOf(t: ChatThread, now: number, autoDays: number, live = false, open = false): Shelf {
   if (isSnoozed(t, now)) return 'snoozed'
-  return settledAt(t, now, autoDays, live) ? 'settled' : 'active'
+  return settledAt(t, now, autoDays, live, open) ? 'settled' : 'active'
 }
 
-/** A list split into its three shelves: active newest first, snoozed soonest first, settled most recent first. */
-export function shelve(threads: ChatThread[], now: number, autoDays: number, live: (id: string) => boolean = () => false) {
+/** A list split into its three shelves: active newest first, snoozed soonest first, settled most recent first. `openId`: the chat on screen. */
+export function shelve(threads: ChatThread[], now: number, autoDays: number, live: (id: string) => boolean = () => false, openId: string | null = null) {
   const active: ChatThread[] = []
   const snoozed: ChatThread[] = []
   const settled: { t: ChatThread; at: number }[] = []
   for (const t of threads) {
     if (isSnoozed(t, now)) { snoozed.push(t); continue }
-    const at = settledAt(t, now, autoDays, live(t.id))
+    const at = settledAt(t, now, autoDays, live(t.id), t.id === openId)
     if (at) settled.push({ t, at })
     else active.push(t)
   }

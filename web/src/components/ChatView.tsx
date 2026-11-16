@@ -181,6 +181,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
 
   const active = threads.find((t) => t.id === activeId) || null
   const autoSettleDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
+  // Opened from the Settled shelf, it stays settled while open; otherwise it keeps its place (settle.ts keptOpenId).
+  const openedSettled = useChat((s) => s.openedSettled)
   // An id in the URL that isn't a thread (deleted, expired) is a new chat —
   // but only once the bridge's list has arrived, not against a cold cache.
   const loaded = useChat((s) => s.loaded)
@@ -648,7 +650,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
         </div>
       )
     }
-    if (!settledAt(active, at, autoSettleDays)) return null
+    if (!settledAt(active, at, autoSettleDays, false, active.id !== openedSettled)) return null
     return (
       <div className="vc-parked">
         <span>This chat is settled. Send a message to bring it back.</span>

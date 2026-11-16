@@ -95,6 +95,7 @@ import { AGENT_SPAWN, killTree, trackAgent } from './scripts/kill-tree.mjs'
 import { createSteering, progressNote, steerPrompt, steerText } from './chat/steer.mjs'
 import { approvalPart, permissionResult, normalizeDecision, statusForDecision, sessionRules, mergeAllowedTools, createApprovalWaits } from './chat/approvals.mjs'
 import { ASK_TOOL, ASK_TOOL_DESCRIPTOR, QUESTION_RULES, DISMISSED_FOR_AGENT, QUESTIONS_LATER_FOR_AGENT, normalizeQuestions, normalizeAnswers, attachedIds, answersForAgent, answersMessage, createQuestionWaits, createHolds, holdableTimeout } from './chat/questions.mjs'
+import { DONE_TOOL, DONE_TOOL_DESCRIPTOR, DONE_RULES, DONE_RESULT } from './chat/done.mjs'
 import { PREVIEW_TOOL, RENDER_TOOL, VISUAL_RULES, visualToolDescriptors, previewVisual, storeVisual, renderedResult, visualToolError } from './chat/visuals.mjs'
 import { usageTally, addUsage, replyStats } from './chat/stats.mjs'
 import { memoryFileStats, outsideDir, MEMORY_HEAD_CHARS } from './chat/memory-ref.mjs'
@@ -8696,9 +8697,9 @@ function grantBrowserAccess(threadId, push) {
  * `ask_questions` (chat/questions.mjs) when `ask` is given. `holds` stop the
  * run's clock while a question waits; the streamers read it off the grant.
  */
-function grantChatAccess(threadId, push, { browser = false, ask = null, handoff = null, change = null, visual = null, runId = null, inboxCard = null } = {}) {
+function grantChatAccess(threadId, push, { browser = false, ask = null, handoff = null, change = null, visual = null, done = null, runId = null, inboxCard = null } = {}) {
   const withBrowser = browser && browserReady()
-  if (!withBrowser && !ask && !change) return null
+  if (!withBrowser && !ask && !change && !done) return null
   const token = randomBytes(24).toString('base64url')
   const holds = createHolds()
   const handOver = withBrowser ? handoff : null
@@ -8710,8 +8711,9 @@ function grantChatAccess(threadId, push, { browser = false, ask = null, handoff 
   // which is no new way out for a run that has the browser, and would be one for
   // a run with no network of its own (Codex's sandbox). Neither launches anything until called.
   const charts = withBrowser ? visual : null
-  agentBrowserAccess.set(token, { threadId, push, browser: withBrowser, ask, handoff: handOver, change, visual: charts, holds, runId, inboxCard })
-  return { token, url: BROWSER_MCP_URL, browser: withBrowser, ask: !!ask, handoff: !!handOver, change: !!change, visual: !!charts, holds, revoke: () => agentBrowserAccess.delete(token) }
+  // `done`: mark_chat_done's callback (chat/done.mjs), which sets the thread's doneAt.
+  agentBrowserAccess.set(token, { threadId, push, browser: withBrowser, ask, handoff: handOver, change, visual: charts, done, holds, runId, inboxCard })
+  return { token, url: BROWSER_MCP_URL, browser: withBrowser, ask: !!ask, handoff: !!handOver, change: !!change, visual: !!charts, done: !!done, holds, revoke: () => agentBrowserAccess.delete(token) }
 }
 
 // Changing Totem from a chat (dev/change.mjs): change_start and change_finish on
@@ -8776,7 +8778,7 @@ const QUESTION_CALL_TIMEOUT_MS = 24 * 60 * 60_000
 function agentMcpTools(access) {
   return [
     ...(access.browser ? browserToolDescriptors() : []), ...(access.handoff ? [HANDOFF_TOOL_DESCRIPTOR] : []),
-    ...(access.ask ? [ASK_TOOL_DESCRIPTOR] : []), ...(access.change ? CHANGE_TOOL_DESCRIPTORS : []), ...visualToolDescriptors(access),
+    ...(access.ask ? [ASK_TOOL_DESCRIPTOR] : []), ...(access.change ? CHANGE_TOOL_DESCRIPTORS : []), ...visualToolDescriptors(access), ...(access.done ? [DONE_TOOL_DESCRIPTOR] : []),
   ]
 }
 
@@ -8808,7 +8810,7 @@ async function handleAgentMcp(req, res) {
       protocolVersion: asked && MCP_SUPPORTED_PROTOCOLS.has(asked) ? asked : MCP_PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: BROWSER_MCP_NAME, version: '1.0.0' },
-      instructions: [access.browser && (access.handoff ? BROWSER_RULES_HANDOFF : BROWSER_RULES), access.ask && QUESTION_RULES, access.visual && VISUAL_RULES].filter(Boolean).join('\n\n'),
+      instructions: [access.browser && (access.handoff ? BROWSER_RULES_HANDOFF : BROWSER_RULES), access.ask && QUESTION_RULES, access.visual && VISUAL_RULES, access.done && DONE_RULES].filter(Boolean).join('\n\n'),
     })
   }
   if (method === 'ping') return ok({})
@@ -8837,6 +8839,14 @@ async function handleAgentMcp(req, res) {
     }
     if (!res.destroyed && !res.writableEnded) res.end(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n\n`)
     return
+  }
+  if (method === 'tools/call' && params?.name === DONE_TOOL && access.done) {
+    try {
+      await access.done()
+      return ok({ content: [{ type: 'text', text: DONE_RESULT }] })
+    } catch (e) {
+      return ok({ content: [{ type: 'text', text: `Could not mark the chat done: ${e?.message || e}` }], isError: true })
+    }
   }
   // Charts shown inline (chat/visuals.mjs): a preview in the box's Chromium, then the page itself.
   if (method === 'tools/call' && params?.name === PREVIEW_TOOL && access.visual) {
@@ -9534,7 +9544,7 @@ function chatPrompt({ thread, userIndex, provider, text, files, voice, fresh, re
   const extras = [
     !voice && filesRule(join(CHAT_OUTPUTS_DIR, thread.id), { visuals: !!reach?.visual }), CHAT_MEMORY_RULES, !voice && WORK_RULES,
     reach && reachRules(reach), reach?.computerUse && COMPUTER_RULES, reach?.browser && BROWSER_RULES_HANDOFF, reach?.ask && QUESTION_RULES, reach?.change && changeRule(HERE),
-    reach?.visual && VISUAL_RULES,
+    reach?.visual && VISUAL_RULES, reach?.done && DONE_RULES,
     !voice && IMAGE_RULES, voice && VOICE_RULES,
   ].filter(Boolean)
   const extraBlock = extras.length ? `${extras.join('\n\n')}\n\n` : ''
@@ -9783,6 +9793,8 @@ async function startChatTurn(body) {
     delete t.settledAt
     delete t.snoozedUntil
     delete t.snoozedAt
+    // A new turn is not the one the agent marked done (chat/done.mjs).
+    delete t.doneAt
     t.updatedAt = now
   }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(newTaskId ? { taskId: newTaskId } : {}), ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
 
@@ -10076,11 +10088,13 @@ async function startChatTurn(body) {
         browserAccess = grantChatAccess(threadId, push, {
           browser: reach.browser, ask: canAsk ? askOwner : null, handoff: handOver, change: canAsk && CHANGE_FLOW_ENABLED && access === 'full' ? changeTools : null,
           visual: canAsk ? showVisual : null,
+          // A one-off request finished (chat/done.mjs). Not in a totem's chat, which never waits on him.
+          done: canAsk && !thread.totemId ? () => threadStore.update(threadId, (t) => { t.doneAt = Date.now() }) : null,
           // An inbox proposal this reply stages shows in it as a card (chat/inbox-outcome.mjs).
           runId: run.id, inboxCard: (card) => { forward({ type: 'inbox', inbox: card }); return save() },
         })
         // What the prompt may tell the agent it has: what the grant actually gave.
-        const offered = { ...reach, browser: !!browserAccess?.browser, ask: !!browserAccess?.ask, change: !!browserAccess?.change, visual: !!browserAccess?.visual }
+        const offered = { ...reach, browser: !!browserAccess?.browser, ask: !!browserAccess?.ask, change: !!browserAccess?.change, visual: !!browserAccess?.visual, done: !!browserAccess?.done }
         // Steering (chat/steer.mjs): Claude Code takes the owner's words into the
         // running turn; every other CLI is interrupted and resumed with them.
         const liveSteer = driver === 'claude'
@@ -10089,6 +10103,8 @@ async function startChatTurn(body) {
           const steer = { id: randomUUID(), text: words, createdAt: Date.now(), files: sent, images }
           const via = steering.send(steer)
           if (!via) return null
+          // His words mid-reply: whatever the agent marked done before them isn't (chat/done.mjs).
+          threadStore.update(threadId, (t) => { delete t.doneAt }).catch((e) => log('chat: clear doneAt failed', e?.message || e))
           const attachments = sent.map((f) => ({ id: f.id, name: f.name, mime: f.mime, size: f.size, kind: f.kind, ...(f.preview ? { preview: f.preview } : {}) }))
           // Signed for the viewers; the saved part drops the url (normalizeAttachment).
           const shown = { id: steer.id, text: words, createdAt: steer.createdAt, via, ...(attachments.length ? { attachments: signAttachments(attachments) } : {}) }
@@ -10270,6 +10286,8 @@ async function startChatTurn(body) {
           // Finished (or failed) and now waiting on him, until he replies or marks it read.
           // A totem's chat posts on a schedule, so it never waits.
           if (status !== 'stopped' && !t.totemId) t.needsReply = true
+          // Marked done (chat/done.mjs) only counts for a reply that finished.
+          if (status !== 'done') delete t.doneAt
           // A reply that lands while the chat is snoozed wakes it early.
           if (status !== 'stopped' && Number(t.snoozedUntil) > Date.now()) t.snoozedUntil = Date.now()
         })

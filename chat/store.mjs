@@ -368,6 +368,12 @@ function applyMetadata(thread, body, now) {
     else delete thread[key]
   }
   if (thread.settledOverride !== 'settled') delete thread.settledAt
+  // The agent marked the request done (chat/done.mjs). Written only by the
+  // bridge: not in METADATA_KEYS, so a client PUT never sets it.
+  if ('doneAt' in body) {
+    if (num(body.doneAt)) thread.doneAt = num(body.doneAt)
+    else delete thread.doneAt
+  }
   if (!thread.snoozedUntil) delete thread.snoozedAt
   else if (!thread.snoozedAt) thread.snoozedAt = now
   if (thread.kind === 'temporary') thread.expiresAt = num(body.expiresAt) || thread.expiresAt || now
@@ -588,7 +594,7 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
     if (!validThreadId(id)) throw new Error('bad thread id')
     return withLock(id, async () => {
       const existing = await rawRead(id)
-      if (!existing) return rawWrite(normalizeThread({ ...body, sessions: null, queue: null }, id))
+      if (!existing) return rawWrite(normalizeThread({ ...body, sessions: null, queue: null, doneAt: null }, id))
       const thread = normalizeThread(existing, id)
       applyMetadata(thread, Object.fromEntries(METADATA_KEYS.filter((k) => k in body).map((k) => [k, body[k]])), Date.now())
       thread.updatedAt = Math.max(thread.updatedAt, num(body.updatedAt) || 0) || Date.now()
