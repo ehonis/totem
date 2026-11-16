@@ -79,7 +79,7 @@ export default function ChatSettings({ onNavigate }: { onNavigate?: (section: st
         <SettingsRow
           id="auto-settle"
           title="Settle quiet chats"
-          description="A chat with no activity for this long moves to its list’s Settled shelf. Pinned chats, and ones you un-settle by hand, stay put."
+          description="A chat with no activity for this long moves to its list’s Settled shelf, and a one-off the agent marked done moves once you’ve read it; Never stops both. Pinned chats, and ones you un-settle by hand, stay put."
           control={
             <select className="model-select" aria-label="Settle quiet chats" value={String(prefs.autoSettleDays ?? 3)} onChange={(e) => save({ autoSettleDays: Number(e.target.value) })}>
               {[1, 2, 3, 7, 14, 30].map((d) => <option key={d} value={d}>After {d} {d === 1 ? 'day' : 'days'}</option>)}

@@ -1,11 +1,42 @@
 import { describe, it, expect } from 'vitest'
-import { shelve, shelfOf, settledAt, snoozePresets, customSnooze, countdown, ago, wakeChange, nextWake, DAY_MS, HOUR_MS } from './settle'
+import { shelve, shelfOf, settledAt, offersSettle, keptOpenId, snoozePresets, customSnooze, countdown, ago, wakeChange, nextWake, DAY_MS, HOUR_MS } from './settle'
 import type { ChatThread } from './types'
 
 const NOW = new Date(2026, 9, 6, 10, 0).getTime() // Tue 6 Oct 2026, 10:00 local
 const chat = (id: string, extra: Partial<ChatThread> = {}): ChatThread => ({ id, kind: 'regular', messages: [], createdAt: NOW - HOUR_MS, updatedAt: NOW - HOUR_MS, ...extra })
 
 describe('shelves', () => {
+  it('settles a chat its agent marked done once the reply is read, and offers Settle until then', () => {
+    const done = chat('d', { doneAt: NOW - 60_000, updatedAt: NOW - 30_000 })
+    // Unread: still in play, with Settle on the row.
+    expect(settledAt({ ...done, needsReply: true }, NOW, 3)).toBe(0)
+    expect(offersSettle({ ...done, needsReply: true }, 'active')).toBe(true)
+    // Read: settled at its last activity, at once.
+    expect(settledAt(done, NOW, 3)).toBe(NOW - 30_000)
+    expect(shelfOf(done, NOW, 3)).toBe('settled')
+    // The chat on screen stays put until he moves off it.
+    expect(settledAt(done, NOW, 3, false, true)).toBe(0)
+    expect(shelve([done], NOW, 3, () => false, 'd').active.map((t) => t.id)).toEqual(['d'])
+    expect(shelve([done], NOW, 3, () => false, 'other').settled.map((t) => t.id)).toEqual(['d'])
+    expect(settledAt({ ...done, settledOverride: 'settled', settledAt: NOW }, NOW, 3, false, true)).toBe(NOW)
+    // Opened from the Settled shelf, it isn't kept: it stays on the shelf.
+    expect(keptOpenId('d', null)).toBe('d')
+    expect(keptOpenId('d', 'd')).toBe(null)
+    expect(keptOpenId(null, null)).toBe(null)
+    // Not while it runs, pinned, snoozed, taken back by hand, or with auto-settle off.
+    expect(settledAt(done, NOW, 3, true)).toBe(0)
+    expect(offersSettle(done, 'active', true)).toBe(false)
+    expect(settledAt({ ...done, pinned: true }, NOW, 3)).toBe(0)
+    expect(offersSettle({ ...done, pinned: true }, 'active')).toBe(false)
+    expect(settledAt({ ...done, snoozedUntil: NOW + HOUR_MS }, NOW, 3)).toBe(0)
+    expect(settledAt({ ...done, settledOverride: 'active' }, NOW, 3)).toBe(0)
+    expect(offersSettle({ ...done, settledOverride: 'active' }, 'active')).toBe(false)
+    expect(settledAt(done, NOW, 0)).toBe(0)
+    expect(offersSettle(done, 'active')).toBe(true)
+    expect(offersSettle(done, 'settled')).toBe(false)
+    expect(offersSettle(chat('plain'), 'active')).toBe(false)
+  })
+
   it('splits a list into active, snoozed (soonest first) and settled (latest first)', () => {
     const { active, snoozed, settled } = shelve([
       chat('a'),

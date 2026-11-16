@@ -18,7 +18,7 @@ import { useChat, openProject, createProject, foldersOf, threadTitle } from '../
 import { pendingQuestions } from '../../lib/chat/questions'
 import { pendingApproval } from '../../lib/chat/approvals'
 import {
-  shelve, wokeAt, countdown, ago, settledAt, isSnoozed, snoozePresets, type Shelf,
+  shelve, wokeAt, countdown, ago, settledAt, isSnoozed, snoozePresets, offersSettle, keptOpenId, type Shelf,
 } from '../../lib/chat/settle'
 import type { ChatThread, Project } from '../../lib/chat/types'
 import { pushError } from '../../lib/toast'
@@ -110,10 +110,24 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: {
           : approving ? <View style={st.woke} accessibilityLabel="A tool call is waiting for your approval"><T size={11} weight={600} color={colors.accent}>Awaiting approval</T></View>
           : live ? <LiveDot />
           : woke ? <View style={st.woke}><T size={11} weight={600} color={colors.accent}>Woke</T></View>
-            : t.needsReply ? <View style={st.dot} accessibilityLabel="Waiting on you" /> : null}
+            : t.needsReply && !offersSettle(t, shelf, live) ? <View style={st.dot} accessibilityLabel="Waiting on you" /> : null}
         {shelf === 'snoozed' ? <T size={11.5} color={colors.accent} style={st.meta}>{countdown(t.snoozedUntil!, now)}</T> : null}
         {shelf === 'settled' ? <T size={11.5} color={muted80} style={st.meta}>{ago(settledAt(t, now, autoDays), now)}</T> : null}
       </Press>
+      {/* The agent called the request finished (mark_chat_done): Settle without a swipe. */}
+      {offersSettle(t, shelf, live) ? (
+        <Press
+          style={st.doneBtn}
+          hitSlop={8}
+          onPress={() => act('settle')}
+          accessibilityRole="button"
+          accessibilityLabel={`Settle ${title}`}
+          accessibilityHint="Marked done; it also settles by itself once you've read it"
+        >
+          <TI icon={IconCheck} size={13} color={colors.green} stroke={2.2} />
+          <T size={11.5} weight={600} color={colors.green}>Settle</T>
+        </Press>
+      ) : null}
     </View>
   )
   return (
@@ -251,7 +265,8 @@ function ShelvedChats({ threads, scope, activeId, onOpen, docked = false, childr
   const runs = useChat((s) => s.runs)
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   const now = useNow(threads)
-  const { active, snoozed, settled } = useMemo(() => shelve(threads, now, autoDays, (id) => !!runs[id]), [threads, now, autoDays, runs])
+  const keep = keptOpenId(activeId, useChat((s) => s.openedSettled))
+  const { active, snoozed, settled } = useMemo(() => shelve(threads, now, autoDays, (id) => !!runs[id], keep), [threads, now, autoDays, runs, keep])
   const openSnoozed = snoozed.find((t) => t.id === activeId)
   const openParked = openSnoozed || settled.find((t) => t.id === activeId)
   const counts: ShelfCounts = { scope, snoozed: snoozed.length, settled: settled.length }
@@ -455,7 +470,8 @@ function FolderRow({ f, open, onToggle, onOpenChat }: { f: Project; open: boolea
   const chats = useMemo(() => listThreads(allThreads, projects, f.id, activeId, runs), [allThreads, projects, f.id, activeId, runs])
   const waiting = useWaiting([f.id])
   // The count is what's still in play, not what's parked on the folder's shelves.
-  const inPlay = chats.filter((t) => !isSnoozed(t, Date.now()) && !settledAt(t, Date.now(), autoDays, !!runs[t.id])).length
+  const keep = keptOpenId(activeId, useChat((s) => s.openedSettled))
+  const inPlay = chats.filter((t) => !isSnoozed(t, Date.now()) && !settledAt(t, Date.now(), autoDays, !!runs[t.id], t.id === keep)).length
   return (
     <View>
       <View style={[st.thread, scoped && st.threadOn]}>
@@ -582,6 +598,7 @@ const st = StyleSheet.create({
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent },
   woke: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: 'rgba(91, 140, 255, 0.15)' },
   meta: { paddingLeft: 4, fontVariant: ['tabular-nums'] },
+  doneBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 26, marginRight: 8, paddingLeft: 6, paddingRight: 8, borderRadius: 7, backgroundColor: 'rgba(63, 185, 80, 0.15)' },
   shelfBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   shelfBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 36, paddingVertical: 6, paddingHorizontal: 11, borderRadius: 18, backgroundColor: colors.bg3 },
   projHead: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingTop: 8, paddingBottom: 2, paddingHorizontal: 4 },

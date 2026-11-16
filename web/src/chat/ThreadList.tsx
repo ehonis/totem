@@ -11,7 +11,7 @@ import { pushToast } from '../toast'
 import ThreadIcon from './ThreadIcon'
 import SnoozeMenu from './SnoozeMenu'
 import { FolderPicker, TaskPicker } from '../work/pickers'
-import { shelve, nextWake, wokeAt, countdown, ago, settledAt, wakeDescription, type Shelf } from './settle'
+import { shelve, nextWake, wokeAt, countdown, ago, settledAt, wakeDescription, offersSettle, keptOpenId, type Shelf } from './settle'
 
 function ThreadMenu({ t, shelf, live, onRename, onSnooze, onMove, onLinkTask, onClose }: { t: ChatThread; shelf: Shelf; live: boolean; onRename: () => void; onSnooze: () => void; onMove: () => void; onLinkTask: () => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -107,7 +107,7 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
   const meta = shelf === 'snoozed'
     ? <span className="vc-thread-meta snoozed" title={`Wakes ${wakeDescription(t.snoozedUntil!, now)}`}>{countdown(t.snoozedUntil!, now)}</span>
     : shelf === 'settled'
-      ? <span className="vc-thread-meta" title={t.settledOverride === 'settled' ? 'Settled' : `Settled after ${autoDays} ${autoDays === 1 ? 'day' : 'days'} without activity`}>{ago(settledAt(t, now, autoDays), now)}</span>
+      ? <span className="vc-thread-meta" title={t.settledOverride === 'settled' ? 'Settled' : t.doneAt ? 'Marked done, settled once read' : `Settled after ${autoDays} ${autoDays === 1 ? 'day' : 'days'} without activity`}>{ago(settledAt(t, now, autoDays), now)}</span>
       : null
   // Questions from the agent outrank everything else on the row, as in T3.
   const asking = !!pendingQuestions(t)
@@ -121,9 +121,15 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
           : approving ? <span className="vc-asking" title="A tool call is waiting for your approval">Awaiting approval</span>
           : live ? <span className="vc-live-dot" aria-label="Answering" />
           : woke ? <span className="vc-woke" title={`Woke ${wakeDescription(wokeAt(t, now), now)}`}>Woke</span>
-          : t.needsReply && <span className="vc-reply-dot" aria-label="Waiting on you" title="Waiting on you" />}
+          : t.needsReply && !offersSettle(t, shelf, live) && <span className="vc-reply-dot" aria-label="Waiting on you" title="Waiting on you" />}
         {meta}
       </button>
+      {/* The agent called the request finished (mark_chat_done): Settle in plain sight. */}
+      {offersSettle(t, shelf, live) && (
+        <button type="button" className="vc-thread-done" onClick={stop(() => settleThread(t.id))} aria-label={`Settle ${title}`} title="Done: settles by itself once you've read it">
+          <TI icon={IconCheck} size={12} />Settle
+        </button>
+      )}
       <div className="vc-thread-actions">
         {shelf === 'active' && (
           <>
@@ -251,8 +257,10 @@ export function ShelvedChats({ threads, scope, activeId, onOpen, children }: {
 }) {
   const runs = useChat((s) => s.runs)
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
+  const openedSettled = useChat((s) => s.openedSettled)
   const now = useNow(threads)
-  const { active, snoozed, settled } = useMemo(() => shelve(threads, now, autoDays, (id) => !!runs[id]), [threads, now, autoDays, runs])
+  const keep = keptOpenId(activeId, openedSettled)
+  const { active, snoozed, settled } = useMemo(() => shelve(threads, now, autoDays, (id) => !!runs[id], keep), [threads, now, autoDays, runs, keep])
   return (
     <>
       {children(active, now)}

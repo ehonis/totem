@@ -38,6 +38,9 @@ test('reports the shelf the panel shows, auto-settle included', () => {
   assert.equal(shelfOf(chat('a', { updatedAt: NOW - 4 * 24 * H }), { now: NOW, autoSettleDays: 3 }), 'settled')
   assert.equal(shelfOf(chat('a', { updatedAt: NOW - 4 * 24 * H, settledOverride: 'active' }), { now: NOW, autoSettleDays: 3 }), 'active')
   assert.equal(shelfOf(chat('a', { snoozedUntil: NOW + H }), { now: NOW }), 'snoozed')
+  // Marked done by its agent (chat/done.mjs): settled once read, in play while unread.
+  assert.equal(shelfOf(chat('a', { updatedAt: NOW - H, doneAt: NOW - H }), { now: NOW }), 'settled')
+  assert.equal(shelfOf(chat('a', { updatedAt: NOW - H, doneAt: NOW - H, needsReply: true }), { now: NOW }), 'active')
   const waiting = listThreads([chat('w', { needsReply: true }), chat('q')], { status: 'waiting' }, { now: NOW })
   assert.deepEqual(waiting.threads.map((t) => t.id), ['w'])
 })

@@ -5,7 +5,7 @@ import { TI } from './ui'
 import { IconFolderPlus, IconArrowLeft, IconChevronDown, IconChevronRight, IconPlus, IconUsersGroup, IconLayoutList } from './icons'
 import { pushError } from '../toast'
 import ThreadList, { ThreadItem, ShelvedChats } from './ThreadList'
-import { isSnoozed, settledAt, ago } from './settle'
+import { isSnoozed, settledAt, ago, keptOpenId } from './settle'
 import { totemNavRows, type TotemNavRow } from './totemNav'
 import Spark from './Spark'
 import { TotemIcon, openTotemChat, refreshTotemDirectory, useTotemDirectory } from '../totems/shared'
@@ -227,7 +227,8 @@ function FolderRow({ f, open, onToggle, onOpenChat }: { f: Project; open: boolea
   const waiting = useWaiting([f.id])
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   // The count is what's still in play, not what's parked on the folder's shelves.
-  const inPlay = chats.filter((t) => !isSnoozed(t, Date.now()) && !settledAt(t, Date.now(), autoDays, !!runs[t.id])).length
+  const keep = keptOpenId(activeId, useChat((s) => s.openedSettled))
+  const inPlay = chats.filter((t) => !isSnoozed(t, Date.now()) && !settledAt(t, Date.now(), autoDays, !!runs[t.id], t.id === keep)).length
   const drop = useThreadDrop(f.id, f.name)
   return (
     <div className={`vc-folder ${drop.over ? 'drop-over' : ''}`} {...drop.props}>

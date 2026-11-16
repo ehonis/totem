@@ -682,6 +682,14 @@ body.panel-resizing .vc-assistant-body > .md, :root.window-resizing .vc-assistan
 .vc-thread-act:disabled { opacity: .35; cursor: default; }
 .vc-thread-meta { flex: none; padding-left: 4px; font-size: 11.5px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--muted) 80%, transparent); }
 .vc-thread-meta.snoozed { color: var(--accent); }
+/* The agent marked the chat done (settle.ts offersSettle): one tap settles it. Gives way to the hover actions. */
+.vc-thread-done {
+  display: inline-flex; align-items: center; gap: 3px; flex: none; height: 22px; margin-right: 2px; padding: 0 7px 0 5px; border-radius: 6px; border: 0;
+  font-size: 11px; font-weight: 600; color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent);
+}
+.vc-thread-done:hover { background: color-mix(in srgb, var(--green) 24%, transparent); }
+.vc-thread:hover .vc-thread-done, .vc-thread.menu-open .vc-thread-done { display: none; }
+@media (hover: none) { .vc-thread:hover .vc-thread-done { display: inline-flex; } }
 .vc-woke {
   flex: none; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 600;
   color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent);

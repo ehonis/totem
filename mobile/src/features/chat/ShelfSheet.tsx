@@ -10,7 +10,7 @@ import { FlatList, StyleSheet, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useChat } from '../../lib/chat/store'
-import { shelve } from '../../lib/chat/settle'
+import { shelve, keptOpenId } from '../../lib/chat/settle'
 import type { ChatThread } from '../../lib/chat/types'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
@@ -34,7 +34,8 @@ export default function ShelfSheet() {
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   const threads = useMemo(() => listThreads(allThreads, projects, scope, activeId, runs), [allThreads, projects, scope, activeId, runs])
   const now = useNow(threads)
-  const { snoozed, settled } = useMemo(() => shelve(threads, now, autoDays, (id) => !!runs[id]), [threads, now, autoDays, runs])
+  const keep = keptOpenId(activeId, useChat((s) => s.openedSettled))
+  const { snoozed, settled } = useMemo(() => shelve(threads, now, autoDays, (id) => !!runs[id], keep), [threads, now, autoDays, runs, keep])
   const rows = kind === 'snoozed' ? snoozed : settled
   const place = scope === 'home' ? 'Home' : projects.find((p) => p.id === scope)?.name || 'Project'
 
@@ -70,7 +71,7 @@ export default function ShelfSheet() {
       <T size={12.5} muted style={st.note}>
         {kind === 'snoozed'
           ? 'Back in your list when they wake. Swipe one to wake it now.'
-          : `Chats you settled, or left quiet for ${autoDays} ${autoDays === 1 ? 'day' : 'days'}. Swipe one to bring it back.`}
+          : `Chats you settled, finished one-offs you've read, or ones left quiet for ${autoDays} ${autoDays === 1 ? 'day' : 'days'}. Swipe one to bring it back.`}
       </T>
       <FlatList
         ref={list}
