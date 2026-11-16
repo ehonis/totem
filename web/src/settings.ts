@@ -30,6 +30,8 @@ export interface StoredShortcuts {
   showHud?: boolean
   /** actionId -> key sequence typed after the leader. */
   bindings?: Record<string, string>
+  /** actionId -> held chord (`mod+shift+o`); '' clears a default. */
+  hotkeys?: Record<string, string>
 }
 
 export type Settings = typeof DEFAULTS

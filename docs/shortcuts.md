@@ -16,7 +16,33 @@ Nothing is held down. You type the keys one after another, and a grace period
 <kbd>G</kbd> followed by <kbd>B</kbd> a minute later does nothing at all.
 
 Everything is rebindable in **Settings → Keyboard**: the leader key, the grace
-period, and the sequence behind each action.
+period, the sequence behind each action, and the hotkeys.
+
+## Hotkeys
+
+A few actions are worth one held chord instead of a sequence. A hotkey is a modifier
+chord, stored as `mod+shift+o` (`mod` is ⌘ on a Mac and Ctrl elsewhere; `ctrl` on a Mac,
+`meta` elsewhere, `alt` and `shift` are the others), and needs ⌘, Ctrl or Alt: Shift alone
+types a capital. Unlike a sequence it fires **while you type**, in the composer included,
+since a chord with a modifier is never text.
+
+| Action | Default |
+|---|---|
+| New chat in Home | ⌘⇧O / Ctrl+Shift+O |
+
+New chat in Home goes to the chat and opens a blank chat outside any project or task,
+focused; `$` in its composer then puts it in a folder or starts it for a task
+(`docs/chat.md` → Placing a new chat with `$`). The plain New chat (`g c c`) still starts
+in the project the chats panel is showing.
+
+Settings → Keyboard › Hotkeys lists the actions with a hotkey (or a default one) and adds
+any other from "Add a hotkey…". Click a field and press the keys; Backspace or × clears
+it, and a cleared default stays cleared (`''` in `hotkeys`). A chord bound twice is
+flagged and the first action listed wins (`hotkeyIndex`); one the browser keeps for itself
+(new tab, close tab, quit) or Ctrl+\` (the terminal) is warned about. The field being
+recorded, and the leader and sequence recorders, carry `data-hotkey-capture`, so a chord
+pressed there is not also fired. Letters and digits are read from the key's position
+(`e.code`), so ⌥O on a Mac (which types "ø") is still `alt+o`. The Keyboard shortcuts switch turns hotkeys off with the leader.
 
 ## Why it looks like this
 
@@ -36,7 +62,7 @@ Two additions over a plain leader-key scheme:
 
 | Thing | Location |
 |---|---|
-| Action registry, bindings, matcher, command bus | `web/src/shortcuts.ts` |
+| Action registry, bindings, hotkeys, matcher, command bus | `web/src/shortcuts.ts` |
 | Quick-panel commands, defaults, and polling lifecycle | `web/src/quickPanels.ts` |
 | The key state machine (`useShortcuts`, `useCommand`) | `web/src/useShortcuts.ts` |
 | Hint panel + cheat sheet | `web/src/components/ShortcutOverlay.tsx` |
@@ -55,6 +81,9 @@ Two flavours, and the difference matters for how a sequence resolves:
   you left" memory in `router.ts`.
 - **command** — a view-level action, broadcast to whichever view claims it with
   `useCommand(COMMANDS.todoNew, …)`.
+
+An action may have both: it navigates first, then runs the command (New chat in
+Home goes to the chat, then opens the blank chat).
 
 Adding one is a single entry in `ACTIONS` plus a default in `DEFAULT_BINDINGS`. A
 command additionally needs its `useCommand` call in the view that owns it.
@@ -93,7 +122,7 @@ excludes:
   keystrokes, since xterm's hidden textarea would otherwise need a tag-name
   special case
 
-Also passed through untouched: any keystroke with Ctrl/Meta/Alt, IME composition,
+Also passed through untouched by the leader (hotkeys take theirs): any keystroke with Ctrl/Meta/Alt, IME composition,
 and <kbd>Esc</kbd> (which cancels an open chord but still reaches whatever dialog
 is listening for it). Window blur and any mousedown drop an armed chord.
 

@@ -1356,6 +1356,32 @@ moves between a task and any of its chats (`web/src/work/`).
   under them inside `.vc-threads-list`, the scroller the Chats and Totems faces use too. In
   the phone drawer the whole drawer scrolls as one list instead.
 
+### Placing a new chat with `$`
+
+A chat not started yet can be put where it belongs from the composer: `$` lists
+**Start it in** (Home, when the chat is not there already, then every project with its
+folders, most recently used first) and **Start it for a task** (open local tasks, soonest
+due first, then the sheet's action items), ahead of any `$` skills. Typing filters both:
+`$harb` finds the harbor folder and "Harbor site map fix", `$acme` the Work -
+Acme project and its folders (names are matched as lower-case words joined by
+hyphens; `web/src/chat/destinations.ts`). A bare `$` lists four places, so the tasks
+under them are in view; a price (`$40`, `$4.99`, `$1,000`) lists none, so "it costs $40"
+and Enter sends. Picking one takes the `$…` out of the words and:
+
+- a project or folder opens the chat there (`openProject`), keeping a task it was being
+  started for;
+- a task starts it for that task (`startTaskDraft`) in the task's folder (`taskHome`: its
+  filing, else the project of its latest chat), else where the chat already was. The first
+  send links it, as "New chat for this task" does, and the task strip says so.
+
+The words move to the new place's draft, under any draft already waiting there (the
+"Start in" chips do the same, `moveDraft`), and the tray's files go with them; while a
+file is still uploading or has failed, the places say so and a pick waits. The menu is only
+offered before the first send (an open chat moves with Move to…), never in a temporary chat,
+and reads tasks only while it is open. The composer's + menu has "Put it in a folder or
+task", which types the `$`. ⌘/Ctrl+Shift+O (Settings → Keyboard › Hotkeys) starts a blank
+chat at Home from any page, ready for this (`docs/shortcuts.md` → Hotkeys).
+
 Nothing loads tasks until the Tasks face or a task strip is on screen; while one is, the
 store (`web/src/work/state.ts`) reads the board, the sheet feed (its own two-minute cache)
 and the filings every minute and on focus. Changes are drawn at once and put back if the

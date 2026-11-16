@@ -15,6 +15,7 @@ import {
   ACTIONS,
   ACTION_GROUPS,
   COMMANDS,
+  hotkeyKeys,
   readConfig,
   type ShortcutAction,
 } from '../shortcuts'
@@ -24,6 +25,15 @@ import { useCommand, type ChordState } from '../useShortcuts'
 export function Keycap({ k }: { k: string }) {
   const label = k === ' ' ? 'Space' : k === ',' ? ',' : k.toUpperCase()
   return <kbd className="keycap">{label}</kbd>
+}
+
+/** A hotkey held together: ⌘ ⇧ O, or Ctrl Shift O. */
+export function HotkeyChord({ combo }: { combo: string }) {
+  return (
+    <span className="key-seq key-chord">
+      {hotkeyKeys(combo).map((k, i) => <kbd className="keycap" key={`${k}-${i}`}>{k}</kbd>)}
+    </span>
+  )
 }
 
 /** "G then T then T" — the leader plus each key of a sequence. */
@@ -97,13 +107,15 @@ interface CheatSheetProps {
 export function ShortcutCheatSheet({ open, onClose }: CheatSheetProps) {
   const settings = useSettings()
   const config = useMemo(() => readConfig(), [settings.shortcuts])
+  // The example chord is one that is actually set: New chat in Home's, else any.
+  const newHome = config.hotkeys['cmd.chatNewHome'] || Object.values(config.hotkeys).find(Boolean)
 
   const grouped = useMemo(() => {
-    const bound = ACTIONS.filter((a) => config.bindings[a.id])
+    const bound = ACTIONS.filter((a) => config.bindings[a.id] || config.hotkeys[a.id])
     return ACTION_GROUPS
       .map((group) => ({ group, actions: bound.filter((a: ShortcutAction) => a.group === group) }))
       .filter((g) => g.actions.length)
-  }, [config.bindings])
+  }, [config.bindings, config.hotkeys])
 
   if (!open) return null
 
@@ -120,7 +132,7 @@ export function ShortcutCheatSheet({ open, onClose }: CheatSheetProps) {
           </button>
         </div>
         <p className="shortcut-sheet-intro">
-          Press <Keycap k={config.leader} /> then the keys below — one after another, not held down.
+          Press <Keycap k={config.leader} /> then the keys below, one after another, not held down.{newHome && <> A chord like <HotkeyChord combo={newHome} /> is held together, and works even while you type.</>}
         </p>
         {grouped.map(({ group, actions }) => (
           <div className="shortcut-sheet-group" key={group}>
@@ -129,7 +141,11 @@ export function ShortcutCheatSheet({ open, onClose }: CheatSheetProps) {
               {actions.map((action) => (
                 <div className="shortcut-sheet-row" key={action.id}>
                   <span>{action.label}</span>
-                  <KeySequence leader={config.leader} sequence={config.bindings[action.id]} />
+                  <span className="shortcut-sheet-keys">
+                    {config.hotkeys[action.id] && <HotkeyChord combo={config.hotkeys[action.id]} />}
+                    {config.hotkeys[action.id] && config.bindings[action.id] && <span className="key-then">or</span>}
+                    {config.bindings[action.id] && <KeySequence leader={config.leader} sequence={config.bindings[action.id]} />}
+                  </span>
                 </div>
               ))}
             </div>

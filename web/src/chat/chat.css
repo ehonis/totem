@@ -581,9 +581,13 @@ body.panel-resizing .vc-assistant-body > .md, :root.window-resizing .vc-assistan
 }
 .vc-cmd { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border-radius: 10px; background: none; border: 0; color: var(--text); text-align: left; }
 .vc-cmd.active { background: var(--vc-raise); }
+/* A place that has to wait for uploads: there, but not pickable yet. */
+.vc-cmd[aria-disabled="true"] { opacity: .55; cursor: default; }
+.vc-cmd[aria-disabled="true"].active { background: none; outline: 1px solid var(--vc-raise); outline-offset: -1px; }
 .vc-cmd-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--bg); color: var(--vc-soft); flex: none; }
 .vc-cmd-text { display: flex; flex-direction: column; min-width: 0; }
 .vc-cmd-name { font: 13px ui-monospace, "SF Mono", Menlo, monospace; display: flex; align-items: baseline; gap: 8px; }
+.vc-cmd-place { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vc-cmd-source { font: 11px/1 system-ui, sans-serif; color: var(--vc-faint); }
 .vc-cmd-desc { font-size: 12.5px; color: var(--vc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

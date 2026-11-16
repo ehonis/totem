@@ -3486,6 +3486,8 @@ body.panel-resizing .panel-resize.dragging { pointer-events: auto; }
 }
 .key-then { color: var(--muted); font-size: 10.5px; margin: 0 5px; }
 .key-seq { display: inline-flex; align-items: center; flex: none; }
+.key-chord { gap: 3px; }
+.shortcut-sheet-keys { display: inline-flex; align-items: center; justify-self: end; flex-wrap: wrap; justify-content: flex-end; }
 
 /* The "you pressed G, now what" panel. Bottom-LEFT: the quick-launch FAB and the
    terminal both live bottom-right, and this must never sit under either. */
@@ -3556,6 +3558,9 @@ body.panel-resizing .panel-resize.dragging { pointer-events: auto; }
 }
 .seq-leader-btn:focus-visible, .seq-leader-btn.recording { outline: none; border-color: var(--accent); }
 .seq-leader-btn em { color: var(--accent); font-style: normal; font-size: 11.5px; }
+/* A hotkey's field: the same box as a sequence, holding the chord's keycaps. */
+.hotkey-input-wrap .seq-display { gap: 3px; }
+.hotkey-input-wrap.taken { border-color: #f0b42966; }
 
 .shortcut-warn {
   display: flex; align-items: flex-start; gap: 8px; margin: 8px 0;

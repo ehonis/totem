@@ -2,7 +2,8 @@
  * Settings → Keyboard.
  *
  * Everything about the leader-key system is editable here: the leader itself,
- * how long a sequence stays open, and the key sequence behind each action.
+ * how long a sequence stays open, and the key sequence behind each action;
+ * and the hotkeys, one held chord per action (⌘/Ctrl+Shift+O for a new chat).
  * Sequences are captured by pressing the keys rather than typed as text, so
  * what you press is exactly what gets stored.
  */
@@ -14,17 +15,21 @@ import {
   ACTION_GROUPS,
   ACTIONS_BY_ID,
   DEFAULT_BINDINGS,
+  DEFAULT_HOTKEYS,
   DEFAULT_SHORTCUTS,
   GRACE_MAX,
   GRACE_MIN,
   findConflicts,
+  hotkeyFromEvent,
+  hotkeyTaken,
   normalizeKey,
   readConfig,
   resetShortcuts,
   setBinding,
+  setHotkey,
   writeConfig,
 } from '../shortcuts'
-import { Keycap } from './ShortcutOverlay'
+import { HotkeyChord, Keycap } from './ShortcutOverlay'
 import { SettingsNote, SettingsPage, SettingsRow, SettingsSection, Switch } from './settings/ui'
 
 const MAX_SEQUENCE = 3
@@ -82,7 +87,7 @@ function SequenceInput({ value, leader, label, onChange }: SequenceInputProps) {
   }
 
   return (
-    <div className="seq-input-wrap">
+    <div className="seq-input-wrap" data-hotkey-capture>
       <span className="seq-leader"><Keycap k={leader} /><span className="key-then">then</span></span>
       <input
         ref={inputRef}
@@ -114,12 +119,65 @@ function SequenceInput({ value, leader, label, onChange }: SequenceInputProps) {
   )
 }
 
+/**
+ * Capture a hotkey by pressing it, as SequenceInput does a sequence. Marked
+ * `data-hotkey-capture` so the chord being recorded is not also fired.
+ */
+function HotkeyInput({ value, label, onChange }: { value: string; label: string; onChange: (combo: string) => void }) {
+  const [recording, setRecording] = useState(false)
+  const [hint, setHint] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const bare = (e: React.KeyboardEvent) => !e.metaKey && !e.ctrlKey && !e.altKey
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Tab' && bare(e)) return // let focus move on
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.key === 'Escape') { inputRef.current?.blur(); return }
+    if ((e.key === 'Backspace' || e.key === 'Delete') && bare(e)) { onChange(''); inputRef.current?.blur(); return }
+    const combo = hotkeyFromEvent(e.nativeEvent)
+    if (!combo) {
+      if (!['Meta', 'Control', 'Alt', 'Shift'].includes(e.key)) setHint('hold ⌘, Ctrl or Alt with it')
+      return
+    }
+    onChange(combo)
+    inputRef.current?.blur()
+  }
+
+  return (
+    <div className={`seq-input-wrap hotkey-input-wrap${value && hotkeyTaken(value) ? ' taken' : ''}`} data-hotkey-capture>
+      <input
+        ref={inputRef}
+        className={`seq-input${recording ? ' recording' : ''}`}
+        // Read-only in spirit: the value is built from keydown, never from typing.
+        value=""
+        onChange={() => {}}
+        onKeyDown={onKeyDown}
+        onFocus={() => { setRecording(true); setHint('') }}
+        onBlur={() => { setRecording(false); setHint('') }}
+        aria-label={`Hotkey for ${label}`}
+      />
+      <span className="seq-display" aria-hidden="true">
+        {recording ? <em>{hint || 'press the keys together…'}</em>
+          : value ? <HotkeyChord combo={value} /> : <em>none</em>}
+      </span>
+      {value && !recording && (
+        <button type="button" className="seq-clear" title="Clear hotkey" onClick={() => onChange('')}>
+          <Hi icon={XMarkIcon} size={13} />
+        </button>
+      )}
+    </div>
+  )
+}
+
 /** Single-key capture for the leader itself. */
 function LeaderInput({ value, onChange }: { value: string; onChange: (key: string) => void }) {
   const [armed, setArmed] = useState(false)
   return (
     <button
       type="button"
+      // Only while it waits for a key: a focused, idle button should not swallow hotkeys.
+      data-hotkey-capture={armed || undefined}
       className={`seq-leader-btn${armed ? ' recording' : ''}`}
       onClick={() => setArmed(true)}
       onBlur={() => setArmed(false)}
@@ -166,6 +224,13 @@ export default function ShortcutsSettings() {
     [config.bindings, config.leader],
   )
 
+  const hotkeyConflicts = useMemo(() => findConflicts(config.hotkeys), [config.hotkeys])
+  const hotkeyClash = useMemo(() => new Set(Object.values(hotkeyConflicts).flat()), [hotkeyConflicts])
+  // A row for each action that has a hotkey or had one by default; any other can be added.
+  const [added, setAdded] = useState<string[]>([])
+  const hotkeyRows = ACTIONS.filter((a) => a.id in DEFAULT_HOTKEYS || config.hotkeys[a.id] || added.includes(a.id))
+  const addable = ACTIONS.filter((a) => !hotkeyRows.includes(a))
+
   const [confirmReset, setConfirmReset] = useState(false)
   // Drop the confirm state if the user wanders off rather than leaving a primed
   // destructive button sitting there.
@@ -178,7 +243,8 @@ export default function ShortcutsSettings() {
   const customised = useMemo(
     () => config.leader !== DEFAULT_SHORTCUTS.leader || config.graceMs !== DEFAULT_SHORTCUTS.graceMs
       || config.enabled !== DEFAULT_SHORTCUTS.enabled || config.showHud !== DEFAULT_SHORTCUTS.showHud
-      || ACTIONS.some((a) => (config.bindings[a.id] || '') !== (DEFAULT_BINDINGS[a.id] || '')),
+      || ACTIONS.some((a) => (config.bindings[a.id] || '') !== (DEFAULT_BINDINGS[a.id] || ''))
+      || ACTIONS.some((a) => (config.hotkeys[a.id] || '') !== (DEFAULT_HOTKEYS[a.id] || '')),
     [config],
   )
 
@@ -205,7 +271,7 @@ export default function ShortcutsSettings() {
         description={<>Press the leader, let go, then the next key: <Keycap k={config.leader} /><span className="key-then">then</span><Keycap k="t" /> opens Todos. Saved on this device.</>}
         action={resetButton}
       >
-        <SettingsRow id="shortcuts-enabled" title="Keyboard shortcuts" description="The whole leader-key system, on or off."
+        <SettingsRow id="shortcuts-enabled" title="Keyboard shortcuts" description="Leader sequences and hotkeys, on or off."
           control={<Switch label="Keyboard shortcuts" checked={config.enabled} onChange={(v) => writeConfig({ enabled: v })} />} />
         <SettingsRow id="leader" title="Leader key" description="The key that starts a sequence. It never fires while you are typing in a field."
           control={<LeaderInput value={config.leader} onChange={(leader) => writeConfig({ leader })} />} />
@@ -239,6 +305,41 @@ export default function ShortcutsSettings() {
           </span>
         </SettingsNote>
       )}
+
+      <SettingsSection
+        id="shortcuts-hotkeys"
+        title="Hotkeys"
+        description="Keys held together, from any page, even while you type. Click one and press the new keys; Backspace clears it."
+        action={addable.length > 0 ? (
+          <select className="model-select" aria-label="Add a hotkey" value="" onChange={(e) => { const id = e.target.value; if (id) setAdded((a) => [...a, id]) }}>
+            <option value="">Add a hotkey…</option>
+            {ACTION_GROUPS.map((group) => (
+              <optgroup key={group} label={group}>
+                {addable.filter((a) => a.group === group).map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        ) : undefined}
+      >
+        {hotkeyRows.map((action) => {
+          const combo = config.hotkeys[action.id] || ''
+          const taken = combo ? hotkeyTaken(combo) : null
+          return (
+            <SettingsRow
+              key={action.id}
+              id={`hotkey-${action.id}`}
+              title={action.label}
+              description={action.id === 'cmd.chatNewHome' ? 'A blank chat at Home. Type $ in it to put it in a folder or start it for a task.' : undefined}
+              status={hotkeyClash.has(action.id) ? <span className="s-bad"><WarnIcon /> Also bound to another action.</span>
+                : taken ? <span className="s-bad"><WarnIcon /> {taken}</span> : undefined}
+              control={<HotkeyInput value={combo} label={action.label} onChange={(next) => {
+                setHotkey(action.id, next)
+                if (!next && !(action.id in DEFAULT_HOTKEYS)) setAdded((a) => a.filter((id) => id !== action.id))
+              }} />}
+            />
+          )
+        })}
+      </SettingsSection>
 
       {grouped.map(({ group, actions }) => (
         <SettingsSection key={group} id={`shortcuts-${group.toLowerCase().replace(/\s+/g, '-')}`} title={group}>
