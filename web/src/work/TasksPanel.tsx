@@ -6,14 +6,16 @@ import { ThreadItem } from '../chat/ThreadList'
 import { TI, useDismiss, usePopoverPlacement } from '../chat/ui'
 import {
   IconArrowsSort, IconChevronDown, IconChevronRight, IconCircle, IconCircleCheck, IconDots, IconEdit, IconExternalLink,
-  IconFolder, IconPlus, IconSearch, IconTable, IconX, IconCheck, IconUser, IconAdjustmentsHorizontal,
+  IconFolder, IconPlus, IconSearch, IconTable, IconX, IconCheck, IconUser, IconAdjustmentsHorizontal, IconZzz,
 } from '../chat/icons'
 import { useThreadTaskDrop } from '../chat/dnd'
 import { pushToast } from '../toast'
 import { parseQuickAdd } from '../todos/parse'
+import { SnoozeMenu } from '../todos/TaskMenus'
+import '../todos/todos.css'
 import { buildWork, dueLabel, folderOf, type WorkGroup, type WorkGroupBy, type WorkRow, type WorkShow, type WorkSort } from './groups'
 import { FolderPicker } from './pickers'
-import { completeTask, createTask, findTask, setTaskFolder, taskHome, useWork } from './state'
+import { completeTask, createTask, findTask, setTaskFolder, snoozeTask, taskHome, useWork } from './state'
 import { openTaskCard, useTaskCard } from './card'
 import { folderNames, PERSONAL } from '../todos/folders'
 import './work.css'
@@ -23,7 +25,7 @@ import './work.css'
 // is filed under (the same folders the Tasks page shows; unfiled is Personal),
 // each with the chats that work on it right below. A click on a task opens its
 // card (TaskCard.tsx), where every setting is edited; the count beside it unfolds
-// its chats.
+// its chats. A local task's row also snoozes it in one click (the zzz on hover).
 
 const VIEW_KEY = 'totem.work.view'
 const FOLDED_KEY = 'totem.work.folded'
@@ -153,7 +155,9 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
   const { task, chats } = row
   const [menu, setMenu] = useState(false)
   const [filing, setFiling] = useState(false)
+  const [snoozing, setSnoozing] = useState(false)
   const moreRef = useRef<HTMLButtonElement>(null)
+  const snoozeRef = useRef<HTMLButtonElement>(null)
   // The folder picker hangs off the row: the "…" it came from hides once the menu closes.
   const rowRef = useRef<HTMLDivElement>(null)
   const projects = useChat((s) => s.projects)
@@ -176,7 +180,7 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
   const openChat = (id: string) => { setActive(id); onOpenChat() }
   return (
     <div className={`wk-task ${open ? 'open' : ''} ${drop.over ? 'drop-over' : ''}`} {...drop.props}>
-      <div ref={rowRef} className={`vc-thread wk-task-row ${holdsActive && !open ? 'active' : ''} ${draftFor === task.ref || carded ? 'active' : ''} ${menu ? 'menu-open' : ''}`}>
+      <div ref={rowRef} className={`vc-thread wk-task-row ${holdsActive && !open ? 'active' : ''} ${draftFor === task.ref || carded ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''}`}>
         {task.kind === 'local'
           ? (
             <button type="button" className={`wk-check prio-${task.priority}`} onClick={() => completeTask(task.ref)} aria-label={`Mark “${task.title}” done`} title="Mark done">
@@ -196,11 +200,16 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
           </button>
         )}
         <div className="wk-task-acts">
+          {task.todo && <button ref={snoozeRef} type="button" className="vc-thread-act" onClick={() => setSnoozing((v) => !v)} aria-label={`Snooze “${task.title}”`} title="Snooze" aria-haspopup="menu" aria-expanded={snoozing}><TI icon={IconZzz} size={15} /></button>}
           <button type="button" className="vc-thread-act wk-act-new" onClick={newChat} aria-label="New chat for this task" title="New chat for this task"><TI icon={IconPlus} size={15} /></button>
           <button ref={moreRef} type="button" className="vc-thread-act" onClick={() => setMenu((v) => !v)} aria-label="More" title="More"><TI icon={IconDots} size={15} /></button>
         </div>
       </div>
       {menu && <RowMenu row={row} anchor={moreRef} onClose={() => setMenu(false)} onNewChat={newChat} onFile={() => setFiling(true)} onEdit={() => openTaskCard(task.ref)} />}
+      {snoozing && task.todo && <SnoozeMenu
+        anchor={snoozeRef.current} now={now} todo={task.todo} onClose={() => setSnoozing(false)}
+        onSnooze={(until) => void snoozeTask(task.ref, until)} onWake={() => void snoozeTask(task.ref, null)}
+      />}
       {filing && <FolderPicker
         open anchor={rowRef} onClose={() => setFiling(false)}
         value={folder} noneLabel={PERSONAL} noneIcon="person" label={`File “${task.title}”`}

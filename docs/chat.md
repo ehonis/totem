@@ -1327,8 +1327,9 @@ moves between a task and any of its chats (`web/src/work/`).
     in `App.tsx`). Esc, × or the backdrop close it; focus goes back where it was. On a
     phone it is a sheet from the bottom.
 
-  The count beside a task unfolds its chats; the "…" has Edit task…, New chat, Move to
-  folder… and Mark done.
+  The count beside a task unfolds its chats. On hover (always on a phone) a local task's
+  row has Snooze (zzz: the Tasks page's snooze menu, with Undo on the toast), New chat
+  and "…", which has Edit task…, New chat, Move to folder… and Mark done.
 - **Live with the Tasks page.** The panel and the page keep their own copies of the list,
   so each tells the other when it changes something (`web/src/todos/bus.ts`:
   `announcing` wraps every call that writes; `onTasksChanged` reads again, once per burst,
