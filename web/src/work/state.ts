@@ -272,3 +272,6 @@ export function taskHome(ref: string): string | null {
   const latest = chatState().threads.filter((t) => t.taskId && resolveRef(t.taskId, state.tasks) === ref && t.projectId).sort((a, b) => b.updatedAt - a.updatedAt)[0]
   return latest?.projectId && projects.some((p) => p.id === latest.projectId) ? latest.projectId : null
 }
+
+/** The store's subscription, for a reader that watches only while it is on screen (the composer's `$` menu). */
+export { subscribe as subscribeWork }

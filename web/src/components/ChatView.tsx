@@ -7,8 +7,10 @@ import {
   useChat, initChat, send, stop, steer, queueMessage, updateQueue, setActive, setThreadModel, keepThread, threadChoice, draftFor, type DraftPick,
   threadTitle, providerById, loadCapabilities, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
   openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead, setMembers,
-  loadFiles, openArtifact, openFile, openResource, takePendingFile, respondToApproval, openThread, loadEarlier,
+  loadFiles, openArtifact, openFile, openResource, takePendingFile, respondToApproval, openThread, loadEarlier, startTaskDraft,
 } from '../chat/store'
+import { draftKeyFor, moveDraft, placeAfter, type Destination } from '../chat/destinations'
+import { taskHome } from '../work/state'
 import { isLoaded } from '../chat/history'
 import { pickAnchor, readScroll, rowBoxes, rowTop, saveScroll, type ScrollEntry } from '../chat/scrollMemory'
 import { useTotemDirectory } from '../totems/shared'
@@ -262,7 +264,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const contextOff = active ? !!active.projectContextOff : draftContextOff
   const kind = project ? 'regular' : active?.kind || draftKind
   const temporary = kind === 'temporary'
-  const draftKey = activeId || (draftTaskId ? `new:task:${draftTaskId}` : project ? `new:project:${project.id}` : `new:${kind}`)
+  const draftKey = activeId || draftKeyFor({ taskId: draftTaskId, projectId: project?.id ?? null, kind })
   // A new chat starts on what was picked for it here, else its folder's or
   // project's model (threadChoice). A pick never follows him to another place,
   // and an open chat keeps its own model.
@@ -299,14 +301,41 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   function startIn(id: string) {
     if (input.trim()) {
       setDrafts((d) => {
-        const next = { ...d, [`new:project:${id}`]: d[`new:project:${id}`] || input }
-        delete next[draftKey]
+        const next = moveDraft(d, draftKey, draftKeyFor({ taskId: null, projectId: id }), input)
         try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(next)) } catch {}
         return next
       })
     }
     openProject(id)
   }
+
+  // `$` in a new chat's composer: put it in a project or folder, or start it for a
+  // task (in the task's folder, as "New chat for this task" does). The words go
+  // to the new place's draft, and the tray's files follow once its composer is up.
+  const placedFiles = useRef<Attachment[] | null>(null)
+  const [placed, setPlaced] = useState(0)
+  const pickDestination = useCallback((d: Destination, text: string) => {
+    const next = placeAfter(d, { taskId: draftTaskId, projectId: scopeProject?.id ?? null }, taskHome)
+    const nextKey = draftKeyFor(next)
+    const files = composer.current?.takeAttachments() || []
+    placedFiles.current = files.length ? files : null
+    setDrafts((dr) => {
+      const n = moveDraft(dr, draftKey, nextKey, text)
+      try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(n)) } catch {}
+      return n
+    })
+    setDraftKind('regular')
+    if (next.taskId) startTaskDraft(next.taskId, next.projectId)
+    else openProject(next.projectId)
+    setPlaced((n) => n + 1)
+  }, [draftTaskId, scopeProject?.id, draftKey])
+  useEffect(() => {
+    const files = placedFiles.current
+    if (!files) return
+    placedFiles.current = null
+    composer.current?.setAttachments(files)
+    composer.current?.focus()
+  }, [placed])
 
   // --- scrolling ---------------------------------------------------------------
   // Follow the reply while you're at the bottom; stop the moment you scroll up to
@@ -471,6 +500,12 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     requestAnimationFrame(() => composer.current?.focus())
   }
   useCommand(COMMANDS.chatNew, () => newChat('regular'))
+  // A blank chat at Home from anywhere (⌘/Ctrl+Shift+O by default): out of any
+  // project or task, ready to type into; `$` then puts it where it belongs.
+  useCommand(COMMANDS.chatNewHome, () => {
+    openProject(null)
+    newChat('regular')
+  })
   // A new chat started from anywhere (the panel, the rail, a project) is ready to type
   // into; not on a touch screen, where focusing would throw up the keyboard.
   useEffect(() => {
@@ -606,6 +641,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     displace: (text) => setInput(input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text),
   })
 
+  const destinations = useMemo(() => ({ projectId: scopeProject?.id ?? null, taskId: draftTaskId, onPick: pickDestination }), [scopeProject?.id, draftTaskId, pickDestination])
   const composerEl = (
     <Composer
       rightSlot={
@@ -633,6 +669,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       autoFocus={visible}
       placeholder={waitingApproval ? DECLINE_PLACEHOLDER : !active && draftTaskId ? 'What should we do about it?' : temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
       allowCommands={!temporary}
+      destinations={active ? undefined : destinations}
       maxUploadBytes={caps?.maxUploadBytes}
       onAuthError={onAuthError}
     />

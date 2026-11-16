@@ -16,6 +16,11 @@
  *               which is what makes `g t t` feel like "go to Todos, then new".
  *   • command — a view-level action (open a composer, toggle the terminal). The
  *               view that owns it subscribes via `useCommand`.
+ * An action with both goes there first, then runs the command.
+ *
+ * Any action can also have a hotkey: one modifier chord (`mod+shift+o`, where
+ * `mod` is ⌘ on a Mac and Ctrl elsewhere) that fires at once, even from a text
+ * field, since a chord with a modifier is never typing.
  */
 import type { Route } from './router'
 import { getSettings, setSetting } from './settings'
@@ -26,7 +31,7 @@ export interface ShortcutAction {
   label: string
   /** Section heading in the cheat sheet and the settings editor. */
   group: string
-  /** Where this action goes. Mutually exclusive with `command`. */
+  /** Where this action goes; with a `command`, it goes there first. */
   nav?: Partial<Route>
   /** Command id broadcast to whichever view owns it. */
   command?: string
@@ -45,6 +50,7 @@ export const COMMANDS = {
   todoNew: 'todo.new',
   habitNew: 'habit.new',
   chatNew: 'chat.new',
+  chatNewHome: 'chat.newHome',
   chatSettle: 'chat.settle',
   journalRecord: 'journal.record',
   terminalToggle: 'terminal.toggle',
@@ -77,6 +83,7 @@ export const ACTIONS: ShortcutAction[] = [
   { id: 'cmd.todoNew', label: 'New todo', group: 'Create', command: COMMANDS.todoNew },
   { id: 'cmd.habitNew', label: 'New habit', group: 'Create', command: COMMANDS.habitNew },
   { id: 'cmd.chatNew', label: 'New chat', group: 'Create', command: COMMANDS.chatNew },
+  { id: 'cmd.chatNewHome', label: 'New chat in Home', group: 'Create', nav: { tab: 'chat' }, command: COMMANDS.chatNewHome },
   { id: 'cmd.chatSettle', label: 'Settle or un-settle this chat', group: 'Utilities', command: COMMANDS.chatSettle },
   { id: 'cmd.journalRecord', label: 'Record a journal entry', group: 'Create', command: COMMANDS.journalRecord },
   ...QUICK_PANEL_SHORTCUTS.map(({ actionId, label, command, chainable }) => ({
@@ -134,6 +141,14 @@ export const DEFAULT_BINDINGS: Record<string, string> = {
   'cmd.cheatsheet': '?',
 }
 
+/**
+ * Default hotkeys, keyed by action. T3 Code's new-thread chord starts a blank
+ * chat at Home from any page.
+ */
+export const DEFAULT_HOTKEYS: Record<string, string> = {
+  'cmd.chatNewHome': 'mod+shift+o',
+}
+
 export interface ShortcutConfig {
   enabled: boolean
   /** Single key that opens a sequence. Lower-cased, no modifiers. */
@@ -144,6 +159,8 @@ export interface ShortcutConfig {
   showHud: boolean
   /** actionId -> sequence after the leader. */
   bindings: Record<string, string>
+  /** actionId -> modifier chord (`mod+shift+o`); '' clears a default. */
+  hotkeys: Record<string, string>
 }
 
 export const DEFAULT_SHORTCUTS: ShortcutConfig = {
@@ -152,6 +169,7 @@ export const DEFAULT_SHORTCUTS: ShortcutConfig = {
   graceMs: 1200,
   showHud: true,
   bindings: { ...DEFAULT_BINDINGS },
+  hotkeys: { ...DEFAULT_HOTKEYS },
 }
 
 export const GRACE_MIN = 400
@@ -166,12 +184,17 @@ export function readConfig(): ShortcutConfig {
     // ignoring it here keeps the editor and the matcher from disagreeing.
     if (ACTIONS_BY_ID[id]) bindings[id] = normalizeSequence(String(seq))
   }
+  const hotkeys: Record<string, string> = { ...DEFAULT_HOTKEYS }
+  for (const [id, combo] of Object.entries(stored.hotkeys || {})) {
+    if (ACTIONS_BY_ID[id]) hotkeys[id] = normalizeHotkey(String(combo))
+  }
   return {
     enabled: stored.enabled ?? DEFAULT_SHORTCUTS.enabled,
     leader: normalizeKey(stored.leader) || DEFAULT_SHORTCUTS.leader,
     graceMs: clampGrace(stored.graceMs),
     showHud: stored.showHud ?? DEFAULT_SHORTCUTS.showHud,
     bindings,
+    hotkeys,
   }
 }
 
@@ -184,8 +207,13 @@ export function setBinding(actionId: string, sequence: string) {
   writeConfig({ bindings: { ...config.bindings, [actionId]: normalizeSequence(sequence) } })
 }
 
+export function setHotkey(actionId: string, combo: string) {
+  const config = readConfig()
+  writeConfig({ hotkeys: { ...config.hotkeys, [actionId]: normalizeHotkey(combo) } })
+}
+
 export function resetShortcuts() {
-  setSetting('shortcuts', { ...DEFAULT_SHORTCUTS, bindings: { ...DEFAULT_BINDINGS } })
+  setSetting('shortcuts', { ...DEFAULT_SHORTCUTS, bindings: { ...DEFAULT_BINDINGS }, hotkeys: { ...DEFAULT_HOTKEYS } })
 }
 
 const clampGrace = (ms: unknown) => {
@@ -210,6 +238,84 @@ export function normalizeSequence(seq: string, max = 3): string {
     .filter(Boolean)
     .slice(0, max)
     .join('')
+}
+
+// ---------------------------------------------------------------------------
+// Hotkeys
+// ---------------------------------------------------------------------------
+
+export const isMac = () => typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+
+const MODIFIERS = ['mod', 'ctrl', 'meta', 'alt', 'shift'] as const
+type Modifier = typeof MODIFIERS[number]
+
+/**
+ * A chord in its stored spelling: modifiers in a fixed order, then one key, all
+ * lower case. Without ⌘/Ctrl/Alt it is no hotkey (Shift+O is a capital O), so ''.
+ */
+export function normalizeHotkey(combo: string): string {
+  const parts = String(combo || '').toLowerCase().split('+').map((p) => p.trim())
+  // "mod++" is the plus key.
+  if (parts.length > 1 && parts[parts.length - 1] === '' && parts[parts.length - 2] === '') parts.splice(-2, 2, '+')
+  const key = parts.pop() || ''
+  const mods = new Set(parts.filter((p): p is Modifier => (MODIFIERS as readonly string[]).includes(p)))
+  if (!key || MODIFIERS.includes(key as Modifier) || !(mods.has('mod') || mods.has('ctrl') || mods.has('meta') || mods.has('alt'))) return ''
+  return [...MODIFIERS.filter((m) => mods.has(m)), key].join('+')
+}
+
+/**
+ * The chord a key press makes, or '' for a press that is no hotkey. Letters and
+ * digits are read from the key's position (`e.code`), so Shift or a Mac's Option
+ * (⌥O types "ø") never changes which key it was.
+ */
+export function hotkeyFromEvent(e: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>, mac = isMac()): string {
+  if (['Meta', 'Control', 'Alt', 'Shift', 'OS', 'AltGraph', 'CapsLock'].includes(e.key)) return ''
+  const letter = /^Key([A-Z])$/.exec(e.code || '')
+  const digit = /^Digit(\d)$/.exec(e.code || '')
+  const key = letter ? letter[1].toLowerCase() : digit ? digit[1] : (e.key || '').toLowerCase()
+  if (!key) return ''
+  const mods: string[] = []
+  if (mac ? e.metaKey : e.ctrlKey) mods.push('mod')
+  if (mac && e.ctrlKey) mods.push('ctrl')
+  if (!mac && e.metaKey) mods.push('meta')
+  if (e.altKey) mods.push('alt')
+  if (e.shiftKey) mods.push('shift')
+  return normalizeHotkey([...mods, key].join('+'))
+}
+
+const KEY_NAMES: Record<string, [mac: string, other: string]> = {
+  mod: ['⌘', 'Ctrl'], ctrl: ['⌃', 'Ctrl'], meta: ['⌘', 'Win'], alt: ['⌥', 'Alt'], shift: ['⇧', 'Shift'],
+  enter: ['↩', 'Enter'], escape: ['Esc', 'Esc'], backspace: ['⌫', 'Backspace'], ' ': ['Space', 'Space'],
+  arrowup: ['↑', '↑'], arrowdown: ['↓', '↓'], arrowleft: ['←', '←'], arrowright: ['→', '→'],
+}
+
+/** A chord as keycaps: `mod+shift+o` → ⌘ ⇧ O on a Mac, Ctrl Shift O elsewhere. */
+export function hotkeyKeys(combo: string, mac = isMac()): string[] {
+  const n = normalizeHotkey(combo)
+  if (!n) return []
+  const parts = n.endsWith('++') ? [...n.slice(0, -2).split('+'), '+'] : n.split('+')
+  return parts.map((p) => KEY_NAMES[p]?.[mac ? 0 : 1] ?? (p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1)))
+}
+
+/**
+ * Chords the browser or Totem keeps for itself: a page never sees the first
+ * (new tab, close tab, quit), and Ctrl+` already opens the terminal.
+ */
+export function hotkeyTaken(combo: string): string | null {
+  const n = normalizeHotkey(combo)
+  if (['mod+t', 'mod+w', 'mod+n', 'mod+q', 'mod+shift+t', 'mod+shift+n', 'mod+shift+w', 'mod+tab', 'mod+shift+tab'].includes(n)) return 'Your browser keeps this one, so it may never reach Totem.'
+  if (n === 'mod+`') return 'This one opens the terminal.'
+  return null
+}
+
+/** Hotkeys as chord -> action, first writer wins like the sequences. */
+export function hotkeyIndex(hotkeys: Record<string, string>): Map<string, ShortcutAction> {
+  const index = new Map<string, ShortcutAction>()
+  for (const [id, combo] of Object.entries(hotkeys)) {
+    const action = ACTIONS_BY_ID[id]
+    if (action && combo && !index.has(combo)) index.set(combo, action)
+  }
+  return index
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,8 @@ import { useSettings } from './settings'
 import {
   ACTIONS_BY_ID,
   bindingIndex,
+  hotkeyFromEvent,
+  hotkeyIndex,
   matchSequence,
   normalizeKey,
   readConfig,
@@ -64,6 +66,7 @@ export function useShortcuts(onNavigate: (target: NavTarget) => void): ChordStat
   // rather than on every keystroke.
   const config: ShortcutConfig = useMemo(() => readConfig(), [settings.shortcuts])
   const index = useMemo(() => bindingIndex(config.bindings), [config.bindings])
+  const hotkeys = useMemo(() => hotkeyIndex(config.hotkeys), [config.hotkeys])
 
   const [chord, setChord] = useState<ChordState>(IDLE)
 
@@ -88,8 +91,9 @@ export function useShortcuts(onNavigate: (target: NavTarget) => void): ChordStat
   }, [])
 
   const fire = useCallback((action: ShortcutAction) => {
+    // Navigate first: the command's view may only mount there (runCommand parks it until then).
     if (action.nav) onNavigate(action.nav)
-    else if (action.command) runCommand(action.command)
+    if (action.command) runCommand(action.command)
   }, [onNavigate])
 
   // Kept in a ref so the keydown listener below can stay registered across
@@ -199,6 +203,28 @@ export function useShortcuts(onNavigate: (target: NavTarget) => void): ChordStat
       clearTimer()
     }
   }, [config.enabled, arm, reset])
+
+  // Hotkeys: one modifier chord, from anywhere, text fields included (a chord with
+  // ⌘/Ctrl/Alt is never typing). A field recording a new hotkey keeps its keys.
+  const hotkeysRef = useRef({ hotkeys, fire, reset })
+  useEffect(() => { hotkeysRef.current = { hotkeys, fire, reset } }, [hotkeys, fire, reset])
+  useEffect(() => {
+    if (!config.enabled) return undefined
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || e.repeat) return
+      if (!(e.metaKey || e.ctrlKey || e.altKey)) return
+      if (e.target instanceof Element && e.target.closest('[data-hotkey-capture]')) return
+      const { hotkeys: idx, fire: run, reset: stop } = hotkeysRef.current
+      const action = idx.get(hotkeyFromEvent(e))
+      if (!action) return
+      e.preventDefault()
+      e.stopPropagation()
+      stop()
+      run(action)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [config.enabled])
 
   // Clicking away or tabbing to another window shouldn't leave a chord hanging.
   useEffect(() => {

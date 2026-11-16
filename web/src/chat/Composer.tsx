@@ -5,6 +5,11 @@ import { pushError } from '../toast'
 import { deleteUpload, transcribe, uploadFile } from './api'
 import { AttachmentChip, useMentionSet } from './Message'
 import { insertMention, mentionAtCaret, splitMentions } from './mentions'
+import { rankDestinations, stripToken, type Destination } from './destinations'
+import ProjectIcon from './ProjectIcon'
+import { useChat } from './store'
+import { getWork, subscribeWork } from '../work/state'
+import { dueLabel } from '../work/groups'
 import { micUnavailableReason, openMic, closeMic, recordUntilStopped } from './recorder'
 import type { Attachment, DraftAttachment } from './types'
 import type { Answering } from './QuestionsPanel'
@@ -12,6 +17,7 @@ import { TI, useDismiss } from './ui'
 import {
   IconArrowUp, IconPlayerStopFilled, IconPlus, IconPaperclip, IconPhoto, IconMicrophone, IconWaveSine,
   IconSparkles, IconX, IconCheck, IconLoader2, IconCornerUpRight, IconPuzzle, IconPlaylistAdd, IconPlayerPlayFilled,
+  IconHome, IconChecklist, IconTable, IconFolder,
 } from './icons'
 import type { ChatCommand } from '../studio'
 
@@ -69,6 +75,16 @@ export interface ComposerProps {
    * answer to the one on screen, and the button moves through them.
    */
   answering?: Answering
+  /**
+   * A chat not started yet: `$` also offers where it goes (a project, a folder,
+   * Home) and the tasks it can be for. Picking one takes the `$…` out of the
+   * words and hands them over, since they move to the new place's draft.
+   */
+  destinations?: {
+    projectId: string | null
+    taskId: string | null
+    onPick: (d: Destination, text: string, caret: number) => void
+  }
 }
 
 const coarse = () => window.matchMedia?.('(pointer: coarse)').matches
@@ -91,6 +107,28 @@ function useModifierHeld(on: boolean) {
 
 let pasteCount = 0
 
+// The tasks are read only while the `$` menu is open (work/state.ts polls while watched).
+const noSubscribe = () => () => {}
+
+type MenuItem = { kind: 'dest'; d: Destination } | { kind: 'cmd'; c: ChatCommand }
+const itemKey = (it: MenuItem) => (it.kind === 'dest' ? it.d.key : it.c.cmd)
+const itemGroup = (it: MenuItem) => (it.kind === 'dest' ? (it.d.kind === 'task' ? 'Start it for a task' : 'Start it in')
+  : it.c.kind === 'agent' ? 'Your agent skills' : 'Totem skills')
+
+function destDesc(d: Destination, sheetName: string) {
+  if (d.kind === 'home') return 'Chats in no project'
+  if (d.kind === 'project') return d.parent ? `Folder in ${d.parent.name}` : 'Project'
+  const due = d.task.dueDate ? dueLabel(d.task.dueDate, new Date()) : null
+  const where = d.task.kind === 'sheet' ? sheetName || 'Shared sheet' : 'Task'
+  return due ? `${where} · ${due.text}` : where
+}
+
+function DestIcon({ d }: { d: Destination }) {
+  if (d.kind === 'home') return <TI icon={IconHome} size={16} />
+  if (d.kind === 'project') return d.project.icon || d.project.imageUrl ? <ProjectIcon p={d.project} size={16} /> : <TI icon={IconFolder} size={16} />
+  return <TI icon={d.task.kind === 'sheet' ? IconTable : IconChecklist} size={16} />
+}
+
 /**
  * The menu for a `/` or `$` token: Totem's skills with that prefix, then (for `/`)
  * the owner's agent skills. Names that start with the term come first.
@@ -111,7 +149,7 @@ function rankCommands(catalog: ChatCommand[], prefix: string, term: string, alon
 }
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, rightSlot, answering, above } = props
+  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, rightSlot, answering, above, destinations } = props
   const ta = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const photoInput = useRef<HTMLInputElement>(null)
@@ -222,6 +260,8 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   const failed = drafts.some((d) => d.status === 'error')
   const ready = drafts.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
   const hasContent = value.trim().length > 0 || drafts.length > 0
+  // Only finished files can move with a chat to its new place, so a pick waits for the rest.
+  const placeHeld = uploading ? 'Waiting for uploads' : failed ? 'Retry or remove failed uploads first' : ''
   const sendable = !uploading && !failed && (value.trim().length > 0 || ready.length > 0)
   const canSend = !busy && sendable
   // While a reply runs, a message waits its turn or steers it (T3 Code). Enter
@@ -294,6 +334,14 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   // Only the token in an otherwise empty box can take a fill-mode skill's prefix.
   const alone = !!query && query.start === 0 && !value.slice(query.end).trim()
   const matches: ChatCommand[] = query ? rankCommands(catalog, query.prefix, query.term, alone) : []
+  // `$` in a chat not started yet: where it goes and which task it is for, before the `$` skills.
+  const dollar = !!query && query.prefix === '$' && !!destinations
+  const work = useSyncExternalStore(dollar ? subscribeWork : noSubscribe, getWork, getWork)
+  const projects = useChat((s) => s.projects)
+  const places = dollar && destinations
+    ? rankDestinations({ projects, tasks: work.tasks, projectId: destinations.projectId, taskId: destinations.taskId }, query!.term)
+    : []
+  const items: MenuItem[] = [...places.map((d): MenuItem => ({ kind: 'dest', d })), ...matches.map((c): MenuItem => ({ kind: 'cmd', c }))]
   useEffect(() => { setSel(0) }, [value])
   useEffect(() => { if (!token) setDismissed(null) }, [token?.start])
   useEffect(() => {
@@ -313,18 +361,26 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     placeCaret(next, pos)
   }
 
-  function startMention() {
+  function chooseItem(it: MenuItem) {
+    if (it.kind === 'cmd') { chooseCommand(it.c); return }
+    if (!query || !destinations || placeHeld) return
+    const { value: next, caret: pos } = stripToken(value, query.start, query.end)
+    setDismissed(null)
+    destinations.onPick(it.d, next, pos)
+  }
+
+  function startMention(prefix: '/' | '$' = '/') {
     const sep = value && !/\s$/.test(value) ? ' ' : ''
-    const next = `${value}${sep}/`
+    const next = `${value}${sep}${prefix}`
     setDismissed(null)
     placeCaret(next, next.length)
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (matches.length) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setSel((s) => (s + 1) % matches.length); return }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setSel((s) => (s - 1 + matches.length) % matches.length); return }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); chooseCommand(matches[sel]); return }
+    if (items.length) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSel((s) => (s + 1) % items.length); return }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setSel((s) => (s - 1 + items.length) % items.length); return }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); chooseItem(items[Math.min(sel, items.length - 1)]); return }
       if (e.key === 'Escape') { e.preventDefault(); setDismissed(query!.start); return }
     }
     // On a phone, Return is a newline and the button sends — the way every
@@ -391,21 +447,33 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   return (
     <div className={`vc-composer ${compact ? 'compact' : ''}`}>
       {above}
-      {matches.length > 0 && (
+      {items.length > 0 && (
         <div className="vc-cmd-menu" role="listbox" ref={cmdMenuRef}>
-          {matches.map((c, i) => {
-            const group = c.kind === 'agent' ? 'Your agent skills' : 'Totem skills'
-            const prev = i > 0 ? (matches[i - 1].kind === 'agent' ? 'Your agent skills' : 'Totem skills') : ''
+          {items.map((it, i) => {
+            const group = itemGroup(it)
+            const prev = i > 0 ? itemGroup(items[i - 1]) : ''
             return (
-              <React.Fragment key={c.cmd}>
+              <React.Fragment key={itemKey(it)}>
                 {group !== prev && <div className="vc-menu-label">{group}</div>}
-                <button type="button" role="option" aria-selected={i === sel} className={`vc-cmd ${i === sel ? 'active' : ''}`}
-                  onMouseDown={(e) => { e.preventDefault(); chooseCommand(c) }} onMouseEnter={() => setSel(i)}>
-                  <span className="vc-cmd-icon">{c.kind === 'agent' ? <TI icon={IconPuzzle} size={16} /> : <Hi icon={c.icon} size={16} />}</span>
-                  <span className="vc-cmd-text">
-                    <span className="vc-cmd-name">{c.cmd}{c.source && <span className="vc-cmd-source">{c.source}</span>}</span>
-                    <span className="vc-cmd-desc">{c.desc}</span>
-                  </span>
+                <button type="button" role="option" aria-selected={i === sel} aria-disabled={it.kind === 'dest' && !!placeHeld} className={`vc-cmd ${i === sel ? 'active' : ''}`}
+                  onMouseDown={(e) => { e.preventDefault(); chooseItem(it) }} onMouseEnter={() => setSel(i)}>
+                  {it.kind === 'dest' ? (
+                    <>
+                      <span className="vc-cmd-icon"><DestIcon d={it.d} /></span>
+                      <span className="vc-cmd-text">
+                        <span className="vc-cmd-place">{it.d.name}</span>
+                        <span className="vc-cmd-desc">{placeHeld || destDesc(it.d, work.sheetName)}</span>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="vc-cmd-icon">{it.c.kind === 'agent' ? <TI icon={IconPuzzle} size={16} /> : <Hi icon={it.c.icon} size={16} />}</span>
+                      <span className="vc-cmd-text">
+                        <span className="vc-cmd-name">{it.c.cmd}{it.c.source && <span className="vc-cmd-source">{it.c.source}</span>}</span>
+                        <span className="vc-cmd-desc">{it.c.desc}</span>
+                      </span>
+                    </>
+                  )}
                 </button>
               </React.Fragment>
             )
@@ -471,13 +539,16 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
                         <TI icon={IconPhoto} size={17} /><span>Take a photo</span>
                       </button>
                     )}
+                    {allowCommands && (catalog.length > 0 || destinations) && <div className="vc-menu-sep" />}
                     {allowCommands && catalog.length > 0 && (
-                      <>
-                        <div className="vc-menu-sep" />
-                        <button type="button" role="menuitem" onClick={() => { setMenu(false); startMention() }}>
-                          <TI icon={IconSparkles} size={17} /><span>Use a skill</span>
-                        </button>
-                      </>
+                      <button type="button" role="menuitem" onClick={() => { setMenu(false); startMention() }}>
+                        <TI icon={IconSparkles} size={17} /><span>Use a skill</span>
+                      </button>
+                    )}
+                    {allowCommands && destinations && (
+                      <button type="button" role="menuitem" onClick={() => { setMenu(false); startMention('$') }}>
+                        <TI icon={IconFolder} size={17} /><span>Put it in a folder or task</span>
+                      </button>
                     )}
                   </div>
                 )}
