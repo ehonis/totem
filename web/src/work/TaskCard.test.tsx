@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TodosView from '../components/TodosView'
 import ToastHost from '../components/ToastHost'
 import type { SheetFeed, Todo } from '../todos/types'
-import TaskCardHost from './TaskCard'
+import TaskCardHost, { PinnedTask } from './TaskCard'
 import TaskBar from './TaskBar'
 import { closeTaskCard, installTaskNav, openTaskCard } from './card'
 import { createTask } from './state'
@@ -145,13 +145,17 @@ describe('task card', () => {
     expect(prevented).toBe(true)
   })
 
-  it('a description typed and then left by clicking the page is saved', async () => {
+  it('a description typed and then left by clicking the backdrop is saved', async () => {
     const user = await mount()
     act(() => openTaskCard('today'))
     const card = await screen.findByRole('dialog', { name: 'Task: Call the bank' })
+    expect(card).toHaveAttribute('aria-modal', 'true')
     await user.click(within(card).getByRole('textbox', { name: 'Description' }))
     await user.keyboard('Ask about the fee')
-    await user.click(screen.getByRole('heading', { name: 'Tasks' }))
+    // A click inside the card leaves it open; the backdrop around it closes it.
+    await user.click(within(card).getByText('Folder'))
+    expect(screen.getByRole('dialog', { name: 'Task: Call the bank' })).toBeVisible()
+    await user.pointer({ keys: '[MouseLeft]', target: card.parentElement! })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task: Call the bank' })).toBeNull())
     await waitFor(() => expect(last(sent('PATCH', /\/api\/todos\/today$/))?.body).toEqual({ description: 'Ask about the fee' }))
   })
@@ -203,6 +207,61 @@ describe('the composer’s task strip', () => {
     expect(modes).toEqual(['tasks'])
     expect(shown).toHaveBeenCalled()
     window.removeEventListener('totem:panel-mode', onMode)
+  })
+})
+
+describe('the chat’s pinned task', () => {
+  function Chat({ visible = true }: { visible?: boolean }) {
+    return (
+      <div className="vc">
+        <PinnedTask taskRef="today" visible={visible} />
+        <p>Messages</p>
+        <TaskBar thread={null} draftTaskId="today" projectId={null} />
+      </div>
+    )
+  }
+
+  it('stays put while the page is clicked, folds, and saves from its rows', async () => {
+    // jsdom lays out a 0px column, which would start it folded.
+    localStorage.setItem('totem.taskPin.folded', '0')
+    const user = userEvent.setup()
+    render(<><Chat /><TaskCardHost /></>)
+    const pin = await screen.findByRole('complementary', { name: /Call the bank/ })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await user.click(screen.getByText('Messages'))
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('complementary', { name: /Call the bank/ })).toBeVisible()
+
+    await user.click(within(pin).getByRole('button', { name: /Today/ }))
+    await user.click(await screen.findByRole('menuitemradio', { name: /^Tomorrow/ }))
+    await waitFor(() => expect(sent('PATCH', /\/api\/todos\/today$/)[0]?.body).toEqual({ dueDate: '2026-11-10' }))
+
+    await user.click(within(pin).getByRole('button', { name: 'Fold the task' }))
+    expect(within(pin).queryByRole('textbox', { name: 'Description' })).toBeNull()
+    expect(localStorage.getItem('totem.taskPin.folded')).toBe('1')
+    await user.click(within(pin).getByRole('button', { name: 'Show the task’s settings', expanded: false }))
+    expect(within(pin).getByRole('textbox', { name: 'Description' })).toBeVisible()
+  })
+
+  it('opening the chat’s own task unfolds the pinned card instead of a dialog', async () => {
+    localStorage.setItem('totem.taskPin.folded', '1')
+    const user = userEvent.setup()
+    render(<><Chat /><TaskCardHost /></>)
+    const pin = await screen.findByRole('complementary', { name: /Call the bank/ })
+    expect(within(pin).queryByRole('textbox', { name: 'Description' })).toBeNull()
+    await user.click(within(screen.getByRole('group', { name: 'Linked task' })).getByRole('button', { name: /Call the bank/ }))
+    expect(within(pin).getByRole('textbox', { name: 'Description' })).toBeVisible()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    // Any other task still opens as a dialog.
+    act(() => openTaskCard('site'))
+    expect(await screen.findByRole('dialog', { name: 'Task: Fix the footer' })).toBeVisible()
+  })
+
+  it('a chat behind another page does not catch its task: that opens as a dialog', async () => {
+    render(<><Chat visible={false} /><TaskCardHost /></>)
+    await screen.findByRole('complementary', { name: /Call the bank/ })
+    act(() => openTaskCard('today'))
+    expect(await screen.findByRole('dialog', { name: 'Task: Call the bank' })).toBeVisible()
   })
 })
 

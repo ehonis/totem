@@ -11,8 +11,9 @@ import { FolderChip } from './FolderField'
 import './work.css'
 
 // The strip over the composer that says which task a chat is for, drawn like the
-// queue's drawer: the task (a click opens its card, TaskCard.tsx, to edit it, and
-// shows it in the chats panel's Tasks face), its folder and due day, Mark done,
+// queue's drawer: the task (a click unfolds and flashes the card pinned at the
+// chat's top right, TaskCard.tsx, or opens it as a sheet on a phone, and shows it
+// in the chats panel's Tasks face), its folder and due day, Mark done,
 // and the link to change or drop it. The click used to only turn the panel to
 // Tasks, which did nothing visible when it was already there. On a new chat started
 // from a task it says so, with × to start a plain chat instead.

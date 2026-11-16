@@ -1306,15 +1306,29 @@ moves between a task and any of its chats (`web/src/work/`).
   from `GET /api/todos/sheet` already filed: its own filing, else the sheet's default
   folder (`docs/task-sheet.md`). Deleting a folder moves its tasks up to its project,
   deleting a project makes them Personal, as with its chats.
-- **The task card** (`web/src/work/TaskCard.tsx`, `card.ts`). A click on a task opens a
-  floating card at the page's top right, T3 Code's thread card for a task: the check
-  circle and title, then one row per setting with a dropdown (Folder, Due, Priority,
-  Repeat, Snooze), the description, the chats working on it with New chat, Open in Tasks
-  (the Tasks page, scrolled to the task with its pane open) and Delete. Every change saves
-  at once and is drawn put back if refused. A sheet row's card is read-only but for its
-  folder, with Open in the sheet. Esc, × or a click elsewhere closes it; on a phone it is
-  a sheet from the bottom over a scrim. The count beside a task unfolds its chats; the
-  "…" has Edit task…, New chat, Move to folder… and Mark done.
+- **The task card** (`web/src/work/TaskCard.tsx`, `card.ts`), T3 Code's thread card for a
+  task: the check circle and title, then one row per setting with a dropdown (Folder, Due,
+  Priority, Repeat, Snooze), the description, the chats working on it with New chat, Open
+  in Tasks (the Tasks page, scrolled to the task with its pane open) and Delete. Every
+  change saves at once and is drawn put back if refused. A sheet row's card is read-only
+  but for its folder, with Open in the sheet. It is drawn two ways:
+  - **Pinned.** The open chat's own task (a linked chat's `taskId`, or the task a new
+    chat is being started from) sits at the chat's top right under the header for as
+    long as the chat is open (`PinnedTask`, mounted by `ChatView`). Nothing outside
+    closes it; its chevron folds it to its title row, kept per device
+    (`totem.taskPin.folded`), and with no choice made it starts folded while the chat
+    column is under 1000px. Unfolded, the messages and composer move left just enough to
+    clear it (a `:has()` rule in `work.css`, percentages of `.vc`, no JS), keeping at
+    least 520px. Opening that task anywhere (the strip, its row in the chats panel)
+    unfolds and flashes it rather than opening a dialog (`pinTask` in `card.ts`), but only
+    while the chat is the page on screen. Not on a phone.
+  - **A dialog.** Any other task, opened from the chats panel's Tasks face (or the chat's
+    own task on a phone), opens in a modal over a backdrop (`TaskCardHost`, mounted once
+    in `App.tsx`). Esc, × or the backdrop close it; focus goes back where it was. On a
+    phone it is a sheet from the bottom.
+
+  The count beside a task unfolds its chats; the "…" has Edit task…, New chat, Move to
+  folder… and Mark done.
 - **Live with the Tasks page.** The panel and the page keep their own copies of the list,
   so each tells the other when it changes something (`web/src/todos/bus.ts`:
   `announcing` wraps every call that writes; `onTasksChanged` reads again, once per burst,
@@ -1329,7 +1343,7 @@ moves between a task and any of its chats (`web/src/work/`).
 - **The strip over the composer** (`web/src/work/TaskBar.tsx`) names a linked chat's task
   with its folder and due day, Done (local tasks), and the link button to change or unlink
   it; on a new chat from a task it says so, with × for a plain chat instead. The task's
-  title opens its card and turns every open chats panel to Tasks, scrolled to the task.
+  title unfolds and flashes the pinned card (the sheet on a phone) and turns every open chats panel to Tasks, scrolled to the task.
   (It used to only turn the panel, which did nothing visible when the panel was already on
   Tasks, as it is for a chat started there.)
 - **Tasks an agent makes.** `totem_create_task` from a chat run (the gateway names the run,

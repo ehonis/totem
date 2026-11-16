@@ -18,6 +18,7 @@ import { GroupPicker } from './TotemsView'
 import { isSnoozed, settledAt, wakeDescription } from '../chat/settle'
 import ProjectHome from '../chat/ProjectHome'
 import TaskBar from '../work/TaskBar'
+import { PinnedTask } from '../work/TaskCard'
 import ProjectIcon from '../chat/ProjectIcon'
 import Composer, { type ComposerHandle, type FollowUpPayload } from '../chat/Composer'
 import QueuedMessages from '../chat/QueuedMessages'
@@ -705,6 +706,9 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     ? <HandoffMark s={{ from: lastProvider, to: choice.provider }} pending />
     : null
 
+  // The task the strip over the composer names (TaskBar), pinned at the top right.
+  const pinnedTaskRef = (active && !empty ? active.taskId : null) || (active ? null : draftTaskId) || null
+
   // The one side panel showing, if any, and its own remembered width.
   const sidePanel = artifact ? { id: 'canvas', label: 'Resize the canvas' }
     : agentsShown ? { id: 'agents', label: 'Resize the agents panel' }
@@ -743,6 +747,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
         temporary={(!active || empty) && !project ? { on: temporary, onToggle: () => newChat(temporary ? 'regular' : 'temporary') } : undefined}
         newChatAtEnd={narrow}
       />
+      {/* The chat's task, pinned at its top right while the chat is open (work/TaskCard.tsx). */}
+      {pinnedTaskRef && <PinnedTask taskRef={pinnedTaskRef} visible={visible} />}
       {picking && active && !active.totemId && (
         <MembersPop anchor={membersRef} onClose={() => setPicking(false)}>
           <GroupPicker
