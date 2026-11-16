@@ -1035,10 +1035,26 @@ do (`chat/projects.mjs`, `web/src/chat/Project*.tsx`):
 
 | Shared | Where | Who writes it |
 |---|---|---|
-| Default account and model | `project.json` → `provider`, `modelSettings` | The owner (Settings tab). A new chat in the project starts on it; any one chat can still pick another. Optional: see Which model a new chat starts on. |
+| Default account and model | `project.json` → `provider`, `modelSettings` | The owner (the card's Model row). A new chat in the project starts on it; any one chat can still pick another. Optional: see Which model a new chat starts on. |
 | Instructions | `project.json` → `instructions` | The owner. |
-| Memory | `<CHAT_PROJECTS_DIR>/<id>/memory.md` | The agent, with its own file tools; the owner can edit it on the Memory tab. |
-| Files | `project.json` → `files` (upload ids) | Uploaded on the Files tab, attached in any of the project's chats, or made by the agent in one (`source`: `upload`, `chat`, `agent`). |
+| Memory | `<CHAT_PROJECTS_DIR>/<id>/memory.md` | The agent, with its own file tools; the owner can edit it from the card's Memory row. |
+| Files | `project.json` → `files` (upload ids) | Uploaded from the card's Files row, attached in any of the project's chats, or made by the agent in one (`source`: `upload`, `chat`, `agent`). |
+
+A project's or folder's page (the chat pane with the place open and no chat) is its
+composer over its folders and chats. What those chats share is its **card**
+(`web/src/chat/ProjectCard.tsx`), T3 Code's thread card for the place: its icon and name
+(a folder says which project it is in), then one row each for Files, Instructions,
+Memory, Model and Settings (name, icon or picture, delete), each with a one-line summary
+that opens its editor under the row, one at a time. On desktop it is pinned at the pane's
+top right; when a new chat is started from a task, the task's card (Tasks panel → The
+task card) is stacked under it in the same column (`.vc-pins` in `ChatView`), each
+folding to its title row on its own (`web/src/chat/pins.ts`; the folder's choice is
+`totem.projectPin.folded`). While either is unfolded the page moves left to clear the
+column (340px with the folder's card in it, 300px for the task alone). A section once
+opened stays mounted while another row is open or the card is folded, so a half-typed
+edit survives the card folding itself when the column narrows (the canvas opening, say).
+On a phone the card sits in the page under the composer, folded to one row. A search hit on a
+project's instructions or memory opens that row (`openProjectSection`) and flashes it.
 
 ### Which model a new chat starts on
 
@@ -1057,7 +1073,7 @@ Most specific first, the same in the dashboard, the app and the bridge
 
 A project's or folder's `modelSettings` only apply on its own account. A new project
 or folder has no default of its own, so it follows its project or Settings → Providers until
-the owner picks one; "Use …" on the Settings tab clears a picked one back to that.
+the owner picks one; "Use …" under the card's Model row clears a picked one back to that.
 (One made from the dashboard before 2026-11 holds a copy of the global default taken
 when it was made, which reads as its own pick until cleared.) An account that is no longer enabled is passed
 over. An existing chat never takes a model picked in another chat. A chat an agent
@@ -1109,7 +1125,7 @@ chat's conclusions reach the next.
   still shows it. **Deleting a project** deletes its files, instructions and memory (and
   its folders') and moves its chats to Home. Thread deletion and the orphan sweep leave
   project files alone.
-- **A picture instead of an icon.** Settings → Icon also takes an uploaded image or a
+- **A picture instead of an icon.** The card's Settings → Icon also takes an uploaded image or a
   website's own icon (`image`, an upload id; the bridge adds a signed `imageUrl`). "Use
   site icon" has the bridge read the page's `<link rel=icon>`/apple-touch-icon tags, then
   `/apple-touch-icon.png` and `/favicon.ico`, and keep the first that is really a PNG,
@@ -1131,11 +1147,11 @@ context (`projectBlock(..., { parent })`; the parent memory is named only when i
 entries, and Claude is denied writing it) and keep only the folder's memory, so a side topic
 never leaks into the project. The owner moves what should be shared up by hand:
 
-- **Memory:** the folder's Memory tab → "Move to <project>" lists entries (top-level
+- **Memory:** the folder card's Memory row → "Move to <project>" lists entries (top-level
   bullets with their indented lines, or paragraphs, under their heading:
   `memoryEntries` in `chat/projects.mjs`, twinned in `web/src/chat/memoryEntries.ts`).
   Picked entries land under the same heading in the parent and leave the folder.
-- **Files:** pick files on the folder's Files tab → "Move to <project>".
+- **Files:** pick files under the folder card's Files row → "Move up" (to the project).
 - **Deleting a folder** moves its chats up to its project.
 
 In the panel, a project's folders sit above its own chats and unfold in place. Dragging
@@ -1314,12 +1330,13 @@ moves between a task and any of its chats (`web/src/work/`).
   but for its folder, with Open in the sheet. It is drawn two ways:
   - **Pinned.** The open chat's own task (a linked chat's `taskId`, or the task a new
     chat is being started from) sits at the chat's top right under the header for as
-    long as the chat is open (`PinnedTask`, mounted by `ChatView`). Nothing outside
+    long as the chat is open (`PinnedTask`, mounted by `ChatView`), under the folder's
+    own card on a folder's page (Projects), the two stacked in one column (`.vc-pins`). Nothing outside
     closes it; its chevron folds it to its title row, kept per device
     (`totem.taskPin.folded`), and with no choice made it starts folded while the chat
-    column is under 1000px. Unfolded, the messages and composer move left just enough to
-    clear it (a `:has()` rule in `work.css`, percentages of `.vc`, no JS), keeping at
-    least 520px. Opening that task anywhere (the strip, its row in the chats panel)
+    column is under 1000px. While any card in the column is unfolded, the messages and
+    composer move left just enough to clear it (a `:has()` rule in `work.css`, percentages
+    of `.vc`, no JS), keeping at least 520px. Opening that task anywhere (the strip, its row in the chats panel)
     unfolds and flashes it rather than opening a dialog (`pinTask` in `card.ts`), but only
     while the chat is the page on screen. Not on a phone.
   - **A dialog.** Any other task, opened from the chats panel's Tasks face (or the chat's

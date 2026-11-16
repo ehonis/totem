@@ -73,7 +73,7 @@ Appearance), a still outline that clears after the same second. On the web this 
 | `list` | the list, then the item the query matched (`target.item`); a title match lands on the list's header. The app opens the list's own screen. |
 | `journal` | the entry's card. |
 | `note` | the heading its section starts at (`target.line`; text before the first heading lands on the note's start). The app shows a note as a sheet of that section, so nothing to scroll. |
-| `project` | the Instructions or Memory tab (`target.section`), flashed. The app has no such tabs; it flashes the instructions on the project page. |
+| `project` | the Instructions or Memory row of the project's card (`target.section`), opened and flashed. The app has no such card; it flashes the instructions on the project page. |
 | `totem` | the totem's Settings tab at its instructions, or its Memory tab (`target.section`). |
 
 `target.item` is chosen at search time: a source may give a doc `parts` (`[{ id, text }]`, a
