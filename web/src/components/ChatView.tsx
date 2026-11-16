@@ -17,6 +17,7 @@ import { useTotemDirectory } from '../totems/shared'
 import { GroupPicker } from './TotemsView'
 import { isSnoozed, settledAt, wakeDescription } from '../chat/settle'
 import ProjectHome from '../chat/ProjectHome'
+import ProjectCard from '../chat/ProjectCard'
 import TaskBar from '../work/TaskBar'
 import { PinnedTask } from '../work/TaskCard'
 import ProjectIcon from '../chat/ProjectIcon'
@@ -708,6 +709,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
 
   // The task the strip over the composer names (TaskBar), pinned at the top right.
   const pinnedTaskRef = (active && !empty ? active.taskId : null) || (active ? null : draftTaskId) || null
+  // A project's or folder's page pins its card above the task's (on a phone it sits in the page).
+  const pinnedProject = empty && project && !narrow ? project.id : null
 
   // The one side panel showing, if any, and its own remembered width.
   const sidePanel = artifact ? { id: 'canvas', label: 'Resize the canvas' }
@@ -747,8 +750,15 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
         temporary={(!active || empty) && !project ? { on: temporary, onToggle: () => newChat(temporary ? 'regular' : 'temporary') } : undefined}
         newChatAtEnd={narrow}
       />
-      {/* The chat's task, pinned at its top right while the chat is open (work/TaskCard.tsx). */}
-      {pinnedTaskRef && <PinnedTask taskRef={pinnedTaskRef} visible={visible} />}
+      {/* T3 Code's cards at the top right, stacked: a project's or folder's own card on
+          its page (chat/ProjectCard.tsx), and the chat's task while the chat is open
+          (work/TaskCard.tsx). Neither is pinned on a phone. */}
+      {(pinnedProject || pinnedTaskRef) && (
+        <div className={`vc-pins${empty ? ' home' : ''}`}>
+          {pinnedProject && <ProjectCard projectId={pinnedProject} mode="pinned" maxUploadBytes={caps?.maxUploadBytes} />}
+          {pinnedTaskRef && <PinnedTask taskRef={pinnedTaskRef} visible={visible} />}
+        </div>
+      )}
       {picking && active && !active.totemId && (
         <MembersPop anchor={membersRef} onClose={() => setPicking(false)}>
           <GroupPicker
@@ -765,7 +775,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
 
       <div className="vc-scroll" ref={scrollRef} onScroll={onScroll} onWheel={onUserInput} onTouchStart={onUserInput} onPointerDown={onUserInput} onKeyDown={onUserInput}>
         {empty && project ? (
-          <ProjectHome projectId={project.id} composer={composerEl} maxUploadBytes={caps?.maxUploadBytes} />
+          <ProjectHome projectId={project.id} composer={composerEl} maxUploadBytes={caps?.maxUploadBytes} cardInline={narrow} />
         ) : empty ? (
           <div className="vc-empty">
             <h1 className="vc-greet">{temporary ? 'Temporary chat' : greeting(ownerName)}</h1>

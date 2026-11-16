@@ -15,6 +15,7 @@ import '../todos/todos.css'
 import { chatsByTask, resolveRef, type WorkTask } from './groups'
 import { closeTaskCard, newTaskChat, openTaskChat, pinTask, showInTasks, useTaskCard } from './card'
 import { FolderField } from './FolderField'
+import { usePhone, usePinFold } from '../chat/pins'
 import { completeTask, deleteTask, findTask, reopenTask, setTaskFolder, snoozeTask, updateTask, useWork } from './state'
 import './work.css'
 
@@ -26,7 +27,8 @@ import './work.css'
 //
 // It is drawn two ways:
 // - Pinned (PinnedTask): the open chat's own task sits at the chat's top right for
-//   as long as the chat is on screen. Nothing outside closes it; it folds to its
+//   as long as the chat is on screen, under the folder's card on a folder's page
+//   (chat/ProjectCard.tsx; ChatView stacks both in `.vc-pins`). Nothing outside closes it; it folds to its
 //   title row, and folds itself while the chat column is too narrow to keep it
 //   beside the messages. When it is unfolded the messages and composer move left
 //   to clear it (work.css). Not on a phone, where the strip opens the sheet.
@@ -35,22 +37,7 @@ import './work.css'
 //   card hanging over the page. Esc, × or the backdrop close it. On a phone it is a
 //   sheet from the bottom.
 
-const PHONE = '(max-width: 720px)'
-/** Below this chat column width the pinned card starts folded, until the owner unfolds it. */
-const PIN_ROOM = 1000
 const PIN_FOLD_KEY = 'totem.taskPin.folded'
-
-function usePhone() {
-  const [phone, setPhone] = useState(() => typeof window !== 'undefined' && Boolean(window.matchMedia?.(PHONE).matches))
-  useEffect(() => {
-    const media = window.matchMedia?.(PHONE)
-    if (!media) return
-    const update = () => setPhone(media.matches)
-    media.addEventListener?.('change', update)
-    return () => media.removeEventListener?.('change', update)
-  }, [])
-  return phone
-}
 
 /** A menu or picker the card opened is up (they are portalled, and take Esc and outside clicks first). */
 const menuUp = () => Boolean(document.querySelector('.wk-combo, .tk-menu'))
@@ -126,36 +113,15 @@ export function PinnedTask({ taskRef, visible }: { taskRef: string; visible: boo
   return <Pinned key={task.ref} task={task} visible={visible} />
 }
 
-function readFoldPref(): boolean | null {
-  try {
-    const v = localStorage.getItem(PIN_FOLD_KEY)
-    return v === '1' ? true : v === '0' ? false : null
-  } catch { return null }
-}
-
 function Pinned({ task, visible }: { task: WorkTask; visible: boolean }) {
   const card = useRef<HTMLDivElement>(null)
-  // The owner's own fold, kept on this device; with none, it folds while the column is narrow.
-  const [pref, setPref] = useState<boolean | null>(readFoldPref)
-  // Opening the task elsewhere unfolds it for now, without changing that choice.
-  const [revealed, setRevealed] = useState(false)
-  const [narrow, setNarrow] = useState(false)
+  // Opening the task elsewhere unfolds it for now, without changing the owner's choice.
+  const { folded, setFolded, reveal } = usePinFold(PIN_FOLD_KEY, card)
   const [flash, setFlash] = useState(0)
-
-  useLayoutEffect(() => {
-    const column = card.current?.closest<HTMLElement>('.vc')
-    if (!column) return
-    const measure = () => setNarrow(column.clientWidth < PIN_ROOM)
-    measure()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(measure)
-    ro.observe(column)
-    return () => ro.disconnect()
-  }, [])
 
   useEffect(() => {
     if (!visible) return
-    return pinTask(task.ref, () => { setRevealed(true); setFlash((n) => n + 1) })
+    return pinTask(task.ref, () => { reveal(); setFlash((n) => n + 1) })
   }, [visible, task.ref])
 
   useEffect(() => {
@@ -163,13 +129,6 @@ function Pinned({ task, visible }: { task: WorkTask; visible: boolean }) {
     const t = window.setTimeout(() => setFlash(0), 900)
     return () => window.clearTimeout(t)
   }, [flash])
-
-  const folded = !revealed && (pref ?? narrow)
-  const setFolded = (next: boolean) => {
-    setRevealed(false)
-    setPref(next)
-    try { localStorage.setItem(PIN_FOLD_KEY, next ? '1' : '0') } catch { /* private window: this visit only */ }
-  }
 
   return <CardBody task={task} mode="pinned" cardRef={card} folded={folded} onFold={setFolded} flash={flash > 0} />
 }
@@ -234,7 +193,7 @@ function CardBody({ task, mode, cardRef, onClose, folded = false, onFold, flash 
   )
 
   const leave = pinned ? undefined : onClose
-  const classes = ['wk-card', mode === 'sheet' ? 'sheet' : '', mode === 'dialog' ? 'dialog' : '', pinned ? 'pinned' : '', folded ? 'folded' : '', flash ? 'flash' : ''].filter(Boolean).join(' ')
+  const classes = ['wk-card', pinned ? 'vc-pin' : '', mode === 'sheet' ? 'sheet' : '', mode === 'dialog' ? 'dialog' : '', pinned ? 'pinned' : '', folded ? 'folded' : '', flash ? 'flash' : ''].filter(Boolean).join(' ')
   const label = pinned ? `This chat’s task: ${task.title}` : `Task: ${task.title}`
 
   return (

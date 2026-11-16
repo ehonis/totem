@@ -185,17 +185,30 @@ button.wk-check:hover .wk-check-on { opacity: 1; transform: none; }
   box-shadow: 0 22px 50px -20px #000d, 0 2px 10px #0007; animation: vc-pop .14s ease-out;
 }
 .wk-card:focus { outline: none; }
-/* Pinned: the open chat's task, at the chat's top right under the header (z-index
-   under the header's own menus, over the log). Unfolded, the log and the composer
-   keep clear of it: each gets right padding (a percentage of .vc, so no JS) just
-   large enough that the centred column ends left of the card, capped so the column
-   keeps 520px; PinnedTask folds it below a 1000px column unless the owner unfolds it. */
+/* Pinned cards: T3 Code's cards at the chat's top right under the header, in one
+   column (.vc-pins, ChatView): a project's card on its page, then the chat's task.
+   z-index under the header's own menus, over the log. Each card shrinks and scrolls
+   inside the column; a folded one keeps its title row. While any card is unfolded the
+   log and the composer keep clear of the column: each gets right padding (a percentage
+   of .vc, so no JS) just large enough that the centred column ends left of it, capped
+   so the column keeps 520px; a card folds itself below a 1000px column (chat/pins.ts)
+   unless the owner unfolds it. On a project's page there is no dock, so the column
+   runs lower, stopping above the running-chats pill in the corner. */
+.vc-pins {
+  --vc-pin-w: 300px;
+  position: absolute; z-index: 2; top: 58px; right: 14px; width: var(--vc-pin-w); max-height: calc(100% - 58px - 150px);
+  display: flex; flex-direction: column; gap: 10px; pointer-events: none;
+}
+.vc-pins.home { max-height: calc(100% - 58px - 84px); }
+/* A project's card has editors under its rows, so the column is wider with one in it. */
+.vc-pins:has(> .vc-pcard) { --vc-pin-w: 340px; }
+.vc:has(> .vc-pins > .vc-pcard) { --vc-pin-room: 368px; }
+.vc-pins > * { pointer-events: auto; }
 .wk-card.pinned {
-  --wk-pin-w: 300px;
-  position: absolute; z-index: 2; top: 58px; right: 14px; width: var(--wk-pin-w); max-height: calc(100% - 58px - 150px);
+  width: 100%; flex: 0 1 auto; min-height: 0; max-height: none;
   box-shadow: 0 16px 40px -20px #000c, 0 1px 6px #0005; animation: vc-pop-down .14s ease-out;
 }
-.wk-card.pinned.folded { max-height: none; overflow: hidden; }
+.wk-card.pinned.folded { flex: none; overflow: hidden; }
 .wk-card.pinned.folded .wk-card-head { align-items: center; padding: 6px 8px 6px 6px; border-bottom: 0; }
 .wk-card.pinned.folded .wk-card-head .wk-check { margin: 0; }
 .wk-card.pinned.folded .wk-card-close { margin-top: 0; }
@@ -209,11 +222,11 @@ button.wk-check:hover .wk-check-on { opacity: 1; transform: none; }
   0%, 40% { border-color: color-mix(in srgb, var(--accent) 80%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent), 0 16px 40px -20px #000c; }
   100% { border-color: var(--line-2); }
 }
-.vc:has(> .wk-card.pinned:not(.folded)) .vc-scroll {
-  padding-right: clamp(0px, calc(2 * (var(--wk-pin-room, 328px)) + var(--vc-col) - 100%), calc(100% - 520px));
+.vc:has(> .vc-pins > .vc-pin:not(.folded)) .vc-scroll {
+  padding-right: clamp(0px, calc(2 * (var(--vc-pin-room, 328px)) + var(--vc-col) - 100%), calc(100% - 520px));
 }
-.vc:has(> .wk-card.pinned:not(.folded)) .vc-dock {
-  padding-right: clamp(16px, calc(2 * (var(--wk-pin-room, 328px)) + var(--vc-col) - 100%), calc(100% - 520px));
+.vc:has(> .vc-pins > .vc-pin:not(.folded)) .vc-dock {
+  padding-right: clamp(16px, calc(2 * (var(--vc-pin-room, 328px)) + var(--vc-col) - 100%), calc(100% - 520px));
 }
 .wk-card .ti { display: block; flex: none; }
 .wk-card-head { display: flex; align-items: flex-start; gap: 6px; padding: 12px 10px 10px 8px; border-bottom: 1px solid var(--line-2); }

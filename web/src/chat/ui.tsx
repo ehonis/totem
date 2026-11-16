@@ -92,6 +92,14 @@ export function formatDuration(ms?: number) {
   return `${m}m ${String(s % 60).padStart(2, '0')}s`
 }
 
+/** A short time today, else a short date (with the year when it is not this one). */
+export function when(ts: number) {
+  const d = new Date(ts)
+  return d.toDateString() === new Date().toDateString()
+    ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) })
+}
+
 export function formatBytes(n: number) {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
