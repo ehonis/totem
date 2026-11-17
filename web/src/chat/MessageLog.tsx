@@ -2,6 +2,7 @@ import React from 'react'
 import { UserMessage, AssistantMessage } from './Message'
 import HandoffMark from './HandoffMark'
 import { providerSwitches } from './handoff'
+import { isCompactionTurn } from './context'
 import { discardUnsent, editAndResend, providerById, regenerate, retryUnsent } from './store'
 import type { ChatMessage, ModelRow, ProviderRow } from './types'
 
@@ -86,6 +87,9 @@ export default React.memo(function MessageLog({ threadId, messages, busy, activi
       {messages.map((m, i) => {
         const live = busy && i === messages.length - 1
         const isLast = m === lastAssistant && i === messages.length - 1
+        // `/compact` (context.ts): its reply's divider stands for the whole turn.
+        const compaction = isCompactionTurn(m) || isCompactionTurn(messages[i - 1])
+        if (isCompactionTurn(m) && !m.unsent) return switches.has(m.id) ? <HandoffMark key={m.id} s={switches.get(m.id)!} /> : null
         return (
           <React.Fragment key={m.id}>
             {switches.has(m.id) && <HandoffMark s={switches.get(m.id)!} />}
@@ -99,7 +103,7 @@ export default React.memo(function MessageLog({ threadId, messages, busy, activi
                   provider={providerById(m.provider || provider) || providers.find((p) => p.driver === m.provider)}
                   modelName={modelName(models, m.provider, m.model)}
                   isLast={isLast}
-                  canRegenerate={isLast && !busy && !!threadId}
+                  canRegenerate={isLast && !busy && !!threadId && !compaction}
                 />}
           </React.Fragment>
         )

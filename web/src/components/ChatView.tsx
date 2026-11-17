@@ -9,6 +9,8 @@ import {
   openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead, setMembers,
   loadFiles, openArtifact, openFile, openResource, takePendingFile, respondToApproval, openThread, loadEarlier, startTaskDraft,
 } from '../chat/store'
+import { compactBeforeSendTokens, contextSnapshot, isCompactionTurn, latestContext } from '../chat/context'
+import ContextMeter from '../chat/ContextMeter'
 import { draftKeyFor, moveDraft, placeAfter, type Destination } from '../chat/destinations'
 import { taskHome } from '../work/state'
 import { isLoaded } from '../chat/history'
@@ -525,7 +527,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   })
 
   function onSend({ text, attachments }: { text: string; attachments: Attachment[] }) {
-    const id = send({ threadId: activeId, text, attachments, kind: !active && draftTaskId ? 'regular' : kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, taskId: active ? undefined : draftTaskId || undefined })
+    const id = send({ threadId: activeId, text, attachments, kind: !active && draftTaskId ? 'regular' : kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, taskId: active ? undefined : draftTaskId || undefined, compactFirst: compactTokens != null && !keepHistory })
+    setKeepHistory(false)
     setInput('')
     if (id !== activeId) {
       setDraftPick(null)
@@ -538,6 +541,15 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   // --- the queue (T3 Code's follow-ups) ----------------------------------------
   // Enter while a reply runs queues or steers, as Settings → Chat says; Ctrl/⌘ the other.
   const followUp = useChat((s) => s.prefs.followUp ?? 'queue')
+  // Compact idle threads → When you return (context.ts): an idle Claude chat whose
+  // prompt cache went cold offers to compact before the next send. Keep is per send.
+  const compactIdle = useChat((s) => s.prefs.compactIdle)
+  const [keepHistory, setKeepHistory] = useState(false)
+  useEffect(() => { setKeepHistory(false) }, [activeId])
+  const compactTokens = active && !pending ? compactBeforeSendTokens({
+    thread: active, provider: choice.provider, claude: providerById(choice.provider)?.driver === 'claude',
+    setting: compactIdle, text: input, idle: !busy, now: Date.now(),
+  }) : null
   const queue = active?.queue || []
   // A queued message being edited in the composer, and the draft it displaced.
   const [queueEdit, setQueueEdit] = useState<{ id: string; threadId: string; draftKey: string; stash: { text: string; attachments: Attachment[] } } | null>(null)
@@ -585,7 +597,9 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     return ok
   }
   const onQueue = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : activeId ? queueMessage(activeId, p.text, p.attachments) : false)
-  const onSteerNow = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : activeId ? steer(activeId, p.text, p.attachments.map((a) => a.id)) : false)
+  // A `/compact` running cannot take words mid-way: they wait behind it (T3).
+  const compactingNow = busy && isCompactionTurn(messages[messages.length - 2])
+  const onSteerNow = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : !activeId ? false : compactingNow ? queueMessage(activeId, p.text, p.attachments) : steer(activeId, p.text, p.attachments.map((a) => a.id)))
   const saveQueueEdit = async (p: FollowUpPayload) => {
     if (!queueEdit) return false
     const ok = await updateQueue(queueEdit.threadId, { action: 'edit', id: queueEdit.id, text: p.text, attachments: p.attachments.map((a) => a.id) })
@@ -644,8 +658,12 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   })
 
   const destinations = useMemo(() => ({ projectId: scopeProject?.id ?? null, taskId: draftTaskId, onPick: pickDestination }), [scopeProject?.id, draftTaskId, pickDestination])
+  // How full this chat's context is on the account it would send on (context.ts).
+  const contextShown = active && !empty ? contextSnapshot(latestContext(messages, choice.provider)) : null
   const composerEl = (
     <Composer
+      leftSlot={contextShown ? <ContextMeter s={contextShown} /> : null}
+      compactSend={compactTokens != null ? { tokens: compactTokens, keep: keepHistory, onToggle: () => setKeepHistory((k) => !k) } : null}
       rightSlot={
         <div className="vc-model-group">
           {/* T3 Code's chip: the model and its effort as one control, whose picker also

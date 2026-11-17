@@ -26,7 +26,7 @@ import { useSmoothText } from '../../lib/chat/smooth'
 import { useTextTicks } from '../../lib/chat/ticks'
 import { POWER_NAMES } from '../../lib/chat/models'
 import { splitMentions } from '../../lib/chat/mentions'
-import type { Attachment, ChangePart, ChatMessage, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart, ApprovalPart, InboxPart, VisualPart } from '../../lib/chat/types'
+import type { Attachment, ChangePart, ChatMessage, CompactionPart, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart, ApprovalPart, InboxPart, VisualPart } from '../../lib/chat/types'
 import { getChatCommands, subscribeChatCommands } from '../../lib/studio'
 import WorkLog from './WorkLog'
 import { foldWork } from './workFold'
@@ -35,6 +35,7 @@ import TurnStats, { TurnChip } from './TurnStats'
 import TotemProposal from './TotemProposal'
 import ChangeCard from './ChangeCard'
 import VisualCard from './VisualCard'
+import CompactionMark from './CompactionMark'
 import { QuestionsRecord } from './QuestionsPanel'
 import ApprovalRow from './ApprovalRow'
 import InboxCardRow from './InboxCardRow'
@@ -328,6 +329,7 @@ type Block =
   | { kind: 'approval'; part: ApprovalPart; key: string }
   | { kind: 'inbox'; part: InboxPart; key: string }
   | { kind: 'visual'; part: VisualPart; key: string }
+  | { kind: 'compaction'; part: CompactionPart; key: string }
 
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
@@ -367,7 +369,9 @@ function blocks(parts: Part[]): Block[] {
     else if (p.type === 'change-pr') out.push({ kind: 'change', part: p, key: `c${i}` })
     else if (p.type === 'visual') out.push({ kind: 'visual', part: p, key: `v${i}` })
     else if (p.type === 'steer') out.push({ kind: 'steer', part: p, key: `s${i}` })
-    else if (p.text) {
+    // The context was compacted here: a divider, never folded into the steps.
+    else if (p.type === 'compaction') out.push({ kind: 'compaction', part: p, key: `cm${i}` })
+    else if (p.type === 'text' && p.text) {
       const last = out[out.length - 1]
       // Two text parts with no tool between them are one paragraph run.
       if (last?.kind === 'text') last.text += p.text
@@ -497,7 +501,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
   // the working line too, so a live reply never looks stalled.
   const asking = !!m.parts?.some((p) => (p.type === 'questions' || p.type === 'approval') && p.status === 'pending')
   const approving = !!m.parts?.some((p) => p.type === 'approval' && p.status === 'pending')
-  const toolRunning = !asking && !!m.parts?.some((p) => p.type === 'tool' && p.status === 'running')
+  // A running compaction pulses in its own divider (CompactionMark.tsx).
+  const toolRunning = !asking && !!m.parts?.some((p) => (p.type === 'tool' || p.type === 'compaction') && p.status === 'running')
   const quiet = useQuiet(live, `${m.content.length}:${m.parts?.length || 0}`)
   const secs = m.durationMs && m.durationMs > 2000 ? formatDuration(m.durationMs) : null
   const lane = m.power ? [POWER_NAMES[String(m.power)], m.route === 'thinking' && secs ? `thought for ${secs}` : null].filter(Boolean).join(', ')
@@ -521,6 +526,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
         if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
         if (b.kind === 'change') return <ChangeCard key={b.key} part={b.part} />
         if (b.kind === 'visual') return <VisualCard key={b.key} part={b.part} />
+        if (b.kind === 'compaction') return <CompactionMark key={b.key} p={b.part} />
         if (b.kind === 'steer') return <SteerNote key={b.key} part={b.part} />
         if (b.kind === 'totem') return <TotemSays key={b.key} answer={b.answer} live={live} />
         if (b.kind === 'questions') return <QuestionsRecord key={b.key} part={b.part} />
@@ -546,7 +552,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
           ) : null}
         </View>
       ) : null}
-      {m.status === 'stopped' ? <T size={13} color={vc.faint}>Stopped</T> : null}
+      {/* A stopped compaction says so in its own divider. */}
+      {m.status === 'stopped' && !m.parts?.some((p) => p.type === 'compaction' && p.status === 'stopped') ? <T size={13} color={vc.faint}>Stopped</T> : null}
       <LandFlash on={flash} radius={12} pad={8} />
     </View>
   )

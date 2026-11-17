@@ -129,6 +129,22 @@ export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): Chat
       parts.push({ type: 'visual', id: v.id, uploadId: v.uploadId, title: v.title || 'Chart', height: v.height || 320, ...(v.url ? { url: v.url } : {}) })
       return next
     }
+    case 'context': {
+      // How full the context window is now (chat/context.mjs): the newest reading wins.
+      if (!event.context || typeof event.context.used !== 'number') return msg
+      next.context = { ...event.context }
+      return next
+    }
+    case 'compaction': {
+      // The session was (or is being) compacted: a divider, added where it began
+      // and settled in place by id.
+      const c = event.compaction || {}
+      if (!c.id) return msg
+      const at = parts.findIndex((p) => p.type === 'compaction' && p.id === c.id)
+      if (at >= 0) parts[at] = { ...parts[at], ...c }
+      else parts.push({ type: 'compaction', status: 'running', trigger: 'auto', startedAt: now, ...c })
+      return next
+    }
     case 'steer': {
       // The owner's words mid-reply, kept where they landed among the steps.
       const st = event.steer || {}

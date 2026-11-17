@@ -21,6 +21,8 @@ export interface SendArgs {
   voice?: boolean
   regenerate?: boolean
   editMessageId?: string
+  /** Compact the idle chat first; the message waits at the front of its queue (chat/context.mjs). */
+  compactFirst?: boolean
 }
 
 export interface StreamHandle {

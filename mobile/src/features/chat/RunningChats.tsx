@@ -29,6 +29,7 @@ import { impact, tap } from '../../ui/haptics'
 import { ThreadIcon, ProjectIcon } from './ThreadIcon'
 import { TI, vc } from './ui'
 import { IconPlayerStopFilled, IconClock, IconCheck, IconMailOpened, IconChevronDown, IconHome } from './icons'
+import { isCompactionTurn } from '../../lib/chat/context'
 
 /** Wait this long before a chat joins, so a run that ends at once doesn't flash in. */
 const JOIN_DELAY_MS = 500
@@ -150,6 +151,8 @@ export default function RunningChats({ onOpenChat }: { onOpenChat?: (id: string)
       const t = getState().threads.find((x) => x.id === id)
       const last = t?.messages[t.messages.length - 1]
       if (!t || t.totemId || last?.role !== 'assistant' || (last.status !== 'done' && last.status !== 'error')) continue
+      // A compaction (`/compact`) is housekeeping, not news.
+      if (isCompactionTurn(t.messages[t.messages.length - 2])) continue
       if (getOnScreen().open.has(id)) continue
       const failed = last.status === 'error'
       const place = placeOf(t, getState().projects)

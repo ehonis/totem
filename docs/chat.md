@@ -155,6 +155,8 @@ Every event has a `seq`. Viewers replay with `since`.
 | `visual` | `visual: {id, uploadId, title, height, url}` | The agent showed a chart with `html_render` (a `visual` part, added where it was called, once per id). `url` is signed for viewers and not saved. See Charts in replies. |
 | `activity` | `text` | The current step, one line. Not persisted. |
 | `browser` | `tabId`, `url`, `title`, `image` (JPEG data URL), `at` | What the chat's browser shows after a page change. Not persisted; `GET /api/chat/browser?threadId=` returns the latest. |
+| `context` | `context: {used, max?, input?, cached?, output?, autoCompactAt?, cacheTtlMs?, cacheExpiresAt?, at}` | How full the context window is after the newest request (Context window and compaction). Kept on the reply as `context`. |
+| `compaction` | `compaction: {id, status, trigger, before?, after?, reason?, startedAt?, endedAt?}` | The session was or is being compacted (a `compaction` part, added where it began, settled in place by id). |
 | `title` | `title`, `icon?` | The AI title (and icon) for a new chat. |
 | `done` | `message` | The settled assistant message. |
 | `error` | `text` | The run threw. |
@@ -188,6 +190,9 @@ Every event has a `seq`. Viewers replay with `since`.
 ```
 
 URLs are never stored; `signThread` adds them on the way out.
+
+`context` on a reply is how full the window was after its last request, and a user message with
+`command: 'compact'` is a `/compact` turn (Context window and compaction).
 
 `stats` is what the agent CLI reported for the reply, read from its stream by `chat/stats.mjs`
 (Claude's and Cursor's `result` event, Codex's `turn.completed`, OpenCode's `step_finish`) and summed
@@ -239,6 +244,59 @@ puts a "Context handed off" divider above the owner message that started the fir
 new account. Once another account is picked, a "Handoff with your next message" row sits over
 the composer until that message is sent. Switching while a reply runs leaves that reply on its
 account; the switch applies to the next message.
+
+## Context window and compaction
+
+Ported from T3 Code (its context row and Compact idle threads), in `chat/context.mjs` on the
+bridge and `web/src/chat/context.ts` (copied byte for byte to `mobile/src/lib/chat/context.ts`).
+
+**The meter.** After the composer's plus, a thin bar and "45k / 1m" (`ContextMeter.tsx`): amber
+from 80%, red from 90%, a tick where Claude compacts when its window is set below the model's;
+hover, focus or tap for "Context: 64% used", the exact tokens and "Compacts automatically at
+about N tokens." (else "Context compacts automatically when needed."). It reads the newest
+`context` of a reply on the account the composer would send on, so after a switch it shows that
+account's session, and nothing before the first reading. Fill is the last request's prompt plus
+its output, never the reply's billed `stats`:
+
+| CLI | Read from | Window |
+|---|---|---|
+| Claude | each top-level `assistant` event's `message.usage` (input + cache creation + cache read + output), live | T3's catalog (`claudeContextWindow`), else `result.modelUsage[model].contextWindow` |
+| Codex | the session's rollout file (`token_count`: `last_token_usage.total_tokens`), tailed from where it ended while the turn runs; `codex exec --json` does not carry it | `model_context_window` |
+| OpenCode | the last `step_finish` (input + cache + output) | unknown: tokens only |
+| Cursor | not reported | no meter |
+
+**Compaction** is the CLI's own: Claude Code and Codex compact a full session themselves. Totem
+shows it where it happened ("Context compacted 967k → 412k tokens", `CompactionMark.tsx`; Claude's
+`status: compacting` and `compact_boundary`, Codex's `compacted` record or the older
+`context_compacted`), and the meter drops to
+what is left. On top of that, as T3 does:
+
+- **`/compact`** as the message (optionally with instructions, no attachments) resumes the
+  chat's Claude session with `/compact`. The turn is only its divider: the `/compact` message is
+  hidden (`command: 'compact'`), it sets no "waiting on you", sends no push, is never replayed to
+  another account (`renderTranscript`), and keeps the session's `through` when other accounts
+  answered in between. Other accounts get T3's "This provider does not support /compact. Start a
+  new thread to continue with a fresh context." (Codex compacts only through its app server,
+  which Totem does not run.) A message sent while it runs is queued, never steered.
+- **Settings → Chat › Compact idle threads** (`compactIdle`), for Claude chats of 200k tokens
+  or more whose prompt cache has gone cold (1 h or 5 min from the request, as Claude reported;
+  70 min when it did not):
+  - *When you return* (default): the composer shows a Compact chip with the tokens; sending
+    posts `compactFirst`, and the bridge puts the message at the front of the queue and runs a
+    `/compact` first (it goes even if the compaction fails, but not if it is stopped). Keep
+    sends as is, for that send.
+  - *Before the cache expires (beta)*: two minutes before the cache expires, the bridge sends the
+    idle chat `/compact` itself (`scheduleIdleCompaction`, after every run ends), not if the chat
+    is settled, snoozed, temporary, a totem's, has a queue or something pending, or its last turn
+    was a compaction (`chat/compaction.mjs`; checked again when it fires, and skipped if the
+    chat's account was switched off). Timers are in memory; a restart loses them and the chip
+    takes over. It leaves the chat's order, unread state and snooze alone, and a message he
+    sends meanwhile waits in the queue behind it.
+  - *Never*.
+- **Settings → Chat › Auto-compact after** (`autoCompactWindow`): empty, or 100,000–1,000,000,
+  passed to Claude as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. The meter's tick is that less 33,000
+  (`CLAUDE_AUTO_COMPACT_RESERVE_TOKENS`); with none set, the account's own `settings.json` or
+  environment is read the way T3 reads it, and compaction switched off there means no tick.
 
 ## Steering
 

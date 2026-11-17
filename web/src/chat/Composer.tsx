@@ -17,8 +17,9 @@ import { TI, useDismiss } from './ui'
 import {
   IconArrowUp, IconPlayerStopFilled, IconPlus, IconPaperclip, IconPhoto, IconMicrophone, IconWaveSine,
   IconSparkles, IconX, IconCheck, IconLoader2, IconCornerUpRight, IconPuzzle, IconPlaylistAdd, IconPlayerPlayFilled,
-  IconHome, IconChecklist, IconTable, IconFolder,
+  IconHome, IconChecklist, IconTable, IconFolder, IconArrowsDiagonalMinimize2, IconArrowsDiagonal,
 } from './icons'
+import { formatContextTokens } from './context'
 import type { ChatCommand } from '../studio'
 
 // A paste this long becomes a chip instead of filling the box. The text is sent
@@ -68,6 +69,14 @@ export interface ComposerProps {
   onAuthError?: () => void
   /** The model chip and its effort and access menu (T3-style), before the mic and send. */
   rightSlot?: React.ReactNode
+  /** After the plus button: how full the chat's context is (ContextMeter.tsx). */
+  leftSlot?: React.ReactNode
+  /**
+   * The next send compacts the idle chat first (T3's Compact idle threads → When
+   * you return): a Compact/Keep chip by the send button, and the button says so.
+   * `keep` is the owner choosing full history for this send.
+   */
+  compactSend?: { tokens: number; keep: boolean; onToggle: () => void } | null
   /** Attached to the box's top edge: the queued messages (QueuedMessages.tsx). */
   above?: React.ReactNode
   /**
@@ -149,7 +158,7 @@ function rankCommands(catalog: ChatCommand[], prefix: string, term: string, alon
 }
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, rightSlot, answering, above, destinations } = props
+  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, rightSlot, leftSlot, compactSend, answering, above, destinations } = props
   const ta = useRef<HTMLTextAreaElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const photoInput = useRef<HTMLInputElement>(null)
@@ -442,6 +451,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   }
 
   const secs = dictation ? Math.floor((Date.now() - dictation.startedAt) / 1000) : 0
+  const compacting = !!compactSend && !compactSend.keep
   const showVoice = !!onVoice && !busy && !value.trim() && !drafts.length && !dictation && !onResume
 
   return (
@@ -522,7 +532,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
             />
           </div>
         )}
-        <div className="vc-box-bar">
+        <div className={`vc-box-bar ${compactSend && !busy ? 'has-compact' : ''}`}>
           <div className="vc-box-left">
             {!dictation && (
               <div className="vc-plus-wrap" ref={menuRef}>
@@ -554,6 +564,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
                 )}
               </div>
             )}
+            {!dictation && leftSlot}
           </div>
           <div className="vc-box-right">
             {dictation ? (
@@ -566,6 +577,22 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
             ) : (
               <>
                 {rightSlot}
+                {compactSend && !busy && !answering && !queueEdit && (
+                  // T3's Compact chip: the next send summarises the idle chat first, unless he keeps the full history.
+                  <span className="vc-compact-wrap">
+                    <button type="button" className={`vc-compact-chip ${compactSend.keep ? '' : 'on'}`} aria-pressed={!compactSend.keep}
+                      aria-label={`Compact ${formatContextTokens(compactSend.tokens)} tokens of history before sending`} onClick={compactSend.onToggle}>
+                      {/* Keep shows the full-size arrows, so the state reads without the word on a phone. */}
+                      <TI icon={compactSend.keep ? IconArrowsDiagonal : IconArrowsDiagonalMinimize2} size={15} />
+                      <span className="vc-compact-word">{compactSend.keep ? 'Keep' : 'Compact'}</span>
+                      <span className="vc-compact-n">{formatContextTokens(compactSend.tokens)}</span>
+                    </button>
+                    <span className="vc-compact-tip" role="tooltip">
+                      <span>{compactSend.keep ? `Next send keeps all ${formatContextTokens(compactSend.tokens)} tokens.` : `Next send compacts ${formatContextTokens(compactSend.tokens)} tokens first.`}</span>
+                      <span>{compactSend.keep ? 'Click to compact first' : 'Click to keep full history'}</span>
+                    </span>
+                  </span>
+                )}
                 {(!busy || followUps) && (
                   <button type="button" className="vc-icon-btn" onClick={startDictation} aria-label="Dictate" title="Dictate">
                     <TI icon={IconMicrophone} size={19} />
@@ -600,7 +627,9 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
                 ) : showVoice ? (
                   <button type="button" className="vc-send voice" onClick={onVoice} aria-label="Start voice mode" title="Voice mode"><TI icon={IconWaveSine} size={19} stroke={2} /></button>
                 ) : (
-                  <button type="button" className="vc-send" onClick={send} disabled={!canSend} aria-label="Send" title={uploading ? 'Waiting for uploads' : 'Send'}>
+                  <button type="button" className="vc-send" onClick={send} disabled={!canSend}
+                    aria-label={compacting ? 'Compact and send' : 'Send'}
+                    title={uploading ? 'Waiting for uploads' : compacting ? `Summarize ${formatContextTokens(compactSend!.tokens)} tokens of history, then send` : 'Send'}>
                     {uploading ? <TI icon={IconLoader2} size={18} className="vc-spin" /> : <TI icon={IconArrowUp} size={18} stroke={2.25} />}
                   </button>
                 )}

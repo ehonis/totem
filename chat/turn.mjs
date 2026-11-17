@@ -79,6 +79,11 @@ function transcriptLine(m, { tools }) {
  */
 export function renderTranscript(messages, { budget = 16_000, heading = 'Conversation so far:', tools = false, keepFirst = false, omitted = null } = {}) {
   if (!Array.isArray(messages) || !messages.length) return ''
+  // A `/compact` turn (the command and the reply to it) is housekeeping on one
+  // account's session: nothing another agent needs. A reply Claude compacted
+  // mid-way is not one, and keeps its steps.
+  messages = messages.filter((m, i) => m?.command !== 'compact' && !(m?.role === 'assistant' && messages[i - 1]?.command === 'compact'))
+  if (!messages.length) return ''
   const all = messages.map((m) => transcriptLine(m, { tools }))
   const firstUser = keepFirst ? messages.findIndex((m, i) => m?.role === 'user' && all[i]) : -1
   const first = firstUser >= 0 && all[firstUser].length <= budget / 4 ? firstUser : -1
@@ -292,6 +297,21 @@ export function applyEvent(msg, event, now = Date.now()) {
       msg.parts.push({ type: 'visual', id: v.id, uploadId: v.uploadId, title: v.title || 'Chart', height: v.height || 320 })
       break
     }
+    case 'context': {
+      // How full the context window is now (chat/context.mjs): the newest reading wins.
+      if (event.context && typeof event.context.used === 'number') msg.context = { ...event.context }
+      break
+    }
+    case 'compaction': {
+      // The session was (or is being) compacted (chat/context.mjs): a divider,
+      // added where it began and settled in place by id.
+      const c = event.compaction || {}
+      if (!c.id) break
+      const existing = msg.parts.find((p) => p.type === 'compaction' && p.id === c.id)
+      if (existing) Object.assign(existing, c)
+      else msg.parts.push({ type: 'compaction', status: 'running', trigger: 'auto', startedAt: now, ...c })
+      break
+    }
     case 'steer': {
       // The owner's words mid-reply, kept where they landed among the steps.
       const st = event.steer || {}
@@ -319,6 +339,8 @@ export function finalizeMessage(msg, { status, error, finalText, startedAt, now 
     if (p.type === 'tool' && p.status === 'running') { p.status = status === 'error' ? 'error' : 'done'; p.endedAt = now }
     // The process that asked is gone, so nothing can answer it now.
     if (p.type === 'approval' && p.status === 'pending') { p.status = 'expired'; p.decidedAt = now }
+    // A compaction the run never closed: cut short by Stop, or the CLI died mid-way.
+    if (p.type === 'compaction' && p.status === 'running') { p.status = status === 'stopped' ? 'stopped' : 'failed'; p.endedAt = now }
     if (p.type === 'tool' && p.agent?.status === 'running') {
       p.agent = { ...p.agent, status: status === 'error' ? 'error' : status === 'stopped' ? 'stopped' : 'done', endedAt: now }
       for (const st of p.agent.steps || []) if (st.status === 'running') st.status = 'done'

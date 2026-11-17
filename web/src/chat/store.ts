@@ -7,6 +7,7 @@
 // (`start` carries the real ids, `done` the settled reply). localStorage is
 // only an instant-paint cache.
 import { useSyncExternalStore } from 'react'
+import { isCompactionTurn } from './context'
 import { getThreadSummaries, getThreadPage, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, ApiError, api, authHeaders } from '../api'
 import { pushError, pushToast } from '../toast'
 import { announceTasks } from '../todos/bus'
@@ -102,6 +103,10 @@ export interface ChatPrefs {
   totemsInChat?: boolean
   /** What sending does while a reply runs: wait its turn or steer the reply. Ctrl/⌘ does the other. */
   followUp?: 'queue' | 'steer'
+  /** Claude's auto-compact window: '' for Claude's default, else 100,000–1,000,000 (chat/context.mjs). */
+  autoCompactWindow?: string
+  /** What an idle Claude chat of 200k tokens or more does when its prompt cache goes cold (T3's Compact idle threads). */
+  compactIdle?: 'onReturn' | 'beforeCacheExpires' | 'off'
 }
 
 // A file the bridge sent here to be shown (chat/files.mjs, chatFileRedirect).
@@ -198,7 +203,11 @@ function withOutbox(threads: ChatThread[], sending: Set<string> = new Set()): Ch
     const t = out[i]
     // It did get through (the response was what got lost): nothing to keep.
     const lastUser = [...t.messages].reverse().find((m) => m.role === 'user')
-    if (lastUser && sameText(lastUser.content, e.message.content, !!t.summary) && (lastUser.createdAt || 0) >= e.at - 60_000) { outboxDrop(id); continue }
+    const recent = !!lastUser && (lastUser.createdAt || 0) >= e.at - 60_000
+    // Or it got through as a `/compact` (Compact and send), or was queued behind a run (one of those, or the bridge's own idle compaction).
+    const queued = (t.queue || []).some((q) => !q.id.startsWith('local-') && (q.createdAt || 0) >= e.at - 60_000 && sameText(q.text, e.message.content, false))
+    const compacting = !!e.args.compactFirst && recent && isCompactionTurn(lastUser)
+    if ((recent && sameText(lastUser!.content, e.message.content, !!t.summary)) || compacting || queued) { outboxDrop(id); continue }
     if (!t.messages.some((m) => m.id === e.message.id)) out[i] = { ...t, messages: [...t.messages.filter((m) => !m.unsent), unsent] }
   }
   return out
@@ -1160,7 +1169,9 @@ function handleEvent(threadId: string, e: StreamEvent) {
         const ui = ai - 1
         if (msgs[ai]?.role === 'assistant' && msgs[ai].status === 'streaming') {
           const live = msgs[ai]
-          msgs[ai] = { ...e.assistantMessage, parts: live.parts?.length ? live.parts : e.assistantMessage.parts, content: live.content || e.assistantMessage.content }
+          // Compact and send's stand-in divider gives way to the bridge's own (same compaction, real id).
+          const kept = (live.parts || []).filter((p) => !(p.type === 'compaction' && p.id.startsWith('local-')))
+          msgs[ai] = { ...e.assistantMessage, parts: kept.length ? kept : e.assistantMessage.parts, content: live.content || e.assistantMessage.content }
           if (msgs[ui]?.role === 'user') msgs[ui] = e.userMessage
         } else {
           msgs.push(e.userMessage, e.assistantMessage)
@@ -1179,6 +1190,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
     case 'approval':
     case 'inbox':
     case 'visual':
+    case 'context':
+    case 'compaction':
     case 'delta':
     case 'tool':
     case 'agent':
@@ -1202,7 +1215,8 @@ function handleEvent(threadId: string, e: StreamEvent) {
     case 'done':
       patchAssistant(threadId, (m) => ({ ...e.message, parts: e.message.parts?.length ? e.message.parts : m.parts }))
       // The bridge marks it waiting on him too; this shows it without a sync.
-      if (e.message.status !== 'stopped') patchThread(threadId, (t) => (t.totemId ? t : { ...t, needsReply: true, ...(t.snoozedUntil && t.snoozedUntil > now() ? { snoozedUntil: now() } : {}) }))
+      // Not after a compaction (`/compact`, context.ts): housekeeping is nothing to read.
+      if (e.message.status !== 'stopped') patchThread(threadId, (t) => (t.totemId || isCompactionTurn(t.messages[t.messages.findIndex((m) => m.id === e.message.id) - 1]) ? t : { ...t, needsReply: true, ...(t.snoozedUntil && t.snoozedUntil > now() ? { snoozedUntil: now() } : {}) }))
       break
     case 'error':
       patchAssistant(threadId, (m) => ({ ...m, status: 'error', error: e.text }))
@@ -1285,6 +1299,8 @@ export interface SendInput {
   projectContextOff?: boolean
   /** A new chat started from a task, linked to it from the first turn. */
   taskId?: string
+  /** "Compact and send" (context.ts): the chat compacts first and the message waits right behind it. */
+  compactFirst?: boolean
 }
 
 /** Start a turn. Returns the thread id (new chats get one here). */
@@ -1304,12 +1320,19 @@ export function send(input: SendInput): string {
   }
   const wire = wireModel(row?.driver || 'cursor', settings)
   const t0 = now()
-  const userMessage: ChatMessage = {
-    id: `local-${newId()}`, role: 'user', content: input.text, createdAt: t0,
-    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-    ...(input.voice ? { voice: true } : {}),
+  // Compact and send: what shows at once is the compaction, with his message waiting behind it.
+  const compactFirst = !!thread && !!input.compactFirst
+  const userMessage: ChatMessage = compactFirst
+    ? { id: `local-${newId()}`, role: 'user', content: '/compact', command: 'compact', createdAt: t0 }
+    : {
+        id: `local-${newId()}`, role: 'user', content: input.text, createdAt: t0,
+        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+        ...(input.voice ? { voice: true } : {}),
+      }
+  const assistant: ChatMessage = {
+    id: `local-${newId()}`, role: 'assistant', content: '', status: 'streaming', provider, createdAt: t0,
+    parts: compactFirst ? [{ type: 'compaction', id: `local-${newId()}`, status: 'running', trigger: 'onReturn', startedAt: t0 }] : [],
   }
-  const assistant: ChatMessage = { id: `local-${newId()}`, role: 'assistant', content: '', parts: [], status: 'streaming', provider, createdAt: t0 }
   const contextOff = !!projectId && !thread && !!input.projectContextOff
   const taskId = !thread && input.taskId ? input.taskId : undefined
   if (!thread) {
@@ -1319,7 +1342,8 @@ export function send(input: SendInput): string {
       messages: [], createdAt: t0, updatedAt: t0, ...(kind === 'temporary' ? { expiresAt: endOfToday() } : {}),
     }
   }
-  upsertThread({ ...thread, messages: [...thread.messages, userMessage, assistant], updatedAt: t0 })
+  const queue = compactFirst ? [{ id: `local-${newId()}`, text: input.text, attachments: input.attachments || [], createdAt: t0 }, ...(thread.queue || [])] : thread.queue
+  upsertThread({ ...thread, messages: [...thread.messages, userMessage, assistant], updatedAt: t0, ...(compactFirst ? { queue } : {}) })
   const args: SendArgs = {
     threadId, text: input.text, attachments: (input.attachments || []).map((a) => a.id), provider,
     // The bridge keeps this model only when the turn runs on `provider`; a
@@ -1330,9 +1354,14 @@ export function send(input: SendInput): string {
     ...(projectId ? { projectId } : {}),
     ...(contextOff ? { projectContextOff: true } : {}),
     ...(taskId ? { taskId } : {}),
+    ...(compactFirst ? { compactFirst: true } : {}),
   }
   const { messages: _m, needsReply: _n, keepUnread: _k, ...meta } = thread
-  outboxPut(threadId, { args, message: userMessage, thread: { ...meta, updatedAt: t0 }, at: t0 })
+  // Unsent, Retry and Discard work on what he wrote; a compact-first send carries it in its args.
+  const unsentAs: ChatMessage = compactFirst
+    ? { id: userMessage.id, role: 'user', content: input.text, createdAt: t0, ...(input.attachments?.length ? { attachments: input.attachments } : {}) }
+    : userMessage
+  outboxPut(threadId, { args, message: unsentAs, thread: { ...meta, updatedAt: t0 }, at: t0 })
   return startRun(threadId, args)
 }
 
@@ -1358,6 +1387,8 @@ export function discardUnsent(threadId: string): string {
   const e = readOutbox()[threadId]
   outboxDrop(threadId)
   if (!e) return ''
+  // Compact and send: what he wrote is the message, not the compaction shown for it.
+  if (e.args.compactFirst) patchThread(threadId, (t) => ({ ...t, queue: (t.queue || []).filter((q) => !q.id.startsWith('local-')) }))
   patchThread(threadId, (t) => ({ ...t, messages: t.messages.filter((m) => m.id !== e.message.id) }))
   if (!state.threads.find((t) => t.id === threadId)?.messages.length) set((s) => ({ threads: s.threads.filter((t) => t.id !== threadId) }))
   return e.message.content
@@ -1381,11 +1412,14 @@ function startRun(threadId: string, args: SendArgs) {
       const reason = navigator.onLine === false ? 'You were offline' : networkText(err)
       box.message.sendError = reason
       outboxPut(threadId, box)
+      // Compact and send shows what he wrote, not the compaction that was to run first.
+      const local = (m: ChatMessage) => (m.parts || []).every((p) => p.type === 'compaction' && p.id.startsWith('local-'))
       patchThread(threadId, (t) => ({
         ...t,
+        ...(box.args.compactFirst ? { queue: (t.queue || []).filter((q) => !q.id.startsWith('local-')) } : {}),
         messages: t.messages
-          .filter((m) => !(m.role === 'assistant' && m.status === 'streaming' && !m.content && !(m.parts || []).length))
-          .map((m) => (m.id === box.message.id ? { ...m, unsent: true, sendError: reason } : m)),
+          .filter((m) => !(m.role === 'assistant' && m.status === 'streaming' && !m.content && local(m)))
+          .map((m) => (m.id === box.message.id ? { ...box.message, unsent: true, sendError: reason } : m)),
       }))
       setRun(threadId, null)
       return

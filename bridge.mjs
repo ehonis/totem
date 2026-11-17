@@ -99,6 +99,8 @@ import { ASK_TOOL, ASK_TOOL_DESCRIPTOR, QUESTION_RULES, DISMISSED_FOR_AGENT, QUE
 import { DONE_TOOL, DONE_TOOL_DESCRIPTOR, DONE_RULES, DONE_RESULT } from './chat/done.mjs'
 import { PREVIEW_TOOL, RENDER_TOOL, VISUAL_RULES, visualToolDescriptors, previewVisual, storeVisual, renderedResult, visualToolError } from './chat/visuals.mjs'
 import { usageTally, addUsage, replyStats } from './chat/stats.mjs'
+import { createIdleCompactor } from './chat/compaction.mjs'
+import { COMPACT_UNSUPPORTED, DEFAULT_IDLE_COMPACTION, IDLE_COMPACTION_MODES, claudeAutoCompactThreshold, claudeAutoCompactWindow, claudeCompactionEvent, claudeContextUsage, claudeContextWindow, codexCompacted, codexContextUsage, isCompactCommand, normalizeAutoCompactWindow, opencodeContextUsage, reportedClaudeWindows } from './chat/context.mjs'
 import { memoryFileStats, outsideDir, MEMORY_HEAD_CHARS } from './chat/memory-ref.mjs'
 import { planHistory, renderTranscript, attachmentBlock, projectBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer, failureText } from './chat/turn.mjs'
 import { listThreads as listOtherThreads, readThread as readOtherThread, threadsRule, findChatPlace, listChatPlaces, projectPath as chatProjectPath } from './chat/thread-tools.mjs'
@@ -3139,7 +3141,21 @@ async function readSteerImages(files) {
 // into a `can_use_tool` control request on stdout. `approve(request, signal)`
 // resolves the permission result, which goes back on stdin; `allowRules` are the
 // chat's saved "Always allow" rules.
-async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, onAgent, signal, model, effort, readOnly, access = null, instance, resume, images = [], browser = null, allowWrite = [], readOnlyPaths = [], allowRules: savedRules = [], approve = null, steering = null, timeoutMs = TIMEOUT } = {}) {
+// The context window Claude Code itself reported per model (`result.modelUsage`),
+// for models outside the catalog in chat/context.mjs. Learned as runs finish.
+const claudeReportedWindows = new Map()
+
+// Where a Claude account compacts, for the meter's tick (chat/context.mjs):
+// Totem's setting, the environment, then the account's own settings.json.
+async function claudeCompactWindowFor(account, model) {
+  const env = { ...process.env, ...instanceEnvironment(account) }
+  const dir = env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+  let settings = null
+  try { settings = JSON.parse(await readFile(join(dir, 'settings.json'), 'utf8')) } catch {}
+  return claudeAutoCompactWindow({ setting: chatSettings.autoCompactWindow, env, settings, model })
+}
+
+async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, onAgent, onContext, onCompaction, signal, model, effort, readOnly, access = null, instance, resume, images = [], browser = null, allowWrite = [], readOnlyPaths = [], allowRules: savedRules = [], approve = null, steering = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('claude')
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']
   const m = currentClaudeModel(bareModelId(model) || CLAUDE_MODEL)
@@ -3194,6 +3210,19 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
   }
   let result = ''
   let sessionId = ''
+  // How full the context is (chat/context.mjs): each top-level request's usage,
+  // against the model's window, with Claude's compaction point when one is set.
+  const compactWindow = onContext ? await claudeCompactWindowFor(account, m) : ''
+  let requestedAt = 0
+  let lastContext = null
+  let compaction = null // the compaction in progress: { id, startedAt }
+  const sendContext = (ctx) => {
+    if (!ctx) return
+    lastContext = ctx
+    const { model: _model, ...shown } = ctx
+    emitSafe(onContext, shown, 'context')
+  }
+  const windowFor = (id) => claudeContextWindow(id || m, claudeReportedWindows.get(id || m))
   const seenTools = new Set()
   const toolNames = new Map() // tool_use id → name, to tell a browser snapshot from any other image
   // Sub-agents launched in the background: their card stays open until Claude
@@ -3226,8 +3255,10 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
       .catch((e) => answerControl(requestId, { subtype: 'error', error: String(e?.message || e) }))
       .finally(() => asking.delete(requestId))
   }
+  // Settings → Chat › Auto-compact after, as T3 passes it (CLAUDE_CODE_AUTO_COMPACT_WINDOW).
+  const ownWindow = normalizeAutoCompactWindow(chatSettings.autoCompactWindow)
   return spawnJsonStream(account.cli, args, {
-    input, label, signal, timeoutMs, holds: browser?.holds, env: { ...instanceEnvironment(account), ...browserCli.env },
+    input, label, signal, timeoutMs, holds: browser?.holds, env: { ...instanceEnvironment(account), ...browserCli.env, ...(ownWindow ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: ownWindow } : {}) },
     keepStdin: !!steering,
     onSpawn: (c) => {
       child = c
@@ -3275,6 +3306,37 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
         }
         return
       }
+      // Compaction, Claude Code's own or a `/compact` (chat/context.mjs).
+      const comp = claudeCompactionEvent(event)
+      if (comp) {
+        if (comp.status === 'running') {
+          // Claude repeats the status while it works: one divider per compaction (T3).
+          if (compaction) return
+          compaction = { id: `cmp-${randomUUID().slice(0, 8)}`, startedAt: Date.now() }
+          emitSafe(onCompaction, { id: compaction.id, status: 'running', startedAt: compaction.startedAt }, 'compaction')
+          return
+        }
+        const id = compaction?.id || `cmp-${randomUUID().slice(0, 8)}`
+        // Stopped by us, not failed by Claude (T3 #33291).
+        const status = comp.status === 'failed' && signal?.aborted ? 'stopped' : comp.status
+        emitSafe(onCompaction, { id, ...comp, status, endedAt: Date.now(), ...(compaction ? {} : { startedAt: Date.now() }) }, 'compaction')
+        compaction = null
+        // The meter drops to what is left at once; the next request refines it.
+        if (comp.status === 'done' && Number.isFinite(comp.after)) {
+          const max = windowFor(lastContext?.model)
+          sendContext({ used: comp.after, ...(max ? { max } : {}), ...(lastContext?.autoCompactAt ? { autoCompactAt: lastContext.autoCompactAt } : {}), at: Date.now() })
+        }
+        return
+      }
+      if (event.type === 'system' && event.subtype === 'status' && 'compact_result' in event) return
+      if (event.type === 'result') {
+        // The window Claude Code compacts against, for a model outside the catalog.
+        for (const [id, size] of Object.entries(reportedClaudeWindows(event))) claudeReportedWindows.set(id, size)
+        if (lastContext && !lastContext.max) {
+          const max = windowFor(lastContext.model)
+          if (max) sendContext({ ...lastContext, max, ...(compactWindow && claudeAutoCompactThreshold(compactWindow, max) ? { autoCompactAt: claudeAutoCompactThreshold(compactWindow, max) } : {}) })
+        }
+      }
       if (event.type === 'result' && typeof event.result === 'string') {
         if (!steering) { result = event.result; return }
         // A turn a steer cut short: the run goes on with the steer.
@@ -3296,8 +3358,15 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
       }
       if (event.type === 'stream_event') {
         const ev = event.event
+        // The prompt cache's lifetime runs from the request, not the reply's end.
+        if (ev?.type === 'message_start') requestedAt = Date.now()
         if (onText && ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) onText(ev.delta.text)
         return
+      }
+      if (event.type === 'assistant' && onContext && event.message?.usage && event.message.model !== '<synthetic>') {
+        const id = event.message.model || m
+        const ctx = claudeContextUsage(event.message.usage, { maxTokens: windowFor(id), autoCompactWindow: compactWindow, requestedAt })
+        if (ctx) sendContext({ ...ctx, model: id })
       }
       if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
         // Claude Code's display data for connector tools: name, server name, logo.
@@ -3393,7 +3462,7 @@ function codexActivity(item, phase) {
 // `resume` continues the thread with `codex exec resume <id>`. That subcommand
 // has no -C or --sandbox flag, so the sandbox goes in as a config override and
 // the working directory comes from the spawn's cwd, which is AGENT_CWD anyway.
-async function spawnCodexStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, onAgent, signal, model, effort, sandbox, access = null, instance, resume, images = [], features = [], extraArgs = [], browser = null, timeoutMs = TIMEOUT } = {}) {
+async function spawnCodexStream(text, { label = 'request', onActivity, onTool, onText, onSession, onImage, onAgent, onContext, onCompaction, signal, model, effort, sandbox, access = null, instance, resume, images = [], features = [], extraArgs = [], browser = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('codex')
   // Entries added to the shared home since the last run (a new skill, a new MCP
   // server in config.toml) only reach this account once they're linked in.
@@ -3457,6 +3526,34 @@ async function spawnCodexStream(text, { label = 'request', onActivity, onTool, o
     }
   }
   const startedAt = Date.now()
+  // How full the context is, and Codex's own compactions (chat/context.mjs): only
+  // the session's rollout file says, so it is tailed while the turn runs. Lines
+  // from before this run are earlier turns'.
+  let contextLog = null
+  let lastUsed = null
+  let openCompaction = null
+  let lastCompactionAt = 0
+  const onRolloutRecord = (r) => {
+    const at = Date.parse(r?.timestamp || '')
+    // Same machine, same clock: anything stamped before this run began is an earlier turn's.
+    if (Number.isFinite(at) && at < startedAt) return
+    const ctx = codexContextUsage(r)
+    if (ctx) {
+      lastUsed = ctx.used
+      emitSafe(onContext, ctx, 'context')
+      // The first reading after a compaction is what it left.
+      if (openCompaction) { emitSafe(onCompaction, { id: openCompaction, after: ctx.used }, 'compaction'); openCompaction = null }
+      return
+    }
+    if (codexCompacted(r)) {
+      const when = Number.isFinite(at) ? at : Date.now()
+      // The records one compaction writes land within a second of each other.
+      if (when - lastCompactionAt < 5000) return
+      lastCompactionAt = when
+      openCompaction = `cmp-${randomUUID().slice(0, 8)}`
+      emitSafe(onCompaction, { id: openCompaction, status: 'done', trigger: 'auto', startedAt: when, endedAt: when, ...(lastUsed != null ? { before: lastUsed } : {}) }, 'compaction')
+    }
+  }
   return spawnJsonStream(account.cli, args, {
     input: text, label, signal, timeoutMs, holds: browser?.holds, env: codexEnv,
     onEvent: (event) => {
@@ -3464,6 +3561,9 @@ async function spawnCodexStream(text, { label = 'request', onActivity, onTool, o
       if (t === 'thread.started' && event.thread_id) {
         sessionId = event.thread_id
         emitSafe(onSession, sessionId, 'session')
+        if ((onContext || onCompaction) && !contextLog) {
+          contextLog = watchSessionLog({ provider: 'codex', threadId: sessionId, startedAt, env: codexEnv, log, onRecord: onRolloutRecord, fromEnd: !!resume })
+        }
         return
       }
       // A rejected model, a quota block or a server error arrives as an event, not
@@ -3523,6 +3623,7 @@ async function spawnCodexStream(text, { label = 'request', onActivity, onTool, o
     },
   }).then(async (res) => {
     await Promise.all([...childLogs.values()].map((c) => c.watcher.stop().catch(() => {})))
+    await contextLog?.stop().catch(() => {})
     if (onImage && sessionId) await emitCodexImages(codexEnv.CODEX_HOME || join(homedir(), '.codex'), sessionId, startedAt, onImage)
     return { ...res, result: lastMessage || [...messages.values()].filter(Boolean).pop() || '', turnError, turnFailed, sessionId }
   })
@@ -3565,7 +3666,7 @@ function chatToolFromOpenCode(part, phase) {
 // OpenCode: `run --format json` emits step_start / text / tool / step_finish
 // events. Each `text` part streams as it grows (keyed by part id), so we diff
 // against what we've already sent. The reply is the concatenation of text parts.
-function spawnOpenCodeStream(text, { label = 'request', onActivity, onTool, onText, onSession, signal, model, instance, resume, images = [], browser = null, timeoutMs = TIMEOUT } = {}) {
+function spawnOpenCodeStream(text, { label = 'request', onActivity, onTool, onText, onSession, onContext, signal, model, instance, resume, images = [], browser = null, timeoutMs = TIMEOUT } = {}) {
   const account = instance || instanceFor('opencode')
   const args = ['run', '--format', 'json']
   const m = bareModelId(model) || OPENCODE_MODEL
@@ -3582,6 +3683,9 @@ function spawnOpenCodeStream(text, { label = 'request', onActivity, onTool, onTe
     onEvent: (event) => {
       const sid = event.sessionID || event.part?.sessionID
       if (sid && sid !== sessionId) { sessionId = sid; emitSafe(onSession, sid, 'session') }
+      // The last step's prompt plus output is what the next request starts from (chat/context.mjs).
+      const ctx = onContext && opencodeContextUsage(event)
+      if (ctx) emitSafe(onContext, ctx, 'context')
       if (event.type === 'text' && event.part) {
         const id = event.part.id || 'text'
         const full = event.part.text || ''
@@ -8644,7 +8748,13 @@ const threadStore = createThreadStore({
     await browserManager.closeSession(thread.id).catch(() => {})
   },
 })
-const chatRuns = createChatRuns({ log, onEnd: (run) => drainChatQueue(run.threadId, run.outcome || (run.status === 'stopped' ? 'stopped' : 'error')) })
+const chatRuns = createChatRuns({
+  log,
+  onEnd: (run) => drainChatQueue(run.threadId, run.outcome || (run.status === 'stopped' ? 'stopped' : 'error'))
+    // Compact idle threads → Before the cache expires: the timer for this chat's idle spell.
+    .then(() => idleCompactor.schedule(run.threadId))
+    .catch((e) => log('chat run end handling failed', e?.message || e)),
+})
 
 // ---- Agent browser ------------------------------------------------------------
 // T3 Code's collaborative browser, for Totem's agents: a headless Chrome or
@@ -9451,7 +9561,7 @@ const CHAT_SETTINGS_FILE = join(HERE, 'data', 'chat-settings.json')
 // A message sent while a reply runs waits its turn (T3 Code's default), except on
 // an install that had steering before the queue existed: it keeps steering.
 const DEFAULT_FOLLOW_UP = EXISTING_INSTALL ? 'steer' : 'queue'
-const DEFAULT_CHAT_SETTINGS = { titles: { provider: '', model: '', effort: '', off: false }, autoSettleDays: 3, totemsInChat: true, followUp: DEFAULT_FOLLOW_UP }
+const DEFAULT_CHAT_SETTINGS = { titles: { provider: '', model: '', effort: '', off: false }, autoSettleDays: 3, totemsInChat: true, followUp: DEFAULT_FOLLOW_UP, autoCompactWindow: '', compactIdle: DEFAULT_IDLE_COMPACTION }
 let chatSettings = structuredClone(DEFAULT_CHAT_SETTINGS)
 readFile(CHAT_SETTINGS_FILE, 'utf8').then((raw) => { chatSettings = normalizeChatSettings(JSON.parse(raw)) }).catch(() => {})
 
@@ -9465,6 +9575,10 @@ function normalizeChatSettings(raw = {}) {
     totemsInChat: raw.totemsInChat !== false,
     // What Enter does while a reply runs; Ctrl/⌘+Enter does the other (chat/queue.mjs).
     followUp: raw.followUp === 'queue' || raw.followUp === 'steer' ? raw.followUp : DEFAULT_FOLLOW_UP,
+    // Claude's auto-compact window (chat/context.mjs): '' is Claude's own default.
+    autoCompactWindow: normalizeAutoCompactWindow(raw.autoCompactWindow) ?? '',
+    // What an idle Claude chat of 200k tokens or more does once its prompt cache goes cold (T3's Compact idle threads).
+    compactIdle: IDLE_COMPACTION_MODES.includes(raw.compactIdle) ? raw.compactIdle : DEFAULT_IDLE_COMPACTION,
   }
 }
 
@@ -9713,6 +9827,18 @@ async function handleChatSend(req, res) {
     await startChatTurn(body)
   } catch (e) {
     if (!e.status) throw e
+    // The bridge is compacting this idle chat on its own (chat/compaction.mjs):
+    // his message waits right behind it, and he watches it go.
+    // Only a plain typed message, and only when nothing was written yet (`busy`).
+    if (e.code === 'busy' && chatRuns.active(body.threadId)?.idle && !body.regenerate && !body.editMessageId && !body.queuedId && !body.voice) {
+      try {
+        await changeChatQueue({ ...body, action: 'add' })
+      } catch (q) {
+        if (!q.status) throw q
+        return send(res, q.status, { error: q.message })
+      }
+      return streamChatRun(req, res, body.threadId, 0)
+    }
     return send(res, e.status, { error: e.message })
   }
   return streamChatRun(req, res, body.threadId, 0)
@@ -9723,10 +9849,10 @@ async function handleChatSend(req, res) {
  * composer (handleChatSend) or from the queue once the reply before it ends
  * (`queuedId`, chat/queue.mjs). Errors meant for the client carry a `status`.
  */
-async function startChatTurn(body) {
+async function startChatTurn(body, { idle = null } = {}) {
   const threadId = body.threadId
   if (!validThreadId(threadId)) throw Object.assign(new Error('missing threadId'), { status: 400 })
-  if (chatRuns.active(threadId)) throw Object.assign(new Error('this chat is already answering'), { status: 409 })
+  if (chatRuns.active(threadId)) throw Object.assign(new Error('this chat is already answering'), { status: 409, code: 'busy' })
 
   const config = await readProviderConfig()
   const existing = await threadStore.get(threadId)
@@ -9757,6 +9883,15 @@ async function startChatTurn(body) {
   const assistantId = randomUUID()
   let userIndex = -1
   let userMessage = null
+  // Compaction (chat/context.mjs). `/compact` as the message compacts the chat's
+  // session; "Compact and send" (`compactFirst`, T3's onReturn) compacts first
+  // and queues the message right behind it; `idle` is the bridge compacting an
+  // idle chat itself (beforeCacheExpires), which must leave its state alone.
+  const session = existing?.sessions?.[provider]
+  const compactFirst = !idle && body.compactFirst === true && !body.regenerate && !body.editMessageId && !body.queuedId
+    && driver === 'claude' && !!session?.id && chatSettings.compactIdle !== 'off' && !isCompactCommand(text)
+  let compactTrigger = idle || (compactFirst ? 'onReturn' : null)
+  const quiet = !!idle
 
   // One write: drop what a regenerate or an edit replaces, append the turn.
   const thread = await threadStore.update(threadId, async (t) => {
@@ -9781,11 +9916,27 @@ async function startChatTurn(body) {
       if (m) metas.push({ id: m.id, name: m.name, mime: m.mime, size: m.size, kind: m.kind, ...(m.preview ? { preview: m.preview } : {}) })
     }
     const inbox = inboxMarker(body.inbox)
-    userMessage = { id: userMessage?.id || randomUUID(), role: 'user', content: text, createdAt: now, ...(metas.length ? { attachments: metas } : {}), ...(voice ? { voice: true } : {}), ...(inbox ? { inbox } : {}) }
+    if (compactFirst) {
+      // His message waits at the front of the queue and goes the moment the compaction ends.
+      t.queue = [{
+        id: randomUUID(), text, attachments: [...metas], createdAt: now,
+        provider: typeof body.provider === 'string' ? body.provider : undefined,
+        model: typeof body.model === 'string' ? body.model : undefined,
+        effort: typeof body.effort === 'string' ? body.effort : undefined,
+        modelSettings: body.modelSettings,
+        ...(inbox ? { inbox } : {}),
+      }, ...(t.queue || [])]
+      text = '/compact'
+      attachments = []
+      metas.length = 0
+    }
+    const compacting = isCompactCommand(text) && !metas.length
+    if (compacting) compactTrigger ||= 'manual'
+    userMessage = { id: userMessage?.id || randomUUID(), role: 'user', content: text, createdAt: now, ...(metas.length ? { attachments: metas } : {}), ...(voice ? { voice: true } : {}), ...(inbox && !compactFirst ? { inbox } : {}), ...(compacting ? { command: 'compact' } : {}) }
     t.messages.push(userMessage)
     userIndex = t.messages.length - 1
     // A message of his own lets a held queue go again once this reply ends (T3 Code).
-    if (!body.queuedId) delete t.queueHeld
+    if (!body.queuedId && !quiet) delete t.queueHeld
     t.messages.push({
       id: assistantId, role: 'assistant', content: '', parts: [], status: 'streaming', provider, model: choice.label, createdAt: now,
       ...(choice.effort ? { effort: choice.effort } : {}),
@@ -9796,6 +9947,8 @@ async function startChatTurn(body) {
     t.provider = provider
     if (body.modelSettings && typeof body.modelSettings === 'object') t.modelSettings = body.modelSettings
     if (!t.title) t.title = fallbackTitle(text) || (metas[0]?.name ?? '')
+    // The bridge compacting an idle chat is not him coming back to it.
+    if (quiet) return
     // He answered: the chat no longer waits on him.
     delete t.needsReply
     delete t.keepUnread
@@ -9840,7 +9993,8 @@ async function startChatTurn(body) {
   // The task this chat works toward (Chats panel → Tasks), read fresh each turn.
   const taskCtx = voice ? '' : await linkedTaskContext(thread.taskId).catch(() => '')
   const contextBlock = `${projectCtx?.text || ''}${taskCtx}${totemCtx}${totemRule}${groupRule ? `${groupRule}\n\n` : ''}${othersRule}`
-  const needsTitle = !existing?.title || userIndex === 0
+  const isCompaction = userMessage.command === 'compact'
+  const needsTitle = !isCompaction && (!existing?.title || userIndex === 0)
   const streamLive = streamingEnabled(provider, config)
   // The browser, computer use and the hour: every dashboard or app chat, never voice.
   // Cursor and OpenCode reach the browser only through the gateway (browserArgs).
@@ -9862,7 +10016,7 @@ async function startChatTurn(body) {
       const save = (extra) => threadStore.update(threadId, (t) => {
         const i = t.messages.findIndex((m) => m.id === assistant.id)
         if (i >= 0) t.messages[i] = structuredClone(assistant)
-        t.updatedAt = Date.now()
+        if (!quiet) t.updatedAt = Date.now()
         extra?.(t)
       }).catch((e) => log('chat: save failed', e?.message || e))
       // A reload mid-run shows the reply so far, not an empty bubble.
@@ -10064,6 +10218,35 @@ async function startChatTurn(body) {
         },
       }
       try {
+        // `/compact` (chat/context.mjs): the chat's own session summarises itself.
+        // The reply is only its divider, so it never counts as an answer to read.
+        if (isCompaction) {
+          const part = { id: `cmp-${assistant.id.slice(0, 8)}`, trigger: compactTrigger || 'manual' }
+          const fail = (reason) => forward({ type: 'compaction', compaction: { ...part, status: 'failed', reason, endedAt: Date.now() } })
+          const own = thread.sessions?.[provider]
+          if (driver !== 'claude') { fail(COMPACT_UNSUPPORTED); return }
+          if (!own?.id) { fail('Not enough messages to compact.'); return }
+          forward({ type: 'compaction', compaction: { ...part, status: 'running', startedAt: Date.now() } })
+          let seen = false
+          let r
+          try {
+            r = await STREAMERS[driver](text, {
+              label: 'web chat compact', signal, instance: instanceFor(provider), model: choice.model, effort: choice.effort,
+              resume: own.id, timeoutMs,
+              onSession: (id) => { sessionId = id },
+              onContext: (ctx) => forward({ type: 'context', context: ctx }),
+              // One divider per compaction turn: Claude's own events settle this turn's part.
+              onCompaction: (c) => { if (c.status !== 'running') { seen = true; forward({ type: 'compaction', compaction: { ...c, id: part.id, trigger: part.trigger } }) } },
+            }).then((res) => { usage = addUsage(usage, res.usage); return res })
+          } catch (e) {
+            if (signal.aborted) { status = 'stopped'; return }
+            fail(truncate(String(e?.message || e), 300))
+            return
+          }
+          if (r.stopped) status = 'stopped'
+          else if (!seen) fail(truncate((r.result || '').trim() || r.stderr?.trim().split('\n').slice(-2).join(' ') || 'Claude did not compact the chat.', 300))
+          return
+        }
         // A skill command ($morning, /journal, …) runs the skill rather than chatting.
         const matchedSkill = !body.regenerate && !files.length ? await lookupSkillCommand(text.toLowerCase(), text) : null
         if (matchedSkill) {
@@ -10183,6 +10366,9 @@ async function startChatTurn(body) {
               },
               onAgent: (ev) => forwardAgent(tag && ev.toolId ? { ...ev, toolId: `${ev.toolId}${tag}` } : ev),
               onSession: (id) => { sessionId = id },
+              // How full the context is, and the CLI's own compactions (chat/context.mjs).
+              onContext: (ctx) => forward({ type: 'context', context: ctx }),
+              onCompaction: (c) => forward({ type: 'compaction', compaction: c }),
               onImage: async ({ buffer, mime, name }) => {
                 const ext = (mime.split('/')[1] || 'png').replace('jpeg', 'jpg')
                 const up = await chatUploads.save({ buffer, name: name || `screenshot-${Date.now()}.${ext}`, mime })
@@ -10294,8 +10480,14 @@ async function startChatTurn(body) {
             // Through this reply only: an inbox outcome recorded while it ran (chat/inbox-outcome.mjs)
             // comes after it, unseen, and must be replayed next turn.
             const at = t.messages.findIndex((m) => m.id === assistant.id)
-            t.sessions = { ...(t.sessions || {}), [provider]: { id: sessionId, through: at >= 0 ? at + 1 : t.messages.length } }
+            const prior = t.sessions?.[provider]
+            // A compaction leaves the session where it was in the chat: turns another
+            // account answered before it are still replayed next time.
+            const through = isCompaction && prior?.id === sessionId && prior.through < userIndex ? prior.through : at >= 0 ? at + 1 : t.messages.length
+            t.sessions = { ...(t.sessions || {}), [provider]: { id: sessionId, through } }
           }
+          // A compaction is housekeeping: nothing new to read, nothing to wake for.
+          if (isCompaction) return
           // Finished (or failed) and now waiting on him, until he replies or marks it read.
           // A totem's chat posts on a schedule, so it never waits.
           if (status !== 'stopped' && !t.totemId) t.needsReply = true
@@ -10314,8 +10506,9 @@ async function startChatTurn(body) {
         run.outcome = status
         push({ type: 'done', message: signMessage(structuredClone(assistant)) })
         noteAiUsage(provider)
+        log(`web chat [${provider}] ${isCompaction ? `compaction (${compactTrigger}) ` : ''}${status} in ${Date.now() - t0}ms`)
+        if (isCompaction) return
         recordUse('web', { text, startedAt: t0, ok: status !== 'error', provider })
-        log(`web chat [${provider}] ${status} in ${Date.now() - t0}ms`)
         // Nobody looking at this chat (phone locked, app in the background, another
         // chat open): tell the phone it's done. Skipped only while someone is on it.
         if (status !== 'stopped' && !someoneViewing(threadId)) {
@@ -10333,6 +10526,9 @@ async function startChatTurn(body) {
     },
   })
 
+  if (idle) run.idle = idle
+  // Compact and send: his message now waits in the queue (or, refused, went as it was).
+  if (body.compactFirst) announceQueue(threadId, await threadStore.get(threadId).catch(() => null))
   return run
 }
 
@@ -10429,6 +10625,18 @@ async function changeChatQueue(body) {
   }
   throw Object.assign(new Error('unknown queue action'), { status: 400 })
 }
+
+// Compact idle threads → Before the cache expires (chat/compaction.mjs): after
+// every run, a timer two minutes before the chat's prompt cache expires.
+const idleCompactor = createIdleCompactor({
+  threads: threadStore,
+  isRunning: (id) => !!chatRuns.active(id),
+  startTurn: (body, opts) => startChatTurn(body, opts),
+  mode: () => chatSettings.compactIdle,
+  driverOf,
+  enabled: async (provider) => (await readProviderConfig()).enabledProviders.includes(provider),
+  log,
+})
 
 /**
  * A run has ended (or the queue changed with nothing running): start the first
@@ -10800,12 +11008,18 @@ async function handleChatApi(req, res, path) {
   if (req.method === 'GET' && path === '/api/chat/settings') return send(res, 200, { settings: chatSettings })
   if (req.method === 'PUT' && path === '/api/chat/settings') {
     const body = await readJsonBody(req)
+    if ('autoCompactWindow' in body && normalizeAutoCompactWindow(body.autoCompactWindow) === null) {
+      return send(res, 400, { error: 'Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude\'s default.' })
+    }
     const next = normalizeChatSettings({ ...chatSettings, ...body, titles: { ...chatSettings.titles, ...(body.titles || {}) } })
     // A Claude model can only be chosen on a Claude account (never Codex).
     const titles = next.titles
     if (titles.provider && !(await readProviderConfig()).enabledProviders.includes(titles.provider)) titles.provider = ''
     if (titles.provider && driverOf(titles.provider) === 'codex' && titles.model && !CODEX_MODEL_ID.test(titles.model)) titles.model = ''
+    const idleChanged = next.compactIdle !== chatSettings.compactIdle
     chatSettings = next
+    // Switched to "Before the cache expires": chats already idle get their timer too.
+    if (idleChanged) idleCompactor.reschedule().catch((e) => log('idle compaction: reschedule failed', e?.message || e))
     await mkdir(dirname(CHAT_SETTINGS_FILE), { recursive: true })
     await writeFile(CHAT_SETTINGS_FILE, JSON.stringify(next, null, 2))
     return send(res, 200, { settings: next })

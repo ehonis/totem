@@ -358,6 +358,23 @@ function dateDirs(root, at) {
   return [...out]
 }
 
+// A Codex thread's rollout file anywhere under sessions/YYYY/MM/DD, newest day first.
+async function findRollout(root, threadId) {
+  const names = async (dir) => { try { return (await readdir(dir)).filter((n) => /^\d+$/.test(n)).sort().reverse() } catch { return [] } }
+  for (const y of await names(root)) {
+    for (const mo of await names(join(root, y))) {
+      for (const d of await names(join(root, y, mo))) {
+        const dir = join(root, y, mo, d)
+        let files = []
+        try { files = await readdir(dir) } catch { continue }
+        const hit = files.find((f) => f.endsWith(`${threadId}.jsonl`))
+        if (hit) return join(dir, hit)
+      }
+    }
+  }
+  return ''
+}
+
 async function listJsonl(dir) {
   try { return (await readdir(dir)).filter((f) => f.endsWith('.jsonl')).map((f) => join(dir, f)) } catch { return [] }
 }
@@ -412,10 +429,11 @@ export function sessionRoots(provider, env = process.env) {
 /**
  * Find and tail the session log of an agent started at `startedAt` with
  * `prompt` (or, for a Codex sub-agent, known by `threadId`). Each new record is
- * parsed into steps for `onStep` and facts for `onPatch`. `stop()` reads what is
+ * parsed into steps for `onStep` and facts for `onPatch`, and handed raw to
+ * `onRecord`; `fromEnd` skips what the file already held when it was found. `stop()` reads what is
  * left and stops; it resolves to whether a log was ever found.
  */
-export function watchSessionLog({ provider, prompt = '', threadId = '', startedAt = Date.now(), env = process.env, onStep, onPatch, log = () => {} }) {
+export function watchSessionLog({ provider, prompt = '', threadId = '', startedAt = Date.now(), env = process.env, onStep, onPatch, onRecord, fromEnd = false, log = () => {} }) {
   const roots = sessionRoots(provider, env)
   const parse = provider === 'codex' ? codexRolloutSteps : claudeRecordSteps
   const match = provider === 'codex' ? codexMatch : claudeMatch
@@ -427,9 +445,13 @@ export function watchSessionLog({ provider, prompt = '', threadId = '', startedA
   let stopped = false
   let timer = null
   let busy = Promise.resolve()
+  let deepSearched = false
 
   const emitRecords = (records) => {
     for (const r of records) {
+      // The raw record too, for a reader of its own (the chat's context meter, chat/context.mjs).
+      if (onRecord) { try { onRecord(r) } catch (e) { log('session log record handler failed', e?.message || e) } }
+      if (!onStep && !onPatch) continue
       const { steps, patch } = parse(r)
       if (Object.keys(patch).length) onPatch?.(patch)
       for (const s of steps) onStep?.(s)
@@ -439,7 +461,13 @@ export function watchSessionLog({ provider, prompt = '', threadId = '', startedA
   async function candidates() {
     if (provider === 'codex') {
       const files = (await Promise.all(roots.flatMap((r) => dateDirs(r, startedAt)).map(listJsonl))).flat()
-      return threadId ? files.filter((f) => f.endsWith(`${threadId}.jsonl`)) : files
+      if (!threadId) return files
+      const mine = files.filter((f) => f.endsWith(`${threadId}.jsonl`))
+      // A resumed thread keeps writing the file it began in, which may be weeks old.
+      // Searched once: a file that is not there now only ever appears under today.
+      if (mine.length || deepSearched) return mine
+      deepSearched = true
+      return (await Promise.all(roots.map((r) => findRollout(r, threadId)))).filter(Boolean)
     }
     // Claude: a project folder gains a file when a session starts in it.
     const out = []
@@ -487,6 +515,14 @@ export function watchSessionLog({ provider, prompt = '', threadId = '', startedA
     busy = busy.then(async () => {
       if (!file) {
         file = await find()
+        // A resumed session's file holds every earlier turn: only what comes now is wanted.
+        if (file && fromEnd) {
+          // From the start of the line being written, if the end falls mid-line.
+          const size = (await stat(file).catch(() => null))?.size || 0
+          const end = size ? await readSlice(file, Math.max(0, size - 65536), Math.min(size, 65536)) : null
+          const cut = end ? end.lastIndexOf(10) : -1
+          offset = cut >= 0 ? size - end.length + cut + 1 : size
+        }
         if (file) { onPatch?.({ log: 'live' }); log(`subagent: tailing ${provider} log ${file}`) }
       }
       if (file) await tail()

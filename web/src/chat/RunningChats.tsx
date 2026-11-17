@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { isCompactionTurn } from './context'
 import { useChat, getState, setActive, stop, settleThread, snoozeThread, markRead, threadTitle, type RunState } from './store'
 import { useOnScreen, getOnScreen } from './onScreen'
 import { isSnoozed, ago } from './settle'
@@ -146,6 +147,8 @@ export default function RunningChats({ onOpenChat, onShowPanel, narrow }: { onOp
       const t = getState().threads.find((x) => x.id === id)
       const last = t?.messages[t.messages.length - 1]
       if (!t || t.totemId || last?.role !== 'assistant' || (last.status !== 'done' && last.status !== 'error')) continue
+      // A compaction (`/compact`) is housekeeping, not news.
+      if (isCompactionTurn(t.messages[t.messages.length - 2])) continue
       const seen = getOnScreen()
       if (seen.open.has(id)) continue
       const failed = last.status === 'error'

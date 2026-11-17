@@ -2,13 +2,13 @@
 // chats settle, whether chats bring in totems, and who writes chat titles ("Pick
 // for me" keeps Totem's own rule). The chat's colour glow is a device setting,
 // under Appearance.
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useChat, ensureModels, savePrefs, providerById, type ChatPrefs } from '../../../lib/chat/store'
 import { visibleModels, EFFORT_LABELS } from '../../../lib/chat/models'
 import { pushError } from '../../../lib/toast'
 import { T } from '../../../ui/Text'
 import { openPane } from '../open'
-import { Link, Picker, Row, Section, Switch } from '../ui'
+import { Field, Link, Picker, Row, Section, Switch } from '../ui'
 
 function Lane({ lane, title, hint }: { lane: 'titles'; title: string; hint: string }) {
   const prefs = useChat((s) => s.prefs)
@@ -74,6 +74,33 @@ function Lane({ lane, title, hint }: { lane: 'titles'; title: string; hint: stri
   )
 }
 
+const shown = (v: string) => (v ? Number(v).toLocaleString('en-US') : '')
+
+/** Claude's auto-compact window: empty, or 100,000–1,000,000 (chat/context.mjs on the bridge). */
+function AutoCompactRow({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+  const [text, setText] = useState(shown(value))
+  useEffect(() => { setText(shown(value)) }, [value])
+  const commit = () => {
+    const v = text.replace(/[,_\s]/g, '')
+    if (v === value) return
+    if (v && !/^(?:[1-9]\d{5}|1000000)$/.test(v)) {
+      pushError('Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude’s default.')
+      setText(shown(value))
+      return
+    }
+    onSave(v)
+  }
+  return (
+    <Row
+      id="auto-compact"
+      title="Auto-compact after"
+      description="Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude’s default."
+      stacked
+      control={<Field value={text} onChangeText={setText} onEndEditing={commit} onSubmitEditing={commit} placeholder="Claude’s default" keyboardType="number-pad" returnKeyType="done" accessibilityLabel="Auto-compact after" />}
+    />
+  )
+}
+
 export default function ChatPane() {
   const prefs = useChat((s) => s.prefs)
   const providers = useChat((s) => s.providers)
@@ -103,6 +130,30 @@ export default function ChatPane() {
             />
           }
         />
+      </Section>
+
+      <Section
+        title="Context"
+        description={<T size={12.5} muted lineHeight={17}>Long chats fill the model’s context window; the bar in the message box shows how full it is. Claude and Codex compact a full chat on their own; in a Claude chat, /compact does it now.</T>}
+      >
+        <Row
+          id="compact-idle"
+          title="Compact idle threads"
+          description="A Claude chat over 200k tokens is re-read in full once its prompt cache expires. Offer to compact it on your next send, or compact it just before the cache expires."
+          control={
+            <Picker
+              label="Compact idle threads"
+              value={prefs.compactIdle ?? 'onReturn'}
+              onChange={(v) => save({ compactIdle: v as ChatPrefs['compactIdle'] })}
+              options={[
+                { value: 'onReturn', label: 'When you return' },
+                { value: 'beforeCacheExpires', label: 'Before the cache expires (beta)' },
+                { value: 'off', label: 'Never' },
+              ]}
+            />
+          }
+        />
+        <AutoCompactRow value={prefs.autoCompactWindow ?? ''} onSave={(v) => save({ autoCompactWindow: v })} />
       </Section>
 
       <Section title="Chat list">

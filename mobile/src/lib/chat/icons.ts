@@ -102,3 +102,6 @@ export { default as IconListNumbers } from '@tabler/icons-react-native/dist/esm/
 export { default as IconGitPullRequest } from '@tabler/icons-react-native/dist/esm/icons/IconGitPullRequest.mjs'
 export { default as IconAlertTriangle } from '@tabler/icons-react-native/dist/esm/icons/IconAlertTriangle.mjs'
 export { default as IconChartBar } from '@tabler/icons-react-native/dist/esm/icons/IconChartBar.mjs'
+// Context compaction (CompactionMark.tsx, the composer's Compact chip): T3's Minimize2.
+export { default as IconArrowsDiagonalMinimize2 } from '@tabler/icons-react-native/dist/esm/icons/IconArrowsDiagonalMinimize2.mjs'
+export { default as IconArrowsDiagonal } from '@tabler/icons-react-native/dist/esm/icons/IconArrowsDiagonal.mjs'

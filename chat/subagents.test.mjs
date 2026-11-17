@@ -178,3 +178,25 @@ test('createCliAgentWatch opens an agent on a delegating command and settles it 
     assert.ok(events.some((e) => e.agent?.log === 'none'))
   } finally { await home.done() }
 })
+
+test('watchSessionLog fromEnd skips a resumed rollout\'s earlier turns, not a line half-written', async () => {
+  const home = await tempHome()
+  try {
+    // A resumed thread's rollout from weeks ago: found anywhere under sessions/.
+    const dayDir = join(home.dir, 'sessions', '2026', '01', '02')
+    await mkdir(dayDir, { recursive: true })
+    const file = join(dayDir, 'rollout-2026-01-02T10-00-00-thread-9.jsonl')
+    const old = { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { total_tokens: 1 } } } }
+    const now = { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { total_tokens: 2 } } } }
+    const next = { type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { total_tokens: 3 } } } }
+    const half = line(now)
+    // An earlier turn, then this turn's record caught half-written when the file is found.
+    await writeFile(file, line({ type: 'session_meta', payload: { id: 'thread-9' } }) + line(old) + half.slice(0, 20))
+    const seen = []
+    const w = watchSessionLog({ provider: 'codex', threadId: 'thread-9', env: { CODEX_HOME: home.dir }, fromEnd: true, onRecord: (r) => seen.push(r) })
+    await new Promise((r) => setTimeout(r, 300))
+    await appendFile(file, half.slice(20) + line(next))
+    await w.stop()
+    assert.deepEqual(seen.map((r) => r.payload.info.last_token_usage.total_tokens), [2, 3])
+  } finally { await home.done() }
+})

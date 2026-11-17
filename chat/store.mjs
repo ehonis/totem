@@ -19,6 +19,7 @@ import { logoUrl } from './tools.mjs'
 import { QUEUE_LIMIT } from './queue.mjs'
 import { APPROVAL_DECISIONS, APPROVAL_STATUSES } from './approvals.mjs'
 import { inboxMarker, normalizeInboxPart } from './inbox-outcome.mjs'
+import { normalizeCompactionPart, normalizeContextUsage } from './context.mjs'
 
 export const validThreadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
 
@@ -46,6 +47,8 @@ export function normalizeAttachment(a) {
 
 export function normalizePart(p, i = 0) {
   if (!p || typeof p !== 'object') return null
+  // The context was compacted here (chat/context.mjs): a divider in the reply.
+  if (p.type === 'compaction') return normalizeCompactionPart(p)
   if (p.type === 'text') return typeof p.text === 'string' ? { type: 'text', text: p.text } : null
   if (p.type === 'image') return validThreadId(p.uploadId) ? { type: 'image', uploadId: p.uploadId, alt: str(p.alt, 200) } : null
   // A document the agent made this turn (a snapshot in uploads; `path` is where
@@ -197,7 +200,12 @@ export function normalizeMessage(m, i = 0) {
       for (const k of STAT_KEYS) if (typeof m.stats[k] === 'number' && Number.isFinite(m.stats[k]) && m.stats[k] >= 0) stats[k] = m.stats[k]
       if (Object.keys(stats).length) out.stats = stats
     }
+    // How full the context window was after this reply's last request (chat/context.mjs).
+    const context = normalizeContextUsage(m.context)
+    if (context) out.context = context
   }
+  // `/compact`: a turn that compacts the session, drawn as a divider, never as a message.
+  if (m.role === 'user' && m.command === 'compact') out.command = 'compact'
   // A totem's scheduled run, posted to its chat.
   if (m.run && typeof m.run === 'object') out.run = { trigger: str(m.run.trigger, 20), status: str(m.run.status, 20), notified: m.run.notified === true }
   if (m.mode && m.mode !== 'chat') out.mode = str(m.mode, 20)
@@ -396,7 +404,7 @@ const pendingParts = (m) => (m.parts || []).filter((p) => SUMMARY_PART_TYPES.has
 
 function summaryMessage(m) {
   const out = { id: m.id, role: m.role, content: m.content.length > SUMMARY_TEXT ? `${m.content.slice(0, SUMMARY_TEXT)}…` : m.content, createdAt: m.createdAt }
-  for (const k of ['status', 'error', 'provider', 'model', 'run', 'mode', 'voice', 'inbox']) if (m[k] !== undefined) out[k] = m[k]
+  for (const k of ['status', 'error', 'provider', 'model', 'run', 'mode', 'voice', 'inbox', 'command']) if (m[k] !== undefined) out[k] = m[k]
   if (m.attachments) out.attachments = m.attachments
   const parts = pendingParts(m)
   if (parts.length) out.parts = parts
@@ -412,11 +420,17 @@ function summaryMessage(m) {
  */
 export function threadSummary(thread) {
   const { messages = [], ...rest } = thread
-  let from = messages.length
-  while (from > 0 && messages.length - from < SUMMARY_TAIL) {
-    from--
-    if (messages[from].role === 'user') break
+  const turnStart = (end) => {
+    let at = end
+    while (at > 0 && messages.length - at < SUMMARY_TAIL) {
+      at--
+      if (messages[at].role === 'user') break
+    }
+    return at
   }
+  let from = turnStart(messages.length)
+  // A compaction turn (`/compact`, chat/context.mjs) previews nothing: the turn before it does.
+  while (from > 0 && messages[from].command === 'compact' && messages.length - from < SUMMARY_TAIL) from = turnStart(from)
   // A card from an earlier turn can still wait on the owner (a reply leaves a
   // proposal open): it comes along as a stub, its parts and no text.
   const waiting = messages.slice(0, from).filter((m) => pendingParts(m).length)

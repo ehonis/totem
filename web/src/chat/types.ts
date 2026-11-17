@@ -189,7 +189,43 @@ export interface InboxPart {
  * bridge adds on the way out; it serves the page sandboxed.
  */
 export interface VisualPart { type: 'visual'; id: string; uploadId: string; title: string; height: number; url?: string }
-export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | ChangePart | SteerPart | QuestionsPart | ApprovalPart | InboxPart | VisualPart
+/**
+ * The context was compacted here (chat/context.mjs on the bridge): the CLI's own
+ * compaction mid-reply (`auto`), a `/compact` the owner sent (`manual`), or one
+ * Totem ran for an idle chat (`onReturn`, `beforeCacheExpires`). A divider.
+ */
+export interface CompactionPart {
+  type: 'compaction'
+  id: string
+  status: 'running' | 'done' | 'failed' | 'stopped'
+  trigger: 'auto' | 'manual' | 'onReturn' | 'beforeCacheExpires'
+  before?: number
+  after?: number
+  reason?: string
+  startedAt?: number
+  endedAt?: number
+}
+export type Part = TextPart | ImagePart | ToolPart | FilePart | TotemProposalPart | ChangePart | SteerPart | QuestionsPart | ApprovalPart | InboxPart | VisualPart | CompactionPart
+
+/**
+ * How full the context window was after a reply's last request (chat/context.mjs):
+ * the request's prompt plus its output, never the reply's billed total.
+ * `max` is absent when the window is unknown; `autoCompactAt` only when Claude's
+ * compaction point is set below the window; `cacheExpiresAt` when Claude said
+ * how long its prompt cache lasts.
+ */
+export interface ContextUsage {
+  used: number
+  max?: number
+  input?: number
+  cached?: number
+  output?: number
+  autoCompactAt?: number
+  cacheTtlMs?: number
+  cacheExpiresAt?: number
+  /** When the reading arrived. */
+  at: number
+}
 
 export interface ChatMessage {
   id: string
@@ -215,6 +251,10 @@ export interface ChatMessage {
   effort?: string
   /** What the CLI reported for this reply (chat/stats.mjs); absent = not reported. */
   stats?: TurnStatsData
+  /** How full the context window is after this reply (chat/context.mjs). */
+  context?: ContextUsage
+  /** A user message that is `/compact`: the turn is drawn as its divider, never as a message. */
+  command?: 'compact'
   /** A totem's scheduled run, posted to its chat. */
   run?: { trigger: string; status: string; notified: boolean }
   /** The owner's decision on, or reply about, an inbox proposal (the bridge wrote this message). */
@@ -408,6 +448,8 @@ export type StreamEvent =
   | { type: 'approval'; approval: Partial<ApprovalPart> & { id: string }; seq: number }
   | { type: 'inbox'; inbox: Partial<InboxPart> & { id: string }; seq: number }
   | { type: 'visual'; visual: { id: string; uploadId: string; title: string; height: number; url?: string }; seq: number }
+  | { type: 'context'; context: ContextUsage; seq: number }
+  | { type: 'compaction'; compaction: Partial<CompactionPart> & { id: string }; seq: number }
   | { type: 'activity'; text: string; seq: number }
   | { type: 'title'; title: string; icon?: string; seq: number }
   | { type: 'done'; message: ChatMessage; seq: number }

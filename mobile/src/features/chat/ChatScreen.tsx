@@ -40,6 +40,8 @@ import { pendingQuestions } from '../../lib/chat/questions'
 import { DECLINE_PLACEHOLDER, pendingApproval } from '../../lib/chat/approvals'
 import { ModelChip } from './ModelPicker'
 import HandoffMark from './HandoffMark'
+import ContextMeter, { CompactChip } from './ContextMeter'
+import { compactBeforeSendTokens, contextSnapshot, isCompactionTurn, latestContext } from '../../lib/chat/context'
 import { providerSwitches } from '../../lib/chat/handoff'
 import { AccessControl, ThinkingControl, hintFor } from './controls'
 import UsageChips from './UsageChips'
@@ -201,6 +203,18 @@ export default function ChatScreen() {
   const messages = waiting ? NO_MESSAGES : active?.messages || NO_MESSAGES
   const empty = !waiting && messages.length === 0
   const input = drafts[draftKey] || ''
+  // Compact idle threads → When you return (lib/chat/context.ts, web ChatView): an
+  // idle Claude chat whose prompt cache went cold offers to compact before the
+  // next send. Keep is per send.
+  const compactIdle = useChat((s) => s.prefs.compactIdle)
+  const [keepHistory, setKeepHistory] = useState(false)
+  useEffect(() => { setKeepHistory(false) }, [activeId])
+  const compactTokens = active && !waiting ? compactBeforeSendTokens({
+    thread: active, provider: choice.provider, claude: providerById(choice.provider)?.driver === 'claude',
+    setting: compactIdle, text: input, idle: !busy, now: Date.now(),
+  }) : null
+  // How full this chat's context is on the account it would send on.
+  const contextShown = active && !empty ? contextSnapshot(latestContext(messages, choice.provider)) : null
   useEffect(() => { ensureModels(choice.provider) }, [choice.provider])
   // A chat in the list that was opened before its summary arrived: read its window now.
   useEffect(() => { if (activeId && active && !isLoaded(active) && !page) void loadThread(activeId) }, [activeId, !!active, active && isLoaded(active), !!page]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -275,7 +289,8 @@ export default function ChatScreen() {
   // Every run may use the browser, computer use and the long task budget; the
   // agent decides, so the app sends neither a mode switch nor a browser flag.
   function onSend({ text, attachments, mode }: { text: string; attachments: Attachment[]; mode: ChatMode }) {
-    const id = send({ threadId: activeId, text, attachments, mode, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff })
+    const id = send({ threadId: activeId, text, attachments, mode, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, compactFirst: compactTokens != null && !keepHistory })
+    setKeepHistory(false)
     setInput('')
     if (id !== activeId) {
       setDraftPick(null)
@@ -350,7 +365,9 @@ export default function ChatScreen() {
     return ok
   }
   const onQueue = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : activeId ? queueMessage(activeId, p.text, p.attachments) : false)
-  const onSteerNow = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : activeId ? steer(activeId, p.text, p.attachments.map((a) => a.id)) : false)
+  // A `/compact` running cannot take words mid-way: they wait behind it (T3).
+  const compactingNow = busy && isCompactionTurn(messages[messages.length - 2])
+  const onSteerNow = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : !activeId ? false : compactingNow ? queueMessage(activeId, p.text, p.attachments) : steer(activeId, p.text, p.attachments.map((a) => a.id)))
   const saveQueueEdit = async (p: FollowUpPayload) => {
     if (!queueEdit) return false
     const ok = await updateQueue(queueEdit.threadId, { action: 'edit', id: queueEdit.id, text: p.text, attachments: p.attachments.map((a) => a.id) })
@@ -462,6 +479,9 @@ export default function ChatScreen() {
   const renderItem = (m: ChatMessage, i: number) => {
     const last = i === messages.length - 1
     const moved = switches.get(m.id)
+    // `/compact` (lib/chat/context.ts): its reply's divider stands for the whole turn.
+    if (isCompactionTurn(m) && !m.unsent) return moved ? <HandoffMark s={moved} /> : <></>
+    const compaction = isCompactionTurn(messages[i - 1])
     return (
       <>
       {moved ? <HandoffMark s={moved} /> : null}
@@ -483,7 +503,7 @@ export default function ChatScreen() {
             provider={providerById(m.provider || choice.provider) || providers.find((p) => p.driver === m.provider)}
             modelName={modelNameFor(m.provider, m.model)}
             isLast={m.id === lastAssistantId && last}
-            onRegenerate={!busy && active ? () => regenerate(active.id) : undefined}
+            onRegenerate={!busy && active && !compaction ? () => regenerate(active.id) : undefined}
             flash={landed === m.id}
           />
         )}
@@ -695,13 +715,22 @@ export default function ChatScreen() {
               placeholder={waitingApproval ? DECLINE_PLACEHOLDER : temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
               allowCommands={!temporary}
               maxUploadBytes={caps?.maxUploadBytes}
+              compacting={compactTokens != null && !keepHistory}
+              rightSlot={questionFlow?.answering || queueEdit ? null : (
+                <>
+                  {/* A phone's footer holds one of them beside the model: the chip names the tokens itself. */}
+                  {contextShown && (compactTokens == null || busy) ? <ContextMeter s={contextShown} /> : null}
+                  {compactTokens != null && !busy ? <CompactChip tokens={compactTokens} keep={keepHistory} onToggle={() => setKeepHistory((k) => !k)} /> : null}
+                </>
+              )}
               leftSlot={
                 <>
                   <ModelChip provider={choice.provider} settings={choice.settings} onChange={changeModel} started={!empty} locked={temporary && !empty} />
                   {/* Answering questions: effort and access make way for the answer buttons. */}
                   {questionFlow?.answering ? null : (
                     <>
-                      {effortEl}
+                      {/* The meter or the Compact chip takes its room, so the model keeps its name; effort is in the model picker too. */}
+                      {contextShown || (compactTokens != null && !busy) ? null : effortEl}
                       <AccessControl value={choice.settings.access} onChange={(v) => changeModel({ provider: choice.provider, modelSettings: { ...choice.settings, access: v } })} />
                     </>
                   )}
