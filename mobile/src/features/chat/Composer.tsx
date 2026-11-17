@@ -78,6 +78,10 @@ export interface ComposerProps {
   allowCommands?: boolean
   maxUploadBytes?: number
   leftSlot?: React.ReactNode
+  /** Before the mic: how full the context is and the Compact chip (ContextMeter.tsx). */
+  rightSlot?: React.ReactNode
+  /** The next send compacts the idle chat first (T3's Compact idle threads): Send says so. */
+  compacting?: boolean
   /** Tells the chat the box grew, so the list keeps its last message above it. */
   onFocus?: () => void
   /** The agent's questions are open (QuestionsPanel.tsx): the box is the typed answer. */
@@ -106,7 +110,7 @@ function rankCommands(catalog: ChatCommand[], prefix: string, term: string, alon
 }
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, above, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, leftSlot, onFocus, answering } = props
+  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, above, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, leftSlot, rightSlot, compacting, onFocus, answering } = props
   const input = useRef<TextInput>(null)
   const { height } = useWindowDimensions()
   const [drafts, setDrafts] = useState<Draft[]>([])
@@ -411,6 +415,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
             </>
           ) : (
             <>
+              {rightSlot}
               {!busy || followUps ? (
                 <Press style={st.iconBtn} onPress={() => { tap(); dictation.start() }} accessibilityLabel="Dictate">
                   <TI icon={IconMicrophone} size={20} color={vc.soft} />
@@ -444,7 +449,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
               ) : showVoice ? (
                 <Press style={st.send} onPress={() => { impact(); onVoice!() }} accessibilityLabel="Start voice"><TI icon={IconWaveSine} size={19} color="#0f1115" stroke={2} /></Press>
               ) : (
-                <Press style={[st.send, !canSend && st.sendOff]} onPress={send} disabled={!canSend} accessibilityLabel={uploading ? 'Waiting for uploads' : 'Send'}>
+                <Press style={[st.send, !canSend && st.sendOff]} onPress={send} disabled={!canSend} accessibilityLabel={uploading ? 'Waiting for uploads' : compacting ? 'Compact and send' : 'Send'}>
                   {uploading ? <ActivityIndicator size="small" color={colors.muted} /> : <TI icon={IconArrowUp} size={18} color={canSend ? '#0f1115' : colors.muted} stroke={2.25} />}
                 </Press>
               )}
@@ -488,7 +493,7 @@ const st = StyleSheet.create({
   recDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: colors.red, shadowColor: colors.red, shadowOpacity: 0.4, shadowRadius: 4 },
   bar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 4, marginTop: 4 },
   left: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1, minWidth: 0 },
-  right: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1, minWidth: 0, justifyContent: 'flex-end' },
+  right: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 0, justifyContent: 'flex-end' },
   iconBtn: { flexShrink: 0, width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   send: { flexShrink: 0, width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.text },
   sendOff: { backgroundColor: '#3a3f4d' },

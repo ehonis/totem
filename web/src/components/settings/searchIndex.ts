@@ -32,6 +32,8 @@ const ENTRIES: Partial<Record<SettingsSection, Entry[]>> = {
   ],
   chat: [
     ['follow-up', 'While a reply is running', 'Sending', 'queue steer follow-up enter'],
+    ['compact-idle', 'Compact idle threads', 'Context', 'compaction context window cache summarize tokens'],
+    ['auto-compact', 'Auto-compact after', 'Context', 'compaction context window tokens claude'],
     ['auto-settle', 'Settle quiet chats', 'Chat list', 'archive settled days'],
     ['totems-in-chat', 'Let chats bring in totems', 'Totems', 'group totem agents'],
     ['titles', 'Name chats automatically', 'Titles', 'thread title naming'],

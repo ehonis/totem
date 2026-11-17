@@ -11,11 +11,12 @@ import { outcomeLabel } from './inboxCards'
 import { isAskTool } from './questions'
 import { isRenderTool } from './visuals'
 import VisualFrame from './VisualFrame'
+import CompactionMark from './CompactionMark'
 import WorkLog from './WorkLog'
 import { foldWork } from './workFold'
 import { AgentGroup } from './AgentsPanel'
 import TurnStats from './TurnStats'
-import type { ApprovalPart, Attachment, ChangePart, ChatMessage, InboxPart, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart, VisualPart } from './types'
+import type { ApprovalPart, Attachment, ChangePart, ChatMessage, CompactionPart, InboxPart, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart, VisualPart } from './types'
 import { TI, ProviderLogo, formatBytes, formatDuration } from './ui'
 import { IconAlertCircle,
   IconCopy, IconCheck, IconRefresh, IconVolume, IconPencil, IconFileText, IconFileTypePdf, IconClipboardText,
@@ -213,7 +214,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
 
 // --- assistant -------------------------------------------------------------------
 
-type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'agents'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'change'; part: ChangePart; key: string } | { kind: 'steer'; part: SteerPart; key: string } | { kind: 'totem'; answer: TotemAnswer; key: string } | { kind: 'questions'; part: QuestionsPart; key: string } | { kind: 'approval'; part: ApprovalPart; key: string } | { kind: 'inbox'; part: InboxPart; key: string } | { kind: 'visual'; part: VisualPart; key: string }
+type Block = { kind: 'text'; text: string; key: string } | { kind: 'tools'; tools: ToolPart[]; key: string } | { kind: 'agents'; tools: ToolPart[]; key: string } | { kind: 'image'; part: any; key: string } | { kind: 'file'; part: any; key: string } | { kind: 'proposal'; part: any; key: string } | { kind: 'change'; part: ChangePart; key: string } | { kind: 'steer'; part: SteerPart; key: string } | { kind: 'totem'; answer: TotemAnswer; key: string } | { kind: 'questions'; part: QuestionsPart; key: string } | { kind: 'approval'; part: ApprovalPart; key: string } | { kind: 'inbox'; part: InboxPart; key: string } | { kind: 'visual'; part: VisualPart; key: string } | { kind: 'compaction'; part: CompactionPart; key: string }
 
 // A totem proposal arrives as a fenced block while streaming; the bridge turns it
 // into a card when the reply settles. Until then, don't show the raw JSON.
@@ -254,7 +255,9 @@ function blocks(parts: Part[]): Block[] {
     else if (p.type === 'totem-proposal') out.push({ kind: 'proposal', part: p, key: `p${i}` })
     else if (p.type === 'change-pr') out.push({ kind: 'change', part: p, key: `c${i}` })
     else if (p.type === 'steer') out.push({ kind: 'steer', part: p, key: `s${i}` })
-    else if (p.text) {
+    // The context was compacted here: a divider, never folded into the steps.
+    else if (p.type === 'compaction') out.push({ kind: 'compaction', part: p, key: `cm${i}` })
+    else if (p.type === 'text' && p.text) {
       const last = out[out.length - 1]
       // Two text parts with no tool between them are one paragraph run.
       if (last?.kind === 'text') last.text += p.text
@@ -345,7 +348,8 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
   // sentence — gets the working line too, so a live reply never looks stalled.
   const asking = !!m.parts?.some((p) => (p.type === 'questions' || p.type === 'approval') && p.status === 'pending')
   const approving = !!m.parts?.some((p) => p.type === 'approval' && p.status === 'pending')
-  const toolRunning = !asking && !!m.parts?.some((p) => p.type === 'tool' && p.status === 'running')
+  // A running compaction shimmers in its own divider (CompactionMark.tsx).
+  const toolRunning = !asking && !!m.parts?.some((p) => (p.type === 'tool' || p.type === 'compaction') && p.status === 'running')
   const quiet = useQuiet(live, `${m.content.length}:${m.parts?.length || 0}`)
   // Replies from the retired Auto/Instant/Thinking presets say which lane answered: "Thought for 14s" reads the
   // way ChatGPT's does and tells you the slower answer was deliberate.
@@ -369,6 +373,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
           if (b.kind === 'approval') return <ApprovalRow key={b.key} part={b.part} messageId={m.id} live={live} />
           if (b.kind === 'inbox') return <InboxCardRow key={b.key} part={b.part} messageId={m.id} />
           if (b.kind === 'visual') return <VisualFrame key={b.key} part={b.part} />
+          if (b.kind === 'compaction') return <CompactionMark key={b.key} p={b.part} />
           if (b.kind === 'file') return <FileCard key={b.key} file={b.part} onOpen={() => openArtifact(b.part)} />
           if (b.kind === 'image') {
             const src = b.part.url || `/api/chat/uploads/${b.part.uploadId}`
@@ -392,7 +397,8 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
             {isLast && onRegenerate && <button type="button" className="vc-btn" onClick={onRegenerate}><TI icon={IconRefresh} size={14} />Try again</button>}
           </div>
         )}
-        {m.status === 'stopped' && <div className="vc-note">Stopped</div>}
+        {/* A stopped compaction says so in its own divider. */}
+        {m.status === 'stopped' && !m.parts?.some((p) => p.type === 'compaction' && p.status === 'stopped') && <div className="vc-note">Stopped</div>}
       </div>
       {!live && (m.content || m.status === 'error') && (
         <div className="vc-actions">

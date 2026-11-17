@@ -4,7 +4,8 @@ import { visibleModels, EFFORT_LABELS } from '../chat/models'
 import { pushError } from '../toast'
 import { SettingsPage, SettingsRow, SettingsSection, Switch } from './settings/ui'
 
-// Settings → Chat: what sending does mid-reply, when quiet chats settle, whether
+// Settings → Chat: what sending does mid-reply, how long chats keep their context
+// (T3 Code's Compact idle threads and Claude's auto-compact window), when quiet chats settle, whether
 // chats bring in totems, and who writes chat titles ("Pick for me" keeps Totem's
 // own rule). The chat's colour glow is a device setting, under Appearance.
 
@@ -71,6 +72,47 @@ export default function ChatSettings({ onNavigate }: { onNavigate?: (section: st
               <option value="queue">Queue it for after</option>
               <option value="steer">Steer the reply</option>
             </select>
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Context"
+        description="Long chats fill the model’s context window; the bar in the message box shows how full it is. Claude and Codex compact a full chat on their own; in a Claude chat, /compact does it now."
+      >
+        <SettingsRow
+          id="compact-idle"
+          title="Compact idle threads"
+          description="A Claude chat over 200k tokens is re-read in full once its prompt cache expires. Offer to compact it on your next send, or compact it just before the cache expires."
+          control={
+            <select className="model-select" aria-label="Compact idle threads" value={prefs.compactIdle ?? 'onReturn'} onChange={(e) => save({ compactIdle: e.target.value as ChatPrefs['compactIdle'] })}>
+              <option value="onReturn">When you return</option>
+              <option value="beforeCacheExpires">Before the cache expires (beta)</option>
+              <option value="off">Never</option>
+            </select>
+          }
+        />
+        <SettingsRow
+          id="auto-compact"
+          title="Auto-compact after"
+          description="Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude’s default."
+          control={
+            <input
+              key={`acw-${prefs.autoCompactWindow ?? ''}`}
+              className="s-input" inputMode="numeric" aria-label="Auto-compact after" placeholder="Claude’s default"
+              defaultValue={prefs.autoCompactWindow ? Number(prefs.autoCompactWindow).toLocaleString('en-US') : ''}
+              onBlur={(e) => {
+                const v = e.target.value.replace(/[,_\s]/g, '')
+                if (v === (prefs.autoCompactWindow ?? '')) return
+                if (v && !/^(?:[1-9]\d{5}|1000000)$/.test(v)) {
+                  pushError('Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude’s default.')
+                  e.target.value = prefs.autoCompactWindow ? Number(prefs.autoCompactWindow).toLocaleString('en-US') : ''
+                  return
+                }
+                void save({ autoCompactWindow: v })
+              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+            />
           }
         />
       </SettingsSection>

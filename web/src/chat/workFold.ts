@@ -55,7 +55,8 @@ export function foldWork<B extends { kind: string; key: string }>(list: B[], set
   list.forEach((b, i) => {
     const folds = i <= last && (b.kind === 'tools' || (b.kind === 'text' && isCommentary((b as unknown as { text: string }).text)))
     if (!folds) {
-      if (b.kind === 'text') close()
+      // Text, or a compaction divider, ends the run of steps before it.
+      if (b.kind === 'text' || b.kind === 'compaction') close()
       out.push(b)
       return
     }

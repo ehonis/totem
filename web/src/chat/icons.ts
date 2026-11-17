@@ -134,3 +134,6 @@ export { default as IconRepeat } from '@tabler/icons-react/dist/esm/icons/IconRe
 export { default as IconZzz } from '@tabler/icons-react/dist/esm/icons/IconZzz.mjs'
 export { default as IconArrowUpRight } from '@tabler/icons-react/dist/esm/icons/IconArrowUpRight.mjs'
 export { default as IconAdjustmentsHorizontal } from '@tabler/icons-react/dist/esm/icons/IconAdjustmentsHorizontal.mjs'
+// Context compaction (CompactionMark.tsx, the composer's Compact chip): T3's Minimize2.
+export { default as IconArrowsDiagonalMinimize2 } from '@tabler/icons-react/dist/esm/icons/IconArrowsDiagonalMinimize2.mjs'
+export { default as IconArrowsDiagonal } from '@tabler/icons-react/dist/esm/icons/IconArrowsDiagonal.mjs'
