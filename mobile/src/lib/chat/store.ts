@@ -18,7 +18,7 @@ import {
 } from './api'
 import type { QueueAction } from './api'
 import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
-import type { ApprovalDecision, Attachment, BrowserFrame, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
+import type { ApprovalDecision, Attachment, BrowserFrame, BrowserHandoff, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
 import { isLoaded, mergeEarlier, mergeLatest, mergeSummary, summarize, type ThreadPage } from './history'
 import { OPENED_KEY, markOpened, readJson } from './recents'
 import { activeAt, wokeAt, settledAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
@@ -61,6 +61,8 @@ export interface ChatState {
   browser: Record<string, BrowserFrame & { live: boolean }>
   /** The browser panel is open beside the active chat. */
   browserOpen: boolean
+  /** Chats whose agent has handed the browser to the owner and is waiting (the web's; this app has no browser to hand over). */
+  handoffs: Record<string, BrowserHandoff>
   /** The Agents panel (AgentsPanel.tsx) is open beside the active chat. */
   agentsOpen: boolean
   /** The sub-agent it has open: the id of the tool card that started it. */
@@ -113,6 +115,7 @@ let state: ChatState = {
   artifact: null,
   browser: {},
   browserOpen: false,
+  handoffs: {},
   agentsOpen: false,
   agentFocus: null,
   retitling: {},
@@ -387,7 +390,7 @@ export function setActive(id: string | null) {
   const scope = t ? (t.projectId && state.projects.some((p) => p.id === t.projectId) ? t.projectId : null) : state.projectId
   const openedSettled = t && settledAt(t, now(), state.prefs.autoSettleDays ?? 3, !!state.runs[t.id]) ? t.id : null
   set({ activeId: id, openedSettled, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null, projectId: scope })
-  if (id && !state.browser[id]) loadBrowser(id)
+  if (id && (!state.browser[id] || state.handoffs[id])) loadBrowser(id)
   if (id) {
     // Overview's Recent chats and the cache both go by when a chat was last opened here.
     try { localStorage.setItem(OPENED_KEY, JSON.stringify(markOpened(readJson(localStorage, OPENED_KEY, {}), id, now()))) } catch {}
@@ -713,10 +716,75 @@ export async function moveThread(threadId: string, projectId: string | null) {
 const browserDismissed = new Set<string>()
 
 async function loadBrowser(threadId: string) {
+  const sentAt = handoffClock
   try {
-    const r = await api<{ open: boolean; frame: BrowserFrame | null }>(`/api/chat/browser?threadId=${encodeURIComponent(threadId)}`)
+    const r = await api<{ open: boolean; frame: BrowserFrame | null; handoff?: BrowserHandoff | null }>(`/api/chat/browser?threadId=${encodeURIComponent(threadId)}`)
     if (r.frame && !state.browser[threadId]) set((s) => ({ browser: { ...s.browser, [threadId]: { ...r.frame!, live: !!s.runs[threadId] } } }))
+    if (r.handoff && !answeredHandoffs.has(r.handoff.id)) onHandoff(threadId, r.handoff)
+    // Answered elsewhere, or the browser closed: only one this device saw before asking.
+    else if (!r.handoff && state.handoffs[threadId] && (handoffSeen.get(threadId) || 0) <= sentAt) onHandoff(threadId, null)
   } catch {}
+}
+
+// When this device last learned of each chat's handoff (a count, not a clock),
+// and the ones it answered: a list or browser read sent before then cannot take
+// one back, and none brings back one answered here.
+let handoffClock = 0
+const handoffSeen = new Map<string, number>()
+const answeredHandoffs = new Set<string>()
+
+/**
+ * The handoffs a chat list names (`handoff` on a summary, the bridge's
+ * withHandoff), taken off the threads. A chat whose run this device follows keeps
+ * what its stream said; for the rest the list is the word, except that it cannot
+ * undo what this device learned after asking, or bring back one it answered.
+ */
+function takeHandoffs(threads: ChatThread[], sentAt: number) {
+  const named = new Map<string, BrowserHandoff>()
+  for (const t of threads) {
+    const h = (t as ChatThread & { handoff?: BrowserHandoff }).handoff
+    if (h && !answeredHandoffs.has(h.id)) named.set(t.id, h)
+    delete (t as { handoff?: unknown }).handoff
+  }
+  return (s: ChatState) => {
+    const out: Record<string, BrowserHandoff> = {}
+    for (const [id, h] of Object.entries(s.handoffs)) {
+      if (s.runs[id] || named.has(id) || (handoffSeen.get(id) || 0) > sentAt) out[id] = h
+    }
+    for (const [id, h] of named) if (!s.runs[id] && out[id]?.id !== h.id) { out[id] = h; handoffSeen.set(id, ++handoffClock) }
+    return out
+  }
+}
+
+// The app has no browser to drive: a handoff shows as the chat's row over the
+// composer (HandoffBar.tsx) and on its row in the drawer, with Done and Skip.
+function onHandoff(threadId: string, handoff: BrowserHandoff | null) {
+  handoffSeen.set(threadId, ++handoffClock)
+  set((s) => {
+    const handoffs = { ...s.handoffs }
+    if (handoff) handoffs[threadId] = handoff
+    else delete handoffs[threadId]
+    return { handoffs }
+  })
+}
+
+/** Done or Skip on a handoff. Past the agent's wait, it goes as his next message. */
+export async function answerHandoff(threadId: string, action: 'done' | 'skip') {
+  const handoff = state.handoffs[threadId]
+  if (!handoff) return
+  answeredHandoffs.add(handoff.id)
+  onHandoff(threadId, null)
+  try {
+    const r = await api<{ live: boolean; message: string | null }>('/api/chat/browser/handoff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, id: handoff.id, action }) })
+    if (!r.live && r.message) send({ threadId, text: r.message })
+  } catch (e: any) {
+    // A 404: it was already over (answered elsewhere, or the browser closed).
+    if ((e as { status?: number })?.status === 404) return
+    // Not taken: it is still waiting on him.
+    answeredHandoffs.delete(handoff.id)
+    if (!state.handoffs[threadId]) onHandoff(threadId, handoff)
+    if (!fail(e)) pushError(`Couldn't answer the browser handoff: ${e?.message || 'Totem is out of reach'}`)
+  }
 }
 
 function onBrowserFrame(threadId: string, frame: BrowserFrame) {
@@ -781,9 +849,11 @@ export async function syncThreads() {
       } catch {}
       localStorage.setItem(MIGRATED, '1')
     }
+    const sentAt = handoffClock
     const { threads } = await getThreadSummaries()
     // A newer sync went out while this one was waiting: its answer is the one to take.
     if (mine !== syncSeq) return
+    const listed = takeHandoffs(threads as ChatThread[], sentAt)
     const stale: string[] = []
     set((s) => {
       const byId = new Map(s.threads.map((t) => [t.id, t]))
@@ -808,7 +878,7 @@ export async function syncThreads() {
       const out = withOutbox(merged, new Set(Object.keys(s.runs)))
       // A thread created here a moment ago may not have reached the bridge yet.
       for (const t of s.threads) if ((s.runs[t.id] || threadReads.has(t.id)) && !out.some((m) => m.id === t.id)) out.push(t)
-      return { threads: sortThreads(out), loaded: true }
+      return { threads: sortThreads(out), loaded: true, handoffs: listed(s) }
     })
     // The open chat moved on the bridge (another device, a totem, a queued reply): read it again.
     const open = state.activeId
@@ -1022,6 +1092,9 @@ function handleEvent(threadId: string, e: StreamEvent) {
       break
     case 'browser':
       onBrowserFrame(threadId, { tabId: e.tabId, url: e.url, title: e.title, image: e.image, at: e.at })
+      break
+    case 'handoff':
+      onHandoff(threadId, e.handoff)
       break
     case 'title':
       patchThread(threadId, (t) => ({ ...t, title: e.title, ...(e.icon ? { icon: e.icon } : {}) }))

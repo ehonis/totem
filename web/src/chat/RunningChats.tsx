@@ -10,9 +10,7 @@ import SnoozeMenu from './SnoozeMenu'
 import { TI } from './ui'
 import { IconPlayerStopFilled, IconClock, IconCheck, IconMailOpened, IconChevronDown, IconHome } from './icons'
 import type { ChatThread, Project } from './types'
-import { pendingQuestions } from './questions'
-import { pendingApproval } from './approvals'
-import { pendingInboxCards } from './inboxCards'
+import { attentionOf, attentionStatus, attentionTitle } from './attention'
 
 // The running-chats panel, bottom-right on every screen. It lists the chats that
 // are answering and the finished ones he hasn't read yet (`needsReply`), that he
@@ -74,15 +72,10 @@ function Row({ t, run, now, onOpen, onSnooze }: {
 }) {
   const title = threadTitle(t)
   const failed = !run && failedReply(t)
-  const asking = pendingQuestions(t)
-  const approving = !asking && pendingApproval(t)
-  const proposals = !asking && !approving ? pendingInboxCards(t) : []
-  const status = asking
-    ? <span className="vc-asking">{asking.part.questions.length === 1 ? 'A question for you' : `${asking.part.questions.length} questions for you`}</span>
-    : approving
-    ? <span className="vc-asking">Waiting for your approval</span>
-    : proposals.length
-    ? <span className="vc-asking" title={proposals.map((p) => p.title).join('\n')}>Waiting on your approval: {proposals.length === 1 ? proposals[0].title : `${proposals.length} proposals`}</span>
+  const handoff = useChat((s) => s.handoffs[t.id])
+  const needs = attentionOf(t, handoff)
+  const status = needs
+    ? <span className="vc-asking" title={attentionTitle(needs)}>{attentionStatus(needs)}</span>
     : run
     ? <><span className="vc-live-dot" aria-hidden /><span>{elapsed(now - run.startedAt)} · {run.activity || 'Working'}</span></>
     : failed
@@ -121,6 +114,7 @@ export default function RunningChats({ onOpenChat, onShowPanel, narrow }: { onOp
   const threads = useChat((s) => s.threads)
   const runs = useChat((s) => s.runs)
   const projects = useChat((s) => s.projects)
+  const handoffs = useChat((s) => s.handoffs)
   const onScreen = useOnScreen()
   const [collapsed, setCollapsed] = useState(true)
   const [snoozing, setSnoozing] = useState<string | null>(null)
@@ -162,9 +156,9 @@ export default function RunningChats({ onOpenChat, onShowPanel, narrow }: { onOp
   }, [runs, open])
 
   const candidates = useMemo(() => threads.filter((t) => (
-    !t.totemId && (runs[t.id] || pendingQuestions(t) || pendingInboxCards(t).length || (t.needsReply && !onPlacePage)) && !onScreen.rows.has(t.id) && !onScreen.open.has(t.id)
+    !t.totemId && (runs[t.id] || attentionOf(t, handoffs[t.id]) || (t.needsReply && !onPlacePage)) && !onScreen.rows.has(t.id) && !onScreen.open.has(t.id)
     && !isSnoozed(t, now) && t.settledOverride !== 'settled'
-  )), [threads, runs, onScreen, now, onPlacePage])
+  )), [threads, runs, handoffs, onScreen, now, onPlacePage])
 
   // Leaving is immediate; joining waits a moment.
   const [shown, setShown] = useState<string[]>([])
@@ -195,15 +189,16 @@ export default function RunningChats({ onOpenChat, onShowPanel, narrow }: { onOp
   const closeSnooze = useCallback(() => setSnoozing(null), [])
   if (!visible.length) return null
 
-  const running = visible.filter((t) => runs[t.id]).length
-  const waiting = visible.filter((t) => !runs[t.id] && pendingInboxCards(t).length).length
+  // A run held on him is waiting, not running: the pill must not say "running" for hours.
+  const waiting = visible.filter((t) => attentionOf(t, handoffs[t.id])).length
+  const running = visible.filter((t) => runs[t.id] && !attentionOf(t, handoffs[t.id])).length
   const done = visible.length - running - waiting
   const summary = [running && `${running} running`, waiting && `${waiting} waiting on you`, done && `${done} unread`].filter(Boolean).join(' · ')
 
   if (collapsed) {
     return (
       <button type="button" className="vc-runs-pill" onClick={() => setCollapsed(false)} title="Show running chats">
-        {running > 0 ? <span className="vc-live-dot" aria-hidden /> : <TI icon={IconCheck} size={14} />}
+        {running > 0 ? <span className="vc-live-dot" aria-hidden /> : waiting > 0 ? <span className="vc-reply-dot" aria-hidden /> : <TI icon={IconCheck} size={14} />}
         <span>{summary}</span>
       </button>
     )

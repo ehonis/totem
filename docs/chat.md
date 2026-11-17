@@ -744,6 +744,28 @@ the CLI drops the call. Then the banner stays, and Done sends "I'm done in the b
 as his next message. Any new message settles a leftover handoff. Totems with the
 browser switch don't get the tool, since nobody is watching their runs.
 
+While a handoff waits, the chat's browser stays open past its 30-minute idle close, for a
+day at most (`keepOpen` in `browser/manager.mjs`, `holdHandoff`/`dropHandoff` in
+`bridge.mjs`), so the page is still there when he comes back hours later. A browser that
+closes anyway (past that day, the chat deleted, Chromium gone) ends its handoff, and a call
+still waiting is told he skipped it (`onClose` on the manager).
+
+A handoff waiting on him shows outside the panel too, so a chat held on him for hours never
+looks like one still working. The chat list's summaries carry it while its browser is open
+(`handoff` on `GET /api/threads?view=summary`, `withHandoff` in `browser/handoff.mjs`; it
+lives in memory beside the browser, never in the thread), and the stores keep it in `handoffs`: a chat this
+device follows a run for keeps what its stream said, and a list sent before this device
+learned of one, or one it answered, cannot undo it (`takeHandoffs` in `web/src/chat/store.ts`).
+Its row in the chats list says "Your turn", the running-chats panel says "Your turn in the
+browser: …" and counts it as waiting on him rather than running, and the chat shows a row over
+the composer with Open / Skip / Done while the panel is shut (the panel's banner has its own
+Done / Skip; `HandoffBar.tsx`).
+Opening a chat that is waiting opens its browser panel. One helper decides what a chat waits
+on him for and the words for it, questions first, then a tool approval, then the browser,
+then an inbox proposal (`web/src/chat/attention.ts`, copied to `mobile/src/lib/chat/`). The
+iPhone app has no browser to drive: it shows the same badge and row, and Done or Skip from
+there answers it.
+
 The sessions live in memory: a bridge restart closes every chat's browser, and the
 next `preview_open` starts a fresh one.
 

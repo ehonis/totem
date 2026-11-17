@@ -423,8 +423,11 @@ export function setActive(id: string | null) {
   const t = id ? state.threads.find((x) => x.id === id) : null
   const scope = t ? (t.projectId && state.projects.some((p) => p.id === t.projectId) ? t.projectId : null) : state.projectId
   const openedSettled = t && settledAt(t, now(), state.prefs.autoSettleDays ?? 3, !!state.runs[t.id]) ? t.id : null
-  set({ activeId: id, openedSettled, artifact: null, browserOpen: false, agentsOpen: false, filesOpen: false, agentFocus: null, projectId: scope, draftTaskId: null })
-  if (id && !state.browser[id]) loadBrowser(id)
+  // A chat waiting on him in its browser opens with the panel showing (onHandoff).
+  const handing = !!(id && state.handoffs[id] && state.browser[id])
+  if (handing) browserDismissed.delete(id!)
+  set({ activeId: id, openedSettled, artifact: null, browserOpen: handing, agentsOpen: false, filesOpen: false, agentFocus: null, projectId: scope, draftTaskId: null })
+  if (id && (!state.browser[id] || state.handoffs[id])) loadBrowser(id)
   if (id) openThread(id)
 }
 
@@ -778,11 +781,44 @@ export async function moveThread(threadId: string, projectId: string | null) {
 const browserDismissed = new Set<string>()
 
 async function loadBrowser(threadId: string) {
+  const sentAt = handoffClock
   try {
     const r = await api<{ open: boolean; frame: BrowserFrame | null; handoff: BrowserHandoff | null }>(`/api/chat/browser?threadId=${encodeURIComponent(threadId)}`)
     if (r.frame && !state.browser[threadId]) set((s) => ({ browser: { ...s.browser, [threadId]: { ...r.frame!, live: !!s.runs[threadId] } } }))
-    if (r.handoff) onHandoff(threadId, r.handoff)
+    if (r.handoff && !answeredHandoffs.has(r.handoff.id)) onHandoff(threadId, r.handoff)
+    // Answered elsewhere, or the browser closed: only one this device saw before asking.
+    else if (!r.handoff && state.handoffs[threadId] && (handoffSeen.get(threadId) || 0) <= sentAt) onHandoff(threadId, null)
   } catch {}
+}
+
+// When this device last learned of each chat's handoff (a count, not a clock),
+// and the ones it answered: a list or browser read sent before then cannot take
+// one back, and none brings back one answered here.
+let handoffClock = 0
+const handoffSeen = new Map<string, number>()
+const answeredHandoffs = new Set<string>()
+
+/**
+ * The handoffs a chat list names (`handoff` on a summary, the bridge's
+ * withHandoff), taken off the threads. A chat whose run this device follows keeps
+ * what its stream said; for the rest the list is the word, except that it cannot
+ * undo what this device learned after asking, or bring back one it answered.
+ */
+function takeHandoffs(threads: ChatThread[], sentAt: number) {
+  const named = new Map<string, BrowserHandoff>()
+  for (const t of threads) {
+    const h = (t as ChatThread & { handoff?: BrowserHandoff }).handoff
+    if (h && !answeredHandoffs.has(h.id)) named.set(t.id, h)
+    delete (t as { handoff?: unknown }).handoff
+  }
+  return (s: ChatState) => {
+    const out: Record<string, BrowserHandoff> = {}
+    for (const [id, h] of Object.entries(s.handoffs)) {
+      if (s.runs[id] || named.has(id) || (handoffSeen.get(id) || 0) > sentAt) out[id] = h
+    }
+    for (const [id, h] of named) if (!s.runs[id] && out[id]?.id !== h.id) { out[id] = h; handoffSeen.set(id, ++handoffClock) }
+    return out
+  }
 }
 
 function onBrowserFrame(threadId: string, frame: BrowserFrame) {
@@ -796,6 +832,7 @@ function onBrowserFrame(threadId: string, frame: BrowserFrame) {
 // A handoff opens the panel even if it was closed, phone included: the owner has
 // something to do in it.
 function onHandoff(threadId: string, handoff: BrowserHandoff | null) {
+  handoffSeen.set(threadId, ++handoffClock)
   set((s) => {
     const handoffs = { ...s.handoffs }
     if (handoff) handoffs[threadId] = handoff
@@ -812,11 +849,19 @@ function onHandoff(threadId: string, handoff: BrowserHandoff | null) {
 export async function answerHandoff(threadId: string, action: 'done' | 'skip') {
   const handoff = state.handoffs[threadId]
   if (!handoff) return
+  answeredHandoffs.add(handoff.id)
   onHandoff(threadId, null)
   try {
     const r = await api<{ live: boolean; message: string | null }>('/api/chat/browser/handoff', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId, id: handoff.id, action }) })
     if (!r.live && r.message) send({ threadId, text: r.message })
-  } catch (e: any) { fail(e) }
+  } catch (e: any) {
+    // A 404: it was already over (answered elsewhere, or the browser closed).
+    if ((e as { status?: number })?.status === 404) return
+    // Not taken: it is still waiting on him.
+    answeredHandoffs.delete(handoff.id)
+    if (!state.handoffs[threadId]) onHandoff(threadId, handoff)
+    if (!fail(e)) pushError(`Couldn't answer the browser handoff: ${e?.message || 'Totem is out of reach'}`)
+  }
 }
 
 const narrowScreen = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches
@@ -971,9 +1016,11 @@ export async function syncThreads(): Promise<boolean> {
       } catch {}
       localStorage.setItem(MIGRATED, '1')
     }
+    const sentAt = handoffClock
     const { threads } = await getThreadSummaries()
     if (asked < syncApplied) return true
     syncApplied = asked
+    const listed = takeHandoffs(threads as ChatThread[], sentAt)
     const stale: string[] = []
     set((s) => {
       const local = new Map(s.threads.map((t) => [t.id, t]))
@@ -989,7 +1036,7 @@ export async function syncThreads(): Promise<boolean> {
       }), new Set(Object.keys(s.runs)))
       // A thread created here a moment ago may not have reached the bridge yet.
       for (const t of s.threads) if (s.runs[t.id] && !merged.some((m) => m.id === t.id)) merged.push(t)
-      return { threads: sortThreads(merged), loaded: true }
+      return { threads: sortThreads(merged), loaded: true, handoffs: listed(s) }
     })
     for (const id of stale) loadLatest(id)
     return true
@@ -1020,7 +1067,8 @@ export function initChat(authError: () => void) {
   onAuthError = authError
   if (started) return
   started = true
-  if (state.activeId) openThread(state.activeId)
+  // The chat the page opened on: its browser too, so a handoff waiting on him opens the panel.
+  if (state.activeId) { openThread(state.activeId); loadBrowser(state.activeId) }
   syncThreads().then(resumeRuns)
   loadProjects()
   loadProviders()

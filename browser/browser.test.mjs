@@ -142,3 +142,26 @@ test('the handoff tool reaches every CLI and is only promised when it is there',
   assert.match(browserRules('x', { handoff: true }), /preview_handoff/)
   assert.doesNotMatch(browserRules('x'), /preview_handoff/)
 })
+
+test('the chat list carries a handoff still waiting, and nothing else of it', async () => {
+  const { withHandoff } = await import('./handoff.mjs')
+  const handoffs = new Map([['a', { id: 'h1', reason: 'Sign in to Gmail', at: 5, extra: 'x' }]])
+  const open = new Set(['a', 'b'])
+  assert.deepEqual(withHandoff({ id: 'a', title: 'Mail' }, handoffs, open), { id: 'a', title: 'Mail', handoff: { id: 'h1', reason: 'Sign in to Gmail', at: 5 } })
+  const other = { id: 'b' }
+  assert.equal(withHandoff(other, handoffs, open), other)
+  assert.equal(withHandoff(null, handoffs, open), null)
+  const closed = { id: 'a', title: 'Mail' }
+  assert.equal(withHandoff(closed, handoffs, new Set()), closed, 'no badge for a browser that has closed')
+})
+
+test('the bridge sets and clears a handoff only through holdHandoff and dropHandoff', async () => {
+  // Those keep the chat's browser open while it waits; a bare set or delete would
+  // let it close after 30 idle minutes, or hold it open with nothing waiting.
+  const { readFileSync } = await import('node:fs')
+  const bridge = readFileSync(new URL('../bridge.mjs', import.meta.url), 'utf8')
+  assert.equal(bridge.match(/browserHandoffs\.set\(/g)?.length, 1)
+  assert.equal(bridge.match(/browserHandoffs\.delete\(/g)?.length, 1)
+  assert.match(bridge, /function holdHandoff\(threadId, handoff\) \{\n  dropHandoff\(threadId\)\n  browserHandoffs\.set\(/)
+  assert.match(bridge, /function dropHandoff\(threadId\) \{\n  browserHandoffs\.delete\(/)
+})

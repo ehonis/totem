@@ -113,7 +113,7 @@ import { createBrowserManager } from './browser/manager.mjs'
 import { attachBrowserSocket, panelOwner, BROWSER_WS_PATH } from './browser/socket.mjs'
 import { callBrowserTool, browserToolDescriptors } from './browser/tools.mjs'
 import { embedLocalImages } from './browser/shots.mjs'
-import { HANDOFF_TOOL, HANDOFF_TOOL_DESCRIPTOR, HANDOFF_LATER, HANDOFF_GONE, normalizeReason, handoffDone, handoffSkipped, handoffMessage } from './browser/handoff.mjs'
+import { HANDOFF_TOOL, HANDOFF_TOOL_DESCRIPTOR, HANDOFF_LATER, HANDOFF_GONE, normalizeReason, handoffDone, handoffSkipped, handoffMessage, withHandoff } from './browser/handoff.mjs'
 import { createVoiceService, realtimeTools, VOICE_INSTRUCTIONS } from './chat/voice.mjs'
 import { createJournalService } from './journal/service.mjs'
 import { createJournalHttpHandler } from './journal/http.mjs'
@@ -8777,6 +8777,12 @@ const browserFrames = new Map() // threadId → the latest frame, for a viewer t
 const browserManager = createBrowserManager({
   log,
   headed: BROWSER_HEADED,
+  // A chat's browser closed (idle past a hold's cap, the chat deleted, Chromium gone):
+  // a handoff waiting in it is over, and a call still waiting is told he skipped it.
+  onClose: (threadId) => {
+    const handoff = browserHandoffs.get(threadId)
+    if (handoff) { dropHandoff(threadId); handoffWaits.dismiss(handoff.id) }
+  },
   onFrame: (threadId, f) => {
     const frame = { tabId: f.tabId, url: f.url, title: f.title, image: `data:image/jpeg;base64,${f.jpeg.toString('base64')}`, at: Date.now() }
     browserFrames.delete(threadId)
@@ -8873,6 +8879,19 @@ if (CHANGE_FLOW_ENABLED) {
 // The browser handed to the owner (browser/handoff.mjs): the one waiting in each
 // chat, for a viewer that arrives late, and the live calls waiting on Done.
 const browserHandoffs = new Map() // threadId → { id, reason, at }
+// While one waits, the chat's browser stays open (browserManager.keepOpen, a day at most):
+// he may come back hours later, past the 30-minute idle close, to sign in.
+const handoffHolds = new Map() // threadId → release
+function holdHandoff(threadId, handoff) {
+  dropHandoff(threadId)
+  browserHandoffs.set(threadId, handoff)
+  handoffHolds.set(threadId, browserManager.keepOpen(threadId))
+}
+function dropHandoff(threadId) {
+  browserHandoffs.delete(threadId)
+  handoffHolds.get(threadId)?.()
+  handoffHolds.delete(threadId)
+}
 const handoffWaits = createQuestionWaits()
 
 // Questions waiting on a live tool call, by part id (chat/questions.mjs).
@@ -9057,7 +9076,11 @@ const signQueue = (queue) => (queue || []).map((q) => (q.attachments ? { ...q, a
 const signThread = (t) => (t ? { ...t, messages: (t.messages || []).map(signMessage), ...(t.queue ? { queue: signQueue(t.queue) } : {}) } : t)
 
 const listThreads = async () => (await threadStore.list()).map(signThread)
-const listThreadSummaries = async () => (await threadStore.summaries()).map(signThread)
+// The list carries a browser handoff still waiting on the owner (browser/handoff.mjs).
+const listThreadSummaries = async () => {
+  const open = new Set(browserManager.sessionKeys())
+  return (await threadStore.summaries()).map((t) => withHandoff(signThread(t), browserHandoffs, open))
+}
 const readThread = async (id) => signThread(await threadStore.get(id))
 const readThreadPage = async (id, opts) => signThread(await threadStore.page(id, opts))
 const writeThread = async (id, body) => signThread(await threadStore.put(id, body))
@@ -10010,7 +10033,7 @@ async function startChatTurn(body, { idle = null } = {}) {
       const t0 = Date.now()
       // A new message settles a browser handoff left waiting from an earlier reply.
       const leftOver = browserHandoffs.get(threadId)
-      if (leftOver) { browserHandoffs.delete(threadId); handoffWaits.dismiss(leftOver.id) }
+      if (leftOver) { dropHandoff(threadId); handoffWaits.dismiss(leftOver.id); push({ type: 'handoff', handoff: null }) }
       const assistant = { ...thread.messages[thread.messages.length - 1], parts: [] }
       let pending = null
       const save = (extra) => threadStore.update(threadId, (t) => {
@@ -10124,7 +10147,7 @@ async function startChatTurn(body, { idle = null } = {}) {
           return { content: [{ type: 'text', text: `${HANDOFF_TOOL}: no page is open in this chat. Open the page with preview_open first.` }], isError: true }
         }
         const handoff = { id: randomUUID().slice(0, 12), reason: normalizeReason(input), at: Date.now() }
-        browserHandoffs.set(threadId, handoff)
+        holdHandoff(threadId, handoff)
         push({ type: 'handoff', handoff })
         await browserManager.look(threadId).catch(() => {})
         log(`web chat [${provider}] handed the browser to the owner`)
@@ -10147,12 +10170,12 @@ async function startChatTurn(body, { idle = null } = {}) {
           release()
         }
         if (r.gone) {
-          if (signal.aborted) { browserHandoffs.delete(threadId); return { content: [{ type: 'text', text: 'The reply was stopped.' }], isError: true } }
+          if (signal.aborted) { dropHandoff(threadId); push({ type: 'handoff', handoff: null }); return { content: [{ type: 'text', text: 'The reply was stopped.' }], isError: true } }
           return codexWindow?.aborted && !gone.aborted
             ? { content: [{ type: 'text', text: HANDOFF_LATER }] }
             : { content: [{ type: 'text', text: HANDOFF_GONE }], isError: true }
         }
-        if (browserHandoffs.get(threadId)?.id === handoff.id) browserHandoffs.delete(threadId)
+        if (browserHandoffs.get(threadId)?.id === handoff.id) dropHandoff(threadId)
         push({ type: 'handoff', handoff: null })
         if (r.dismissed) return { content: [{ type: 'text', text: handoffSkipped(handoff.reason) }] }
         const page = await browserManager.status(threadId).catch(() => ({}))
@@ -10843,7 +10866,7 @@ async function handleChatApi(req, res, path) {
     await browserManager.closeSession(threadId)
     browserFrames.delete(threadId)
     const handoff = browserHandoffs.get(threadId)
-    if (handoff) { browserHandoffs.delete(threadId); handoffWaits.dismiss(handoff.id) }
+    if (handoff) { dropHandoff(threadId); handoffWaits.dismiss(handoff.id) }
     return send(res, 200, { ok: true })
   }
   // Done or Skip on a browser handoff (browser/handoff.mjs). A call still waiting
@@ -10856,7 +10879,7 @@ async function handleChatApi(req, res, path) {
     if (!handoff || handoff.id !== id) return send(res, 404, { error: 'that handoff is over' })
     const done = action !== 'skip'
     const live = done ? handoffWaits.answer(id, {}) : handoffWaits.dismiss(id)
-    browserHandoffs.delete(threadId)
+    dropHandoff(threadId)
     return send(res, 200, { live, message: live ? null : handoffMessage(handoff.reason, done) })
   }
 

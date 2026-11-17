@@ -36,6 +36,7 @@ import Composer, { type ComposerHandle, type FollowUpPayload } from './Composer'
 import QueuedMessages from './QueuedMessages'
 import { UserMessage, AssistantMessage } from './Message'
 import { useQuestionFlow } from './QuestionsPanel'
+import HandoffBar from './HandoffBar'
 import { pendingQuestions } from '../../lib/chat/questions'
 import { DECLINE_PLACEHOLDER, pendingApproval } from '../../lib/chat/approvals'
 import { ModelChip } from './ModelPicker'
@@ -685,7 +686,7 @@ export default function ChatScreen() {
               </Animated.View>
             ) : null}
             <RunningChats />
-            {questionFlow ? questionFlow.panel : <>{parkedEl}{pendingHandoff}</>}
+            {questionFlow ? questionFlow.panel : <><HandoffBar threadId={activeId} />{parkedEl}{pendingHandoff}</>}
             {empty && !project && !temporary && !questionFlow && startInProjects.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={st.startIn} contentContainerStyle={st.startInRow}>
                 <T size={12.5} color={vc.soft} style={{ marginRight: 2 }}>Start in</T>

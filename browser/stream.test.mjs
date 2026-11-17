@@ -198,6 +198,28 @@ test('the idle timers end the stream, close the context, then the browser', asyn
   await until(() => fake.seen.browserClosed === 1, 1000)
 })
 
+test('a hold keeps the context open past its idle time; releasing it starts the timer again', async () => {
+  const fake = fakePlaywright()
+  const closed = []
+  const manager = createBrowserManager({ executablePath: '/bin/true', loadPlaywright: fake.loadPlaywright, contextIdleMs: 60, browserIdleMs: 40, onClose: (key) => closed.push(key) })
+  try {
+    await manager.open('t', { url: 'https://example.com' })
+    const release = manager.keepOpen('t')
+    await new Promise((r) => setTimeout(r, 200))
+    assert.deepEqual(manager.sessionKeys(), ['t'], 'held: still open well past the idle time')
+    release()
+    release()
+    await until(() => manager.sessionKeys().length === 0, 1000)
+    assert.equal(manager.keepOpen('gone')(), undefined, 'holding a chat with no browser is a no-op')
+    await manager.open('u', { url: 'https://example.com' })
+    manager.keepOpen('u', { maxMs: 50 })
+    await until(() => manager.sessionKeys().length === 0, 1000)
+    assert.deepEqual(closed, ['t', 'u'], 'every close is reported, so a handoff in it can end')
+  } finally {
+    await manager.closeAll()
+  }
+})
+
 test('owner input reaches the page in order, as CDP mouse events and keyboard keys', async () => {
   const fake = fakePlaywright()
   const manager = createBrowserManager({ executablePath: '/bin/true', loadPlaywright: fake.loadPlaywright })

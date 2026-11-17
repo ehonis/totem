@@ -23,6 +23,7 @@ export { default as IconX } from '@tabler/icons-react-native/dist/esm/icons/Icon
 export { default as IconLoader2 } from '@tabler/icons-react-native/dist/esm/icons/IconLoader2.mjs'
 export { default as IconTerminal2 } from '@tabler/icons-react-native/dist/esm/icons/IconTerminal2.mjs'
 export { default as IconWorld } from '@tabler/icons-react-native/dist/esm/icons/IconWorld.mjs'
+export { default as IconHandClick } from '@tabler/icons-react-native/dist/esm/icons/IconHandClick.mjs'
 export { default as IconDeviceDesktop } from '@tabler/icons-react-native/dist/esm/icons/IconDeviceDesktop.mjs'
 export { default as IconChecklist } from '@tabler/icons-react-native/dist/esm/icons/IconChecklist.mjs'
 export { default as IconTarget } from '@tabler/icons-react-native/dist/esm/icons/IconTarget.mjs'

@@ -21,6 +21,8 @@ import { cdpMouse, cdpWheel, coalesce, parseInput, MODIFIERS } from './input.mjs
 export { readOnlyRequestDecision, findChromium }
 
 const CONTEXT_IDLE_MS = 30 * 60_000
+// The longest a hold (a handoff waiting on the owner) keeps a context open.
+const HOLD_MAX_MS = 24 * 60 * 60_000
 const BROWSER_IDLE_MS = 10 * 60_000
 const DEFAULT_TIMEOUT = 15_000
 const MAX_TIMEOUT = 60_000
@@ -82,7 +84,7 @@ export function normalizeUrl(raw) {
 }
 
 export function createBrowserManager({
-  log = () => {}, onFrame = () => {}, executablePath = findChromium(), loadPlaywright = () => import('playwright-core'),
+  log = () => {}, onFrame = () => {}, onClose = () => {}, executablePath = findChromium(), loadPlaywright = () => import('playwright-core'),
   headed = false, contextIdleMs = CONTEXT_IDLE_MS, browserIdleMs = BROWSER_IDLE_MS, releaseTimeoutMs = RELEASE_TIMEOUT_MS,
 } = {}) {
   let browserPromise = null
@@ -101,7 +103,9 @@ export function createBrowserManager({
         b.on('disconnected', () => {
           browserPromise = null
           for (const s of sessions.values()) endViewers(s, 'closed')
+          const keys = [...sessions.keys()]
           sessions.clear()
+          for (const key of keys) onClose(key)
         })
         userAgent = await ownUserAgent(b)
         log(`browser: started ${executablePath}${headed ? ' (headed)' : ''}`)
@@ -140,8 +144,33 @@ export function createBrowserManager({
   function touch(s, key) {
     s.lastUsed = Date.now()
     if (s.timer) clearTimeout(s.timer)
+    s.timer = null
+    if (s.holds) return
     s.timer = setTimeout(() => closeSession(key), contextIdleMs)
     s.timer.unref?.()
+  }
+
+  /**
+   * Keep a chat's context open while something in it waits on the owner (a
+   * browser handoff he may come back to hours later): its idle timer starts again
+   * once every hold is released, or a hold reaches `maxMs`. Returns the release.
+   */
+  function keepOpen(key, { maxMs = HOLD_MAX_MS } = {}) {
+    const s = sessions.get(key)
+    if (!s) return () => {}
+    s.holds = (s.holds || 0) + 1
+    if (s.timer) { clearTimeout(s.timer); s.timer = null }
+    let released = false
+    const cap = setTimeout(() => release(), maxMs)
+    cap.unref?.()
+    function release() {
+      if (released) return
+      released = true
+      clearTimeout(cap)
+      s.holds--
+      if (sessions.get(key) === s) touch(s, key)
+    }
+    return release
   }
 
   async function closeSession(key) {
@@ -149,6 +178,7 @@ export function createBrowserManager({
     if (!s) return
     sessions.delete(key)
     if (s.timer) clearTimeout(s.timer)
+    onClose(key)
     endViewers(s, 'closed')
     await stopCast(s)
     await s.context.close().catch(() => {})
@@ -197,7 +227,8 @@ export function createBrowserManager({
   // CDP's Page.startScreencast on the current tab while at least one viewer
   // watches, stopped when the last one leaves, the tab changes or the context
   // closes. Watching never opens a browser or a context, and never keeps one
-  // alive: only the agent's actions and the owner's input touch the idle timer.
+  // alive: only the agent's actions and the owner's input touch the idle timer
+  // (and keepOpen, while a handoff waits on him).
 
   async function cdpFor(s, tab) {
     if (!tab.cdp) {
@@ -887,7 +918,7 @@ export function createBrowserManager({
     executablePath,
     status, open, navigate, resize, setColorScheme, snapshot, click, type, press, scroll, evaluate, waitFor, look,
     watch, latestFrame, input, release,
-    renderPage, readPage, storageState, closeSession, closeAll,
+    renderPage, readPage, storageState, closeSession, closeAll, keepOpen,
     sessionKeys: () => [...sessions.keys()],
   }
 }

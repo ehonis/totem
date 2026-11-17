@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import { useChat, getState, linkTask, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread, markRead, markUnread, setProjectContext, settleThread, unsettleThread, snoozeThread, wakeThread } from './store'
-import { pendingQuestions } from './questions'
-import { pendingApproval } from './approvals'
+import { attentionOf, attentionBadge, attentionTitle } from './attention'
 import type { ChatThread } from './types'
 import { TI, useDismiss } from './ui'
 import { IconDots, IconPinned, IconPencil, IconTrash, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconMail, IconMailOpened, IconClock, IconAlarmOff, IconArrowBackUp, IconChevronUp, IconChevronDown, IconPlus, IconLink } from './icons'
@@ -76,6 +75,7 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
   const closePicker = useCallback(() => setPicking(null), [])
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   const retitling = useChat((s) => !!s.retitling[t.id])
+  const handoff = useChat((s) => s.handoffs[t.id])
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const rowRef = useRowOnScreen(t.id)
@@ -109,16 +109,14 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
     : shelf === 'settled'
       ? <span className="vc-thread-meta" title={t.settledOverride === 'settled' ? 'Settled' : t.doneAt ? 'Marked done, settled once read' : `Settled after ${autoDays} ${autoDays === 1 ? 'day' : 'days'} without activity`}>{ago(settledAt(t, now, autoDays), now)}</span>
       : null
-  // Questions from the agent outrank everything else on the row, as in T3.
-  const asking = !!pendingQuestions(t)
-  const approving = !asking && !!pendingApproval(t)
+  // What the chat waits on him for outranks everything else on the row, as in T3 (attention.ts).
+  const needs = attentionOf(t, handoff)
   return (
     <div ref={setRow} className={`vc-thread shelf-${shelf} ${active ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''} ${(t.needsReply && !live) || woke ? 'waiting' : ''}`} {...dragThreadProps(t.id)}>
       <button type="button" className="vc-thread-main" onClick={() => onOpen(t.id)} title={title}>
         <ThreadIcon t={t} size={16} busy={retitling} />
         <span className={`vc-thread-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{title}</span>
-        {asking ? <span className="vc-asking" title="Totem asked you questions">Awaiting input</span>
-          : approving ? <span className="vc-asking" title="A tool call is waiting for your approval">Awaiting approval</span>
+        {needs ? <span className="vc-asking" title={attentionTitle(needs)}>{attentionBadge(needs)}</span>
           : live ? <span className="vc-live-dot" aria-label="Answering" />
           : woke ? <span className="vc-woke" title={`Woke ${wakeDescription(wokeAt(t, now), now)}`}>Woke</span>
           : t.needsReply && !offersSettle(t, shelf, live) && <span className="vc-reply-dot" aria-label="Waiting on you" title="Waiting on you" />}

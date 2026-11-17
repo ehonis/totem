@@ -54,3 +54,15 @@ export const HANDOFF_GONE =
 /** The message sent for him when Done is pressed after the call stopped waiting. */
 export const handoffMessage = (reason, done) =>
   done ? `I'm done in the browser (${reason}). Carry on.` : `I skipped that in the browser (${reason}). Carry on without it.`
+
+/**
+ * A chat as the list sends it, with the handoff still waiting on the owner. The
+ * handoff lives in memory beside the browser it needs (`handoffs`, thread id →
+ * handoff), never in the thread, so a chat he is not in, on any device, still
+ * says it is waiting on him there; only while that browser is open (`open`, the
+ * chats with a browser session), as GET /api/chat/browser does.
+ */
+export const withHandoff = (thread, handoffs, open) => {
+  const handoff = thread && open.has(thread.id) && handoffs.get(thread.id)
+  return handoff ? { ...thread, handoff: { id: handoff.id, reason: handoff.reason, at: handoff.at } } : thread
+}

@@ -15,8 +15,7 @@ import { MenuView } from '@react-native-menu/menu'
 import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated'
 import { useChat, openProject, createProject, foldersOf, threadTitle } from '../../lib/chat/store'
-import { pendingQuestions } from '../../lib/chat/questions'
-import { pendingApproval } from '../../lib/chat/approvals'
+import { attentionOf, attentionBadge, attentionTitle } from '../../lib/chat/attention'
 import {
   shelve, wokeAt, countdown, ago, settledAt, isSnoozed, snoozePresets, offersSettle, keptOpenId, type Shelf,
 } from '../../lib/chat/settle'
@@ -76,9 +75,9 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: {
   const title = threadTitle(t)
   const woke = shelf === 'active' && !!wokeAt(t, now) && !active
   const waiting = (t.needsReply && !live) || woke
-  // Questions from the agent outrank everything else on the row, as in T3.
-  const asking = !!pendingQuestions(t)
-  const approving = !asking && !!pendingApproval(t)
+  // What the chat waits on him for outranks everything else on the row, as in T3 (attention.ts).
+  const handoff = useChat((s) => s.handoffs[t.id])
+  const needs = attentionOf(t, handoff)
   const menu = threadMenu(t, shelf, live)
   const swipe = useRef<SwipeableMethods>(null)
   // Every swipe action is one of the menu's own ids, so both run the same code.
@@ -106,8 +105,7 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: {
         >
           {title}
         </T>
-        {asking ? <View style={st.woke} accessibilityLabel="Totem asked you questions"><T size={11} weight={600} color={colors.accent}>Awaiting input</T></View>
-          : approving ? <View style={st.woke} accessibilityLabel="A tool call is waiting for your approval"><T size={11} weight={600} color={colors.accent}>Awaiting approval</T></View>
+        {needs ? <View style={st.woke} accessibilityLabel={attentionTitle(needs)}><T size={11} weight={600} color={colors.accent}>{attentionBadge(needs)}</T></View>
           : live ? <LiveDot />
           : woke ? <View style={st.woke}><T size={11} weight={600} color={colors.accent}>Woke</T></View>
             : t.needsReply && !offersSettle(t, shelf, live) ? <View style={st.dot} accessibilityLabel="Waiting on you" /> : null}
