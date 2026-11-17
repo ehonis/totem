@@ -1835,16 +1835,23 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
   color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
-/* Queued messages (QueuedMessages.tsx), T3 Code's drawer: a strip tucked under
-   the composer's top edge, the box drawn over its lower lip. */
-.vc-queue {
-  position: relative; margin: 0 30px -22px; padding: 4px 6px 26px;
-  border: 1px solid #ffffff17; border-bottom: 0; border-radius: 16px 16px 0 0;
+/* Over the composer's top edge, one tab holds the linked task (TaskBar.tsx) and
+   the queued messages (QueuedMessages.tsx), divided by a hairline. It sits on the
+   box, never tucked under it: the box is see-through, so a tucked lip showed
+   through it as a dark band. */
+.vc-above {
+  position: relative; margin: 0 30px -1px; overflow: hidden;
+  border: 1px solid #ffffff17; border-bottom: 0; border-radius: 14px 14px 0 0;
   background: color-mix(in srgb, var(--vc-surface) 70%, transparent);
-  font-size: 12px; line-height: 16px;
 }
-.vc.no-glow .vc-queue { background: var(--vc-surface); }
+.vc-above:empty { display: none; }
+.vc.no-glow .vc-above { background: var(--vc-surface); }
+.vc-above > * + * { border-top: 1px solid #ffffff0f; }
 .vc-composer > .vc-box { position: relative; z-index: 1; }
+@media (max-width: 720px) { .vc-above { margin: 0 14px -1px; } }
+
+/* Queued messages, T3 Code's drawer. */
+.vc-queue { padding: 2px 6px 6px; font-size: 12px; line-height: 16px; }
 .vc-queue-head {
   display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 6px;
   background: none; border: 0; color: var(--vc-soft); font: inherit; cursor: pointer; text-align: left;

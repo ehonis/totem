@@ -545,3 +545,45 @@ test('every face of the chats panel scrolls to its last row, and the phone drawe
     served.close()
   }
 })
+
+// The tab over the composer's top edge holds the linked task and the queued
+// messages. It sits on the box and is one tab: the queue used to be a second tab
+// tucked 22px under the box, which is see-through, so the tucked lip showed
+// through the top of the box as a dark band. This draws the real Composer,
+// TaskBar and QueuedMessages (web/src/chat/ComposerTab.harness.tsx).
+test('the task and the queue share one tab that sits on the composer, never under it', { skip: !executablePath || !esbuild }, async () => {
+  const todo = { id: 'k1', title: 'Fictional task to install a connector', description: '', area: 'Personal', ventureTag: null, status: 'todo', priority: 1, dueDate: new Date().toISOString().slice(0, 10), recurrence: null,
+    snoozedUntil: null, position: 0, createdAt: ago(48), updatedAt: ago(1), completedAt: null, outcome: null, archivedAt: null, deletedAt: null,
+    tags: [], notes: [], relations: [], lists: [], externalLinks: [], issueLink: null, folderId: null }
+  const api = (url) => url.split('?')[0] === '/api/todos/board' ? { counts: { archived: 0, snoozed: 0, deleted: 0 }, todos: [todo] } : null
+  const served = await serveHarness({ entry: 'chat/ComposerTab.harness.tsx', styles: ['styles.css', 'shell.css', 'chat/chat.css', 'work/work.css'], api })
+  const browser = await chromium.launch({ executablePath })
+  try {
+    for (const v of ['both', 'task', 'queue', 'many']) {
+      for (const width of [1100, 390]) {
+        const where = `${v}, ${width}px`
+        const page = await browser.newPage({ viewport: { width, height: 500 } })
+        await page.goto(`${served.url}?v=${v}`)
+        if (v !== 'queue') await page.waitForFunction(() => document.querySelector('.wk-taskbar-title')?.textContent?.startsWith('Fictional'), null, { timeout: 10000 })
+        const got = await page.evaluate(() => {
+          const r = (e) => e && e.getBoundingClientRect()
+          const tab = document.querySelector('.vc-above')
+          const kids = [...tab.children].map((e) => { const b = r(e); const s = getComputedStyle(e); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom, radius: s.borderTopLeftRadius, side: s.borderLeftWidth } })
+          return { tab: r(tab), box: r(document.querySelector('.vc-box')), kids }
+        })
+        assert.equal(got.kids.length, v === 'both' || v === 'many' ? 2 : 1, `${where}: one row per part`)
+        assert.ok(Math.abs(got.tab.bottom - got.box.top) <= 1, `${where}: the tab sits on the box (tab ends ${got.tab.bottom}, box starts ${got.box.top})`)
+        assert.ok(got.tab.left > got.box.left && got.tab.right < got.box.right, `${where}: the tab is inset from the box's corners`)
+        for (const k of got.kids) {
+          assert.ok(k.left >= got.tab.left && k.right <= got.tab.right, `${where}: a part runs the tab's width`)
+          assert.equal(k.side, '0px', `${where}: a part draws no tab of its own`)
+        }
+        for (let i = 1; i < got.kids.length; i++) assert.ok(Math.abs(got.kids[i].top - got.kids[i - 1].bottom) <= 1, `${where}: the parts stack with no gap`)
+        await page.close()
+      }
+    }
+  } finally {
+    await browser.close()
+    served.close()
+  }
+})
