@@ -158,14 +158,12 @@ button.wk-check:hover .wk-check-on { opacity: 1; transform: none; }
   .wk-combo-search input { font-size: 16px; }
 }
 
-/* --- the task strip over the composer (TaskBar.tsx): a tab sitting on the box's top edge --- */
+/* --- the task strip over the composer (TaskBar.tsx): the first row of the tab on
+   the box's top edge (.vc-above in chat.css draws the tab) --- */
 .wk-taskbar {
-  position: relative; display: flex; align-items: center; gap: 6px; margin: 0 30px -1px; padding: 4px 8px 5px 10px;
-  border: 1px solid #ffffff17; border-bottom: 0; border-radius: 14px 14px 0 0;
-  background: color-mix(in srgb, var(--vc-surface, var(--surface)) 70%, transparent);
+  position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 8px 5px 12px;
   font-size: 12.5px; line-height: 18px; color: var(--vc-soft, var(--muted));
 }
-.vc.no-glow .wk-taskbar { background: var(--vc-surface, var(--surface)); }
 .wk-taskbar .ti { flex: none; }
 .wk-taskbar-icon { color: var(--accent); }
 .wk-taskbar-label { flex: none; color: var(--vc-faint, var(--muted)); }
@@ -182,7 +180,6 @@ button.wk-check:hover .wk-check-on { opacity: 1; transform: none; }
 }
 .wk-taskbar-btn:hover { background: var(--vc-raise, var(--raise)); color: var(--text); }
 @media (max-width: 720px) {
-  .wk-taskbar { margin: 0 14px -1px; }
   .wk-taskbar-label { display: none; }
   .wk-taskbar-btn { height: 32px; min-width: 32px; }
 }

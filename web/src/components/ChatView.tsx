@@ -684,7 +684,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       followUp={followUp}
       queueEdit={queueEdit && queueEdit.threadId === activeId ? { onSave: saveQueueEdit } : undefined}
       onResume={!busy && active?.queueHeld && queue.length && activeId ? () => { void updateQueue(activeId, { action: 'resume' }) } : undefined}
-      above={<><TaskBar thread={active && !empty ? active : null} draftTaskId={active ? null : draftTaskId} projectId={project?.id || null} onShowPanel={onShowPanel} />{queueEl}</>}
+      above={<div className="vc-above"><TaskBar thread={active && !empty ? active : null} draftTaskId={active ? null : draftTaskId} projectId={project?.id || null} onShowPanel={onShowPanel} />{queueEl}</div>}
       onVoice={() => setVoice(true)}
       busy={busy}
       autoFocus={visible}
