@@ -18,9 +18,7 @@ import { useChat, getState, setActive, stop, settleThread, snoozeThread, markRea
 import { useOnScreen, getOnScreen } from '../../lib/chat/onScreen'
 import { isSnoozed, ago, snoozePresets } from '../../lib/chat/settle'
 import type { ChatThread, Project } from '../../lib/chat/types'
-import { pendingQuestions } from '../../lib/chat/questions'
-import { pendingApproval } from '../../lib/chat/approvals'
-import { pendingInboxCards } from '../../lib/chat/inboxCards'
+import { attentionOf, attentionStatus } from '../../lib/chat/attention'
 import { pushToast } from '../../lib/toast'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
@@ -73,12 +71,9 @@ function Row({ t, run, now, onOpen }: { t: ChatThread; run?: RunState; now: numb
   const title = threadTitle(t)
   const failed = !run && failedReply(t)
   const when = ago(t.updatedAt, now)
-  const asking = pendingQuestions(t)
-  const approving = !asking && pendingApproval(t)
-  const proposals = !asking && !approving ? pendingInboxCards(t) : []
-  const status = asking ? (asking.part.questions.length === 1 ? 'A question for you' : `${asking.part.questions.length} questions for you`)
-    : approving ? 'Waiting for your approval'
-    : proposals.length ? `Waiting on your approval: ${proposals.length === 1 ? proposals[0].title : `${proposals.length} proposals`}`
+  const handoff = useChat((s) => s.handoffs[t.id])
+  const needs = attentionOf(t, handoff)
+  const status = needs ? attentionStatus(needs)
     : run ? `${elapsed(now - run.startedAt)} · ${run.activity?.split('\n')[0] || 'Working'}`
     : failed ? `Failed ${when !== 'now' ? `${when} ago` : 'just now'}`
       : when !== 'now' ? `Done ${when} ago` : 'Done just now'
@@ -91,7 +86,7 @@ function Row({ t, run, now, onOpen }: { t: ChatThread; run?: RunState; now: numb
           <T size={14} numberOfLines={1}>{title}</T>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             {run ? <LiveDot /> : null}
-            <T size={12} numberOfLines={1} color={run ? vc.soft : failed ? '#ff7a8f' : GREEN} style={{ flexShrink: 1, fontVariant: ['tabular-nums'] }}>{status}</T>
+            <T size={12} numberOfLines={1} color={needs ? colors.accent : run ? vc.soft : failed ? '#ff7a8f' : GREEN} style={{ flexShrink: 1, fontVariant: ['tabular-nums'] }}>{status}</T>
           </View>
         </View>
       </Press>
@@ -128,6 +123,7 @@ export default function RunningChats({ onOpenChat }: { onOpenChat?: (id: string)
   const threads = useChat((s) => s.threads)
   const runs = useChat((s) => s.runs)
   const projects = useChat((s) => s.projects)
+  const handoffs = useChat((s) => s.handoffs)
   const onScreen = useOnScreen()
   const { height } = useWindowDimensions()
   const [collapsed, setCollapsed] = useState(true)
@@ -165,9 +161,9 @@ export default function RunningChats({ onOpenChat }: { onOpenChat?: (id: string)
   }, [runs, open])
 
   const candidates = useMemo(() => threads.filter((t) => (
-    !t.totemId && (runs[t.id] || pendingQuestions(t) || pendingInboxCards(t).length || t.needsReply) && !onScreen.open.has(t.id)
+    !t.totemId && (runs[t.id] || attentionOf(t, handoffs[t.id]) || t.needsReply) && !onScreen.open.has(t.id)
     && !isSnoozed(t, now) && t.settledOverride !== 'settled'
-  )), [threads, runs, onScreen, now])
+  )), [threads, runs, handoffs, onScreen, now])
 
   // Leaving is immediate; joining waits a moment.
   const [shown, setShown] = useState<string[]>([])
@@ -196,8 +192,9 @@ export default function RunningChats({ onOpenChat }: { onOpenChat?: (id: string)
   }, [visible, projects])
 
   if (!visible.length) return null
-  const running = visible.filter((t) => runs[t.id]).length
-  const waiting = visible.filter((t) => !runs[t.id] && pendingInboxCards(t).length).length
+  // A run held on him is waiting, not running: the pill must not say "running" for hours.
+  const waiting = visible.filter((t) => attentionOf(t, handoffs[t.id])).length
+  const running = visible.filter((t) => runs[t.id] && !attentionOf(t, handoffs[t.id])).length
   const done = visible.length - running - waiting
   const summary = [running && `${running} running`, waiting && `${waiting} waiting on you`, done && `${done} unread`].filter(Boolean).join(' · ')
 
@@ -205,7 +202,7 @@ export default function RunningChats({ onOpenChat }: { onOpenChat?: (id: string)
     return (
       <Animated.View entering={FadeIn.duration(150)} exiting={FadeOut.duration(120)} style={{ alignSelf: 'flex-end', marginBottom: 8 }}>
         <Press style={st.pill} onPress={() => { tap(); setCollapsed(false) }} accessibilityLabel={`Other chats: ${summary}. Show them`}>
-          {running > 0 ? <LiveDot /> : <TI icon={IconCheck} size={14} color={GREEN} />}
+          {running > 0 ? <LiveDot /> : waiting > 0 ? <View style={st.dot} /> : <TI icon={IconCheck} size={14} color={GREEN} />}
           <T size={13} color={vc.text} style={{ fontVariant: ['tabular-nums'] }}>{summary}</T>
         </Press>
       </Animated.View>

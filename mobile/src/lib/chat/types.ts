@@ -14,6 +14,8 @@ export interface Attachment {
 export interface TextPart { type: 'text'; text: string }
 /** What the chat's browser is showing (bridge `browser` events). `image` is a JPEG data URL. */
 export interface BrowserFrame { tabId: string; url: string; title: string; image: string; at: number }
+/** The agent handing the browser to the owner (preview_handoff): what it needs done. */
+export interface BrowserHandoff { id: string; reason: string; at: number }
 
 export interface ImagePart { type: 'image'; uploadId: string; alt?: string; url?: string }
 export interface ToolPart {
@@ -436,6 +438,7 @@ export type StreamEvent =
   | { type: 'agent'; toolId: string; agent?: Partial<AgentInfo>; step?: AgentStep; seq: number }
   | { type: 'image'; uploadId: string; alt?: string; url?: string; seq: number }
   | ({ type: 'browser'; seq: number } & BrowserFrame)
+  | { type: 'handoff'; handoff: BrowserHandoff | null; seq: number }
   | { type: 'file'; file: FilePart; seq: number }
   | { type: 'steer'; steer: Omit<SteerPart, 'type'>; seq: number }
   | { type: 'questions'; questions: Partial<QuestionsPart> & { id: string }; seq: number }

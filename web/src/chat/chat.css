@@ -731,6 +731,25 @@ body.panel-resizing .vc-assistant-body > .md, :root.window-resizing .vc-assistan
   margin: 0 auto 6px; max-width: 760px; padding: 4px 4px 4px 14px; border-radius: 12px;
   background: var(--vc-raise); color: var(--vc-soft); font-size: 13px;
 }
+/* A browser handoff waiting on him (HandoffBar.tsx), over the composer. */
+.vc-needs {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 auto 6px; max-width: 760px; padding: 4px 4px 4px 12px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, #7aa2ff 45%, transparent); background: color-mix(in srgb, #7aa2ff 12%, var(--vc-surface));
+  color: var(--text); font-size: 13px;
+}
+.vc-needs > svg { flex: none; color: #7aa2ff; }
+.vc-needs-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-needs-text b { font-weight: 600; margin-right: 4px; }
+.vc-needs .vc-btn { flex: none; }
+.vc-needs-short { display: none; }
+@media (max-width: 600px) {
+  .vc-needs-text { display: flex; flex-direction: column; white-space: normal; line-height: 1.3; }
+  .vc-needs-text > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--vc-soft); }
+  .vc-needs-long { display: none; }
+  .vc-needs-short { display: inline; }
+}
+.vc-needs-done { flex: none; height: 28px; padding: 0 14px; border: 0; border-radius: 999px; background: #7aa2ff; color: #0b1020; font-size: 13px; font-weight: 600; cursor: pointer; }
 .vc-snooze-menu { min-width: 230px; }
 .vc-proj-chat.settled:not(:hover) { opacity: .6; }
 /* The shelves are at the bottom of the panel: their menus open upward. */

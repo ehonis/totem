@@ -44,6 +44,7 @@ import { useViewing } from '../chat/onScreen'
 import { contextVersion, subscribeContext, takeContext } from '../chat/pendingContext'
 import { TI } from '../chat/ui'
 import { IconArrowDown, IconPaperclip } from '../chat/icons'
+import HandoffBar from '../chat/HandoffBar'
 import type { Attachment, ChatMessage, ModelSettings, QueuedMessage } from '../chat/types'
 import '../chat/chat.css'
 import { chatGlow } from '../chat/glow'
@@ -858,7 +859,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
           {!empty && !atBottom && (
             <button type="button" className="vc-jump" onClick={glideToBottom} aria-label="Scroll to the latest message"><TI icon={IconArrowDown} size={18} /></button>
           )}
-          {questionFlow ? questionFlow.panel : <>{parkedEl}{pendingHandoff}</>}
+          {questionFlow ? questionFlow.panel : <><HandoffBar threadId={activeId} />{parkedEl}{pendingHandoff}</>}
           {composerEl}
         </div>
       )}
