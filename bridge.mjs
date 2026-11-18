@@ -87,6 +87,7 @@ import { fetchFavicon } from './chat/favicon.mjs'
 import { createConnectionIconStore, validConnectionId } from './connections/icons.mjs'
 import { createProjectStore, moveMemoryEntries, validProjectId } from './chat/projects.mjs'
 import { createTaskFolderStore } from './chat/task-folders.mjs'
+import { createSheetMarkStore } from './todos/sheet-marks.mjs'
 import { fileSheetItems as fileSheetFolders, folderAdoption, folderPath, resolveFolder, SHEET_UNFILED } from './todos/folders.mjs'
 import { linkedTaskBlock, findSheetItem } from './chat/task-link.mjs'
 import { createChatRuns } from './chat/runs.mjs'
@@ -17117,7 +17118,19 @@ const todoCommands = createTodoCommands({
 // keeps it out of Settings -> Connections.
 sourceRuns.forget('github-tasks')
 const todoIssueStates = createIssueStates({ links: (o) => todoService.issueLinks(o), run: ghCapture })
-todoHttpHandler = createTodoHttpHandler({ service: todoService, commands: todoCommands, sheetFeed: taskSheetFeed, issueStates: todoIssueStates, sheetFolders: fileSheetItems })
+// The owner's own done and snoozed marks on sheet rows: kept here, never written
+// to the sheet (todos/sheet-marks.mjs).
+const sheetMarks = createSheetMarkStore({ file: process.env.SHEET_MARKS_FILE || join(HERE, 'data', 'sheet-marks.json') })
+todoHttpHandler = createTodoHttpHandler({ service: todoService, commands: todoCommands, sheetFeed: taskSheetFeed, issueStates: todoIssueStates, sheetFolders: fileSheetItems, sheetMarks,
+  onSheetMark: ({ ref, state, until, title }) => actionLog.record({
+    action: state ? `sheet.${state}` : 'sheet.unmark',
+    actor: 'http',
+    channel: 'http',
+    target: ref,
+    status: 'ok',
+    summary: `${state === 'done' ? 'Marked done in Totem' : state === 'snoozed' ? `Snoozed until ${until}` : 'Back in the list'}: ${title || ref} (the sheet is unchanged)`,
+  }),
+})
 todoMcpTools = createTodoMcpTools({ service: todoService, commands: todoCommands, folders: taskFolderContext })
 adoptTaskFolders().catch((e) => log(`task folders: the move from areas to folders failed (${e.message}); it runs again at the next start`))
 

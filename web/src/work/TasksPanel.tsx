@@ -12,7 +12,7 @@ import { useThreadTaskDrop } from '../chat/dnd'
 import { pushToast } from '../toast'
 import { SnoozeMenu } from '../todos/TaskMenus'
 import '../todos/todos.css'
-import { buildWork, dueLabel, folderOf, matches, type WorkGroup, type WorkGroupBy, type WorkRow, type WorkShow, type WorkSort, type WorkTask } from './groups'
+import { buildWork, dueLabel, folderOf, matches, snoozeSubject, type WorkGroup, type WorkGroupBy, type WorkRow, type WorkShow, type WorkSort, type WorkTask } from './groups'
 import { FolderPicker } from './pickers'
 import AddTask from './AddTask'
 import { completeTask, findTask, setTaskFolder, snoozeTask, taskHome, useWork } from './state'
@@ -108,7 +108,7 @@ function ViewMenu({ view, onView, hasSheet, sheetName }: { view: View; onView: (
 function RowMenu({ row, anchor, onClose, onNewChat, onFile, onEdit }: { row: WorkRow; anchor: React.RefObject<HTMLElement>; onClose: () => void; onNewChat: () => void; onFile: () => void; onEdit: () => void }) {
   const pop = useRef<HTMLDivElement>(null)
   useDismiss(true, [pop, anchor] as React.RefObject<HTMLElement>[], onClose)
-  const placement = usePopoverPlacement(true, anchor, { width: 220, height: 220, gap: 2, align: 'end', narrow: 0, fit: true, minHeight: 120 })
+  const placement = usePopoverPlacement(true, anchor, { width: 220, height: 260, gap: 2, align: 'end', narrow: 0, fit: true, minHeight: 120 })
   if (!placement) return null
   const { task } = row
   return createPortal(
@@ -116,9 +116,8 @@ function RowMenu({ row, anchor, onClose, onNewChat, onFile, onEdit }: { row: Wor
       <button type="button" role="menuitem" onClick={() => { onClose(); onEdit() }}><TI icon={IconAdjustmentsHorizontal} size={16} /><span>{row.task.kind === 'local' ? 'Edit task…' : 'Details…'}</span></button>
       <button type="button" role="menuitem" onClick={() => { onClose(); onNewChat() }}><TI icon={IconEdit} size={16} /><span>New chat for this task</span></button>
       <button type="button" role="menuitem" onClick={() => { onClose(); onFile() }}><TI icon={IconFolder} size={16} /><span>Move to folder…</span></button>
-      {task.kind === 'local'
-        ? <button type="button" role="menuitem" onClick={() => { onClose(); void completeTask(task.ref) }}><TI icon={IconCircleCheck} size={16} /><span>Mark done</span></button>
-        : task.url && <button type="button" role="menuitem" onClick={() => { onClose(); window.open(task.url, '_blank', 'noopener') }}><TI icon={IconExternalLink} size={16} /><span>Open in the sheet</span></button>}
+      <button type="button" role="menuitem" onClick={() => { onClose(); void completeTask(task.ref) }}><TI icon={IconCircleCheck} size={16} /><span>{task.kind === 'local' ? 'Mark done' : 'Mark done for me'}</span></button>
+      {task.kind === 'sheet' && task.url && <button type="button" role="menuitem" onClick={() => { onClose(); window.open(task.url, '_blank', 'noopener') }}><TI icon={IconExternalLink} size={16} /><span>Open in the sheet</span></button>}
     </div>,
     document.body,
   )
@@ -163,7 +162,13 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
               <TI icon={IconCircleCheck} size={16} className="wk-check-on" />
             </button>
           )
-          : <span className="wk-check sheet" title={task.status || 'On the shared sheet'}><TI icon={IconTable} size={15} /></span>}
+          : (
+            // The sheet's mark until hovered: done here is the owner's alone, the sheet is unchanged.
+            <button type="button" className="wk-check sheet" onClick={() => completeTask(task.ref)} aria-label={`Mark “${task.title}” done for you (the sheet is unchanged)`} title={`${task.status ? `${task.status} on the sheet. ` : ''}Mark done for you; the sheet is unchanged`}>
+              <TI icon={IconTable} size={15} className="wk-check-off" />
+              <TI icon={IconCircleCheck} size={16} className="wk-check-on" />
+            </button>
+          )}
         <button type="button" className="vc-thread-main wk-task-main" onClick={() => openTaskCard(task.ref)} title={`${task.title}: show its settings and chats`} aria-haspopup="dialog" aria-expanded={carded}>
           <span className="vc-thread-title">{task.title}</span>
           {live ? <span className="vc-live-dot" aria-label="A chat is answering" /> : waiting ? <span className="vc-reply-dot" aria-label="A chat is waiting on you" /> : null}
@@ -175,14 +180,14 @@ function TaskRow({ row, open, onToggle, onOpenChat, activeId, runs }: {
           </button>
         )}
         <div className="wk-task-acts">
-          {task.todo && <button ref={snoozeRef} type="button" className="vc-thread-act" onClick={() => setSnoozing((v) => !v)} aria-label={`Snooze “${task.title}”`} title="Snooze" aria-haspopup="menu" aria-expanded={snoozing}><TI icon={IconZzz} size={15} /></button>}
+          {(task.todo || task.kind === 'sheet') && <button ref={snoozeRef} type="button" className="vc-thread-act" onClick={() => setSnoozing((v) => !v)} aria-label={`Snooze “${task.title}”`} title="Snooze" aria-haspopup="menu" aria-expanded={snoozing}><TI icon={IconZzz} size={15} /></button>}
           <button type="button" className="vc-thread-act wk-act-new" onClick={newChat} aria-label="New chat for this task" title="New chat for this task"><TI icon={IconPlus} size={15} /></button>
           <button ref={moreRef} type="button" className="vc-thread-act" onClick={() => setMenu((v) => !v)} aria-label="More" title="More"><TI icon={IconDots} size={15} /></button>
         </div>
       </div>
       {menu && <RowMenu row={row} anchor={moreRef} onClose={() => setMenu(false)} onNewChat={newChat} onFile={() => setFiling(true)} onEdit={() => openTaskCard(task.ref)} />}
-      {snoozing && task.todo && <SnoozeMenu
-        anchor={snoozeRef.current} now={now} todo={task.todo} onClose={() => setSnoozing(false)}
+      {snoozing && <SnoozeMenu
+        anchor={snoozeRef.current} now={now} todo={snoozeSubject(task)} onClose={() => setSnoozing(false)}
         onSnooze={(until) => void snoozeTask(task.ref, until)} onWake={() => void snoozeTask(task.ref, null)}
       />}
       {filing && <FolderPicker

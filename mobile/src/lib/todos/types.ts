@@ -150,7 +150,8 @@ export interface ConnectorHealth {
 
 /**
  * One open row of the owner's shared action-items sheet (GET /api/todos/sheet): read
- * only, drawn among the tasks with no check circle. Only rows whose Who names one of
+ * only, drawn among the tasks with no check circle; the owner's done and snoozed
+ * marks stay in Totem (SheetMark). Only rows whose Who names one of
  * the configured assignees and whose Status is not Done arrive.
  */
 export interface SheetItem {
@@ -175,6 +176,24 @@ export interface SheetItem {
   folderDefault?: boolean
 }
 
+/**
+ * The owner's own mark on a sheet row, kept in Totem and never written to the sheet
+ * (POST /api/todos/sheet/mark, todos/sheet-marks.mjs): `done` until the owner takes it off
+ * or the row leaves the feed, `snoozed` until `until`.
+ */
+export interface SheetMark {
+  state: 'done' | 'snoozed'
+  /** When it was marked. */
+  at: string
+  /** A snooze's end, an ISO instant. */
+  until?: string
+}
+
+/** A row the owner marked: out of `items`, kept here so it can be put back. */
+export interface SheetHiddenItem extends SheetItem {
+  mark: SheetMark
+}
+
 /** GET /api/todos/sheet. A failed read keeps the last good items, `stale: true`, with a scrubbed `error`. */
 export type SheetFeed =
   | {
@@ -187,6 +206,8 @@ export type SheetFeed =
     stale: boolean
     error: string | null
     items: SheetItem[]
+    /** Rows the owner marked done or snoozed in Totem; absent from an older bridge. */
+    hidden?: SheetHiddenItem[]
     /** Where rows land until filed (Settings -> Tasks › Task sheet), or null. */
     defaultFolderId?: string | null
   }
@@ -194,6 +215,7 @@ export type SheetFeed =
     configured: false
     /** Always empty. */
     items: SheetItem[]
+    hidden?: SheetHiddenItem[]
     /** What to set to turn it on. */
     reason: string
   }

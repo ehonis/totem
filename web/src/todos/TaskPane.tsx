@@ -7,7 +7,7 @@
 // task to the next.
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  Hi, ArchiveBoxIcon, ArrowPathIcon, ArrowTopRightOnSquareIcon, CalendarDaysIcon, ChatBubbleLeftRightIcon,
+  Hi, ArchiveBoxIcon, ArrowPathIcon, ArrowTopRightOnSquareIcon, ArrowUturnLeftIcon, CalendarDaysIcon, ChatBubbleLeftRightIcon, CheckIcon,
   ChevronDownIcon, ChevronLeftIcon, EllipsisHorizontalIcon, LinkIcon, NoSymbolIcon, PlusIcon, TrashIcon, XMarkIcon,
 } from '../icons'
 import { ApiError, getTodoBoard, unarchiveBoardTodo } from '../api'
@@ -17,13 +17,13 @@ import ChatAbout from '../chat/about/ChatAbout'
 import { pushError } from '../toast'
 import { sheetFeedLine } from '../components/sheetFeedLine'
 import { groupArchive } from './archive'
-import { SHEET_PRIORITY_WORD, sheetName, wakeLabel } from './board'
+import { SHEET_PRIORITY_WORD, sheetMarkOf, sheetName, wakeLabel } from './board'
 import { dateLabel, dueText } from './format'
 import Menu from './Menu'
 import { DueMenu, PRIORITIES, priorityName, RepeatMenu, SnoozeMenu } from './TaskMenus'
 import { CheckCircle, issueKey, repeatWords } from './TaskRow'
 import type { TaskBoard } from './useTaskBoard'
-import type { IssueState, SheetFeed, SheetItem, Todo } from './types'
+import type { IssueState, SheetFeed, SheetHiddenItem, SheetItem, Todo } from './types'
 import { FolderField } from '../work/FolderField'
 import { TaskChats } from '../work/TaskCard'
 import { folderLabel } from './folders'
@@ -352,14 +352,23 @@ function Related({ todo, all, onOpen, onPick, onRelate }: { todo: Todo; all: Tod
   )
 }
 
-export function SheetDetail({ item, feed, now, onClose, onFile }: { item: SheetItem; feed: SheetFeed | null; now: Date; onClose: () => void; onFile: (folderId: string | null) => void }) {
+export function SheetDetail({ item, feed, now, onClose, onFile, onMark }: {
+  item: SheetItem | SheetHiddenItem; feed: SheetFeed | null; now: Date; onClose: () => void; onFile: (folderId: string | null) => void
+  /** Done or snoozed for the owner only (the sheet unchanged), or put back with null. */
+  onMark?: (next: 'done' | 'snoozed' | null, until?: Date | null) => void
+}) {
   const source = sheetName(feed)
   const prio = item.priority ? SHEET_PRIORITY_WORD[item.priority] : 'None'
+  const mark = sheetMarkOf(item)
+  const snoozedUntil = mark?.state === 'snoozed' && mark.until && new Date(mark.until) > now ? mark.until : null
+  const [snoozeAt, setSnoozeAt] = useState<HTMLElement | null>(null)
   return (
     <div className="tk-pane-body" role="region" aria-label={`${source}: ${item.title}`}>
       <div className="tk-pane-bar">
-        <span className="tk-lead"><Hi icon={SheetIcon} size={17} className="tk-sheet-glyph" /></span>
-        <span className="tk-pane-state">{source} · read-only</span>
+        {onMark
+          ? <CheckCircle checked={mark?.state === 'done'} label={mark?.state === 'done' ? `Put ${item.title} back on your list` : `Mark ${item.title} done for you`} onToggle={() => onMark(mark?.state === 'done' ? null : 'done')} />
+          : <span className="tk-lead"><Hi icon={SheetIcon} size={17} className="tk-sheet-glyph" /></span>}
+        <span className="tk-pane-state">{mark?.state === 'done' ? 'Done for you' : snoozedUntil ? `Snoozed until ${wakeLabel(new Date(snoozedUntil), now)}` : `${source} · read-only`}</span>
         <span className="tk-saved" />
         <button type="button" className="tk-icon-btn" aria-label="Close" title="Close (Esc)" onClick={onClose}><Hi icon={XMarkIcon} size={17} /></button>
       </div>
@@ -374,11 +383,32 @@ export function SheetDetail({ item, feed, now, onClose, onFile }: { item: SheetI
           <FolderField folderId={item.folderId} title={item.title} className="tk-prop-btn tk-folder-btn" onPick={onFile} />
           {item.folderDefault && <p className="tk-hint">Where {source}'s rows go until you file them (Settings → Tasks).</p>}
         </Row>
+        {onMark && mark?.state !== 'done' && (
+          <Row label="Snooze">
+            <button type="button" className={`tk-prop-btn${snoozedUntil ? '' : ' is-empty'}`} aria-haspopup="menu" onClick={(event) => setSnoozeAt(event.currentTarget)}>
+              <Hi icon={SnoozeIcon} size={14} />{snoozedUntil ? `Until ${wakeLabel(new Date(snoozedUntil), now)}` : 'Not snoozed'}
+            </button>
+          </Row>
+        )}
       </div>
       {item.notes && <section className="tk-pane-section" aria-label="Notes and links"><h3>Notes &amp; links</h3><p className="tk-sheet-notes">{item.notes}</p></section>}
       <TaskChats taskRef={item.id} />
-      <a className="btn primary tk-open-sheet" href={item.url} target="_blank" rel="noreferrer"><Hi icon={ArrowTopRightOnSquareIcon} size={15} /> Open in sheet</a>
-      <p className="tk-pane-meta">Totem only reads this sheet. Change the row there; it shows here within two minutes.</p>
+      <div className="tk-sheet-actions">
+        <a className="btn primary tk-open-sheet" href={item.url} target="_blank" rel="noreferrer"><Hi icon={ArrowTopRightOnSquareIcon} size={15} /> Open in sheet</a>
+        {onMark && (
+          <button type="button" className="btn" onClick={() => onMark(mark?.state === 'done' ? null : 'done')}>
+            <Hi icon={mark?.state === 'done' ? ArrowUturnLeftIcon : CheckIcon} size={15} /> {mark?.state === 'done' ? 'Put back on my list' : 'Done for me'}
+          </button>
+        )}
+      </div>
+      <p className="tk-pane-meta">Totem only reads this sheet. Change the row there; it shows here within two minutes. Done and snooze here are yours alone: the sheet is unchanged.</p>
+      {snoozeAt && onMark && (
+        <SnoozeMenu
+          anchor={snoozeAt} now={now} onClose={() => setSnoozeAt(null)}
+          todo={{ id: item.id, title: item.title, dueDate: item.dueDate, snoozedUntil }}
+          onSnooze={(until) => onMark('snoozed', until)} onWake={() => onMark(null)}
+        />
+      )}
     </div>
   )
 }

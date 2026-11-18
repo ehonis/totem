@@ -1,9 +1,10 @@
 // One row of the shared task sheet, opened from the list (the task route, todo/[id],
-// with the row's "sheet:…" id). Read-only: Totem never writes to the sheet (a partner
-// shares it), so everything here is the sheet's own words, and the one action on the
-// row itself is Open in sheet, which opens that row in the browser or the Sheets app.
-// The one thing kept in Totem is where the row is filed (a chat project or folder, or
-// Personal), set from the Folder row (PUT /api/chat/task-folders/<row id>).
+// with the row's "sheet:…" id). Totem never writes to the sheet (a partner shares it),
+// so everything here is the sheet's own words, and Open in sheet opens that row in the
+// browser or the Sheets app. What is kept in Totem, for the owner only: where the row
+// is filed (a chat project or folder, or Personal; PUT /api/chat/task-folders/<row id>),
+// and whether it is done or snoozed for the owner (POST /api/todos/sheet/mark, store.ts
+// markSheet), which takes it off the owner's list and leaves the sheet unchanged.
 import React, { useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { router } from 'expo-router'
@@ -14,9 +15,9 @@ import IconUser from '@tabler/icons-react-native/dist/esm/icons/IconUser.mjs'
 import { colors, fonts } from '../../theme'
 import { T } from '../../ui/Text'
 import { Btn, IconBtn } from '../../ui/kit'
-import { Hi, ArrowTopRightOnSquareIcon, CalendarDaysIcon, FlagIcon, FolderIcon, UserIcon, XMarkIcon, type IconType } from '../../lib/icons'
+import { Hi, ArrowTopRightOnSquareIcon, ArrowUturnLeftIcon, CalendarDaysIcon, CheckIcon, FlagIcon, FolderIcon, UserIcon, XMarkIcon, type IconType } from '../../lib/icons'
 import { openUrl } from '../../lib/siblingApps'
-import type { SheetItem } from '../../lib/todos/types'
+import type { SheetHiddenItem, SheetItem } from '../../lib/todos/types'
 import { dueText, dueTone } from './format'
 import { SHEET_PRIORITY_WORD, linkParts } from './list'
 import { PropertyGroup, PropertyRow } from './detail/PropertyRow'
@@ -25,18 +26,26 @@ import { sheetPriorityColor } from './compose/labels'
 import { InlineError, tone } from './ui'
 import { folderActions, folderFor, folderLabel, folderPicked } from './folders'
 import { useFolders } from './useFolders'
-import { fileSheet } from './store'
+import { fileSheet, markSheet } from './store'
+import { snoozeTimes } from './format'
+import { sheetMarkOf, wakeLabel } from './board'
+import { PickWhenSheet } from './ui'
+import { showMenu } from '../../ui/menu'
 import { ProjectIcon } from '../chat/ThreadIcon'
-import { tap, warn } from '../../ui/haptics'
+import { success, tap, warn } from '../../ui/haptics'
 
 /** A task route's id that names a sheet row rather than a task. */
 export const isSheetId = (id: string | undefined) => typeof id === 'string' && id.startsWith('sheet:')
 
-export default function SheetItemPage({ item, source, fetchedAt }: { item: SheetItem | null; source: string; fetchedAt: string | null }) {
+export default function SheetItemPage({ item, source, fetchedAt }: { item: SheetItem | SheetHiddenItem | null; source: string; fetchedAt: string | null }) {
   const insets = useSafeAreaInsets()
   const { projects } = useFolders()
   const [fileError, setFileError] = useState('')
+  const [markError, setMarkError] = useState('')
+  const [pick, setPick] = useState(false)
   const now = new Date()
+  const mark = sheetMarkOf(item, now)
+  const snoozedUntil = mark?.state === 'snoozed' && mark.until && new Date(mark.until) > now ? mark.until : null
   const head = (
     <View style={st.head}>
       <View style={st.headLeft}>
@@ -44,7 +53,7 @@ export default function SheetItemPage({ item, source, fetchedAt }: { item: Sheet
           <IconTable size={12} color={SHEET_GREEN} strokeWidth={2} />
           <T size={12} weight={600} color={SHEET_GREEN} numberOfLines={1}>{source}</T>
         </View>
-        <View style={st.pill}><T size={12} weight={600} muted>Read-only</T></View>
+        <View style={st.pill}><T size={12} weight={600} muted numberOfLines={1}>{mark?.state === 'done' ? 'Done for you' : snoozedUntil ? `Snoozed until ${wakeLabel(new Date(snoozedUntil), now)}` : 'Read-only'}</T></View>
       </View>
       <IconBtn icon={XMarkIcon} size={20} box={44} label="Close" onPress={() => router.back()} />
     </View>
@@ -69,6 +78,18 @@ export default function SheetItemPage({ item, source, fetchedAt }: { item: Sheet
     setFileError('')
     fileSheet(item.id, folder).catch((cause) => { warn(); setFileError(cause instanceof Error && cause.message ? cause.message : 'The row could not be filed there.') })
   }
+  const id = item.id
+  const setMark = (next: 'done' | 'snoozed' | null, until: Date | null = null) => {
+    tap()
+    setMarkError('')
+    markSheet(id, next, until).then(() => { success(); if (next) router.back() })
+      .catch((cause) => { warn(); setMarkError(cause instanceof Error && cause.message ? cause.message : 'The row could not be marked.') })
+  }
+  const snoozeMenu = () => showMenu([
+    ...snoozeTimes(now, item.dueDate).map((option) => ({ label: `${option.label} (${option.detail})`, onPress: () => setMark('snoozed', option.value) })),
+    // The picker waits for the action sheet to finish closing: iOS refuses a second presentation mid-animation.
+    { label: 'Pick a date and time', onPress: () => void setTimeout(() => setPick(true), 400) },
+  ], { title: 'Snooze until', message: `For you only; ${source} is unchanged.` })
   const due = item.dueDate ? dueTone(item.dueDate, now, 'todo') : ''
   const dueColor = due === 'overdue' ? tone.red.color : due === 'today' ? tone.amber.color : colors.text
   return (
@@ -91,6 +112,17 @@ export default function SheetItemPage({ item, source, fetchedAt }: { item: Sheet
           <T size={12.5} muted lineHeight={18}>{`Where ${source}’s rows go until you file them (Settings → Tasks).`}</T>
         ) : null}
         {fileError ? <InlineError>{fileError}</InlineError> : null}
+        {/* Done and snooze are the owner's alone, kept in Totem; the sheet is never written. */}
+        {mark ? (
+          <Btn icon={ArrowUturnLeftIcon} title="Put back on my list" onPress={() => setMark(null)} style={{ minHeight: 48 }} />
+        ) : (
+          <View style={st.actions}>
+            <Btn icon={CheckIcon} title="Done for me" onPress={() => setMark('done')} style={{ flex: 1, minHeight: 48 }} />
+            <Btn title="Snooze…" onPress={snoozeMenu} style={{ flex: 1, minHeight: 48 }} />
+          </View>
+        )}
+        {mark?.state === 'snoozed' ? <Btn title="Snooze until another time…" onPress={snoozeMenu} style={{ minHeight: 44 }} /> : null}
+        {markError ? <InlineError>{markError}</InlineError> : null}
         {item.notes ? (
           <View style={st.notes}>
             <T size={15} weight={600}>Notes & links</T>
@@ -111,9 +143,19 @@ export default function SheetItemPage({ item, source, fetchedAt }: { item: Sheet
           style={{ minHeight: 48 }}
         />
         <T size={12.5} muted lineHeight={18}>
-          {`Row ${item.row}. Change it in the sheet; Totem only reads it${fetchedAt ? `, last read ${new Date(fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}.`}
+          {`Row ${item.row}. Change it in the sheet; Totem only reads it${fetchedAt ? `, last read ${new Date(fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}. Done and snooze here are yours alone: the sheet is unchanged.`}
         </T>
       </ScrollView>
+      <PickWhenSheet
+        visible={pick}
+        title="Custom snooze time"
+        mode="datetime"
+        submitLabel="Snooze until selected time"
+        initial={new Date(now.getTime() + 60 * 60_000)}
+        minimum={now}
+        onClose={() => setPick(false)}
+        onSubmit={(value) => { setPick(false); setMark('snoozed', value) }}
+      />
     </View>
   )
 }
@@ -140,5 +182,6 @@ const st = StyleSheet.create({
   body: { paddingHorizontal: 16, paddingTop: 10, gap: 14 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingHorizontal: 14 },
   notes: { gap: 6 },
+  actions: { flexDirection: 'row', gap: 10 },
   link: { textDecorationLine: 'underline' },
 })

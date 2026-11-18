@@ -1,4 +1,5 @@
 import { TodoDomainError } from './errors.mjs';
+import { findSheetItem } from '../chat/task-link.mjs';
 
 const JSON_TYPE = { 'content-type': 'application/json; charset=utf-8' };
 const LEGACY_PRIORITY = Object.freeze({ 4: 'p1', 3: 'p2', 2: 'p3', 1: 'p4' });
@@ -139,8 +140,19 @@ function queryFrom(url) {
 // `issueStates`: the live state of linked GitHub issues (issue-states.mjs).
 // `sheetFolders`: gives each sheet row the folder it is filed under (`folderId`),
 // its own filing or the sheet's default (fileSheetItems in bridge.mjs).
-export function createTodoHttpHandler({ service, commands, sheetFeed = null, issueStates = null, sheetFolders = null, now = () => new Date().toISOString(), maxBodyBytes = 1_000_000 } = {}) {
+// `sheetMarks`: the owner's own done and snoozed marks on sheet rows, kept in
+// Totem and never written to the sheet (todos/sheet-marks.mjs). `onSheetMark`
+// is told each change, for the action log.
+export function createTodoHttpHandler({ service, commands, sheetFeed = null, issueStates = null, sheetFolders = null, sheetMarks = null, onSheetMark = null, now = () => new Date().toISOString(), maxBodyBytes = 1_000_000 } = {}) {
   if (!service || !commands) throw new TypeError('createTodoHttpHandler requires service and commands');
+  // The feed as this owner sees it: each row filed under its folder, and the rows
+  // he marked done or snoozed moved from `items` to `hidden`.
+  async function ownersSheet(feed) {
+    if (!Array.isArray(feed?.items)) return feed;
+    let out = sheetFolders ? await sheetFolders(feed) : feed;
+    if (sheetMarks) out = await sheetMarks.apply(out);
+    return out;
+  }
   return async function todoHttpHandler(req, res, suppliedUrl) {
     const url = suppliedUrl instanceof URL ? suppliedUrl : new URL(req.url, 'http://localhost');
     const path = url.pathname;
@@ -190,7 +202,30 @@ export function createTodoHttpHandler({ service, commands, sheetFeed = null, iss
         const feed = sheetFeed
           ? await sheetFeed.read({ refresh: url.searchParams.get('refresh') === '1' })
           : { configured: false, items: [], reason: 'The task sheet is not available on this server.' };
-        send(res, 200, sheetFolders && Array.isArray(feed?.items) ? await sheetFolders(feed) : feed);
+        send(res, 200, await ownersSheet(feed));
+        return true;
+      }
+      // Done or snoozed, for the owner only: the row is untouched in the sheet.
+      if (req.method === 'POST' && path === '/api/todos/sheet/mark') {
+        if (!sheetFeed || !sheetMarks) throw bad('SHEET_MARKS_UNAVAILABLE', 'The task sheet is not available on this server.', 503);
+        const body = await readJson(req, maxBodyBytes);
+        const state = body.state ?? null;
+        if (state !== null && state !== 'done' && state !== 'snoozed') throw bad('INVALID_SHEET_MARK', 'state must be "done", "snoozed" or null.');
+        if (typeof body.id !== 'string' || !body.id.startsWith('sheet:')) throw bad('INVALID_SHEET_MARK', 'id must be a sheet row id.');
+        const feed = await sheetFeed.read();
+        // Marked from a list read a minute ago: the row is found again by title if it moved.
+        const row = findSheetItem(feed?.items, body.id);
+        if (state && !row) throw bad('SHEET_ROW_NOT_FOUND', 'That row is no longer open on the sheet for you.', 404);
+        const ref = row?.id ?? body.id;
+        let saved;
+        try {
+          if (!state && body.id !== ref) await sheetMarks.set(body.id, { state: null });
+          saved = await sheetMarks.set(ref, { state, until: body.until ?? null, title: row?.title ?? '', row });
+        } catch (error) {
+          throw bad('INVALID_SHEET_MARK', error.message || 'The mark was not saved.', error.status || 400);
+        }
+        onSheetMark?.({ ref, state, until: saved?.[ref]?.until ?? null, title: row?.title ?? '' });
+        send(res, 200, await ownersSheet(feed));
         return true;
       }
       if (req.method === 'GET' && path === '/api/todos/venture-tags') {

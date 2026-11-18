@@ -524,6 +524,12 @@ export const getSheetFeed = ({ refresh = false }: { refresh?: boolean } = {}) =>
  */
 export const fileSheetRow = (id: string, folderId: string | null) =>
   sendJSON(`/api/chat/task-folders/${encodeURIComponent(id)}`, 'PUT', { projectId: folderId }) as Promise<{ folders: Record<string, string> }>
+/**
+ * Mark a sheet row done or snoozed for the owner only, or put it back with null. Kept
+ * in Totem, never written to the sheet (todos/sheet-marks.mjs). Answers the feed, as GET does.
+ */
+export const markSheetRow = (id: string, state: 'done' | 'snoozed' | null, until: Date | null = null) =>
+  sendJSON('/api/todos/sheet/mark', 'POST', { id, state, ...(state === 'snoozed' && until ? { until: until.toISOString() } : {}) }) as Promise<SheetFeed>
 /** Set a task's GitHub issue link (https://github.com/<owner>/<repo>/issues/<n>), or clear it with null. */
 export const setIssueLink = (id: string, url: string | null) =>
   sendJSON(`/api/todos/${encodeURIComponent(id)}/issue-link`, 'PUT', { url }) as Promise<{ todo: Todo }>

@@ -4,7 +4,7 @@
 // row's comes filed by the bridge). Pure, so the panel and its tests read the
 // same rules.
 import type { ChatThread, Project } from '../chat/types'
-import type { SheetItem, Todo } from '../todos/types'
+import type { SheetHiddenItem, SheetItem, SheetMark, Todo } from '../todos/types'
 
 /** One thing the panel lists: a local task or a sheet row, on one scale. */
 export interface WorkTask {
@@ -31,6 +31,8 @@ export interface WorkTask {
   todo?: Todo
   /** The row itself, for a sheet item. */
   sheet?: SheetItem
+  /** A sheet row the owner marked done or snoozed in Totem (the sheet is untouched). */
+  mark?: SheetMark
 }
 
 export type WorkSort = 'due' | 'priority' | 'activity' | 'title'
@@ -71,12 +73,19 @@ export function fromTodo(t: Todo): WorkTask {
   }
 }
 
-export function fromSheet(i: SheetItem): WorkTask {
+/** A sheet row; one the owner marked (the feed's `hidden`) is done or snoozed here, as a task would be. */
+export function fromSheet(i: SheetItem | SheetHiddenItem): WorkTask {
+  const mark = 'mark' in i ? i.mark : undefined
   return {
     ref: i.id, kind: 'sheet', title: i.title, dueDate: i.dueDate, priority: i.priority ? SHEET_PRIORITY[i.priority] : 1,
-    done: false, status: i.status, url: i.url, updatedAt: 0,
-    folderId: i.folderId ?? null, sheet: i,
+    done: mark?.state === 'done', ...(mark?.state === 'snoozed' ? { hidden: true } : {}), status: i.status, url: i.url, updatedAt: 0,
+    folderId: i.folderId ?? null, sheet: i, ...(mark ? { mark } : {}),
   }
+}
+
+/** What the snooze menu reads, for a local task or a sheet row. */
+export function snoozeSubject(task: WorkTask): Pick<Todo, 'id' | 'title' | 'dueDate' | 'snoozedUntil'> {
+  return task.todo ?? { id: task.ref, title: task.title, dueDate: task.dueDate, snoozedUntil: task.mark?.state === 'snoozed' ? task.mark.until ?? null : null }
 }
 
 /** Open, not snoozed, not archived or deleted: what belongs on the panel. */

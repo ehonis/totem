@@ -1,7 +1,8 @@
 // The board's lifecycle panels (web/src/todos/TodoLifecyclePanels.tsx, plus the Done
 // column's archive, whose header a phone never shows) as one sheet per panel, opened
 // from the board's "…" menu, its snoozed chip and its archive link: snoozed tasks
-// (soonest back first, each with Wake now), the recycle bin, the archive by
+// (soonest back first, each with Wake now; the shared sheet's rows the owner snoozed
+// (for the owner only) come after them, with Put back), the recycle bin, the archive by
 // day/week/month/year, retention.
 import React, { useEffect, useState } from 'react'
 import { SectionList, StyleSheet, View } from 'react-native'
@@ -18,8 +19,9 @@ import { groupArchive, type ArchivePeriod } from '../../lib/todos/archive'
 import type { TodoPreferences } from '../../lib/todos/types'
 import TodoCard from './TodoCard'
 import { archiveHourLabel } from './format'
-import { loadBoard, restoreTodo, showArchive, useBoard, wakeTodo } from './store'
+import { loadBoard, markSheet, restoreTodo, showArchive, useBoard, wakeTodo } from './store'
 import { byWake, wakeLabel } from './board'
+import { sheetName, sheetSnoozed } from '../../lib/todos/board.ts'
 import { DateField, Field, FieldInput, InlineError, InlineNotice, SheetFrame, SheetHead } from './ui'
 import { openTodo } from './nav'
 
@@ -59,7 +61,14 @@ function Panels({ panel }: { panel: Exclude<Panel, 'archive'> }) {
     try { await wakeTodo(id); success() }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Task could not be woken.') }
   }
+  async function wakeRow(id: string) {
+    setError('')
+    try { await markSheet(id, null); success() }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'The row could not be put back.') }
+  }
   const now = new Date()
+  const asleepRows = sheetSnoozed(board.sheet, now)
+  const source = sheetName(board.sheet)
   async function purge() {
     const days = prefs.recyclePurgeDays ?? 30
     if (!(await confirm('Purge eligible deleted tasks?', { message: `Tasks in the recycle bin for more than ${days} days are removed for good. The task database is backed up first.`, confirmLabel: 'Purge' }))) return
@@ -83,7 +92,7 @@ function Panels({ panel }: { panel: Exclude<Panel, 'archive'> }) {
       <InlineError>{error}</InlineError>
       <InlineNotice>{notice}</InlineNotice>
       {panel === 'snoozed' ? (
-        board.snoozed.length ? (
+        board.snoozed.length || asleepRows.length ? (
           <View style={st.rows}>
             {byWake(board.snoozed).map((todo, index) => {
               const at = todo.snoozedUntil ? new Date(todo.snoozedUntil) : null
@@ -100,6 +109,22 @@ function Panels({ panel }: { panel: Exclude<Panel, 'archive'> }) {
                     ) : null}
                   </Press>
                   <Btn compact title="Wake now" onPress={() => void wake(todo.id)} style={{ minHeight: 44 }} />
+                </View>
+              )
+            })}
+            {asleepRows.map((item, index) => {
+              const at = item.mark.until ? new Date(item.mark.until) : null
+              return (
+                <View key={item.id} style={[st.row, index === 0 && !board.snoozed.length && st.first]}>
+                  <Press onPress={() => openTodo({ id: item.id })} style={{ flex: 1, minHeight: 44, justifyContent: 'center', gap: 2 }} accessibilityRole="button"
+                    accessibilityLabel={`${item.title}, from ${source}, snoozed for you${at ? `, back ${wakeLabel(at, now)}` : ''}`} accessibilityHint="Opens the row">
+                    <T size={14} lineHeight={19} numberOfLines={2}>{item.title}</T>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Hi icon={ClockIcon} size={12} color={colors.muted} />
+                      <T size={12} muted numberOfLines={1} style={{ flexShrink: 1 }}>{`${source}${at ? ` · back ${wakeLabel(at, now)}` : ''}`}</T>
+                    </View>
+                  </Press>
+                  <Btn compact title="Wake now" onPress={() => void wakeRow(item.id)} style={{ minHeight: 44 }} />
                 </View>
               )
             })}

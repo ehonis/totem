@@ -3,7 +3,7 @@
 // (mobile/src/features/todos/shared.test.mjs checks it). No React, React Native or
 // DOM, so vitest and node's test runner both load it as is. Nothing here changes a
 // task; it only decides where each one is drawn. A task is open or done.
-import type { SheetFeed, SheetItem, Todo } from './types'
+import type { SheetFeed, SheetHiddenItem, SheetItem, SheetMark, Todo } from './types'
 import { dateKey, isDayKey } from './format.ts'
 
 /* ------------------------------------------------------------------ */
@@ -37,6 +37,51 @@ export function sectionFor(dueDate: string | null, today: string): SectionKey {
 export function sheetName(feed: SheetFeed | null | undefined): string {
   const title = feed && feed.configured ? feed.title?.trim() : ''
   return title || 'Task sheet'
+}
+
+/**
+ * The feed with one row marked done or snoozed for the owner (moved from `items` to
+ * `hidden`), or put back with null: what the bridge answers, drawn before it does.
+ * The sheet itself is never changed (todos/sheet-marks.mjs).
+ */
+export function withSheetMark(feed: SheetFeed, id: string, mark: SheetMark | null): SheetFeed {
+  if (!feed.configured) return feed
+  const hidden = feed.hidden ?? []
+  const row: SheetItem | undefined = feed.items.find((item) => item.id === id) ?? hidden.find((item) => item.id === id)
+  if (!row) return feed
+  const { mark: _old, ...plain } = row as SheetHiddenItem
+  const items = feed.items.filter((item) => item.id !== id)
+  const rest = hidden.filter((item) => item.id !== id)
+  return mark ? { ...feed, items, hidden: [...rest, { ...plain, mark }] } : { ...feed, items: [...items, plain], hidden: rest }
+}
+
+/**
+ * A sheet row's mark, or null when the owner has not marked it. With `now`, a snooze
+ * that has run out counts as no mark (what an Undo should put back).
+ */
+export function sheetMarkOf(item: SheetItem | SheetHiddenItem | null | undefined, now?: Date): SheetMark | null {
+  const mark = (item as Partial<SheetHiddenItem> | null | undefined)?.mark ?? null
+  if (mark && now && mark.state === 'snoozed' && !(mark.until && new Date(mark.until) > now)) return null
+  return mark
+}
+
+/** The rows the owner snoozed and that are still asleep at `now`, the soonest back first. */
+export function sheetSnoozed(feed: SheetFeed | null | undefined, now: Date): SheetHiddenItem[] {
+  const at = (item: SheetHiddenItem) => (item.mark.until ? new Date(item.mark.until).getTime() : Number.NaN)
+  return (feed?.hidden ?? [])
+    .filter((item) => item.mark.state === 'snoozed' && at(item) > now.getTime())
+    .sort((a, b) => at(a) - at(b) || a.id.localeCompare(b.id))
+}
+
+/** How many sheet rows the owner marked done today: they count toward "done today" beside finished tasks. */
+export function sheetDoneToday(feed: SheetFeed | null | undefined, now: Date): number {
+  const today = dayKey(now)
+  return (feed?.hidden ?? []).filter((item) => item.mark.state === 'done' && dayKey(new Date(item.mark.at)) === today).length
+}
+
+/** The rows the owner marked done (the sheet still has them open), the latest first. */
+export function sheetDone(feed: SheetFeed | null | undefined): SheetHiddenItem[] {
+  return (feed?.hidden ?? []).filter((item) => item.mark.state === 'done').sort((a, b) => b.mark.at.localeCompare(a.mark.at) || a.id.localeCompare(b.id))
 }
 
 /** A sheet row's priority as the sheet says it (the feed's 1, 2, 3). */

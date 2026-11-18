@@ -8,8 +8,10 @@
 // then manual position), and Completed is one folded row (features/todos/list.ts). A
 // status line says what is left today, what is done today, and how many are snoozed.
 // Ticking, snoozing, "not doing" and deleting offer Undo in one inline line at the
-// foot of the page, never a toast: the phone shows error toasts only. The task
-// detail, a sheet row's read-only detail, the composer and the lifecycle panels are
+// foot of the page, never a toast: the phone shows error toasts only. A sheet row
+// can be done or snoozed for the owner only (kept in Totem, the sheet unchanged):
+// a done one sits in Completed, a snoozed one in the Snoozed panel. The task
+// detail, a sheet row's detail, the composer and the lifecycle panels are
 // sheets (src/app/todo/*); the top bar carries the title.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshControl, StyleSheet, View } from 'react-native'
@@ -23,11 +25,12 @@ import { impact } from '../../ui/haptics'
 import { Hi, PlusIcon } from '../../lib/icons'
 import { bulkBoardTodos } from '../../lib/api'
 import { filterTodos } from '../../lib/todos/state'
-import type { Todo } from '../../lib/todos/types'
+import type { SheetItem, Todo } from '../../lib/todos/types'
+import { sheetDone, sheetDoneToday, sheetMarkOf, sheetSnoozed } from '../../lib/todos/board.ts'
 import { loadProjects } from '../../lib/chat/store'
 import { FAB_CLEARANCE } from '../../shell/Screen'
 import TodoCard from '../todos/TodoCard'
-import SheetCard from '../todos/SheetCard'
+import SheetCard, { type SheetMarkChange } from '../todos/SheetCard'
 import TodoToolbar, { type LifecyclePanel } from '../todos/TodoToolbar'
 import { boardActions } from '../todos/boardActions'
 import { afterDone, buildList, byWake, doneToday, nextWake, wakeLabel } from '../todos/board'
@@ -40,7 +43,7 @@ import { useFolders } from '../todos/useFolders'
 import { quote, undoText, type UndoKind } from '../todos/undo'
 import { ArchiveLink, BoardSkeleton, ClearNote, EmptyBoard, LoadError, SectionHeader, SheetLine, ShowMore, StatusLine } from '../todos/BoardParts'
 import { UndoLine, type UndoState } from '../todos/detail/bits'
-import { clearCreated, getBoard, loadBoard, loadIssueStates, loadSheet, setTodos, useBoard } from '../todos/store'
+import { clearCreated, getBoard, loadBoard, loadIssueStates, loadSheet, markSheet, setTodos, useBoard } from '../todos/store'
 import { openTodo } from '../todos/nav'
 import { dateLabel } from '../todos/format'
 import { LandFlash, useLandOn } from '../../ui/landing'
@@ -108,8 +111,9 @@ export default function TodosView({ active }: { active: boolean }) {
     const timer = setInterval(() => {
       const at = new Date()
       setNow(at)
-      // A snooze that ran out while the page was open: the bridge lists that task on the board again.
+      // A snooze that ran out while the page was open: the bridge lists that task (or sheet row) again.
       if (getBoard().snoozed.some((todo) => todo.snoozedUntil && new Date(todo.snoozedUntil) <= at)) void loadBoard()
+      if ((getBoard().sheet?.hidden ?? []).some((item) => item.mark.until && new Date(item.mark.until) <= at)) void loadSheet()
     }, 60_000)
     return () => clearInterval(timer)
   }, [active])
@@ -130,6 +134,9 @@ export default function TodosView({ active }: { active: boolean }) {
     return tasks ? scopedTodos(filterTodos(board.todos, tasks, now), shown, projects) : []
   }, [board.todos, shown, now, projects])
   const visibleRows = useMemo(() => visibleSheet(sheetItems, shown, now, projects), [sheetItems, shown, now, projects])
+  // Rows marked done for the owner follow the same scope and search, in Completed.
+  const visibleDone = useMemo(() => visibleSheet(sheetDone(sheet), { ...shown, due: undefined }, now, projects), [sheet, shown, now, projects])
+  const asleepRows = useMemo(() => sheetSnoozed(sheet, now), [sheet, now])
   // The chips count what is open, whatever else is filtered.
   const scopes = useMemo(() => {
     const open = buildList(board.todos, sheetItems, { now }).sections.flatMap((section) => section.items)
@@ -140,12 +147,15 @@ export default function TodosView({ active }: { active: boolean }) {
     return label === null ? null : { label, project: folderFor(folderId, projects) }
   }, [projects, scope])
   const rows = useMemo(() => listRows(visible, visibleRows, {
-    now, completedOpen: view.completedOpen, showAllDone, archiveCount: board.archiveCount, filtered: filtering,
-  }), [visible, visibleRows, now, view.completedOpen, showAllDone, board.archiveCount, filtering])
+    now, completedOpen: view.completedOpen, showAllDone, archiveCount: board.archiveCount, filtered: filtering, sheetDone: visibleDone,
+  }), [visible, visibleRows, visibleDone, now, view.completedOpen, showAllDone, board.archiveCount, filtering])
   const near = useMemo(() => orderNeighbours(rows), [rows])
-  const finishedToday = useMemo(() => doneToday(board.todos, now) + doneToday(board.archivedCompletions, now), [board.todos, board.archivedCompletions, now])
+  // Sheet rows marked done today count too, as on the web.
+  const finishedToday = useMemo(() => doneToday(board.todos, now) + doneToday(board.archivedCompletions, now) + sheetDoneToday(board.sheet, now), [board.todos, board.archivedCompletions, board.sheet, now])
   const left = useMemo(() => leftToday(board.todos, sheetItems, now), [board.todos, sheetItems, now])
-  const wakeAt = useMemo(() => nextWake(board.snoozed, now), [board.snoozed, now])
+  // Snoozed tasks and snoozed sheet rows, as one count and one "next back".
+  const snoozedCount = board.snoozed.length + asleepRows.length
+  const wakeAt = useMemo(() => nextWake([...board.snoozed, ...asleepRows.map((item) => ({ snoozedUntil: item.mark.until ?? null }))], now), [board.snoozed, asleepRows, now])
   const wakeText = wakeAt ? wakeLabel(wakeAt, now) : null
   const note = sheetNote(sheet, board.sheetError)
 
@@ -225,6 +235,23 @@ export default function TodosView({ active }: { active: boolean }) {
     offer('delete', todo, () => actions.restore(todo))
   }
 
+  // A sheet row, done or snoozed for the owner only; Undo puts its mark back as it was.
+  async function markRow(item: SheetItem, next: SheetMarkChange, until?: Date) {
+    const prior = sheetMarkOf((getBoard().sheet?.hidden ?? []).find((row) => row.id === item.id), new Date())
+    setMoveError('')
+    try {
+      await markSheet(item.id, next, until ?? null)
+    } catch (cause) {
+      setMoveError(cause instanceof Error && cause.message ? cause.message : next ? 'The row could not be marked.' : 'The row could not be put back.')
+      return
+    }
+    if (!next) return
+    const text = next === 'done'
+      ? `Done for you: ${quote(item.title)}. ${source} is unchanged.`
+      : `Snoozed ${quote(item.title)} until ${until ? wakeLabel(until, new Date()) : 'later'}.`
+    setUndo({ id: Date.now(), text, action: { label: 'Undo', run: () => { impact(); void markSheet(item.id, prior?.state ?? null, prior?.until ? new Date(prior.until) : null).catch(() => {}) } } })
+  }
+
   async function bulk(operation: string, value?: unknown) {
     if (!selection.size) return
     const chosen = getBoard().todos.filter((todo) => selection.has(todo.id))
@@ -261,14 +288,14 @@ export default function TodosView({ active }: { active: boolean }) {
   const fabBottom = Math.max(insets.bottom, 14) + 8 + 5
   const error = board.error
   const todos = board.todos
-  const snoozedNote = board.snoozed.length
-    ? `${board.snoozed.length.toLocaleString()} snoozed${wakeText ? `, the next back ${wakeText}` : ''}.`
+  const snoozedNote = snoozedCount
+    ? `${snoozedCount.toLocaleString()} snoozed${wakeText ? `, the next back ${wakeText}` : ''}.`
     : null
   const upcoming = useMemo(() => {
-    const ahead = byWake(board.snoozed)[0]
+    const ahead = byWake([...board.snoozed, ...asleepRows.map((item) => ({ id: item.id, title: item.title, snoozedUntil: item.mark.until ?? null }))])[0]
     if (!ahead) return null
     return `Next back: ${quote(ahead.title)}${wakeText ? `, ${wakeText}` : ''}.`
-  }, [board.snoozed, wakeText])
+  }, [board.snoozed, asleepRows, wakeText])
 
   // The first date ahead, for "nothing due today"; the tasks themselves are the cards under the line.
   const nextUp = useMemo(() => {
@@ -286,7 +313,13 @@ export default function TodosView({ active }: { active: boolean }) {
     if (row.kind === 'sheet') {
       // A sheet row names its folder only when filed in a project: Personal on every row would be noise beside the sheet's name.
       const folder = folderOf(row.item.folderId)
-      return <SheetCard item={row.item} source={source} now={now} dueSection={row.section} dim={bulkMode} folder={folder?.project ? { label: folder.label, project: folder.project } : null} />
+      return (
+        <SheetCard
+          item={row.item} source={source} now={now} dueSection={row.section === 'done' ? undefined : row.section} dim={bulkMode}
+          folder={folder?.project ? { label: folder.label, project: folder.project } : null}
+          onMark={(item, next, until) => markRow(item, next, until)} swipeable={!bulkMode}
+        />
+      )
     }
     const todo = row.todo
     const pair = row.section !== 'done' ? near.get(todo.id) : undefined
@@ -343,7 +376,7 @@ export default function TodosView({ active }: { active: boolean }) {
         ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
         ListHeaderComponent={(
           <>
-            <StatusLine ready={board.loaded} leftToday={left} doneToday={finishedToday} snoozed={board.snoozed.length} nextWake={wakeText} onSnoozed={() => openPanel('snoozed')} />
+            <StatusLine ready={board.loaded} leftToday={left} doneToday={finishedToday} snoozed={snoozedCount} nextWake={wakeText} onSnoozed={() => openPanel('snoozed')} />
             {note?.tone === 'problem' ? <SheetLine tone="problem" text={note.text} onRetry={() => void loadSheet({ refresh: true })} /> : null}
           </>
         )}
@@ -365,7 +398,7 @@ export default function TodosView({ active }: { active: boolean }) {
     <View style={st.view}>
       <TodoToolbar
         query={shown} scopes={scopes} bulkMode={bulkMode} selectedCount={selection.size}
-        lifecycle={{ snoozed: board.snoozed.length, nextWake: wakeText, deleted: board.deleted.length, archived: board.archiveCount }}
+        lifecycle={{ snoozed: snoozedCount, nextWake: wakeText, deleted: board.deleted.length, archived: board.archiveCount }}
         onQuery={setQuery}
         onBulkMode={(value) => { setBulkMode(value); if (!value) setSelection(new Set()) }}
         onBulk={(operation, value) => void bulk(operation, value)}

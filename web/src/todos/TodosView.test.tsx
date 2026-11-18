@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TodosView from '../components/TodosView'
 import ToastHost from '../components/ToastHost'
 import type { SheetFeed, Todo } from './types'
+import { withSheetMark } from './board'
 
 // Monday 9 November 2026, 10:00 local.
 const NOW = new Date(2026, 10, 9, 10, 0, 0)
@@ -66,6 +67,10 @@ function route(url: string, method: string, body: any): Response {
       if (status === 'done' && todo.recurrence && todo.dueDate) fake.todos = [...fake.todos, task({ id: `${id}-next`, title: todo.title, recurrence: todo.recurrence, dueDate: '2026-11-17' })]
     }
     return json({ todos: changed })
+  }
+  if (path === '/api/todos/sheet/mark' && method === 'POST') {
+    fake.sheet = withSheetMark(fake.sheet, body.id, body.state ? { state: body.state, at: NOW.toISOString(), ...(body.until ? { until: body.until } : {}) } : null)
+    return json(fake.sheet)
   }
   if (path === '/api/todos/sheet') return fake.sheetFails ? json({ error: 'Drive said no' }, 500) : json(fake.sheet)
   if (path === '/api/todos/completed') return json({ todos: fake.recent ?? [] })
@@ -146,10 +151,10 @@ describe('Tasks page', () => {
     expect(screen.getByRole('button', { name: /Completed today/ })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('Renew passport')).toBeNull()
 
-    // A sheet row sits in Today with the feed's name and no check circle.
+    // A sheet row sits in Today with the feed's mark where a task has its check circle.
     const sheetRow = row('Order banner stands')
-    // Named by the icon's tooltip, not repeated as text on every row.
-    expect(within(sheetRow).getByTitle('Team HQ (read-only)')).toBeVisible()
+    // Named by the mark's tooltip, not repeated as text on every row.
+    expect(within(sheetRow).getByRole('button', { name: 'Mark Order banner stands done for you (Team HQ is unchanged)' })).toBeVisible()
     expect(within(sheetRow).queryByText('Team HQ')).toBeNull()
     expect(within(sheetRow).queryByText(/in progress/i)).toBeNull()
     // Its flag is coloured by meaning: the sheet's High is a task's P2 (amber), never P1 red.
@@ -397,11 +402,37 @@ describe('Tasks page', () => {
     const pane = await screen.findByRole('region', { name: 'Team HQ: Order banner stands' })
     expect(within(pane).getByRole('link', { name: /Open in sheet/ })).toHaveAttribute('href', SHEET.items[0].url)
     expect(within(pane).queryByRole('textbox')).toBeNull()
-    expect(within(pane).queryByRole('checkbox')).toBeNull()
-    // x does nothing to a row Totem cannot change.
+    expect(within(pane).getByText(/the sheet is unchanged/)).toBeVisible()
+  })
+
+  it('marks a sheet row done for the owner only, with x or its mark, and puts it back from Completed', async () => {
+    const user = await mount(BOARD())
     row('Order banner stands').focus()
     await user.keyboard('x')
+    await waitFor(() => expect(sent('POST', /\/api\/todos\/sheet\/mark$/)[0]?.body).toEqual({ id: 'sheet:0:7:abcd1234', state: 'done' }))
+    // Nothing else is sent: the sheet is never written, and no task moves.
     expect(sent('POST', /move$/)).toHaveLength(0)
+    expect(sent('PUT', /task-folders/)).toHaveLength(0)
+    await waitFor(() => expect(screen.queryByRole('row', { name: /^Order banner stands, Team HQ, (?!done)/ })).toBeNull())
+    expect(await screen.findByText(/Done: “Order banner stands”\. The sheet is unchanged\./)).toBeVisible()
+    // It counts as done today beside the task the fixture finished today.
+    expect(await screen.findByText(/· 2 done today/)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: /^Completed/ }))
+    const done = await screen.findByRole('row', { name: /Order banner stands, Team HQ, done for you/ })
+    await user.click(within(done).getByRole('checkbox', { name: 'Put Order banner stands back on your list' }))
+    await waitFor(() => expect(sent('POST', /\/api\/todos\/sheet\/mark$/)[1]?.body).toEqual({ id: 'sheet:0:7:abcd1234', state: null }))
+    await waitFor(() => expect(row('Order banner stands')).toBeVisible())
+  })
+
+  it('snoozes a sheet row with s, into the Snoozed fold', async () => {
+    const user = await mount(BOARD())
+    row('Order banner stands').focus()
+    await user.keyboard('s')
+    await user.click(await screen.findByRole('menuitem', { name: /Tomorrow/ }))
+    await waitFor(() => expect(sent('POST', /\/api\/todos\/sheet\/mark$/)[0]?.body).toMatchObject({ id: 'sheet:0:7:abcd1234', state: 'snoozed' }))
+    expect(new Date(sent('POST', /\/api\/todos\/sheet\/mark$/)[0].body.until).getTime()).toBeGreaterThan(NOW.getTime())
+    await user.click(await screen.findByRole('button', { name: /^Snoozed/ }))
+    expect(await screen.findByRole('row', { name: /Order banner stands, Team HQ, .*back / })).toBeVisible()
   })
 
   it('takes the archive and bin counts from the board, never downloading the archive to count it', async () => {

@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
-  afterDone, buildList, clearScope, compareListItems, rollsOnCompletion, sectionFor, sheetAsTaskPriority, sheetName, SHEET_PRIORITY_WORD, urgency,
+  afterDone, buildList, clearScope, compareListItems, rollsOnCompletion, sectionFor, sheetAsTaskPriority, sheetDone, sheetDoneToday, sheetMarkOf, sheetName, sheetSnoozed, SHEET_PRIORITY_WORD, urgency, withSheetMark,
   type ListItem, type TaskList,
 } from './board'
-import type { SheetItem, Todo } from './types'
+import type { SheetFeed, SheetItem, Todo } from './types'
 
 // Wednesday 4 November 2026, 10:00 local.
 const NOW = new Date(2026, 10, 4, 10, 0)
@@ -256,6 +256,48 @@ describe('the task sheet beside tasks', () => {
     expect(sheetName({ configured: true, url: 'x', fetchedAt: null, stale: false, error: 'boom', items: [] })).toBe('Task sheet')
     expect(sheetName({ configured: false, items: [], reason: 'Set it' })).toBe('Task sheet')
     expect(sheetName(null)).toBe('Task sheet')
+  })
+})
+
+describe('the owner’s own marks on sheet rows', () => {
+  const row = (n: number): SheetItem => ({ id: `sheet:0:${n}:0000000${n}`, row: n, title: `Row ${n}`, who: 'Owner', priority: null, status: '', dueDate: null, notes: '', url: `u#${n}` })
+  const feed = (): SheetFeed => ({ configured: true, url: 'x', fetchedAt: null, stale: false, error: null, items: [row(1), row(2), row(3)] })
+
+  it('moves a marked row to hidden and back, and leaves anything else alone', () => {
+    const done = withSheetMark(feed(), 'sheet:0:2:00000002', { state: 'done', at: '2026-11-04T09:00:00.000Z' })
+    expect(done.items.map((i) => i.row)).toEqual([1, 3])
+    expect(done.configured && done.hidden?.map((i) => [i.row, i.mark.state])).toEqual([[2, 'done']])
+    const back = withSheetMark(done, 'sheet:0:2:00000002', null)
+    expect(back.items.map((i) => i.row).sort()).toEqual([1, 2, 3])
+    expect(back.items.find((i) => i.row === 2)).not.toHaveProperty('mark')
+    expect(back.configured && back.hidden).toEqual([])
+    expect(withSheetMark(feed(), 'sheet:0:9:00000009', { state: 'done', at: 'x' })).toEqual(feed())
+    const off: SheetFeed = { configured: false, items: [], reason: 'Set it' }
+    expect(withSheetMark(off, 'sheet:0:1:00000001', { state: 'done', at: 'x' })).toBe(off)
+  })
+
+  it('reads a row’s mark, and counts a snooze that has run out as none when asked about now', () => {
+    const asleep = withSheetMark(feed(), 'sheet:0:1:00000001', { state: 'snoozed', at: 'a', until: new Date(2026, 10, 4, 9).toISOString() })
+    const row1 = asleep.configured ? asleep.hidden![0] : null
+    expect(sheetMarkOf(row1)?.state).toBe('snoozed')
+    expect(sheetMarkOf(row1, NOW)).toBeNull()
+    expect(sheetMarkOf(row1, new Date(2026, 10, 4, 8))?.state).toBe('snoozed')
+    expect(sheetMarkOf(row(2))).toBeNull()
+    expect(sheetMarkOf(undefined)).toBeNull()
+  })
+
+  it('lists snoozed rows still asleep, soonest back first, and done rows latest first', () => {
+    let f = withSheetMark(feed(), 'sheet:0:1:00000001', { state: 'snoozed', at: 'a', until: new Date(2026, 10, 6, 9).toISOString() })
+    f = withSheetMark(f, 'sheet:0:2:00000002', { state: 'snoozed', at: 'a', until: new Date(2026, 10, 5, 9).toISOString() })
+    f = withSheetMark(f, 'sheet:0:3:00000003', { state: 'snoozed', at: 'a', until: new Date(2026, 10, 4, 9).toISOString() })
+    expect(sheetSnoozed(f, NOW).map((i) => i.row)).toEqual([2, 1])
+    f = withSheetMark(f, 'sheet:0:1:00000001', { state: 'done', at: '2026-11-03T09:00:00.000Z' })
+    f = withSheetMark(f, 'sheet:0:2:00000002', { state: 'done', at: '2026-11-04T09:00:00.000Z' })
+    expect(sheetDone(f).map((i) => i.row)).toEqual([2, 1])
+    // One marked on the 4th, one on the 3rd: only the 4th's is done today.
+    expect(sheetDoneToday(f, new Date('2026-11-04T15:00:00.000Z'))).toBe(1)
+    expect(sheetDoneToday(null, NOW)).toBe(0)
+    expect(sheetSnoozed(null, NOW)).toEqual([])
   })
 })
 

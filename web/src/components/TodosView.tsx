@@ -11,10 +11,10 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { Hi, ChevronDownIcon, EllipsisHorizontalIcon, MagnifyingGlassIcon, PlusIcon, XMarkIcon, ArchiveBoxIcon, TrashIcon, ArrowPathIcon, AdjustmentsHorizontalIcon, CheckCircleIcon, FlagIcon } from '../icons'
 import { COMMANDS } from '../shortcuts'
 import { useCommand, isTypingTarget } from '../useShortcuts'
-import { buildList, byWake, nextWake, sectionFor, sheetName as nameOfSheet, wakeLabel, SECTION_TITLE, type ListItem, type SectionKey } from '../todos/board'
+import { buildList, byWake, nextWake, sectionFor, sheetDone, sheetDoneToday, sheetMarkOf, sheetName as nameOfSheet, sheetSnoozed, wakeLabel, SECTION_TITLE, type ListItem, type SectionKey } from '../todos/board'
 import { dateKey } from '../todos/format'
 import { filterTodos } from '../todos/state'
-import type { SheetItem, Todo } from '../todos/types'
+import type { SheetHiddenItem, SheetItem, Todo } from '../todos/types'
 import { useFolders, folderFor, folderLabel } from '../todos/folders'
 import { groupByFolder, inScope, itemFolder, projectChips, scopeFolder, subfolderChips } from '../todos/byFolder'
 import ProjectIcon from '../chat/ProjectIcon'
@@ -127,7 +127,11 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   const feed = board.sheet
   const sheetOn = feed?.configured === true
   const sheetName = nameOfSheet(feed)
-  const sheetItems = useMemo(() => (feed?.items ?? []), [feed])
+  // A row whose snooze ran out since the feed was read is back, as the bridge will say on its next read.
+  const sheetItems = useMemo<SheetItem[]>(() => [
+    ...(feed?.items ?? []),
+    ...(feed?.hidden ?? []).filter((item) => item.mark.state === 'snoozed' && !(item.mark.until && new Date(item.mark.until) > now)),
+  ], [feed, now])
   // A saved scope whose chip is gone (no sheet set up, its project deleted) shows everything.
   const savedFolder = scopeFolder(view.scope)
   const scope: Scope = (view.scope === 'sheet' && feed && !sheetOn) || (savedFolder && projects.length && !folderFor(savedFolder, projects)) ? 'all' : view.scope
@@ -149,6 +153,13 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
     return needle ? scoped.filter((item) => sheetMatches(item, needle)) : scoped
   }, [sheetItems, shows, needle])
   const list = useMemo(() => buildList(todos, sheet, { now }), [todos, sheet, now])
+  // Sheet rows the owner snoozed or marked done in Totem, in the folds with the tasks.
+  const sheetFilter = useCallback((rows: SheetHiddenItem[]) => {
+    const scoped = rows.filter((item) => shows({ kind: 'sheet', item }))
+    return needle ? scoped.filter((item) => sheetMatches(item, needle)) : scoped
+  }, [shows, needle])
+  const sheetAsleep = useMemo(() => sheetFilter(sheetSnoozed(feed, now)), [sheetFilter, feed, now])
+  const sheetFinished = useMemo(() => sheetFilter(sheetDone(feed)), [sheetFilter, feed])
   // What is drawn: the day groups, or (from the "…" menu) one group per folder.
   const drawn = useMemo(() => (view.groupBy === 'folder'
     ? groupByFolder(list.sections, projects).map((group) => ({ key: `f:${group.key}`, folder: group, items: group.items, place: null }))
@@ -157,8 +168,10 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   const allSnoozed = useMemo(() => board.todos.filter((todo) => todo.status !== 'done' && todo.snoozedUntil && new Date(todo.snoozedUntil) > now), [board.todos, now])
   const today = dateKey(now)
   const completed = list.completed
+  const snoozedCount = snoozed.length + sheetAsleep.length
+  const completedCount = completed.length + sheetFinished.length
   // Which headings are drawn: the sticky observer below re-runs only when this changes.
-  const drawnHeadings = `${board.loaded}:${drawn.map((section) => section.key).join(',')}:${snoozed.length > 0}:${completed.length > 0}`
+  const drawnHeadings = `${board.loaded}:${drawn.map((section) => section.key).join(',')}:${snoozedCount > 0}:${completedCount > 0}`
 
   // A section heading is drawn bare at rest and gets its band only while stuck to the
   // top of the list, so the glow is not cut into slabs. A 1 px sentinel above each
@@ -176,19 +189,19 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
     root.querySelectorAll('.tk-sentinel').forEach((el) => observer.observe(el))
     return () => observer.disconnect()
   }, [drawnHeadings])
-  const completedTitle = completed.every((todo) => todo.completedAt && dateKey(new Date(todo.completedAt)) === today) ? 'Completed today' : 'Completed'
+  const completedTitle = completed.every((todo) => todo.completedAt && dateKey(new Date(todo.completedAt)) === today) && sheetFinished.every((item) => dateKey(new Date(item.mark.at)) === today) ? 'Completed today' : 'Completed'
 
   // Rows in the order they are drawn: the keyboard walks this.
   const order = useMemo(() => {
     const keys: string[] = []
     for (const section of drawn) for (const item of section.items) keys.push(keyOf(item))
-    if (view.snoozedOpen) for (const todo of snoozed) keys.push(todo.id)
-    if (view.completedOpen) for (const todo of completed) keys.push(todo.id)
+    if (view.snoozedOpen) for (const row of [...snoozed, ...sheetAsleep]) keys.push(row.id)
+    if (view.completedOpen) for (const row of [...completed, ...sheetFinished]) keys.push(row.id)
     return keys
-  }, [drawn, snoozed, completed, view.snoozedOpen, view.completedOpen])
+  }, [drawn, snoozed, completed, sheetAsleep, sheetFinished, view.snoozedOpen, view.completedOpen])
 
   const todoById = useMemo(() => new Map(board.todos.map((todo) => [todo.id, todo])), [board.todos])
-  const sheetById = useMemo(() => new Map(sheetItems.map((item) => [item.id, item])), [sheetItems])
+  const sheetById = useMemo(() => new Map<string, SheetItem | SheetHiddenItem>([...(feed?.hidden ?? []), ...sheetItems].map((item) => [item.id, item])), [feed, sheetItems])
   // The keyboard cursor. When its row leaves (finished, snoozed, binned, moved out of
   // view), it stays at the same place in the list, on the row that took its spot, never
   // back at the top.
@@ -197,6 +210,8 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   const active = activeAt >= 0 ? activeKey : order[Math.min(lastIndex.current, order.length - 1)] ?? null
   useEffect(() => { const at = active ? order.indexOf(active) : -1; if (at >= 0) lastIndex.current = at }, [active, order])
 
+  // Done today: finished tasks plus sheet rows the owner marked done today.
+  const doneToday = board.doneTodayCount + sheetDoneToday(feed, now)
   const counts = {
     overdue: full.sections.find((section) => section.key === 'overdue')?.items.length ?? 0,
     today: full.sections.find((section) => section.key === 'today')?.items.length ?? 0,
@@ -204,21 +219,21 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   const liveLine = [
     counts.overdue ? `${counts.overdue.toLocaleString()} overdue` : null,
     counts.today ? `${counts.today.toLocaleString()} today` : null,
-    board.doneTodayCount ? `${board.doneTodayCount.toLocaleString()} done today` : null,
+    doneToday ? `${doneToday.toLocaleString()} done today` : null,
   ].filter(Boolean).join(' · ') || (board.loaded ? 'Nothing due today' : '')
 
   // The Snoozed fold's "next back" is about the snoozed tasks it holds (this scope and search).
-  const wakeAt = nextWake(snoozed, now)
+  const wakeAt = nextWake([...snoozed, ...sheetAsleep.map((item) => ({ snoozedUntil: item.mark.until ?? null }))], now)
   const summary: Summary = useMemo(() => {
     const upcoming = full.sections.find((section) => section.key === 'upcoming')?.items[0]
     const first = byWake(allSnoozed)[0]
     return {
-      overdue: counts.overdue, today: counts.today, doneToday: board.doneTodayCount,
+      overdue: counts.overdue, today: counts.today, doneToday,
       nextDue: upcoming ? (upcoming.kind === 'task' ? upcoming.todo.dueDate : upcoming.item.dueDate) : null,
       snoozed: allSnoozed.length,
       nextBack: first?.snoozedUntil ? { title: first.title, at: new Date(first.snoozedUntil) } : null,
     }
-  }, [full, allSnoozed, counts.overdue, counts.today, board.doneTodayCount])
+  }, [full, allSnoozed, counts.overdue, counts.today, doneToday])
 
   /* ---------------- focus and the pane ---------------- */
 
@@ -347,6 +362,13 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
     if (fromKeyboard) stepOff(todo.id)
     void board.complete(todo)
   }
+  /** A sheet row: done for the owner (the sheet unchanged), or a done one put back. */
+  // It leaves at once (no beat: nothing is saved to the sheet), so the cursor moves on.
+  const toggleSheet = (item: SheetItem | SheetHiddenItem) => {
+    if (sheetMarkOf(item)?.state === 'done') { void board.markSheet(item.id, null); return }
+    stepOff(item.id)
+    void board.markSheet(item.id, 'done')
+  }
   const toggleSelected = (id: string) => setSelection((current) => {
     const next = new Set(current)
     if (next.has(id)) next.delete(id); else next.add(id)
@@ -356,7 +378,8 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
 
   function rowMenuFor(key: string, kind: RowMenu['kind']) {
     const todo = todoById.get(key)
-    if (!todo || todo.status === 'done') return
+    const item = sheetById.get(key)
+    if (item ? kind !== 'snooze' || sheetMarkOf(item)?.state === 'done' : !todo || todo.status === 'done') return
     const row = rows.current.get(key) ?? null
     // The hover tools are hidden on a device without hover; then the menu hangs from the row's marks.
     const shown = (el: HTMLElement | null | undefined) => (el && el.getClientRects().length ? el : null)
@@ -395,9 +418,10 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
         event.preventDefault()
         if (selectMode && todo) return toggleSelected(key)
         if (todo) toggle(todo, true)
+        else if (item && !selectMode) toggleSheet(item)
         return
       case 's': case 'd': case 'p':
-        if (todo && !selectMode) { event.preventDefault(); rowMenuFor(key, event.key === 's' ? 'snooze' : event.key === 'd' ? 'due' : 'priority') }
+        if ((todo || (item && event.key === 's')) && !selectMode) { event.preventDefault(); rowMenuFor(key, event.key === 's' ? 'snooze' : event.key === 'd' ? 'due' : 'priority') }
         return
       case 'n':
         event.preventDefault()
@@ -495,25 +519,28 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
       onTools={(kind, anchor) => { setActiveKey(todo.id); setRowMenu({ kind, id: todo.id, anchor }) }}
     />
   )
-  const drawItem = (item: ListItem, place: SectionKey) => item.kind === 'task' ? drawTask(item.todo, place) : (
+  const drawSheet = (row: SheetItem | SheetHiddenItem, place: RowPlace) => (
     <SheetRow
-      key={item.item.id}
-      item={item.item}
+      key={row.id}
+      item={row}
       place={place}
       source={sheetName}
-      showFolder={rowFolder(item.item.folderId) !== null}
+      showFolder={rowFolder(row.folderId) !== null}
       now={now}
-      active={active === item.item.id}
-      open={openId === item.item.id}
+      active={active === row.id}
+      open={openId === row.id}
       selectMode={selectMode}
-      rowRef={rowRef(item.item.id)}
-      onFocusRow={() => setActiveKey(item.item.id)}
-      onOpen={() => { setActiveKey(item.item.id); openKey(item.item.id); focusRow(item.item.id, false) }}
+      rowRef={rowRef(row.id)}
+      onFocusRow={() => setActiveKey(row.id)}
+      onOpen={() => { setActiveKey(row.id); openKey(row.id); focusRow(row.id, false) }}
+      onDone={() => { setActiveKey(row.id); toggleSheet(row) }}
+      onTools={(kind, anchor) => { setActiveKey(row.id); setRowMenu({ kind, id: row.id, anchor }) }}
     />
   )
+  const drawItem = (item: ListItem, place: SectionKey) => item.kind === 'task' ? drawTask(item.todo, place) : drawSheet(item.item, place)
 
   const filtering = Boolean(needle) || scope !== 'all'
-  const nothing = !drawn.length && !snoozed.length && !completed.length
+  const nothing = !drawn.length && !snoozedCount && !completedCount
 
   // The sheet's state, once and quietly, wherever its rows would be drawn: the read
   // failed (rows gone, or the last good rows shown stale), or nothing is assigned.
@@ -544,7 +571,7 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   const headItems: MenuEntry[] = [
     { key: 'select', label: selectMode ? 'Stop selecting' : 'Select tasks', icon: CheckCircleIcon, onSelect: () => (selectMode ? endSelect() : setSelectMode(true)) },
     'separator',
-    { key: 'snoozed', label: 'Snoozed', detail: allSnoozed.length.toLocaleString(), icon: SnoozeIcon, onSelect: () => { setView((current) => ({ ...current, snoozedOpen: true })); requestAnimationFrame(() => { snoozedHead.current?.scrollIntoView?.({ block: 'start' }); snoozedHead.current?.focus() }) } },
+    { key: 'snoozed', label: 'Snoozed', detail: (allSnoozed.length + sheetSnoozed(feed, now).length).toLocaleString(), icon: SnoozeIcon, onSelect: () => { setView((current) => ({ ...current, snoozedOpen: true })); requestAnimationFrame(() => { snoozedHead.current?.scrollIntoView?.({ block: 'start' }); snoozedHead.current?.focus() }) } },
     { key: 'archive', label: 'Archive', detail: board.counts.archived.toLocaleString(), icon: ArchiveBoxIcon, onSelect: () => setPane({ kind: 'shelf', shelf: 'archive' }) },
     { key: 'deleted', label: 'Recycle bin', detail: board.counts.deleted.toLocaleString(), icon: TrashIcon, onSelect: () => setPane({ kind: 'shelf', shelf: 'deleted' }) },
     'separator',
@@ -571,7 +598,13 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
       />
     )
   } else if (paneSheet) {
-    paneBody = <SheetDetail key={paneSheet.id} item={paneSheet} feed={feed} now={now} onClose={closePane} onFile={(folderId) => void board.fileSheet(paneSheet.id, folderId)} />
+    paneBody = (
+      <SheetDetail
+        key={paneSheet.id} item={paneSheet} feed={feed} now={now} onClose={closePane}
+        onFile={(folderId) => void board.fileSheet(paneSheet.id, folderId)}
+        onMark={(next, until) => { if (next) stepOff(paneSheet.id); void board.markSheet(paneSheet.id, next, until) }}
+      />
+    )
   } else if (pane?.kind === 'shelf') {
     paneBody = <ShelfPane key={pane.shelf} kind={pane.shelf} board={board} onClose={closePane} />
   } else if (!overlay) {
@@ -580,6 +613,7 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
   const paneOpen = Boolean(paneTodo || paneSheet || pane?.kind === 'shelf')
 
   const menuTodo = rowMenu ? todoById.get(rowMenu.id) : undefined
+  const menuSheet = rowMenu && !menuTodo ? sheetById.get(rowMenu.id) : undefined
   const selectedIds = [...selection].filter((id) => todoById.has(id))
 
   return (
@@ -667,32 +701,34 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
                 </div>
               ))}
 
-              {snoozed.length > 0 && (
+              {snoozedCount > 0 && (
                 <div role="rowgroup" className="tk-section tk-fold" aria-labelledby="tk-h-snoozed">
                   <div className="tk-sentinel" aria-hidden="true" />
                   <div role="row" className="tk-section-head">
                     <span role="columnheader">
                       <button ref={snoozedHead} type="button" id="tk-h-snoozed" className="tk-fold-btn" aria-expanded={view.snoozedOpen} onClick={() => setView((current) => ({ ...current, snoozedOpen: !current.snoozedOpen }))}>
-                        <Hi icon={ChevronDownIcon} size={12} className="tk-fold-caret" />Snoozed<span className="tk-count">{snoozed.length}</span>
+                        <Hi icon={ChevronDownIcon} size={12} className="tk-fold-caret" />Snoozed<span className="tk-count">{snoozedCount}</span>
                         {wakeAt && <span className="tk-fold-note">next back {wakeLabel(wakeAt, now)}</span>}
                       </button>
                     </span>
                   </div>
                   {view.snoozedOpen && snoozed.map((todo) => drawTask(todo, 'snoozed'))}
+                  {view.snoozedOpen && sheetAsleep.map((row) => drawSheet(row, 'snoozed'))}
                 </div>
               )}
 
-              {completed.length > 0 && (
+              {completedCount > 0 && (
                 <div role="rowgroup" className="tk-section tk-fold" aria-labelledby="tk-h-completed">
                   <div className="tk-sentinel" aria-hidden="true" />
                   <div role="row" className="tk-section-head">
                     <span role="columnheader">
                       <button type="button" id="tk-h-completed" className="tk-fold-btn" aria-expanded={view.completedOpen} onClick={() => setView((current) => ({ ...current, completedOpen: !current.completedOpen }))}>
-                        <Hi icon={ChevronDownIcon} size={12} className="tk-fold-caret" />{completedTitle}<span className="tk-count">{completed.length}</span>
+                        <Hi icon={ChevronDownIcon} size={12} className="tk-fold-caret" />{completedTitle}<span className="tk-count">{completedCount}</span>
                       </button>
                     </span>
                   </div>
                   {view.completedOpen && completed.map((todo) => drawTask(todo, 'completed'))}
+                  {view.completedOpen && sheetFinished.map((row) => drawSheet(row, 'completed'))}
                 </div>
               )}
             </div>
@@ -702,11 +738,11 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
             <div className="tk-empty">
               {filtering
                 ? <><p>Nothing here{needle ? ` matches “${search.trim()}”` : ''}.</p><button type="button" className="btn compact" onClick={() => { setSearch(''); setView((current) => ({ ...current, scope: 'all', sub: null })) }}>Show everything</button></>
-                : <p>{board.doneTodayCount ? `All clear. ${plural(board.doneTodayCount, 'task')} done today.` : 'Nothing to do. Add a task above.'}</p>}
+                : <p>{doneToday ? `All clear. ${plural(doneToday, 'task')} done today.` : 'Nothing to do. Add a task above.'}</p>}
             </div>
           )}
           {board.loaded && !nothing && !drawn.length && !filtering && (
-            <p className="tk-clear">{board.doneTodayCount ? `All clear. ${plural(board.doneTodayCount, 'task')} done today.` : 'Nothing open right now.'}</p>
+            <p className="tk-clear">{doneToday ? `All clear. ${plural(doneToday, 'task')} done today.` : 'Nothing open right now.'}</p>
           )}
         </div>
 
@@ -722,6 +758,12 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
         <SnoozeMenu anchor={rowMenu.anchor} todo={menuTodo} now={now} onClose={() => { setRowMenu(null); backToList() }}
           onSnooze={(until) => { stepOff(menuTodo.id); void board.snooze(menuTodo, until) }}
           onWake={() => void board.wake(menuTodo)} />
+      )}
+      {rowMenu && menuSheet && rowMenu.kind === 'snooze' && (
+        <SnoozeMenu anchor={rowMenu.anchor} now={now} onClose={() => { setRowMenu(null); backToList() }}
+          todo={{ id: menuSheet.id, title: menuSheet.title, dueDate: menuSheet.dueDate, snoozedUntil: sheetMarkOf(menuSheet)?.until ?? null }}
+          onSnooze={(until) => { stepOff(menuSheet.id); void board.markSheet(menuSheet.id, 'snoozed', until) }}
+          onWake={() => void board.markSheet(menuSheet.id, null)} />
       )}
       {rowMenu && menuTodo && rowMenu.kind === 'due' && (
         <DueMenu anchor={rowMenu.anchor} dueDate={menuTodo.dueDate} title={menuTodo.title} idKey={menuTodo.id} now={now} onClose={() => { setRowMenu(null); backToList() }}

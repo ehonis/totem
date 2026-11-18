@@ -12,9 +12,9 @@ import * as todoApi from '../api'
 import { AuthError, getIssueStates, getRecentCompletions, getSheetFeed, getTodoBoard } from '../api'
 import { pushError, pushToast } from '../toast'
 import { announcing, onTasksChanged } from './bus'
-import { afterDone, rollsOnCompletion, wakeLabel } from './board'
+import { afterDone, rollsOnCompletion, sheetMarkOf, wakeLabel, withSheetMark } from './board'
 import { dateKey, dateLabel } from './format'
-import type { IssueStatesResponse, SheetFeed, Todo, TodoBoardCounts, TodoOutcome, TodoPatch } from './types'
+import type { IssueStatesResponse, SheetFeed, SheetHiddenItem, SheetItem, SheetMark, Todo, TodoBoardCounts, TodoOutcome, TodoPatch } from './types'
 
 /** How long a ticked row stays in place, checked, before it leaves for Completed. */
 export const DONE_BEAT_MS = 650
@@ -33,6 +33,7 @@ const unlinkRelatedTodo = announcing('board', todoApi.unlinkRelatedTodo)
 const updateBoardTodo = announcing('board', todoApi.updateBoardTodo)
 const bulkBoardTodos = announcing('board', todoApi.bulkBoardTodos)
 const fileSheetRow = announcing('board', todoApi.fileSheetRow, { sheet: true })
+const markSheetRow = announcing('board', todoApi.markSheetRow, { sheet: true })
 
 const FIELD: Record<string, string> = {
   title: 'title', description: 'description', dueDate: 'due date', priority: 'priority', area: 'area',
@@ -114,8 +115,19 @@ export function useTaskBoard({ onAuthError, now = () => new Date(), beatMs = DON
     }
   }, [set])
 
+  // Bumped by each mark: a feed read or a mark's answer that began before a later
+  // mark would draw that mark's row back, so it is dropped and the later one lands.
+  // A read that starts while a mark is still being saved may read the marks from
+  // before it, so it is dropped too: the mark's own answer is the fresher feed.
+  const markSeq = useRef(0)
+  const marking = useRef(0)
   const loadSheet = useCallback(async (refresh = false) => {
-    try { set({ sheet: await getSheetFeed({ refresh }), sheetError: '' }) } catch (cause) {
+    const seq = markSeq.current
+    const during = marking.current > 0
+    try {
+      const feed = await getSheetFeed({ refresh })
+      if (seq === markSeq.current && !during) set({ sheet: feed, sheetError: '' })
+    } catch (cause) {
       if (cause instanceof AuthError) { authError.current(); return }
       set({ sheetError: message(cause, 'The task sheet could not be read.') })
     }
@@ -314,6 +326,31 @@ export function useTaskBoard({ onAuthError, now = () => new Date(), beatMs = DON
     }
   }, [replace])
 
+  /**
+   * Mark a sheet row done or snoozed for the owner only, or put it back with null.
+   * Kept in Totem, never written to the sheet; drawn at once, with Undo.
+   */
+  const markSheet = useCallback(async function mark(id: string, next: 'done' | 'snoozed' | null, until: Date | null = null): Promise<void> {
+    const feed = latest.current.sheet
+    if (!feed?.configured) return
+    const row: SheetItem | SheetHiddenItem | undefined = feed.items.find((item) => item.id === id) ?? feed.hidden?.find((item) => item.id === id)
+    if (!row) return
+    const prior: SheetMark | null = sheetMarkOf(row, nowRef.current())
+    const seq = ++markSeq.current
+    set({ sheet: withSheetMark(feed, id, next ? { state: next, at: new Date().toISOString(), ...(next === 'snoozed' && until ? { until: until.toISOString() } : {}) } : null) })
+    marking.current += 1
+    try {
+      const answer = await markSheetRow(id, next, until).finally(() => { marking.current -= 1 })
+      if (seq === markSeq.current) set({ sheet: answer, sheetError: '' })
+      const undo = () => mark(id, prior?.state ?? null, prior?.until ? new Date(prior.until) : null)
+      if (next === 'done') undoable(`Done: ${quote(row.title)}. The sheet is unchanged.`, undo)
+      else if (next === 'snoozed' && until) undoable(`Snoozed until ${wakeLabel(until, nowRef.current())}`, undo)
+    } catch (cause) {
+      fail(cause, next ? 'The row could not be marked.' : 'The row could not be put back.')
+      void loadSheet()
+    }
+  }, [fail, loadSheet, set])
+
   /** File a sheet row under a folder (null: Personal, even when the sheet has a default). */
   const fileSheet = useCallback(async (id: string, folderId: string | null) => {
     const feed = latest.current.sheet
@@ -424,7 +461,7 @@ export function useTaskBoard({ onAuthError, now = () => new Date(), beatMs = DON
     ...state, ticking, revealId, doneTodayCount,
     clearReveal: () => setRevealId(null),
     load, loadBoard, loadSheet,
-    complete, reopen, notDoing, snooze, wake, remove, restore, update, create, linkIssue, addNote, relate, bulk, fileSheet,
+    complete, reopen, notDoing, snooze, wake, remove, restore, update, create, linkIssue, addNote, relate, bulk, fileSheet, markSheet,
     noteDraft, setNoteDraft,
   }
 }

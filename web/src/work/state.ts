@@ -22,6 +22,7 @@ const moveBoardTodo = announcing('work', todoApi.moveBoardTodo)
 const deleteBoardTodo = announcing('work', todoApi.deleteBoardTodo)
 const restoreBoardTodo = announcing('work', todoApi.restoreBoardTodo)
 const fileSheetRow = announcing('work', todoApi.fileSheetRow, { sheet: true })
+const markSheetRow = announcing('work', todoApi.markSheetRow, { sheet: true })
 
 export interface WorkState {
   /** Local tasks on the board (open, done and snoozed) plus sheet rows, by ref. */
@@ -109,7 +110,8 @@ export function loadWork(): Promise<void> {
       const now = new Date()
       const todos = board.todos.filter((t) => !t.deletedAt).map((t) => local(t, now))
       const keep = state.tasks.filter((t) => t.kind === 'local' && fetchedExtra.has(t.ref) && !todos.some((l) => l.ref === t.ref))
-      const rows = sheet?.configured ? sheet.items.map(fromSheet) : []
+      // Rows marked done or snoozed come too, so a chat can still name its row and the card can put it back.
+      const rows = sheet?.configured ? [...sheet.items, ...(sheet.hidden ?? [])].map(fromSheet) : []
       set({
         tasks: [...todos, ...keep, ...rows],
         sheetName: sheet?.configured ? sheet.title || 'Shared sheet' : '',
@@ -189,9 +191,34 @@ export async function setTaskFolder(ref: string, projectId: string | null) {
   }
 }
 
-/** Mark a local task done, with Undo. Sheet rows are finished in the sheet. */
+/**
+ * Mark a sheet row done or snoozed for the owner only, or put it back with null:
+ * kept in Totem, never written to the sheet. Drawn at once, with Undo.
+ */
+export async function markSheet(ref: string, next: 'done' | 'snoozed' | null, until: Date | null = null) {
+  const before = state.tasks.find((t) => t.ref === resolveRef(ref, state.tasks))
+  if (!before || before.kind !== 'sheet') return
+  const mark = next ? { state: next, at: new Date().toISOString(), ...(next === 'snoozed' && until ? { until: until.toISOString() } : {}) } : undefined
+  const { mark: _old, hidden: _hidden, ...plain } = before
+  replaceTask({ ...plain, done: next === 'done', ...(next === 'snoozed' ? { hidden: true } : {}), ...(mark ? { mark } : {}) })
+  try {
+    await markSheetRow(before.ref, next, until)
+    // A snooze that has run out since is no mark to put back.
+    const prior = before.mark?.state === 'snoozed' && !(before.mark.until && new Date(before.mark.until) > new Date()) ? null : before.mark ?? null
+    const undo = { label: 'Undo', onClick: () => { void markSheet(before.ref, prior?.state ?? null, prior?.until ? new Date(prior.until) : null) } }
+    if (next === 'done') pushToast(`Done: ${quote(before.title)}. The sheet is unchanged.`, 'info', { action: undo })
+    else if (next === 'snoozed' && until) pushToast(`Snoozed until ${wakeLabel(until, new Date())}`, 'info', { action: undo })
+    void loadWork()
+  } catch (e) {
+    replaceTask(before)
+    fail(e, next ? 'The row could not be marked.' : 'The row could not be put back.')
+  }
+}
+
+/** Mark a task done, with Undo; a sheet row is done for the owner only (markSheet). */
 export async function completeTask(ref: string) {
   const before = state.tasks.find((t) => t.ref === ref)
+  if (before?.kind === 'sheet' && !before.done) { await markSheet(ref, 'done'); return }
   if (!before || before.kind !== 'local' || before.done) return
   replaceTask({ ...before, done: true })
   try {
@@ -208,6 +235,7 @@ export async function completeTask(ref: string) {
 
 export async function reopenTask(ref: string) {
   const before = state.tasks.find((t) => t.ref === ref)
+  if (before?.kind === 'sheet') { await markSheet(ref, null); return }
   if (!before || before.kind !== 'local') return
   replaceTask({ ...before, done: false })
   try {
@@ -219,8 +247,9 @@ export async function reopenTask(ref: string) {
   }
 }
 
-/** Snooze a local task until `until`, or wake it with null; Undo puts the old snooze back. */
+/** Snooze a task until `until`, or wake it with null; Undo puts the old snooze back. */
 export async function snoozeTask(ref: string, until: Date | null) {
+  if (state.tasks.find((t) => t.ref === ref)?.kind === 'sheet') { await markSheet(ref, until ? 'snoozed' : null, until); return }
   const before = state.tasks.find((t) => t.ref === ref)?.todo
   if (!before) return
   const saved = await updateTask(ref, { snoozedUntil: until ? until.toISOString() : null })
