@@ -1,16 +1,17 @@
 // One ~40 px line of the Tasks list: a check circle, the title, and right-aligned
 // marks drawn only when they say something (AGENTS.md: mobile's styling, desktop's
 // value in the pane and the keyboard, not busier rows). A task sheet row
-// has no check circle: it is read-only, opened in the sheet.
+// wears the sheet's mark where a task has its check circle; pressing it marks the
+// row done for the owner only, in Totem (the sheet is never written).
 import React from 'react'
 import {
   Hi, ArrowTopRightOnSquareIcon, CalendarDaysIcon, ChatBubbleLeftIcon, CheckIcon, LinkIcon, MinusIcon,
 } from '../icons'
 import ChatAbout from '../chat/about/ChatAbout'
 import { todoContext } from '../chat/about/context'
-import { SHEET_PRIORITY_WORD, sheetAsTaskPriority, wakeLabel, type SectionKey } from './board'
+import { SHEET_PRIORITY_WORD, sheetAsTaskPriority, sheetMarkOf, wakeLabel, type SectionKey } from './board'
 import { dateLabel, dueText } from './format'
-import { priorityLabel, type IssueState, type SheetItem, type Todo } from './types'
+import { priorityLabel, type IssueState, type SheetHiddenItem, type SheetItem, type Todo } from './types'
 import { FolderChip } from '../work/FolderField'
 import { FlagSolidIcon, IssueClosedIcon, IssueOpenIcon, RepeatIcon, SheetIcon, SnoozeIcon } from './taskIcons'
 
@@ -141,39 +142,60 @@ export function TaskRow({
   )
 }
 
-export function SheetRow({ item, place, source, active, open, now, rowRef, onFocusRow, onOpen, selectMode, showFolder = true }: RowCommon & {
-  item: SheetItem
+export function SheetRow({ item, place, source, active, open, now, rowRef, onFocusRow, onOpen, selectMode, showFolder = true, onDone, onTools }: RowCommon & {
+  /** An open row, or one the owner marked (it carries `mark`). */
+  item: SheetItem | SheetHiddenItem
   place: RowPlace
   /** Whether to show the row's folder (not when the view is that folder already). */
   showFolder?: boolean
   /** The feed's name for itself (say "Partner HQ"), else "Task sheet". */
   source: string
   selectMode: boolean
+  /** Mark it done for the owner, or put a done one back. */
+  onDone?: () => void
+  /** A hover tool was pressed: open that menu against it. */
+  onTools?: (menu: 'snooze', anchor: HTMLElement) => void
 }) {
+  const mark = sheetMarkOf(item)
+  const done = mark?.state === 'done'
   const due = dueMark(item.dueDate, place, now)
   const prio = item.priority ? SHEET_PRIORITY_WORD[item.priority] : null
   const prioTone = item.priority ? sheetFlagTone(item.priority) : ''
+  const back = place === 'snoozed' && mark?.until ? wakeLabel(new Date(mark.until), now) : null
   return (
     <div
       ref={rowRef}
       role="row"
       aria-selected={selectMode ? false : open}
-      aria-label={[item.title, source, due?.text, prio ? `${prio} priority` : null].filter(Boolean).join(', ')}
+      aria-label={[item.title, source, done ? 'done for you' : null, due?.text, prio ? `${prio} priority` : null, back ? `back ${back}` : null].filter(Boolean).join(', ')}
       tabIndex={active ? 0 : -1}
       data-row={item.id}
-      className={`tk-row tk-sheet-row${active ? ' active' : ''}${open ? ' open' : ''}${selectMode ? ' inert' : ''}`}
+      className={`tk-row tk-sheet-row${active ? ' active' : ''}${open ? ' open' : ''}${done ? ' checked' : ''}${selectMode ? ' inert' : ''}`}
       onFocus={(event) => { if (event.target === event.currentTarget) onFocusRow() }}
       onClick={() => { if (!selectMode) onOpen() }}
     >
-      <span role="gridcell" className="tk-lead" title={`${source} (read-only)`}><Hi icon={SheetIcon} size={16} className="tk-sheet-glyph" /></span>
+      <span role="gridcell" className="tk-lead">
+        {done && onDone
+          ? <CheckCircle checked label={`Put ${item.title} back on your list`} onToggle={onDone} />
+          : onDone && !selectMode
+            ? (
+              <button type="button" className="tk-sheet-check" aria-label={`Mark ${item.title} done for you (${source} is unchanged)`} title={`Done for you (x). ${source} is unchanged.`} onClick={(event) => { event.stopPropagation(); onDone() }}>
+                <Hi icon={SheetIcon} size={16} className="tk-sheet-glyph" />
+                <span className="tk-check" aria-hidden="true"><Hi icon={CheckIcon} size={12} className="tk-check-mark" /></span>
+              </button>
+            )
+            : <span title={`${source} (read-only)`}><Hi icon={SheetIcon} size={16} className="tk-sheet-glyph" /></span>}
+      </span>
       <span role="gridcell" className="tk-title"><span className="tk-title-text">{item.title}</span></span>
       <span role="gridcell" className="tk-marks">
+        {back && <span className="tk-mark"><Hi icon={SnoozeIcon} size={13} />{back}</span>}
         {due && <span className={`tk-mark tk-due ${due.tone}`}>{due.text}</span>}
         {prio && <span className={`tk-mark tk-prio ${prioTone}`} title={`${prio} priority`}><Hi icon={FlagSolidIcon} size={12} />{prio}</span>}
         {showFolder && <FolderChip folderId={item.folderId} className="tk-mark tk-folder-mark" />}
       </span>
       {!selectMode && (
         <span className="tk-tools" role="gridcell">
+          {!done && onTools && <button type="button" tabIndex={-1} aria-label={`Snooze ${item.title}`} title="Snooze (s)" onClick={(event) => { event.stopPropagation(); onTools('snooze', event.currentTarget) }}><Hi icon={SnoozeIcon} size={15} /></button>}
           <a href={item.url} target="_blank" rel="noreferrer" tabIndex={-1} aria-label={`Open ${item.title} in the sheet`} title="Open in sheet (o)" onClick={(event) => event.stopPropagation()}><Hi icon={ArrowTopRightOnSquareIcon} size={15} /></a>
         </span>
       )}

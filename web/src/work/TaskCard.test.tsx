@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TodosView from '../components/TodosView'
 import ToastHost from '../components/ToastHost'
 import type { SheetFeed, Todo } from '../todos/types'
+import { withSheetMark } from '../todos/board'
 import TaskCardHost, { PinnedTask } from './TaskCard'
 import TaskBar from './TaskBar'
 import TasksPanel from './TasksPanel'
@@ -45,6 +46,10 @@ function route(url: string, method: string, body: any): Response {
     const created = task({ id: `new-${todos.length}`, title: body.title, folderId: body.folderId ?? null })
     todos = [...todos, created]
     return json({ todo: created })
+  }
+  if (path === '/api/todos/sheet/mark' && method === 'POST') {
+    sheet = withSheetMark(sheet, body.id, body.state ? { state: body.state, at: NOW.toISOString(), ...(body.until ? { until: body.until } : {}) } : null)
+    return json(sheet)
   }
   if (path === '/api/todos/sheet') return json(sheet)
   if (path === '/api/todos/completed') return json({ todos: [] })
@@ -281,8 +286,22 @@ describe('the chats panel’s task rows', () => {
     expect(screen.queryByRole('menu')).toBeNull()
     await user.click(await screen.findByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(sent('PATCH', /\/api\/todos\/today$/)[1]?.body).toEqual({ snoozedUntil: null }))
-    // A sheet row cannot be snoozed, so it gets no button.
-    expect(screen.queryByRole('button', { name: /Snooze “Order banner stands”/ })).toBeNull()
+  })
+
+  it('snoozes or marks a sheet row done for the owner only; the sheet is never written', async () => {
+    const user = userEvent.setup()
+    render(<><TasksPanel onOpenChat={() => {}} /><ToastHost /></>)
+    await user.click(await screen.findByRole('button', { name: 'Snooze “Order banner stands”' }))
+    await user.click(await screen.findByRole('menuitem', { name: /Tomorrow/ }))
+    const tomorrow = new Date(2026, 10, 10, 9, 0, 0).toISOString()
+    await waitFor(() => expect(sent('POST', /\/api\/todos\/sheet\/mark$/)[0]?.body).toEqual({ id: 'sheet:0:7:abcd1234', state: 'snoozed', until: tomorrow }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Snooze “Order banner stands”' })).toBeNull())
+    await user.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(sent('POST', /\/api\/todos\/sheet\/mark$/)[1]?.body).toEqual({ id: 'sheet:0:7:abcd1234', state: null }))
+    await user.click(await screen.findByRole('button', { name: 'Mark “Order banner stands” done for you (the sheet is unchanged)' }))
+    await waitFor(() => expect(sent('POST', /\/api\/todos\/sheet\/mark$/)[2]?.body).toEqual({ id: 'sheet:0:7:abcd1234', state: 'done' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Order banner stands/ })).toBeNull())
+    expect(sent('PUT', /task-folders/)).toHaveLength(0)
   })
 })
 

@@ -264,18 +264,42 @@ test('the sheet alone, with nothing to draw: set up, not set up, failed and stil
   assert.match(sheetOnlyEmpty('Task sheet', null, '').title, /^Reading Task sheet/)
 })
 
-test('sheet rows are read-only: no check circle, no swipe, nothing that writes', () => {
+test('sheet rows never write the sheet: done and snooze are the owner’s marks, kept in Totem', () => {
   const card = read(join(features, 'todos/SheetCard.tsx'))
-  assert.doesNotMatch(card, /CheckCircle|Swipeable|onMove|moveBoardTodo|updateBoardTodo|lib\/api/)
+  // No task circle and no task write: a sheet row is never a task.
+  assert.doesNotMatch(card, /CheckCircle|onMove|moveBoardTodo|updateBoardTodo|lib\/api/)
+  // Its swipe and menu go through onMark, which the page sends to store.ts markSheet.
+  assert.match(card, /Swipeable[\s\S]*onSwipeableOpen=\{[\s\S]{0,300}act\(done \? 'putback' : 'done'\)/)
+  assert.match(card, /is unchanged/)
   const detail = read(join(features, 'todos/SheetItemPage.tsx'))
   assert.match(detail, /Open in/)
+  assert.match(detail, /markSheet\(/)
+  assert.match(detail, /the sheet is unchanged/)
   assert.doesNotMatch(detail, /\b(updateBoardTodo|moveBoardTodo|createBoardTodo|sendJSON|TextInput)\b/)
-  // The page hands a sheet row to SheetCard, never to TodoCard, and the task route sends a sheet id to the read-only page.
+  // The only write the store makes for a sheet row's state is the mark route, never a task route.
+  const store = read(join(features, 'todos/store.ts'))
+  assert.match(store, /export async function markSheet[\s\S]{0,900}markSheetRow\(id, next, until\)/)
+  // The page hands a sheet row to SheetCard, never to TodoCard, and the task route sends a sheet id to its own page.
   const view = read(join(features, 'productivity/TodosView.tsx'))
-  assert.match(view, /row\.kind === 'sheet'[\s\S]{0,200}<SheetCard/)
+  assert.match(view, /row\.kind === 'sheet'[\s\S]{0,400}<SheetCard/)
   const route = read(join(features, 'todos/TodoDetailScreen.tsx'))
   assert.match(route, /if \(isSheetId\(id\)\) return <SheetRow\b/)
-  assert.match(route, /function SheetRow[\s\S]{0,2500}<SheetItemPage\b/)
+  assert.match(route, /function SheetRow[\s\S]{0,2700}<SheetItemPage\b/)
+  // A marked row is still found (in `hidden`), so it can be put back.
+  assert.match(route, /sheet\.hidden\?\.find/)
+})
+
+test('rows the owner marked done sit in Completed: counted, drawn first when open, with or without done tasks', () => {
+  const done = [row({ title: 'HQ done' })]
+  const fin = todo({ id: 'fin', status: 'done', completedAt: '2026-11-04T09:00:00.000Z' })
+  const open = todo({ id: 'open' })
+  // The "all clear" note is clearScope's business, not this test's.
+  const noClear = (rows) => shape(rows).filter((r) => !r.startsWith('<clear'))
+  assert.deepEqual(noClear(listRows([open, fin], [], opts({ sheetDone: done }))), ['[No date 1]', 'nodate:open', '[Completed 2]'])
+  assert.deepEqual(noClear(listRows([open, fin], [], opts({ sheetDone: done, completedOpen: true }))), ['[No date 1]', 'nodate:open', '[Completed 2]', 'done:HQ done', 'done:fin'])
+  // No finished task: Completed is there for the sheet row alone.
+  assert.deepEqual(noClear(listRows([open], [], opts({ sheetDone: done, completedOpen: true }))), ['[No date 1]', 'nodate:open', '[Completed 1]', 'done:HQ done'])
+  assert.deepEqual(noClear(listRows([open], [], opts())), ['[No date 1]', 'nodate:open'])
 })
 
 /* ------------------------------------------------------------------ */

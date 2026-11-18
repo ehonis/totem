@@ -10,6 +10,7 @@ import { createTodoCommands } from './commands.mjs';
 import { closeTodoDatabase, openTodoDatabase } from './db.mjs';
 import { createTodoHttpHandler } from './http.mjs';
 import { createTodoService } from './service.mjs';
+import { createSheetMarkStore } from './sheet-marks.mjs';
 import { seedVentureTags } from './test-support.mjs';
 
 const NOW = '2026-09-11T12:00:00.000Z';
@@ -43,7 +44,9 @@ async function fixture(options = {}) {
       return { configured: true, title: 'Example HQ', url: 'https://docs.example/s', fetchedAt: NOW, stale: false, error: null, items: [{ id: 'sheet:0:5:0a1b2c3d', row: 5, title: 'Row five' }] };
     },
   };
-  const handler = createTodoHttpHandler({ service, commands, sheetFeed: options.sheetFeed === undefined ? sheetFeed : options.sheetFeed, issueStates: options.issueStates ?? null, now: () => NOW, maxBodyBytes: 128 });
+  const sheetMarkLog = [];
+  const sheetMarks = options.sheetMarks ? createSheetMarkStore({ file: join(directory, 'sheet-marks.json'), now: () => Date.parse(NOW) }) : null;
+  const handler = createTodoHttpHandler({ service, commands, sheetFeed: options.sheetFeed === undefined ? sheetFeed : options.sheetFeed, issueStates: options.issueStates ?? null, sheetMarks, onSheetMark: (m) => sheetMarkLog.push(m), now: () => NOW, maxBodyBytes: 128 });
   const server = createServer(async (req, res) => {
     try {
       if (await handler(req, res, new URL(req.url, 'http://localhost'))) return;
@@ -72,7 +75,7 @@ async function fixture(options = {}) {
     const text = await response.text();
     return { status: response.status, body: text ? JSON.parse(text) : null };
   }
-  return { service, request, connectorCalls, sheetReads };
+  return { service, request, connectorCalls, sheetReads, sheetMarkLog, directory };
 }
 
 test('legacy list/create/update/close/delete/projects/completed shapes stay compatible', async () => {
@@ -188,6 +191,32 @@ test('GET /api/todos/sheet answers the read-only feed, passes refresh=1 through,
   assert.deepEqual((await bare.request('GET', '/api/todos/sheet')).body, {
     configured: false, items: [], reason: 'The task sheet is not available on this server.',
   });
+});
+
+test('POST /api/todos/sheet/mark hides a row for the owner only, and takes the mark off again', async () => {
+  const { request, sheetMarkLog } = await fixture({ sheetMarks: true });
+  const done = await request('POST', '/api/todos/sheet/mark', { id: 'sheet:0:5:0a1b2c3d', state: 'done' });
+  assert.equal(done.status, 200);
+  assert.deepEqual(done.body.items, []);
+  assert.equal(done.body.hidden[0].mark.state, 'done');
+  assert.deepEqual((await request('GET', '/api/todos/sheet')).body.items, []);
+  // A row that moved (a row inserted above it) is found by its title.
+  const back = await request('POST', '/api/todos/sheet/mark', { id: 'sheet:0:4:0a1b2c3d', state: null });
+  assert.equal(back.body.items.length, 1);
+  assert.deepEqual(back.body.hidden, []);
+  const snoozed = await request('POST', '/api/todos/sheet/mark', { id: 'sheet:0:5:0a1b2c3d', state: 'snoozed', until: '2026-09-14T09:00:00Z' });
+  assert.equal(snoozed.body.hidden[0].mark.until, '2026-09-14T09:00:00.000Z');
+  assert.deepEqual(sheetMarkLog.map((m) => m.state), ['done', null, 'snoozed']);
+
+  const bad = async (body) => (await request('POST', '/api/todos/sheet/mark', body)).body.error.code;
+  assert.equal(await bad({ id: 'sheet:0:5:0a1b2c3d', state: 'snoozed', until: '2026-09-01T00:00:00Z' }), 'INVALID_SHEET_MARK');
+  assert.equal(await bad({ id: 'sheet:0:5:0a1b2c3d', state: 'snoozed' }), 'INVALID_SHEET_MARK');
+  assert.equal(await bad({ id: 'sheet:0:5:0a1b2c3d', state: 'archived' }), 'INVALID_SHEET_MARK');
+  assert.equal(await bad({ id: 'local-1', state: 'done' }), 'INVALID_SHEET_MARK');
+  assert.equal(await bad({ id: 'sheet:0:9:ffffffff', state: 'done' }), 'SHEET_ROW_NOT_FOUND');
+
+  const bare = await fixture();
+  assert.equal((await bare.request('POST', '/api/todos/sheet/mark', { id: 'sheet:0:5:0a1b2c3d', state: 'done' })).status, 503);
 });
 
 test('HTTP refuses syncTarget sheet with 400 SHEET_SHARING_REMOVED, and the sheet admin routes are gone', async () => {

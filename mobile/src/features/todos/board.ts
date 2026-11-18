@@ -3,6 +3,6 @@
 // one place. The page's own rows over it (buildList's groups with the sheet's rows,
 // Completed folded) are in list.ts.
 export {
-  afterDone, buildList, byFinished, byWake, dayKey, doneToday, morningSnooze, moveBeside, nextWake, rolledOccurrence, rollsOnCompletion, wakeLabel,
+  afterDone, buildList, byFinished, byWake, dayKey, doneToday, morningSnooze, moveBeside, nextWake, rolledOccurrence, rollsOnCompletion, sheetMarkOf, wakeLabel,
   type DoneFollowUp,
 } from '../../lib/todos/board.ts'

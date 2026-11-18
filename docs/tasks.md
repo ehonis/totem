@@ -50,8 +50,12 @@ mirrored byte for byte to `mobile/src/lib/todos/`.
   buttons appear on hover and on keyboard focus. At phone width the marks drop under the
   title, as the app draws them.
 - **Sheet rows** (the read-only task sheet, `docs/task-sheet.md`) sit in the same groups,
-  with the sheet's mark (its name, the feed's `title` or "Task sheet", is the mark's
-  tooltip), no check circle, and an open-in-sheet button. Their flag keeps the
+  with the sheet's mark where a task has its check circle (its name, the feed's `title`
+  or "Task sheet", is in the mark's tooltip), and snooze and open-in-sheet buttons. The
+  mark turns into a check on hover: pressing it, `x` or Space marks the row done **for the
+  owner only**, and `s` snoozes it; both are kept in Totem and never written to the sheet
+  (`docs/task-sheet.md` → Done and snooze, for you only). A snoozed row waits in the
+  Snoozed fold and a done one in Completed, where its check puts it back. Their flag keeps the
   sheet's word and takes the colour of what it means beside a task's: one mapping,
   `sheetAsTaskPriority` in `board.ts`, ranks, filters and colours them on the web and
   in the app: High as P2 (amber), Medium as P3 (blue), Low in the P3 band but muted. Their "In Progress" shows only
@@ -84,7 +88,8 @@ mirrored byte for byte to `mobile/src/lib/todos/`.
   chats linked to the task with New chat, related tasks, and Chat about this. Esc in the title
   or description puts the saved text back and saves nothing. A refused change puts back
   only the fields it touched, names them in the toast, and never draws over a later edit. A sheet row opens
-  read-only with Open in sheet, except its Folder, which files it (`PUT /api/chat/task-folders/<row id>`). With nothing selected the pane is today's summary and the
+  read-only with Open in sheet, except its Folder, which files it (`PUT /api/chat/task-folders/<row id>`), and its
+  check and Snooze, which are the owner's own (`POST /api/todos/sheet/mark`). With nothing selected the pane is today's summary and the
   keys. Below ~1100 px the pane slides over the list; at phone width it fills the screen.
 - **Archive and recycle bin** open in the pane from the "…" menu and are read only then;
   a task opened from either is shown read-only there, with Unarchive or Restore;
@@ -113,8 +118,8 @@ The list is one tab stop (a roving focus over its rows).
 | Key | Does |
 |---|---|
 | `j` / `k`, ↓ / ↑, Home / End | Move between rows (the pane follows when open) |
-| `x`, Space | Complete or reopen (select mode: select) |
-| `s` / `d` / `p` | Snooze / due date / priority menu |
+| `x`, Space | Complete or reopen (select mode: select); on a sheet row, done for you or back |
+| `s` / `d` / `p` | Snooze / due date / priority menu (a sheet row: snooze only) |
 | `n` | The quick-add line (New task), from anywhere on the page |
 | `m` | Open the row with the note composer focused |
 | `g t t` | The quick-add line, from anywhere in the dashboard |

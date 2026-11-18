@@ -4,7 +4,7 @@ import { useChat } from '../chat/store'
 import { ThreadItem } from '../chat/ThreadList'
 import { TI } from '../chat/ui'
 import {
-  IconArrowUpRight, IconCalendar, IconChevronDown, IconChevronUp, IconCircle, IconCircleCheck, IconExternalLink, IconFlag, IconFolder,
+  IconArrowBackUp, IconArrowUpRight, IconCalendar, IconChevronDown, IconChevronUp, IconCircle, IconCircleCheck, IconExternalLink, IconFlag, IconFolder,
   IconMessage, IconPlus, IconRepeat, IconTable, IconTrash, IconX, IconZzz,
 } from '../chat/icons'
 import { SHEET_PRIORITY_WORD, wakeLabel } from '../todos/board'
@@ -12,7 +12,7 @@ import { dueText } from '../todos/format'
 import { DueMenu, PriorityMenu, priorityName, RepeatMenu, SnoozeMenu } from '../todos/TaskMenus'
 import { repeatWords } from '../todos/TaskRow'
 import '../todos/todos.css'
-import { chatsByTask, resolveRef, type WorkTask } from './groups'
+import { chatsByTask, resolveRef, snoozeSubject, type WorkTask } from './groups'
 import { closeTaskCard, newTaskChat, openTaskChat, pinTask, showInTasks, useTaskCard } from './card'
 import { FolderField } from './FolderField'
 import { usePhone, usePinFold } from '../chat/pins'
@@ -156,7 +156,8 @@ function CardBody({ task, mode, cardRef, onClose, folded = false, onFold, flash 
 
   const title = useDraft(task.title, (next) => { if (todo && next.trim() && next.trim() !== todo.title) void updateTask(task.ref, { title: next.trim() }) })
   const description = useDraft(todo?.description ?? '', (next) => { if (todo && next !== todo.description) void updateTask(task.ref, { description: next }) })
-  const snoozed = Boolean(todo?.snoozedUntil && new Date(todo.snoozedUntil) > now)
+  const snoozeable = snoozeSubject(task)
+  const snoozed = Boolean(snoozeable.snoozedUntil && new Date(snoozeable.snoozedUntil) > now)
   // Grows with its text (field-sizing is Chromium-only; the desktop app is WebKit).
   const titleBox = useRef<HTMLTextAreaElement>(null)
   useLayoutEffect(() => {
@@ -174,7 +175,12 @@ function CardBody({ task, mode, cardRef, onClose, folded = false, onFold, flash 
           <TI icon={IconCircle} size={18} className="wk-check-off" />
           <TI icon={IconCircleCheck} size={18} className="wk-check-on" />
         </button>
-      ) : <span className="wk-check sheet" title="On the shared sheet"><TI icon={IconTable} size={16} /></span>}
+      ) : (
+        <button type="button" className={`wk-check sheet ${task.done ? 'done' : ''}`} onClick={() => void (task.done ? reopenTask(task.ref) : completeTask(task.ref))} aria-label={task.done ? `Put “${task.title}” back on your list` : `Mark “${task.title}” done for you (the sheet is unchanged)`} title={task.done ? 'Put back on your list' : 'Mark done for you; the sheet is unchanged'}>
+          <TI icon={IconTable} size={16} className="wk-check-off" />
+          <TI icon={IconCircleCheck} size={18} className="wk-check-on" />
+        </button>
+      )}
       {folded ? (
         <button type="button" className="wk-card-title static folded" onClick={() => onFold?.(false)} title="Show the task’s settings">{task.title}</button>
       ) : todo ? (
@@ -230,7 +236,12 @@ function CardBody({ task, mode, cardRef, onClose, folded = false, onFold, flash 
               <>
                 <CardRow icon={IconCalendar} label="Due"><span className="wk-card-static">{sheet.dueDate ? dueText(sheet.dueDate, now) : 'No date'}</span></CardRow>
                 <CardRow icon={IconFlag} label="Priority"><span className="wk-card-static">{sheet.priority ? SHEET_PRIORITY_WORD[sheet.priority] : 'None'}</span></CardRow>
-                {sheet.status && <CardRow icon={IconCircle} label="Status"><span className="wk-card-static">{sheet.status}</span></CardRow>}
+                {(sheet.status || task.done) && <CardRow icon={IconCircle} label="Status"><span className="wk-card-static">{task.done ? `Done for you${sheet.status ? ` (${sheet.status} on the sheet)` : ''}` : sheet.status}</span></CardRow>}
+                {!task.done && (
+                  <CardRow icon={IconZzz} label="Snooze">
+                    <ValueButton empty={!snoozed} onClick={open('snooze')} text={snoozed ? `Until ${wakeLabel(new Date(snoozeable.snoozedUntil!), now)}` : 'Not snoozed'} />
+                  </CardRow>
+                )}
               </>
             )}
           </div>
@@ -251,6 +262,11 @@ function CardBody({ task, mode, cardRef, onClose, folded = false, onFold, flash 
             {todo
               ? <button type="button" className="wk-card-link" onClick={() => { leave?.(); showInTasks(task.ref) }}><TI icon={IconArrowUpRight} size={14} />Open in Tasks</button>
               : sheet && <a className="wk-card-link" href={sheet.url} target="_blank" rel="noreferrer"><TI icon={IconExternalLink} size={14} />Open in the sheet</a>}
+            {sheet && (
+              <button type="button" className="wk-card-link" onClick={() => void (task.done ? reopenTask(task.ref) : completeTask(task.ref))}>
+                <TI icon={task.done ? IconArrowBackUp : IconCircleCheck} size={14} />{task.done ? 'Put back on my list' : 'Done for me'}
+              </button>
+            )}
             {todo && (
               <button type="button" className="wk-card-link danger" onClick={() => { leave?.(); void deleteTask(task.ref) }}><TI icon={IconTrash} size={14} />Delete</button>
             )}
@@ -261,7 +277,7 @@ function CardBody({ task, mode, cardRef, onClose, folded = false, onFold, flash 
       {todo && menu?.kind === 'due' && <DueMenu anchor={menu.anchor} now={now} dueDate={todo.dueDate} title={todo.title} idKey={`card-${todo.id}`} onClose={() => setMenu(null)} onDue={(dueDate) => void updateTask(task.ref, { dueDate })} />}
       {todo && menu?.kind === 'priority' && <PriorityMenu anchor={menu.anchor} priority={todo.priority} title={todo.title} onClose={() => setMenu(null)} onPriority={(priority) => void updateTask(task.ref, { priority })} />}
       {todo && menu?.kind === 'repeat' && <RepeatMenu anchor={menu.anchor} recurrence={todo.recurrence} title={todo.title} onClose={() => setMenu(null)} onRepeat={(recurrence) => void updateTask(task.ref, { recurrence })} />}
-      {todo && menu?.kind === 'snooze' && <SnoozeMenu anchor={menu.anchor} now={now} todo={todo} onClose={() => setMenu(null)} onSnooze={(until) => void snoozeTask(task.ref, until)} onWake={() => void snoozeTask(task.ref, null)} />}
+      {menu?.kind === 'snooze' && <SnoozeMenu anchor={menu.anchor} now={now} todo={snoozeable} onClose={() => setMenu(null)} onSnooze={(until) => void snoozeTask(task.ref, until)} onWake={() => void snoozeTask(task.ref, null)} />}
     </div>
   )
 }

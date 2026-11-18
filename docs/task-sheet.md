@@ -93,12 +93,43 @@ that is set up with nothing assigned says so once at the foot of the list; one t
 up adds nothing to the list, and Filter › Show lists it greyed as not set up. The feed is not
 ETag-cached, so offline the app keeps the rows it last read in memory.
 
+## Done and snooze, for you only
+
+A row you have finished, or want out of sight for a while, can leave your list without the
+sheet changing: nobody else sees anything. The mark is kept in Totem
+(`data/sheet-marks.json`, `SHEET_MARKS_FILE`; `todos/sheet-marks.mjs`):
+
+- **Done for you** hides the row until you put it back, or until the row leaves the feed
+  (marked Done in the sheet, given to someone else, deleted), when the mark goes with it.
+- **Snoozed** hides it until the time you picked (the same presets as a task's snooze, at
+  most a year out), then it comes back on its own and the mark is dropped.
+
+`POST /api/todos/sheet/mark` with `{ "id": "<row id>", "state": "done" | "snoozed" | null,
+"until": "<ISO time, for a snooze>" }` answers the feed as `GET` does. The row must be open
+for you on the current read (`404 SHEET_ROW_NOT_FOUND` otherwise); `null` takes a mark off.
+Each change is one action-log line (`sheet.done`, `sheet.snoozed`, `sheet.unmark`). Like the
+task routes, it takes the bearer as well as a session: an agent holding `BRIDGE_SECRET` could
+hide a row from the owner's list, as it could finish a task, but never change the sheet.
+
+In `GET /api/todos/sheet`, a marked row moves from `items` to `hidden`, carrying its `mark`
+(`{ state, at, until? }`); every list draws `items`, so a client that predates marks simply
+stops showing marked rows. A mark follows its row when a row above it is inserted or deleted
+(it finds the row again by tab and title and is re-keyed, but only if the row still has the
+due date and Who it had when marked, so a new row that reuses a title, a weekly "Send the
+update", is not hidden by last week's mark); a done row re-dated or reassigned in place loses its
+mark the same way and comes back; with two rows of the same title it applies only to the exact id. Marks of rows gone from a good read are dropped; a stale or
+failed read keeps them all. A chat linked to a marked row still gets its `LINKED TASK` block.
+
+Where: the web's Tasks page (the row's mark, `x`, `s`, the pane; the Snoozed and Completed
+folds hold marked rows), the chats panel's Tasks face and its task card (check, Snooze,
+"Mark done for me" in the row menu), and the iPhone app's Tasks list and row page.
+
 ## What "read-only" covers
 
 **The task feed never writes to the sheet.** It is handed only Drive's read calls (`sheetInfo`,
 `sheetRead`; see `taskSheetFeed` in `bridge.mjs`), and only a GET reaches it. Tests check that
 every request it makes to Google is a GET to the Sheets API. Nothing in the task list (completing,
-snoozing, editing, sharing) changes a sheet row.
+snoozing, editing, sharing) changes a sheet row: done and snooze on a row are kept in Totem (above).
 
 **The Drive tools are a separate feature and can still edit the sheet.** An agent asked to add a
 note to a row, or to fill in a cell, does it with the `drive__sheet_*` tools (`docs/drive.md`), as

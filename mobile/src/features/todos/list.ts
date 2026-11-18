@@ -1,8 +1,9 @@
 // The Tasks page's rows, as pure functions over the shared list (lib/todos/board.ts
 // buildList, the web's copy): open tasks and the task sheet's rows in one set of
 // groups (Overdue, Today, Upcoming, No date), ordered by due day, priority, tasks
-// before sheet rows, then manual position; and Completed folded into one row. A task
-// is open or done. No React Native, so node's test runner loads it as is.
+// before sheet rows, then manual position; and Completed folded into one row, which
+// also holds the sheet rows the owner marked done for the owner (the sheet unchanged).
+// A task is open or done. No React Native, so node's test runner loads it as is.
 import type { SheetFeed, SheetItem, Todo, TodoQuery } from '../../lib/todos/types'
 import { trimUrl } from './issueLink.ts'
 import { inScope, type Folder, type TaskScope } from './folders.ts'
@@ -22,7 +23,7 @@ export type RowSection = SectionKey | 'done'
 export type Row =
   | Exclude<BoardRow<RowSection, SectionTone>, { kind: 'card' }>
   | { kind: 'card'; key: string; todo: Todo; section: RowSection }
-  | { kind: 'sheet'; key: string; item: SheetItem; section: SectionKey }
+  | { kind: 'sheet'; key: string; item: SheetItem; section: RowSection }
 
 const TONE: Record<SectionKey, SectionTone> = { overdue: 'overdue', today: 'today', upcoming: 'upcoming', nodate: 'quiet' }
 
@@ -86,6 +87,8 @@ export interface RowOptions {
   /** A search or filter is narrowing the list, so "all clear" would claim more than it can see. */
   filtered?: boolean
   doneLimit?: number
+  /** Sheet rows marked done for the owner (lib/todos/board.ts sheetDone), drawn first in Completed. */
+  sheetDone?: readonly SheetItem[]
 }
 
 /** The page's rows: the "all clear" note when it applies, the due groups with sheet rows mixed in, then Completed. */
@@ -104,10 +107,20 @@ export function listRows(todos: readonly Todo[], sheet: readonly SheetItem[], op
         : { kind: 'sheet', key: item.item.id, item: item.item, section: section.key })
     }
   }
-  rows.push(...completedRows<RowSection, SectionTone>(list.completed, {
+  const done = completedRows<RowSection, SectionTone>(list.completed, {
     completedOpen: options.completedOpen, showAllDone: options.showAllDone, manual: true,
     archiveCount: options.archiveCount, doneLimit: options.doneLimit,
-  }, 'done', 'completed'))
+  }, 'done', 'completed')
+  const marked = options.sheetDone ?? []
+  if (marked.length) {
+    // Counted in Completed's heading, and drawn under it before the tasks, the latest mark first.
+    const head = done[0]?.kind === 'header'
+      ? { ...done[0], count: done[0].count + marked.length }
+      : { kind: 'header' as const, key: 'h-done', title: 'Completed', count: marked.length, tone: 'completed' as const, collapsible: true, open: options.completedOpen }
+    rows.push(head)
+    if (options.completedOpen) for (const item of marked) rows.push({ kind: 'sheet', key: item.id, item, section: 'done' })
+    rows.push(...done.slice(1))
+  } else rows.push(...done)
   return rows
 }
 

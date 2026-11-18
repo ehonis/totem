@@ -4,10 +4,11 @@
 // so the state moves into a small external store they all read.
 import { useSyncExternalStore } from 'react'
 import {
-  deleteBoardTodo, fileSheetRow as fileSheetRowApi, getIssueStates, getSheetFeed, getTodoBoard, getTodoPreferences, isAccountChanged, peekTodoBoard, peekTodoPreferences,
+  deleteBoardTodo, fileSheetRow as fileSheetRowApi, getIssueStates, markSheetRow, getSheetFeed, getTodoBoard, getTodoPreferences, isAccountChanged, peekTodoBoard, peekTodoPreferences,
   restoreBoardTodo, updateBoardTodo,
 } from '../../lib/api'
 import type { IssueState, SheetFeed, Todo, TodoPreferences } from '../../lib/todos/types'
+import { withSheetMark } from '../../lib/todos/board.ts'
 import { freshRead } from './freshRead'
 import { createIssueStatesLoader } from './issueLink'
 import { readUntilStable } from './readUntilStable'
@@ -238,12 +239,16 @@ export async function restoreTodo(id: string) {
  * says so once, quietly, under the list.
  */
 let sheetRead: Promise<void> | null = null
+// Bumped by each mark (markSheet): a read or a mark's answer from before a later mark is not drawn.
+let markSeq = 0
 async function readSheet(refresh: boolean) {
   // A first read that failed: clear the error while trying again, so the page shows it is trying.
   if (!state.sheet && state.sheetError) set({ sheetError: '' })
   try {
+    const seq = markSeq
     const feed = await getSheetFeed({ refresh })
-    set({ sheet: feed, sheetError: '' })
+    // A mark made while this read was out is newer than what it read.
+    if (seq === markSeq) set({ sheet: feed, sheetError: '' })
   } catch (cause) {
     if (!isAccountChanged(cause)) set({ sheetError: cause instanceof Error ? cause.message : 'The task sheet could not load.' })
   }
@@ -269,6 +274,30 @@ export async function fileSheet(id: string, folderId: string | null) {
     // A read already out began before the filing; wait it out, then read the filing back.
     if (sheetRead) await sheetRead
     await loadSheet()
+  }
+}
+
+/**
+ * Mark a sheet row done or snoozed for the owner only, or put it back with null. Kept
+ * in Totem, never written to the sheet (todos/sheet-marks.mjs). Drawn at once; the
+ * bridge's answer is the feed. Throws when the bridge refuses, after reading the feed again.
+ */
+export async function markSheet(id: string, next: 'done' | 'snoozed' | null, until: Date | null = null) {
+  const feed = state.sheet
+  if (!feed?.configured) return
+  const mark = next ? { state: next, at: new Date().toISOString(), ...(next === 'snoozed' && until ? { until: until.toISOString() } : {}) } : null
+  const seq = ++markSeq
+  set({ sheet: withSheetMark(feed, id, mark) })
+  try {
+    // A read already out began before the mark and would draw the row back: let it land first.
+    const answer = await markSheetRow(id, next, until)
+    if (sheetRead) await sheetRead
+    // Another mark made since answers with it in, so only the latest answer is drawn.
+    if (seq === markSeq) set({ sheet: answer, sheetError: '' })
+  } catch (cause) {
+    if (sheetRead) await sheetRead
+    await loadSheet()
+    throw cause
   }
 }
 

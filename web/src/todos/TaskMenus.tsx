@@ -11,7 +11,8 @@ import { repeatWords } from './TaskRow'
 interface Common { anchor: HTMLElement | null; onClose: () => void; now: Date }
 
 export function SnoozeMenu({ todo, anchor, onClose, now, onSnooze, onWake }: Common & {
-  todo: Todo
+  /** A task, or anything snoozed like one (a sheet row, work/groups.ts snoozeSubject). */
+  todo: Pick<Todo, 'id' | 'title' | 'dueDate' | 'snoozedUntil'>
   onSnooze: (until: Date) => void
   onWake: () => void
 }) {

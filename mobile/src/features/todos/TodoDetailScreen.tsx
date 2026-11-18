@@ -4,8 +4,8 @@
 // saves that field at once. Nothing waits for a Save button. Below: notes, related
 // tasks, the linked GitHub issue, and the task's history.
 // Opened from a card with ?focus=notes it lands on the note field, as "+ Add a note"
-// does on the web. A "sheet:…" id is a row of the shared task sheet, which opens the
-// read-only SheetItemPage instead.
+// does on the web. A "sheet:…" id is a row of the shared task sheet, which opens
+// SheetItemPage instead (the sheet's words, read-only; done and snooze for the owner only).
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { StyleSheet, TextInput, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
@@ -94,7 +94,8 @@ function SheetRow({ id }: { id: string }) {
       </View>
     )
   }
-  const item = sheet.items.find((entry) => entry.id === id) ?? null
+  // A row the owner marked done or snoozed is in `hidden`, still openable (to put it back).
+  const item = sheet.items.find((entry) => entry.id === id) ?? sheet.hidden?.find((entry) => entry.id === id) ?? null
   return <SheetItemPage item={item} source={sheetName(sheet)} fetchedAt={sheet.configured ? sheet.fetchedAt : null} />
 }
 
