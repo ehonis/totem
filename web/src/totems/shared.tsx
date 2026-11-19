@@ -1,5 +1,5 @@
 import React from 'react'
-import { api, runJobNow, getJobs } from '../api'
+import { api, runJobNow, getJobs, updateJob } from '../api'
 import { pushError, pushToast } from '../toast'
 import { Hi } from '../icons'
 import { iconFor } from '../studio'
@@ -49,20 +49,38 @@ export function TotemIcon({ name, size = 20 }: { name?: string; size?: number })
   return <Hi icon={iconFor(name || '', 'sparkles')} size={size} />
 }
 
-export const kindOf = (job: any) => (job.runner ? 'Built-in' : job.skillId ? 'Skill' : TYPE_LABEL[job.taskType] || 'Agent')
+/** Shipped with Totem: a runner, a skill, or a seeded job (jobs/store.mjs `kind`). */
+export const isBuiltIn = (job: any) => !!(job.runner || job.skillId || job.kind === 'seeded')
 
-export function statusLine(job: any) {
-  if (job.lastRun?.status === 'running') return 'Running now…'
-  if (!job.enabled) return 'Paused'
-  if (job.trigger) {
-    const w = job.watch
-    if (w?.error) return `Can’t check: ${w.error}`
-    if (!w?.checkedAt) return 'First check within a minute'
-    return `Checked ${relativeTime(w.checkedAt)}${w.changedAt ? ` · last change ${relativeTime(w.changedAt)}` : ''}${job.lastRun?.status === 'error' ? ' · last run failed' : ''}`
-  }
-  const next = job.nextRunAt ? `Next ${relativeTime(job.nextRunAt)}` : 'Not scheduled'
-  if (job.lastRun?.status === 'error') return `Last run failed · ${next}`
-  return next
+export const kindOf = (job: any) => (job.runner || (job.kind === 'seeded' && !job.skillId) ? 'Built-in' : job.skillId ? 'Skill' : TYPE_LABEL[job.taskType] || 'Agent')
+
+/** Switch a totem on or off. A built-in that goes off moves to the folded shelf, so it says where. */
+export async function setTotemEnabled(job: any, enabled: boolean): Promise<any | null> {
+  try {
+    const r: any = await updateJob(job.id, { enabled })
+    if (isBuiltIn(job)) pushToast(enabled ? `${job.name} is on.` : `Paused ${job.name}. It’s under More built in, at the bottom of the Totems page.`, 'info')
+    return r.job
+  } catch (e: any) { pushError(e.message); return null }
+}
+
+export type TotemTone = 'live' | 'bad' | 'idle' | 'good'
+
+/** What a totem is doing, as a dot colour and a few words: its page's header. */
+export function totemState(job: any, live = false): { tone: TotemTone; text: string } {
+  if (live || job.lastRun?.status === 'running') return { tone: 'live', text: 'Running now' }
+  if (!job.enabled) return { tone: 'idle', text: 'Paused' }
+  if (job.watch?.error) return { tone: 'bad', text: `Can’t check: ${job.watch.error}` }
+  if (job.lastRun?.status === 'error') return { tone: 'bad', text: 'Last run failed' }
+  if (job.trigger) return { tone: 'good', text: job.watch?.checkedAt ? `Watching · checked ${relativeTime(job.watch.checkedAt)}` : 'Watching · first check within a minute' }
+  return { tone: 'good', text: [job.nextRunAt && `Next ${relativeTime(job.nextRunAt)}`, job.scheduleLabel].filter(Boolean).join(' · ') || 'Not scheduled' }
+}
+
+/** The same for a row in the list, shorter, with a dot only for trouble, pauses and runs. */
+export function totemBrief(job: any, live = false): { tone?: TotemTone; text: string } {
+  const state = totemState(job, live)
+  if (state.tone !== 'good') return { tone: state.tone, text: job.watch?.error && state.tone === 'bad' ? 'Can’t check what it watches' : state.text }
+  if (job.trigger) return { text: job.watch?.changedAt ? `Watching · changed ${relativeTime(job.watch.changedAt)}` : 'Watching' }
+  return { text: job.scheduleLabel || state.text }
 }
 
 export async function openTotemChat(job: any, onOpenChat: () => void) {
@@ -91,14 +109,15 @@ const runSubs = new Set<() => void>()
 const bumpRuns = () => runSubs.forEach((f) => f())
 
 /** Start a run of this totem now; its report lands in its chat, which is refreshed. */
-export async function startTotemRun(job: any) {
-  if (runningHere.has(job.id)) return
+export async function startTotemRun(job: any): Promise<any | null> {
+  if (runningHere.has(job.id)) return null
   runningHere.add(job.id)
   bumpRuns()
   try {
-    await runTotemNow(job)
+    const fresh = await runTotemNow(job)
     await syncThreads()
     refreshTotemDirectory(true)
+    return fresh
   } finally {
     runningHere.delete(job.id)
     bumpRuns()
@@ -106,7 +125,7 @@ export async function startTotemRun(job: any) {
 }
 
 /** Whether this totem is running, kept current, and a way to start it (the play button, or its row in the chat header's "…"). */
-export function useTotemRun(job: any): { running: boolean; run: () => void } {
+export function useTotemRun(job: any, onDone?: (fresh: any) => void): { running: boolean; run: () => void } {
   const [, bump] = React.useState(0)
   React.useEffect(() => {
     const f = () => bump((n) => n + 1)
@@ -114,7 +133,7 @@ export function useTotemRun(job: any): { running: boolean; run: () => void } {
     return () => { runSubs.delete(f) }
   }, [])
   const running = !!job && (runningHere.has(job.id) || job.lastRun?.status === 'running')
-  return { running, run: () => { if (job && !running) void startTotemRun(job) } }
+  return { running, run: () => { if (job && !running) void startTotemRun(job).then((fresh) => { if (fresh) onDone?.(fresh) }) } }
 }
 
 /** The play button in a totem's chat: run it now instead of waiting for its schedule or watch. */
