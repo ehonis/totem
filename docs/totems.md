@@ -30,7 +30,7 @@ errors).
 |---|---|
 | Prompts, parsers, cost tiers (pure, tested) | `totems/core.mjs`, `totems/core.test.mjs` |
 | Engine and routes | `bridge.mjs`, the "Totems" block beside the job engine |
-| UI | `web/src/components/TotemsView.tsx` (list, group picker, builder, settings), `totems.css`; `web/src/totems/shared.tsx`; a totem's answer in a chat `web/src/chat/totemReply.ts` + `Message.tsx`; proposal card `web/src/chat/TotemProposal.tsx`. iPhone: `mobile/src/features/totems/` (`TotemGroupSheet.tsx` picks a group's totems) |
+| UI | `web/src/components/TotemsView.tsx` (the list and group picker), `web/src/totems/Builder.tsx`, `web/src/totems/Detail.tsx` (a totem's page), `web/src/totems/fields.tsx` (the settings sections both share), `totems.css`; `web/src/totems/shared.tsx`; a totem's answer in a chat `web/src/chat/totemReply.ts` + `Message.tsx`; proposal card `web/src/chat/TotemProposal.tsx`. iPhone: `mobile/src/features/totems/` (`TotemGroupSheet.tsx` picks a group's totems) |
 | Memory | `data/totems/<jobId>/memory.md` (`TOTEMS_DIR`) |
 | Chat | thread `totem-<jobId>`, carrying `totemId`; kept out of Recents. Group chats are regular chats with `members` (job ids) |
 
@@ -128,7 +128,8 @@ are dropped, and if none is left the schedule applies.
 
 **The builder is a conversation.** Its reply carries a `reply` sentence and up to
 three `questions` about scope it would otherwise guess (a host, a path, a
-threshold). The builder page shows them in a chat panel beside the draft; each
+threshold). The builder page shows them in a chat card beside the draft (above it
+on a narrow window); each
 message he sends is one more builder turn (`POST /api/totems/build {draftId,
 draft, message}`) that gets the conversation, the draft as it stands (his own
 edits included, so a rename or rewritten instructions survive) and his message,
@@ -152,11 +153,34 @@ settings offer the same picker.
 
 ## The list
 
-The tab reads like the chats list. Each totem is a row with the newest thing in
-its chat (a run's report, or the last thing said), how long ago, an unread dot,
-and its status line; clicking the row opens that chat, so reading what its runs
-found is one click. The switch pauses it; the gear opens its settings, memory and
-runs (`/totems?totem=<id>`), which the gear in the totem's chat header also opens.
+The page reads like a project's page, after T3 Code: a title, a composer to
+describe a new totem (Enter hands the words to the builder, which starts designing
+at once; three example chips fill it), then sections of flush rows: Drafts, Group
+chats (with "New group chat"), Totems (his own and every built-in that is on, the
+ones that are on first, then whichever spoke last), and a folded "More built in"
+shelf for the built-ins that are off (`isBuiltIn`: a runner, a skill or a seeded
+job), with deleted built-ins to restore at its end (open or folded is kept per
+device, `totem.totems.builtInOpen`). Pausing a built-in moves it there, so the
+toast says where it went (`setTotemEnabled`). Each totem's row has the newest
+thing in its chat (a run's report, or the last thing said), how long ago, an
+unread dot, and a short status beside its name: its schedule or "Watching", and a
+dot only for trouble (last run failed, can't check), a pause or a run in progress
+(`totemBrief` in `web/src/totems/shared.tsx`). Clicking the row opens that chat,
+so reading what its runs found is one click. On hover the row shows a gear for its
+page and a "…" menu: Open chat, Run now (the row says "Running now" until it ends),
+Pause/Turn on, and its page; on a touch screen only the "…" shows, always.
+
+A totem's page (`/totems?totem=<id>`, also the gear in its chat header) has a
+header (icon, name, kind, status; Open chat, Run now and an On switch), a red note
+when the last run failed, and Settings / Memory / Runs tabs. Settings is drawn with
+the Settings dialog's sections and rows (`components/settings/ui.tsx`;
+`settings.css` scopes them to `.tm-view` too): Totem (name, description, icon from
+the chat icon set), Instructions, When it runs, Model, Behaviour (notify, browser,
+full access) and Delete. Name, description, icon, schedule, model and switches
+save at once; instructions, memory and a watch wait for Save, whose bar appears
+once there is something to save. The builder's draft uses the same sections
+(`web/src/totems/fields.tsx`) with a Create bar under them (on a phone, Create
+also sits under the name).
 Beside that gear, a play button runs the totem now (`POST /api/jobs/run`, the same
 manual run as its settings page) instead of waiting for its schedule or watch; it spins
 until the run ends and its report lands in the chat (`TotemRunButton` in

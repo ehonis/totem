@@ -110,29 +110,6 @@ function formatMs(ms: number | null | undefined): string {
 
 // ---- small shared pieces ---------------------------------------------------
 
-interface SwitchProps {
-  checked: boolean
-  onChange: (checked: boolean) => void
-  disabled?: boolean
-  label: string
-}
-
-export function Switch({ checked, onChange, disabled, label }: SwitchProps) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      className={`switch ${checked ? 'on' : ''}`}
-      onClick={() => onChange(!checked)}
-    >
-      <span />
-    </button>
-  )
-}
-
 // A job's last attempt, stated plainly. "Never run" is its own state on purpose:
 // an enabled job that has never run is the exact thing that used to hide.
 // ---- schedule builder ------------------------------------------------------
@@ -330,6 +307,9 @@ export function ScheduleBuilder({ value, onChange }: { value: ScheduleValue; onC
 
 // ---- run history -----------------------------------------------------------
 
+const RUN_STATUS: Record<string, string> = { ok: 'Done', error: 'Failed', skipped: 'Nothing new', running: 'Running' }
+
+/** A totem's recent runs, newest first, as rows of one group (Settings' look). */
 export function RunHistory({ jobId }: { jobId: string }) {
   const [runs, setRuns] = useState<any[] | null>(null)
   const [err, setErr] = useState('')
@@ -343,24 +323,27 @@ export function RunHistory({ jobId }: { jobId: string }) {
     return () => { alive = false }
   }, [jobId])
 
-  if (err) return <div className="job-history"><div className="muted inline-warn"><Hi icon={ExclamationTriangleIcon} size={13} /> {err}</div></div>
-  if (!runs) return <div className="job-history"><div className="muted">Loading history…</div></div>
-  if (!runs.length) return <div className="job-history"><div className="muted">No runs recorded yet.</div></div>
+  if (err) return <p className="tm-empty-line bad"><Hi icon={ExclamationTriangleIcon} size={13} /> Couldn’t load its runs: {err}</p>
+  if (!runs) return <p className="tm-empty-line">Loading runs…</p>
+  if (!runs.length) return <p className="tm-empty-line">No runs yet. Its first one shows here, and its report lands in its chat.</p>
 
   return (
-    <div className="job-history">
+    <>
       {runs.map((r: any, i: number) => (
-        <div className={`job-run ${r.status}`} key={`${r.ts}-${i}`}>
-          <span className="job-run-when">{dayAndTime(r.startedAt || r.ts)}</span>
-          <span className={`run-pill ${r.status === 'ok' ? 'good' : r.status === 'error' ? 'bad' : 'warn'}`}>{r.status}</span>
-          {r.trigger === 'manual' && <span className="job-run-tag">manual</span>}
-          {r.late && <span className="job-run-tag late">caught up</span>}
-          {r.provider && <span className="job-run-tag">{r.provider}</span>}
-          {r.ms != null && <span className="job-run-ms">{formatMs(r.ms)}</span>}
-          <span className="job-run-text">{r.error || r.preview || ''}</span>
+        <div className={`tm-run is-${r.status}`} key={`${r.ts}-${i}`}>
+          <span className={`tm-dot ${r.status === 'ok' ? 'good' : r.status === 'error' ? 'bad' : r.status === 'running' ? 'live' : 'idle'}`} aria-hidden />
+          <span className="tm-run-main">
+            <span className="tm-run-top">
+              <strong>{dayAndTime(r.startedAt || r.ts)}</strong>
+              <span className="tm-run-status">{RUN_STATUS[r.status] || r.status}</span>
+              {r.trigger === 'manual' && <span className="tm-tag">Run by hand</span>}
+              {r.late && <span className="tm-tag warn">Caught up</span>}
+            </span>
+            {(r.error || r.preview) && <span className="tm-run-text">{r.error || r.preview}</span>}
+          </span>
+          <span className="tm-run-side">{[r.provider, formatMs(r.ms)].filter(Boolean).join(' · ')}</span>
         </div>
       ))}
-    </div>
+    </>
   )
 }
-

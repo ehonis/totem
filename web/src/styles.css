@@ -2870,17 +2870,6 @@ a { color: var(--accent); }
 .job-error { font-size: 12px; color: var(--red); overflow-wrap: anywhere; }
 .job-error.muted { color: var(--muted); }
 
-.run-pill {
-  display: inline-flex; align-items: center; gap: 4px; flex: none;
-  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
-  border: 1px solid var(--line); color: var(--muted);
-}
-.run-pill.good { color: var(--green); border-color: color-mix(in srgb, var(--green) 38%, transparent); }
-.run-pill.bad { color: var(--red); border-color: color-mix(in srgb, var(--red) 38%, transparent); }
-.run-pill.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 38%, transparent); }
-.run-pill.running { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 38%, transparent); }
-.run-pill.idle { border-style: dashed; }
-
 /* AI health */
 .ai-health { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 14px; }
 .ai-health-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -3004,22 +2993,6 @@ a { color: var(--accent); }
   background: var(--bg-3); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
 }
 .skill-diff-gap:first-child { border-top: 0; }
-
-/* Run history */
-.job-history {
-  margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--line);
-  display: flex; flex-direction: column; gap: 5px;
-}
-.job-run { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
-.job-run-when { flex: none; min-width: 14ch; color: var(--text); }
-.job-run-tag {
-  flex: none; font-size: 10px; padding: 1px 5px; border-radius: 999px;
-  border: 1px solid var(--line); color: var(--muted);
-}
-.job-run-tag.late { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 38%, transparent); }
-.job-run-ms { flex: none; }
-.job-run-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.job-run.error .job-run-text { color: var(--red); }
 
 /* Legacy import banner */
 .legacy-banner {
