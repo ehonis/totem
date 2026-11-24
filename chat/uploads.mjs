@@ -13,8 +13,8 @@
 // an HMAC of the upload id (`?sig=`), minted with the bridge secret. A signature
 // names one file and nothing else; it is not a session.
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, extname, join } from 'node:path'
 import { VISUAL_CSP } from './visuals.mjs'
 
 const IMAGE_MIME = /^image\/(png|jpe?g|gif|webp|heic|heif|avif|bmp)$/i
@@ -47,6 +47,14 @@ export function servedHeaders(meta, { download = false } = {}) {
 }
 
 export const validUploadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(id)
+
+const TEXT_UPLOAD = /\/api\/chat\/uploads\/([A-Za-z0-9_-]{8,64})(?![A-Za-z0-9_-])/g
+/**
+ * Upload ids a message's text points at: a picture the reply shows by its URL
+ * (browser/shots.mjs writes one for every ![…](/path) it embeds). The sweep keeps
+ * them like the ones a part names, or a shown picture would break after a day.
+ */
+export const textUploadIds = (text) => (typeof text === 'string' ? [...text.matchAll(TEXT_UPLOAD)].map((m) => m[1]) : [])
 
 export function safeFileName(name) {
   const base = String(name || '').split(/[\\/]/).pop().replace(/[^\w.\- ()]+/g, '_').replace(/^\.+/, '').trim()
@@ -124,7 +132,7 @@ export function createUploadStore({ dir, secret, maxBytes = 25 * 1024 * 1024, lo
   }
 
   // Files nobody sent: attached in the composer, then the draft was abandoned.
-  async function sweepOrphans({ referenced, olderThanMs = 24 * 60 * 60_000 } = {}) {
+  async function sweepOrphans({ referenced, olderThanMs = 24 * 60 * 60_000, now = Date.now() } = {}) {
     let ids = []
     try { ids = await readdir(dir) } catch { return 0 }
     let removed = 0
@@ -132,7 +140,7 @@ export function createUploadStore({ dir, secret, maxBytes = 25 * 1024 * 1024, lo
       if (!validUploadId(id) || referenced.has(id)) continue
       try {
         const s = await stat(join(dir, id))
-        if (Date.now() - s.mtimeMs < olderThanMs) continue
+        if (now - s.mtimeMs < olderThanMs) continue
         await remove(id)
         removed++
       } catch {}
@@ -142,4 +150,56 @@ export function createUploadStore({ dir, secret, maxBytes = 25 * 1024 * 1024, lo
   }
 
   return { save, meta, read, remove, verify, sign, urlFor, publicMeta, sweepOrphans, maxBytes }
+}
+
+/** How long a draft's hold keeps an unsent upload after the last time a client renewed it. */
+export const UPLOAD_HOLD_MS = 30 * 24 * 60 * 60_000
+
+/**
+ * Uploads a saved draft still holds (web/src/chat/drafts.ts), so the orphan
+ * sweep leaves them. Drafts live in each browser, so a client renews the ids its
+ * drafts hold whenever they change and when it starts; a hold lapses 30 days
+ * after its last renewal, and ids another client did not name are left alone.
+ *
+ * Layout: one JSON file, { "<upload id>": <last held, ms> }, written atomically.
+ */
+export function createUploadHolds({ file, now = () => Date.now(), keepMs = UPLOAD_HOLD_MS } = {}) {
+  if (!file) throw new TypeError('createUploadHolds requires file')
+  let queue = Promise.resolve()
+
+  async function read() {
+    let raw = {}
+    try { raw = JSON.parse(await readFile(file, 'utf8')) } catch {}
+    const out = {}
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const since = now() - keepMs
+      for (const [id, at] of Object.entries(raw)) if (validUploadId(id) && Number.isFinite(at) && at >= since) out[id] = at
+    }
+    return out
+  }
+
+  function change(fn) {
+    const run = queue.then(async () => {
+      const map = await read()
+      fn(map)
+      await mkdir(dirname(file), { recursive: true })
+      const tmp = `${file}.${process.pid}.tmp`
+      await writeFile(tmp, JSON.stringify(map) + '\n')
+      await rename(tmp, file)
+    })
+    queue = run.catch(() => {})
+    return run
+  }
+
+  return {
+    /** The ids held now. */
+    async ids() { return new Set(Object.keys(await read())) },
+    /** Renew these ids' holds from now. */
+    hold(ids) {
+      const at = now()
+      return change((map) => { for (const id of ids) if (validUploadId(id)) map[id] = at })
+    },
+    /** Let these go: their draft removed the file, or their chat was deleted. */
+    release(ids) { return change((map) => { for (const id of ids) delete map[id] }) },
+  }
 }

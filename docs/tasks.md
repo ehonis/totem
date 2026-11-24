@@ -18,8 +18,8 @@ mirrored byte for byte to `mobile/src/lib/todos/`.
 - **Folders.** Every task is filed under one of the owner's chat projects or the folders
   inside them (`folderId` on the task, a chat project id), or under none, which every
   client calls **Personal**. They replaced Personal/Ventures and venture tags (migration
-  013; see "From areas to folders" below). The chats panel's Tasks face groups by the same
-  folders, and a change in either place shows in the other at once (`web/src/todos/bus.ts`).
+  013; see "From areas to folders" below). A chat card in the chats panel names its linked
+  task, and a change in either place shows in the other at once (`web/src/todos/bus.ts`).
 - **Scope chips**: All, Personal (the unfiled), one per top-level project with something
   open in it (its own tasks, its folders' tasks and sheet rows filed there), and the task
   sheet by its own name (only once it is set up), each with its open count. A project
@@ -109,7 +109,7 @@ chat project (`UNKNOWN_FOLDER`); a task whose project is deleted later moves to 
 folder's project, or becomes Personal (`refileFolder`). Agents read and set the folder by
 name (`totem_get_tasks`, `totem_create_task`, `totem_update_task`; `totem_get_projects`
 lists the folders), and a task an agent creates from a chat in a project lands in that
-project and is linked to the chat (`docs/chat.md` → Tasks panel).
+project and is linked to the chat (`docs/chat.md` → Linked tasks).
 
 ## Keys
 

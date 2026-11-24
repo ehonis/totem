@@ -5,6 +5,7 @@
 import React, { useEffect, useMemo } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { useChat, loadProject, openProject, setActive, threadTitle, foldersOf } from '../../lib/chat/store'
+import { attentionOf } from '../../lib/chat/attention'
 import { shelfOf, ago } from '../../lib/chat/settle'
 import type { ChatThread } from '../../lib/chat/types'
 import { T } from '../../ui/Text'
@@ -21,6 +22,7 @@ export default function ProjectHome({ projectId }: { projectId: string }) {
   const projects = useChat((s) => s.projects)
   const all = useChat((s) => s.threads) as ChatThread[]
   const runs = useChat((s) => s.runs)
+  const handoffs = useChat((s) => s.handoffs)
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   useEffect(() => { loadProject(projectId) }, [projectId])
   const folders = useMemo(() => foldersOf(projects, projectId), [projects, projectId])
@@ -65,7 +67,7 @@ export default function ProjectHome({ projectId }: { projectId: string }) {
       <T size={12} color={vc.faint} style={st.group}>Chats</T>
       {!chats.length ? <T size={14} lineHeight={21} color={vc.soft} style={{ paddingVertical: 10 }}>Chats in this project will show up here. Start one below.</T> : null}
       {chats.map((t) => {
-        const shelf = shelfOf(t, now, autoDays, !!runs[t.id])
+        const shelf = shelfOf(t, now, autoDays, !!runs[t.id], false, !!attentionOf(t, handoffs[t.id]))
         return (
           <Press key={t.id} style={[st.row, shelf === 'settled' && { opacity: 0.6 }]} onPress={() => { tap(); setActive(t.id) }}>
             <ThreadIcon t={t} size={17} />

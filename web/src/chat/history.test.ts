@@ -52,6 +52,15 @@ describe('history', () => {
     expect(fresh.thread.summary).toBe(true)
   })
 
+  it('takes when the chat\'s task was finished from each summary, so a reopened task takes it away', () => {
+    const loaded = { ...mergeLatest(undefined, page(['u1', 'a1'])), taskId: 'task-1', taskDoneAt: 5 }
+    const reopened = mergeSummary(loaded, { ...loaded, taskDoneAt: undefined, summary: true, messages: [m('a1', 'cut')] })
+    expect(reopened.thread.taskDoneAt).toBeUndefined()
+    expect(reopened.stale).toBe(false)
+    const done = mergeSummary({ ...loaded, taskDoneAt: undefined }, { ...loaded, taskDoneAt: 9, summary: true, messages: [m('a1', 'cut')] })
+    expect(done.thread.taskDoneAt).toBe(9)
+  })
+
   it('an unsent message here does not make an opened chat stale', () => {
     const loaded = mergeLatest(undefined, page(['u1', 'a1']))
     const withUnsent = { ...loaded, messages: [...loaded.messages, { ...m('local-x'), unsent: true }] }

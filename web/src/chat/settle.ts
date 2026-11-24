@@ -13,8 +13,9 @@
 // it is opened (opening clears the fields). A reply that finishes while the chat
 // is snoozed wakes it early (the bridge sets `snoozedUntil` to that moment).
 //
-// The bridge stores the fields (chat/store.mjs) and clears them when a message
-// is sent; everything else about them lives in this file.
+// The bridge stores the fields (chat/store.mjs) and clears them whenever he
+// writes in the chat (wakeOnOwnerMessage there, ownerMessageChange here);
+// everything else about them lives in this file.
 import type { ChatThread } from './types'
 
 export const HOUR_MS = 3_600_000
@@ -33,25 +34,53 @@ export const wokeAt = (t: ChatThread, now: number) => (t.snoozedUntil && t.snooz
 export const activeAt = (t: ChatThread, now: number) => Math.max(t.updatedAt || 0, t.unsettledAt || 0, wokeAt(t, now))
 
 /**
- * When the chat settled (by hand, or the activity it auto-settled after); 0 if it isn't settled.
- * A chat its agent marked done (`doneAt`, chat/done.mjs on the bridge) settles as soon as the
- * owner has read the reply and moved off it (`open`: it is the chat on screen, which stays put
- * under him); turning auto-settle off ("Never") turns that off too.
+ * When he last wrote in the chat, took it off the shelf, or started it: what a finished task is
+ * measured against. A summary's or window's messages can be cut short of his latest, so the
+ * bridge's `lastOwnerAt` counts too; a `/compact` the bridge ran is not him writing.
  */
-export function settledAt(t: ChatThread, now: number, autoDays: number, live = false, open = false): number {
+export function ownerAt(t: ChatThread): number {
+  let at = Math.max(t.createdAt || 0, t.unsettledAt || 0, t.lastOwnerAt || 0)
+  for (const m of t.messages || []) if (m.role === 'user' && m.command !== 'compact' && m.createdAt > at) at = m.createdAt
+  return at
+}
+
+/**
+ * When the chat's linked task was finished (`taskDoneAt`, which the bridge adds from the task
+ * list), if that came after he last wrote in it; 0 otherwise. T3 Code settles a thread when its
+ * pull request merges after the thread's latest message; a linked task is Totem's pull request.
+ * A task finished before his latest message doesn't count: he came back to the chat for
+ * something else.
+ */
+export const taskDoneSince = (t: ChatThread) => (t.taskDoneAt && t.taskDoneAt >= ownerAt(t) ? t.taskDoneAt : 0)
+
+/** The chat's work is done: its agent said so (mark_chat_done) or its task was finished since he last wrote. */
+const finishedAt = (t: ChatThread) => Math.max(t.doneAt || 0, taskDoneSince(t))
+
+/**
+ * When the chat settled (by hand, or the activity it auto-settled after); 0 if it isn't settled.
+ * A chat its agent marked done (`doneAt`, chat/done.mjs on the bridge), or whose linked task was
+ * finished (taskDoneSince), settles as soon as the owner has read the reply and moved off it
+ * (`open`: it is the chat on screen, which stays put under him); turning auto-settle off
+ * ("Never") turns that off too. Reopening the task brings it back, since nothing is written.
+ * `waiting`: the chat waits on him (a question, an approval, the browser, a proposal:
+ * attention.ts), so nothing but his own Settle shelves it.
+ */
+export function settledAt(t: ChatThread, now: number, autoDays: number, live = false, open = false, waiting = false): number {
   if (t.settledOverride === 'settled') return t.settledAt || t.updatedAt || 1
-  if (t.settledOverride === 'active' || t.pinned || live || !autoDays || isSnoozed(t, now)) return 0
+  if (waiting || t.settledOverride === 'active' || t.pinned || live || !autoDays || isSnoozed(t, now)) return 0
   const at = activeAt(t, now)
-  if (t.doneAt && !t.needsReply) return open ? 0 : Math.max(at, t.doneAt)
+  const finished = finishedAt(t)
+  if (finished && !t.needsReply) return open ? 0 : Math.max(at, finished)
   return now - at >= autoDays * DAY_MS ? at : 0
 }
 
 /**
- * The agent marked this chat done and it hasn't settled yet (the reply is still unread, or
- * auto-settle is off): its row offers Settle in plain sight rather than behind a hover or swipe.
+ * The agent marked this chat done, or its task was finished, and it hasn't settled yet (the reply
+ * is still unread, or auto-settle is off): its row offers Settle in plain sight rather than
+ * behind a hover or swipe.
  */
 export const offersSettle = (t: ChatThread, shelf: Shelf, live = false) =>
-  shelf === 'active' && !!t.doneAt && !live && !t.pinned && t.settledOverride !== 'active'
+  shelf === 'active' && !!finishedAt(t) && !live && !t.pinned && t.settledOverride !== 'active'
 
 /**
  * The open chat that keeps its place while it's on screen (settledAt's `open`): any open chat but
@@ -59,20 +88,20 @@ export const offersSettle = (t: ChatThread, shelf: Shelf, live = false) =>
  */
 export const keptOpenId = (activeId: string | null, openedSettled: string | null) => (activeId && activeId !== openedSettled ? activeId : null)
 
-/** Snoozed wins over settled, as in T3. */
-export function shelfOf(t: ChatThread, now: number, autoDays: number, live = false, open = false): Shelf {
+/** Snoozed wins over settled, as in T3. `waiting` as for settledAt. */
+export function shelfOf(t: ChatThread, now: number, autoDays: number, live = false, open = false, waiting = false): Shelf {
   if (isSnoozed(t, now)) return 'snoozed'
-  return settledAt(t, now, autoDays, live, open) ? 'settled' : 'active'
+  return settledAt(t, now, autoDays, live, open, waiting) ? 'settled' : 'active'
 }
 
 /** A list split into its three shelves: active newest first, snoozed soonest first, settled most recent first. `openId`: the chat on screen. */
-export function shelve(threads: ChatThread[], now: number, autoDays: number, live: (id: string) => boolean = () => false, openId: string | null = null) {
+export function shelve(threads: ChatThread[], now: number, autoDays: number, live: (id: string) => boolean = () => false, openId: string | null = null, waiting: (t: ChatThread) => boolean = () => false) {
   const active: ChatThread[] = []
   const snoozed: ChatThread[] = []
   const settled: { t: ChatThread; at: number }[] = []
   for (const t of threads) {
     if (isSnoozed(t, now)) { snoozed.push(t); continue }
-    const at = settledAt(t, now, autoDays, live(t.id), t.id === openId)
+    const at = settledAt(t, now, autoDays, live(t.id), t.id === openId, waiting(t))
     if (at) settled.push({ t, at })
     else active.push(t)
   }
@@ -105,6 +134,16 @@ export const settleChange = (now: number): SettleFields => ({ settledOverride: '
 export const unsettleChange = (now: number): SettleFields => ({ settledOverride: 'active', settledAt: undefined, unsettledAt: now })
 
 export const snoozeChange = (until: number, now: number): SettleFields => ({ snoozedUntil: until, snoozedAt: now })
+
+/**
+ * He wrote in it, by any way in: a settled chat comes back, a snoozed one wakes with its timer gone,
+ * either at the top; auto-settle can have it again later, and the agent's "done" no longer stands.
+ * The bridge's copy is wakeOnOwnerMessage in chat/store.mjs, which lists the ways in.
+ */
+export const ownerMessageChange = (t: ChatThread, now: number): SettleFields & Pick<ChatThread, 'doneAt'> => ({
+  settledOverride: undefined, settledAt: undefined, snoozedUntil: undefined, snoozedAt: undefined, doneAt: undefined,
+  ...(t.settledOverride === 'settled' || isSnoozed(t, now) ? { unsettledAt: now } : {}),
+})
 
 /** Wake now (or acknowledge a wake): back in the list, at the top if it was still asleep. */
 export const wakeChange = (t: ChatThread, now: number): SettleFields => ({ snoozedUntil: undefined, snoozedAt: undefined, ...(isSnoozed(t, now) ? { unsettledAt: now } : {}) })

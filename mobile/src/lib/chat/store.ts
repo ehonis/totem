@@ -9,19 +9,23 @@
 import { useSyncExternalStore } from 'react'
 import { isCompactionTurn } from './context'
 import { AppState } from 'react-native'
-import { getThreadSummaries, getThreadPage, peekThreadPage, forgetCached, isAccountChanged, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, api } from '../api'
+import { getThreadSummaries, getThreadPage, peekThreadPage, forgetCached, isAccountChanged, putThread, deleteThread as apiDeleteThread, getChatModels, setProviderConfig, AuthError, api, onTaskStatus } from '../api'
 import { pushError, pushToast } from '../toast'
+import { oneAtATime } from '../oneAtATime'
 import { applyEvent } from './reduce'
 import {
-  sendChat, attachRun, stopChat, steerChat, decideApproval, changeQueue, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi,
+  sendChat, attachRun, stopChat, steerChat, decideApproval, changeQueue, getRuns, getCapabilities, probeCapabilities, listProjects, peekProjects, getProject, createProjectApi, patchProjectApi,
   deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
 } from './api'
 import type { QueueAction } from './api'
 import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
 import type { ApprovalDecision, Attachment, BrowserFrame, BrowserHandoff, ChatCapabilities, ChatMessage, ChatMode, ChatThread, ModelRow, ModelSettings, Project, ProviderRow, QueuedMessage, StreamEvent } from './types'
+import { projectList } from './projectList'
 import { isLoaded, mergeEarlier, mergeLatest, mergeSummary, summarize, type ThreadPage } from './history'
 import { OPENED_KEY, markOpened, readJson } from './recents'
-import { activeAt, wokeAt, settledAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, wakeDescription, type SettleFields } from './settle'
+import { plainRefs } from './refs'
+import { activeAt, wokeAt, settledAt, settleFieldsOf, settleChange, unsettleChange, snoozeChange, wakeChange, ownerMessageChange, wakeDescription, type SettleFields } from './settle'
+import { attentionOf } from './attention'
 
 // Every chat as a summary, plus the windows of the chats opened last (cache below).
 const CACHE_KEY = 'chat_threads_v3'
@@ -75,6 +79,8 @@ export interface ChatState {
   projectId: string | null
   /** Chats whose window is being read, or failed to be (by id). */
   pages: Record<string, PageState>
+  /** A new chat being started from a task (a task's page): linked to it on its first send. */
+  draftTaskId: string | null
 }
 
 /** A chat's window being read (history.ts): the latest turns, or an earlier page. */
@@ -123,6 +129,7 @@ let state: ChatState = {
   projectDetail: {},
   projectId: null,
   pages: {},
+  draftTaskId: null,
   prefs: { titles: { provider: '', model: '', effort: '', off: false }, autoSettleDays: 3 },
 }
 
@@ -381,15 +388,16 @@ export function draftFor(pick: DraftPick | null, key: string, { open, projectId 
 // --- threads ----------------------------------------------------------------
 
 export function setActive(id: string | null) {
-  if (state.activeId === id) return
+  // A new chat asked for again drops the task it was being started for.
+  if (state.activeId === id) { if (!id && state.draftTaskId) set({ draftTaskId: null }); return }
   // Opening a chat that woke from a snooze is seeing it: the "Woke" mark goes.
   const opened = id ? state.threads.find((x) => x.id === id) : null
   if (opened && wokeAt(opened, now())) wakeThread(opened.id)
   // The panel follows the chat: opening a project's chat shows that project.
   const t = id ? state.threads.find((x) => x.id === id) : null
   const scope = t ? (t.projectId && state.projects.some((p) => p.id === t.projectId) ? t.projectId : null) : state.projectId
-  const openedSettled = t && settledAt(t, now(), state.prefs.autoSettleDays ?? 3, !!state.runs[t.id]) ? t.id : null
-  set({ activeId: id, openedSettled, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null, projectId: scope })
+  const openedSettled = t && settledAt(t, now(), state.prefs.autoSettleDays ?? 3, !!state.runs[t.id], false, !!attentionOf(t, state.handoffs[t.id])) ? t.id : null
+  set({ activeId: id, openedSettled, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null, projectId: scope, draftTaskId: null })
   if (id && (!state.browser[id] || state.handoffs[id])) loadBrowser(id)
   if (id) {
     // Overview's Recent chats and the cache both go by when a chat was last opened here.
@@ -500,9 +508,18 @@ export async function loadEarlier(id: string): Promise<boolean> {
 
 /** Show a project's page (or Home with null) with no chat open. */
 export function openProject(id: string | null) {
-  set({ projectId: id, activeId: null, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null })
+  set({ projectId: id, activeId: null, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null, draftTaskId: null })
   if (id) loadProject(id)
 }
+
+/** A new chat for a task, in the project it should open in (its folder, or where its latest chat is). */
+export function startTaskDraft(taskId: string, projectId: string | null) {
+  set({ projectId, activeId: null, artifact: null, browserOpen: false, agentsOpen: false, agentFocus: null, draftTaskId: taskId })
+  if (projectId) loadProject(projectId)
+}
+
+/** The new chat stays a plain one: the task it was started from is dropped. */
+export function clearTaskDraft() { set({ draftTaskId: null }) }
 
 export const projectById = (id?: string | null) => (id ? state.projects.find((p) => p.id === id) : undefined)
 
@@ -516,12 +533,8 @@ export function threadProject(t: Pick<ChatThread, 'projectId'> | null | undefine
   return t?.projectId ? projectById(t.projectId) : undefined
 }
 
-export async function loadProjects() {
-  try {
-    const { projects } = await listProjects()
-    set((s) => ({ projects, projectId: s.projectId && !projects.some((p) => p.id === s.projectId) ? null : s.projectId }))
-  } catch (e) { fail(e) }
-}
+const projectSync = projectList({ peek: peekProjects, list: listProjects, get: () => state, set, fail })
+export const loadProjects = projectSync.load
 
 function takeProject(project: Project) {
   const { files: _f, memory: _m, ...summary } = project
@@ -535,6 +548,12 @@ function takeProject(project: Project) {
   return project
 }
 
+/** The bridge's answer to a change the phone made: a list asked for before it is out of date. */
+function takeChange(project: Project) {
+  projectSync.changed()
+  return takeProject(project)
+}
+
 export async function loadProject(id: string) {
   try { return takeProject((await getProject(id)).project) } catch (e: any) {
     if (!fail(e) && e?.status === 404) set((s) => ({ projects: s.projects.filter((p) => p.id !== id), projectId: s.projectId === id ? null : s.projectId }))
@@ -546,7 +565,7 @@ export async function createProject(body: { name: string; icon?: string; instruc
   // No model of its own until one is picked: a folder follows its project, a
   // project the default in Settings → Providers (projectDefault).
   const { project } = await createProjectApi(body)
-  takeProject(project)
+  takeChange(project)
   openProject(project.id)
   return project
 }
@@ -554,7 +573,7 @@ export async function createProject(body: { name: string; icon?: string; instruc
 export async function updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'icon' | 'instructions' | 'provider' | 'modelSettings'>>) {
   const before = state.projectDetail[id]
   if (before) set((s) => ({ projectDetail: { ...s.projectDetail, [id]: { ...before, ...patch } } }))
-  try { return takeProject((await patchProjectApi(id, patch)).project) } catch (e: any) {
+  try { return takeChange((await patchProjectApi(id, patch)).project) } catch (e: any) {
     if (!fail(e)) pushError(`Couldn't save the project: ${e.message}`)
     if (before) set((s) => ({ projectDetail: { ...s.projectDetail, [id]: before } }))
     return null
@@ -570,13 +589,13 @@ export async function saveProjectMemory(id: string, memory: string) {
 
 export async function addProjectFiles(id: string, uploadIds: string[]) {
   if (!uploadIds.length) return
-  try { takeProject((await addProjectFilesApi(id, uploadIds)).project) } catch (e: any) { if (!fail(e)) pushError(`Couldn't add the files: ${e.message}`) }
+  try { takeChange((await addProjectFilesApi(id, uploadIds)).project) } catch (e: any) { if (!fail(e)) pushError(`Couldn't add the files: ${e.message}`) }
 }
 
 export async function removeProjectFiles(id: string, ids: string[]) {
   const p = state.projectDetail[id]
   if (p?.files) set((s) => ({ projectDetail: { ...s.projectDetail, [id]: { ...p, files: p.files!.filter((f) => !ids.includes(f.id)), fileCount: p.fileCount - ids.length } } }))
-  try { takeProject((await removeProjectFilesApi(id, ids)).project) } catch (e: any) {
+  try { takeChange((await removeProjectFilesApi(id, ids)).project) } catch (e: any) {
     if (!fail(e)) pushError(`Couldn't remove the files: ${e.message}`)
     loadProject(id)
   }
@@ -586,6 +605,7 @@ export async function removeProjectFiles(id: string, ids: string[]) {
 export async function deleteProject(id: string) {
   const parentId = projectById(id)?.parentId
   const { movedChats } = await deleteProjectApi(id)
+  projectSync.changed()
   if (parentId) {
     set((s) => {
       const detail = { ...s.projectDetail }
@@ -612,6 +632,7 @@ export async function deleteProject(id: string) {
       threads: s.threads.map((t) => (t.projectId && gone.has(t.projectId) ? { ...t, projectId: undefined } : t)),
     }
   })
+  loadProjects()
   return movedChats
 }
 
@@ -619,7 +640,7 @@ export async function deleteProject(id: string) {
 export async function moveMemoryUp(folderId: string, entries: string[]) {
   const parentId = projectById(folderId)?.parentId
   const { moved, project } = await moveProjectMemoryApi(folderId, entries)
-  takeProject(project)
+  takeChange(project)
   if (parentId && state.projectDetail[parentId]) loadProject(parentId)
   return moved
 }
@@ -628,7 +649,7 @@ export async function moveMemoryUp(folderId: string, entries: string[]) {
 export async function moveFilesUp(folderId: string, ids: string[]) {
   const parentId = projectById(folderId)?.parentId
   const { moved, project } = await moveProjectFilesApi(folderId, ids)
-  takeProject(project)
+  takeChange(project)
   if (parentId) loadProject(parentId)
   loadProjects()
   return moved
@@ -673,6 +694,17 @@ function backInPlay(id: string) {
   if (state.openedSettled === id) set({ openedSettled: null })
 }
 
+/**
+ * settle.ts ownerMessageChange, shown at once rather than on the next list read. `answered`: a new
+ * turn, which also clears "waiting on you".
+ */
+export function wakeOnOwnerMessage(id: string, answered = false) {
+  backInPlay(id)
+  patchThread(id, (t) => (t.settledOverride || t.settledAt || t.snoozedUntil || t.snoozedAt || t.doneAt || (answered && t.needsReply)
+    ? { ...t, ...ownerMessageChange(t, now()), ...(answered ? { needsReply: undefined, keepUnread: undefined } : {}) }
+    : t))
+}
+
 export function snoozeThread(id: string, until: number) {
   const t = state.threads.find((x) => x.id === id)
   if (!t || until <= now()) return
@@ -697,6 +729,18 @@ export function markRead(threadId: string) {
 export function markUnread(threadId: string) {
   patchThread(threadId, (t) => ({ ...t, needsReply: true, keepUnread: true }))
   putThread({ id: threadId, needsReply: true, keepUnread: true }).catch(fail)
+}
+
+/** Link a chat to a task (its ref), or unlink it with null. The bridge reads the task into each turn. */
+export function linkTask(threadId: string, taskId: string | null) {
+  // The old task's finish no longer counts; the bridge's answer says whether the new one is done.
+  const next = taskId || undefined
+  patchThread(threadId, (t) => ({ ...t, taskId: next, taskDoneAt: undefined }))
+  putThread({ id: threadId, taskId })
+    .then((saved: { taskDoneAt?: number } | null) => {
+      if (saved?.taskDoneAt) patchThread(threadId, (t) => (t.taskId === next ? { ...t, taskDoneAt: saved.taskDoneAt } : t))
+    })
+    .catch(fail)
 }
 
 /** Move a chat into a project, or back to Home with null. Its files come with it. */
@@ -831,15 +875,28 @@ export function openArtifact(a: Artifact | null) {
 
 // A summary that has not changed keeps its object, so the drawer's rows don't redraw.
 const summaryText = new Map<string, string>()
-let syncSeq = 0
+
+// When this device last let go of each chat's run (a count, not a clock). A list
+// asked for before then can predate the chat itself, so it does not drop it.
+let listClock = 0
+const runLeft = new Map<string, number>()
+// Counts the bridge's lists applied; 0 until it first answers (a failed pull leaves it).
+let listsApplied = 0
+/** Changes each time the bridge's list of chats is applied; 0 until it first answers. */
+export const listAnswered = () => listsApplied
 
 /**
  * Pull the list (summaries). A chat with a live local run keeps its live copy; an
  * opened chat keeps its messages, and the open one reads its window again when
  * the bridge has moved on (mergeSummary's `stale`).
+ *
+ * One pull at a time: a call while one is out waits for it and then pulls once
+ * more, shared by every call in between. On a slow link the calls queue behind
+ * one download instead of each throwing away the answer before it.
  */
-export async function syncThreads() {
-  const mine = ++syncSeq
+export const syncThreads = oneAtATime(pullThreads)
+
+async function pullThreads() {
   try {
     if (!localStorage.getItem(MIGRATED)) {
       // One-time upload of chats that only ever lived in this browser.
@@ -850,11 +907,13 @@ export async function syncThreads() {
       localStorage.setItem(MIGRATED, '1')
     }
     const sentAt = handoffClock
+    const askedAt = listClock
     const { threads } = await getThreadSummaries()
-    // A newer sync went out while this one was waiting: its answer is the one to take.
-    if (mine !== syncSeq) return
+    // Not a list (a sign-in or captive page answered): keep what the app holds.
+    if (!Array.isArray(threads)) throw new Error('The bridge did not answer with the chat list.')
     const listed = takeHandoffs(threads as ChatThread[], sentAt)
     const stale: string[] = []
+    listsApplied++
     set((s) => {
       const byId = new Map(s.threads.map((t) => [t.id, t]))
       const merged = (threads as ChatThread[]).map((sum) => {
@@ -876,15 +935,19 @@ export async function syncThreads() {
         return thread
       })
       const out = withOutbox(merged, new Set(Object.keys(s.runs)))
-      // A thread created here a moment ago may not have reached the bridge yet.
-      for (const t of s.threads) if ((s.runs[t.id] || threadReads.has(t.id)) && !out.some((m) => m.id === t.id)) out.push(t)
+      // A thread created here a moment ago may not have reached the bridge yet, nor
+      // be in a list asked for before its run ended here.
+      const have = new Set(out.map((t) => t.id))
+      for (const t of s.threads) {
+        if (!have.has(t.id) && (s.runs[t.id] || threadReads.has(t.id) || (runLeft.get(t.id) || 0) > askedAt)) out.push(t)
+      }
       return { threads: sortThreads(out), loaded: true, handoffs: listed(s) }
     })
+    for (const [id, at] of runLeft) if (at <= askedAt) runLeft.delete(id)
     // The open chat moved on the bridge (another device, a totem, a queued reply): read it again.
     const open = state.activeId
     if (open && stale.includes(open) && !state.runs[open]) void loadThread(open)
   } catch (e) {
-    if (mine !== syncSeq) return
     if (!fail(e) && !isAccountChanged(e)) set({ loaded: true })
   }
 }
@@ -920,11 +983,15 @@ export function initChat(authError: () => void) {
   started = true
   // Every message of every chat, as the list was before summaries: nothing reads it now.
   forgetCached('/api/threads')
+  projectSync.seed()
   syncThreads().then(resumeRuns)
   loadProjects()
   loadProviders()
   loadCapabilities()
   loadPrefs()
+  // A task done or reopened here: the list reads again, so its chats settle or come back
+  // (each chat's `taskDoneAt` is the bridge's reading of its task; settle.ts taskDoneSince).
+  onTaskStatus(() => { void syncThreads() })
   const refresh = () => {
     // A run the bridge started from a queue, or from another device, shows live
     // here too. Summaries are small, so the list syncs even while a reply runs.
@@ -1012,6 +1079,7 @@ export async function removeThread(id: string) {
 // --- runs -------------------------------------------------------------------
 
 function setRun(id: string, patch: Partial<RunState> | null) {
+  if (patch === null && state.runs[id]) runLeft.set(id, ++listClock)
   set((s) => {
     const runs = { ...s.runs }
     if (patch === null) delete runs[id]
@@ -1083,6 +1151,7 @@ function handleEvent(threadId: string, e: StreamEvent) {
     case 'tool':
     case 'agent':
     case 'image':
+    case 'tool_image':
       // A sub-agent's step is not the reply moving on: the activity line stays.
       if (e.type !== 'agent' && (e.type !== 'tool' || (e as any).tool?.phase !== 'end')) setRun(threadId, { activity: '' })
       patchAssistant(threadId, (m) => applyEvent(m, e))
@@ -1198,8 +1267,12 @@ export interface SendInput {
   projectId?: string | null
   /** A new project chat that leaves the project's context out. */
   projectContextOff?: boolean
+  /** A new chat started from a task, linked to it from the first turn. */
+  taskId?: string
   /** "Compact and send" (context.ts): the chat compacts first and the message waits right behind it. */
   compactFirst?: boolean
+  /** The bridge refused the message before starting it (not a message that never reached it, which stays as "Not sent"). */
+  onRefused?: () => void
 }
 
 /** Start a turn. Returns the thread id (new chats get one here). */
@@ -1234,10 +1307,11 @@ export function send(input: SendInput): string {
     parts: compactFirst ? [{ type: 'compaction', id: `local-${newId()}`, status: 'running', trigger: 'onReturn', startedAt: t0 }] : [],
   }
   const contextOff = !!projectId && !thread && !!input.projectContextOff
+  const taskId = !thread && input.taskId ? input.taskId : undefined
   if (!thread) {
     thread = {
       id: threadId, kind, provider: kind === 'regular' ? provider : undefined, modelSettings: settings,
-      ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}),
+      ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(taskId ? { taskId } : {}),
       messages: [], createdAt: t0, updatedAt: t0, ...(kind === 'temporary' ? { expiresAt: endOfToday() } : {}),
     }
   }
@@ -1253,6 +1327,7 @@ export function send(input: SendInput): string {
     // Only read for a chat the bridge hasn't seen; an existing one keeps its project.
     ...(projectId ? { projectId } : {}),
     ...(contextOff ? { projectContextOff: true } : {}),
+    ...(taskId ? { taskId } : {}),
     ...(compactFirst ? { compactFirst: true } : {}),
   }
   const { messages: _m, needsReply: _n, keepUnread: _k, ...meta } = thread
@@ -1261,11 +1336,11 @@ export function send(input: SendInput): string {
     ? { id: userMessage.id, role: 'user', content: input.text, createdAt: t0, ...(input.attachments?.length ? { attachments: input.attachments } : {}) }
     : userMessage
   outboxPut(threadId, { args, message: unsentAs, thread: { ...meta, updatedAt: t0 }, at: t0 })
-  return startRun(threadId, args)
+  return startRun(threadId, args, input.onRefused)
 }
 
-/** Send an unsent message again (or drop it if it turns out the bridge got it). */
-export async function retryUnsent(threadId: string) {
+/** Send an unsent message again (or drop it if it turns out the bridge got it). `onRefused` as for `send`. */
+export async function retryUnsent(threadId: string, onRefused?: () => void) {
   const e = readOutbox()[threadId]
   if (!e || state.runs[threadId]) return
   await syncThreads() // maybe it reached the bridge after all
@@ -1278,7 +1353,7 @@ export async function retryUnsent(threadId: string) {
       { id: `local-${newId()}`, role: 'assistant' as const, content: '', parts: [], status: 'streaming' as const, provider: e.args.provider || undefined, createdAt: now() },
     ],
   }))
-  startRun(threadId, e.args)
+  startRun(threadId, e.args, onRefused)
 }
 
 /** Take an unsent message back out of the chat, returning its text for the composer. */
@@ -1293,15 +1368,12 @@ export function discardUnsent(threadId: string): string {
   return e.message.content
 }
 
-function startRun(threadId: string, args: SendArgs) {
+function startRun(threadId: string, args: SendArgs, onRefused?: () => void) {
   setRun(threadId, { seq: 0, activity: '', mode: args.mode || 'chat', startedAt: now() })
   // Replying (or regenerating, or editing) is what clears "waiting on you".
-  // So does writing in a settled or snoozed chat, which brings it back (the bridge does the same).
-  backInPlay(threadId)
-  patchThread(threadId, (t) => (t.needsReply || t.settledOverride || t.snoozedUntil || t.doneAt
-    ? { ...t, needsReply: undefined, keepUnread: undefined, settledOverride: undefined, settledAt: undefined, snoozedUntil: undefined, snoozedAt: undefined, doneAt: undefined, ...(t.settledOverride === 'settled' ? { unsettledAt: now() } : {}) }
-    : t))
-  const handle = sendChat(args, (e) => handleEvent(threadId, e), (err: any) => {
+  wakeOnOwnerMessage(threadId, true)
+  let began = false
+  const handle = sendChat(args, (e) => { if (e.type === 'start') began = true; handleEvent(threadId, e) }, (err: any) => {
     if (fail(err)) { setRun(threadId, null); return }
     // Never reached the bridge: the message stays, marked unsent, with Retry —
     // and with no empty reply bubble under it. (A 4xx is a real refusal, not a
@@ -1324,6 +1396,7 @@ function startRun(threadId: string, args: SendArgs) {
       return
     }
     if (box) outboxDrop(threadId)
+    if (!began) onRefused?.()
     // The bridge refused before starting (busy, bad input): show it on the reply.
     patchAssistant(threadId, (m) => (m.status === 'streaming' && !m.content ? { ...m, status: 'error', error: err.message } : m))
     setRun(threadId, null)
@@ -1358,6 +1431,7 @@ export async function steer(threadId: string, text: string, attachments?: string
   if (!state.runs[threadId] || (!text.trim() && !attachments?.length)) return false
   try {
     await steerChat(threadId, text, attachments)
+    wakeOnOwnerMessage(threadId)
     return true
   } catch (e: any) {
     if (!fail(e)) pushError(e?.status === 409 ? 'That reply had already finished. Your message is still in the box.' : `Couldn't send that: ${e.message}`)
@@ -1372,6 +1446,7 @@ export async function steer(threadId: string, text: string, attachments?: string
 export async function respondToApproval(threadId: string, messageId: string, partId: string, decision: ApprovalDecision, feedback?: string): Promise<boolean> {
   try {
     await decideApproval(threadId, messageId, partId, decision, feedback)
+    if (decision === 'decline' && feedback?.trim()) wakeOnOwnerMessage(threadId)
     return true
   } catch (e: any) {
     if (!fail(e)) pushError(e?.status === 409 ? (e.message || 'That request has ended.') : `Couldn't send that: ${e.message}`)
@@ -1396,6 +1471,7 @@ export async function queueMessage(threadId: string, text: string, attachments: 
   const wire = wireModel(row?.driver || 'cursor', settings)
   try {
     takeQueue(threadId, await changeQueue(threadId, { action: 'add', text, attachments: attachments.map((a) => a.id), provider, model: wire.model ?? undefined, effort: wire.effort ?? undefined, modelSettings: settings }))
+    wakeOnOwnerMessage(threadId)
     // It ended as this was sent, so the bridge started it at once.
     if (!state.runs[threadId]) watchQueue(threadId)
     return true
@@ -1409,6 +1485,7 @@ export async function queueMessage(threadId: string, text: string, attachments: 
 export async function updateQueue(threadId: string, change: Exclude<QueueAction, { action: 'add' }>): Promise<boolean> {
   try {
     takeQueue(threadId, await changeQueue(threadId, change))
+    if (change.action === 'steer') wakeOnOwnerMessage(threadId)
     if (change.action === 'resume' && !state.runs[threadId]) watchQueue(threadId)
     return true
   } catch (e: any) {
@@ -1472,7 +1549,7 @@ export function threadTitle(t: ChatThread | null | undefined): string {
   if (!t) return 'New chat'
   if (t.title) return t.title
   // A summary's preview holds only the last turn; the first message comes with it.
-  const first = (t.firstUserText || t.messages.find((m) => m.role === 'user')?.content)?.replace(/\s+/g, ' ').trim()
+  const first = plainRefs(t.firstUserText || t.messages.find((m) => m.role === 'user')?.content || '').replace(/\s+/g, ' ').trim()
   if (first) return first.length > 48 ? `${first.slice(0, 48)}…` : first
   return t.kind === 'temporary' ? 'Temporary chat' : 'New chat'
 }

@@ -121,8 +121,8 @@ mark the same way and comes back; with two rows of the same title it applies onl
 failed read keeps them all. A chat linked to a marked row still gets its `LINKED TASK` block.
 
 Where: the web's Tasks page (the row's mark, `x`, `s`, the pane; the Snoozed and Completed
-folds hold marked rows), the chats panel's Tasks face and its task card (check, Snooze,
-"Mark done for me" in the row menu), and the iPhone app's Tasks list and row page.
+folds hold marked rows), a task card opened from a chat card's task in the chats panel (check,
+Snooze), and the iPhone app's Tasks list and row page.
 
 ## What "read-only" covers
 

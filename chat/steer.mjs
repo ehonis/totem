@@ -19,6 +19,7 @@
 // blocks on stdin or as the restarted attempt's images.
 
 import { attachmentBlock } from './turn.mjs'
+import { contextSeal, projectRefs } from './refs.mjs'
 
 export function createSteering() {
   let deliver = null // (steer) => boolean, while a streamer can take input mid-turn
@@ -71,19 +72,29 @@ export function progressNote(msg, { textTail = 1200, tools = 12 } = {}) {
 /**
  * What one steer says to the agent: the owner's words and the files sent with
  * them (`files`, loaded uploads with their paths), the way a message lists them.
+ * Sealed on its own (chat/refs.mjs `contextSeal`) unless a larger prompt's `seal`
+ * holds its block.
  */
-export function steerText(steer) {
-  const att = attachmentBlock(steer.files).trim()
-  const words = String(steer.text || '').trim() || (att ? '(The owner sent only the attachments above. Look at them and take them into account.)' : '')
-  return [att, words].filter(Boolean).join('\n\n')
+export function steerText(steer, seal = null) {
+  const own = seal || contextSeal()
+  const refs = projectRefs(steer.text, steer.files)
+  const att = attachmentBlock(refs.rest, refs.textLeft).trim()
+  const words = refs.text.trim() || (att ? '(The owner sent only the attachments above. Look at them and take them into account.)' : '')
+  const text = [att, words, own.hold(refs.context)].filter(Boolean).join('\n\n')
+  return seal ? text : own.seal(text)
 }
 
-/** The message a restarted attempt sends: the owner's words, with what came before. */
-export function steerPrompt(steers, { owner = 'Owner', progress = '' } = {}) {
-  const words = steers.map(steerText).join('\n\n')
-  return [
+/**
+ * The message a restarted attempt sends: the owner's words, with what came before.
+ * With `seal` (the whole restarted prompt's), its blocks are held there.
+ */
+export function steerPrompt(steers, { owner = 'Owner', progress = '', seal = null } = {}) {
+  const own = seal || contextSeal()
+  const words = steers.map((s) => steerText(s, own)).join('\n\n')
+  const text = [
     'The owner interrupted your reply to add the message below. Take it into account and carry on with their request from where you were, changing course if they ask you to. Do not start over or repeat work you have already done.',
     progress,
     `${owner}: ${words}`,
   ].filter(Boolean).join('\n\n')
+  return seal ? text : own.seal(text)
 }

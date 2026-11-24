@@ -36,6 +36,8 @@ export interface ToolPart {
   endedAt?: number
   /** Another agent this call started, and what it is doing (chat/subagents.mjs). */
   agent?: AgentInfo
+  /** Pictures the call returned (a screenshot, an image it read): the agent's looking, shown only when the card is opened. */
+  images?: { uploadId: string; url?: string }[]
 }
 /** One thing a sub-agent did: thought, said, or called a tool. */
 export interface AgentStep {
@@ -305,6 +307,8 @@ export interface ChatThread {
   members?: string[]
   /** A project chat that reads none of the project's instructions, memory or files. */
   projectContextOff?: boolean
+  /** The owner's task this chat works toward (drawer → Tasks): a local task id or a sheet row's. */
+  taskId?: string
   /** Finished, and not yet answered or marked read. */
   needsReply?: boolean
   /** He marked it unread to come back to: opening it no longer reads it. Only set with needsReply. */
@@ -319,6 +323,13 @@ export interface ChatThread {
   snoozedAt?: number
   /** The agent marked the request finished (mark_chat_done): Settle is offered, and it settles once read. Cleared by his next message. */
   doneAt?: number
+  /**
+   * When the chat's linked task was finished (a local task done, a sheet row marked done), added by
+   * the bridge on every read and never stored: reopening the task takes it away. See settle.ts taskDoneSince.
+   */
+  taskDoneAt?: number
+  /** When he last wrote in it (the bridge's reading of the whole chat, which a summary or window may cut short of). */
+  lastOwnerAt?: number
   messages: ChatMessage[]
   /**
    * The bridge sent a summary (GET /api/threads?view=summary): `messages` is only a
@@ -437,6 +448,7 @@ export type StreamEvent =
   | { type: 'tool'; tool: any; seq: number }
   | { type: 'agent'; toolId: string; agent?: Partial<AgentInfo>; step?: AgentStep; seq: number }
   | { type: 'image'; uploadId: string; alt?: string; url?: string; seq: number }
+  | { type: 'tool_image'; toolId: string; uploadId: string; url?: string; seq: number }
   | ({ type: 'browser'; seq: number } & BrowserFrame)
   | { type: 'handoff'; handoff: BrowserHandoff | null; seq: number }
   | { type: 'file'; file: FilePart; seq: number }

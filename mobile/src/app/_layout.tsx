@@ -11,6 +11,7 @@ import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_7
 import { Unbounded_600SemiBold } from '@expo-google-fonts/unbounded'
 import { loadConnection, useConnection, clearSecretStored } from '../lib/connection'
 import { initChat } from '../lib/chat/store'
+import { startDraftSync } from '../features/chat/appDrafts'
 import ToastHost from '../ui/ToastHost'
 import { pushedOptions } from '../features/settings/ui'
 import { ScreenError } from '../shell/ScreenError'
@@ -56,6 +57,8 @@ const ROUTES: { name: string; options: object }[] = [
   { name: 'chat/snooze', options: sheet([0.5]) },
   // A list's Snoozed or Settled chats, opened from the drawer's foot.
   { name: 'chat/shelf', options: sheet([0.75, 1]) },
+  // The task a chat works toward: picked, changed or unlinked (features/work/LinkTaskSheet.tsx).
+  { name: 'chat/task', options: sheet([0.75, 1]) },
   // Voice takes the whole screen and stays until ended: no swipe-down to leave it live.
   { name: 'chat/voice', options: { presentation: 'fullScreenModal', animation: 'fade', gestureEnabled: false, contentStyle: { backgroundColor: '#08090d' } } },
   // Tasks
@@ -109,7 +112,12 @@ export default function RootLayout() {
   useEffect(() => { if (fontsLoaded && ready) SplashScreen.hideAsync() }, [fontsLoaded, ready])
   // The chat store is the app's one long-lived sync loop; start it once signed in.
   // A 401 anywhere in it means the secret is wrong now: back to Connect.
-  useEffect(() => { if (connected) initChat(() => { void clearSecretStored() }) }, [connected])
+  // The saved drafts keep their uploads on the bridge and drop the drafts of chats that are gone.
+  useEffect(() => {
+    if (!connected) return
+    initChat(() => { void clearSecretStored() })
+    startDraftSync()
+  }, [connected])
 
   if (!fontsLoaded || !ready) return <View style={{ flex: 1, backgroundColor: colors.bg }} />
 

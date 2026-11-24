@@ -8,6 +8,7 @@
 // whole JSON body it hashes that body and answers from the result. Anything
 // streamed with write() passes straight through.
 import { createHash } from 'node:crypto'
+import { gzipSync } from 'node:zlib'
 
 // The read routes a client may keep. Every one answers a single JSON body, and
 // none streams, changes on every poll (usage meters, /api/jobs' generatedAt),
@@ -15,6 +16,9 @@ import { createHash } from 'node:crypto'
 // route joins this list only if all of that stays true: the phone writes these
 // bodies to disk. The inbox (staged emails and messages) and the journal
 // (transcripts) stay off it for that reason, as does anything a search typed.
+// The chat projects list is the summaries (names, icons, folders, instructions,
+// counts, a picture's link, which has no expiry); one project, with its memory and
+// file list, is not.
 const ETAG_PATHS = new Set([
   '/api/todos', '/api/todos/board', '/api/todos/projects', '/api/todos/completed',
   '/api/todos/venture-tags', '/api/todos/preferences',
@@ -26,6 +30,7 @@ const ETAG_PATHS = new Set([
   '/api/notifications',
   '/api/productivity',
   '/api/threads',
+  '/api/chat/projects',
 ])
 // One record by id: /api/todos/<id>, /api/goals/<id>, /api/lists/<id>. Not
 // /api/goals/search, whose query would land on disk, nor /api/todos/sheet, a feed
@@ -38,6 +43,24 @@ const ETAG_THREAD = /^\/api\/threads\/[A-Za-z0-9_-]{1,128}$/
 
 // Keep it, but ask the bridge before every use; never in a shared cache.
 const CACHE_CONTROL = 'private, no-cache'
+
+// Bodies this big go gzipped to a client that takes it. The chat list is hundreds
+// of KB and polled every 30 s; over a relayed Tailscale link the phone's whole
+// download has to land inside its cache's deadline. JSON shrinks about 3x.
+export const GZIP_MIN_BYTES = 8 * 1024
+
+/** Whether an Accept-Encoding header takes gzip (and does not refuse it with q=0). */
+export function acceptsGzip(header) {
+  const weights = new Map()
+  for (const part of String(header || '').split(',')) {
+    const [name, ...params] = part.trim().toLowerCase().split(';').map((p) => p.trim())
+    const q = params.find((p) => p.startsWith('q='))
+    if (name && !weights.has(name)) weights.set(name, q ? Number(q.slice(2)) : 1)
+  }
+  // gzip named outright wins over the wildcard.
+  const q = weights.has('gzip') ? weights.get('gzip') : weights.get('*')
+  return q > 0
+}
 
 export function etagEligible(method, path) {
   return method === 'GET' && (ETAG_PATHS.has(path) || ETAG_RECORD.test(path) || ETAG_THREAD.test(path))
@@ -91,10 +114,16 @@ export function etagResponse(req, res, path) {
     }
     const etag = weakEtag(chunk)
     if (etagMatches(req.headers['if-none-match'], etag)) {
-      writeHead.call(this, 304, { etag, 'cache-control': CACHE_CONTROL })
+      writeHead.call(this, 304, { etag, 'cache-control': CACHE_CONTROL, vary: 'accept-encoding' })
       return end.call(this)
     }
-    writeHead.call(this, status, { ...headers, etag, 'cache-control': CACHE_CONTROL })
+    const out = { ...headers, etag, 'cache-control': CACHE_CONTROL, vary: 'accept-encoding' }
+    if (Buffer.byteLength(chunk) >= GZIP_MIN_BYTES && acceptsGzip(req.headers['accept-encoding'])) {
+      for (const k of Object.keys(out)) if (k.toLowerCase() === 'content-length') delete out[k]
+      writeHead.call(this, status, { ...out, 'content-encoding': 'gzip' })
+      return end.call(this, gzipSync(chunk))
+    }
+    writeHead.call(this, status, out)
     return end.call(this, chunk, ...rest)
   }
 }

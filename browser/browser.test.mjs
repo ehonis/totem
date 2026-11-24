@@ -97,6 +97,38 @@ test('a shared screenshot becomes an upload; any other path stays put', async ()
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
+test('a picture the agent opened is shown from the upload its tool made; one it did not stays text', async () => {
+  const { embedLocalImages } = await import('./shots.mjs')
+  const { writeFile, mkdir } = await import('node:fs/promises')
+  const dir = await mkdtemp(join(tmpdir(), 'vshots-'))
+  try {
+    await mkdir(join(dir, 'listing photos'))
+    const seen = join(dir, 'listing photos', 'back yard.jpg')
+    const other = join(dir, 'other.jpg')
+    await writeFile(seen, Buffer.from([0xff, 0xd8, 0xff, 1]))
+    await writeFile(other, Buffer.from([0xff, 0xd8, 0xff, 2]))
+    const saved = []
+    const save = async (f) => { saved.push(f); return { id: 'x', url: '/x' } }
+    const known = new Map([[seen, { id: 'read1', url: '/api/chat/uploads/read1?sig=s' }]])
+    // A path with spaces is written in angle brackets.
+    const out = await embedLocalImages(`![cover](<${seen}>)\n\n![nope](${other})`, { allowedDirs: [], seen: known, save })
+    assert.equal(saved.length, 0, 'the disk is not read again: the reply reuses what the agent saw')
+    assert.match(out.text, /!\[cover\]\(\/api\/chat\/uploads\/read1\?sig=s\)/)
+    assert.ok(out.text.includes(`![nope](${other})`))
+    // A literal % in a name is tried as written before any URL decoding.
+    const pct = join(dir, '100% cotton.png')
+    const shown = await embedLocalImages(`![shirt](<${pct}>)`, { allowedDirs: [], seen: new Map([[pct, { url: '/api/chat/uploads/pct1' }]]), save })
+    assert.match(shown.text, /!\[shirt\]\(\/api\/chat\/uploads\/pct1\)/)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('text uploads: the ids a reply\'s text shows are found for the sweep', async () => {
+  const { textUploadIds } = await import('../chat/uploads.mjs')
+  const id = 'a'.repeat(32)
+  assert.deepEqual(textUploadIds(`![x](/api/chat/uploads/${id}?sig=abc) and [f](/api/chat/uploads/bad!) ![y](/api/chat/uploads/${id}?sig=d)`), [id, id])
+  assert.deepEqual(textUploadIds(undefined), [])
+})
+
 test('browser calls read like what the agent did', async () => {
   const { describeMcpCall } = await import('../chat/tools.mjs')
   assert.equal(describeMcpCall({ name: 'mcp__totem-browser__preview_open', input: { url: 'https://www.example.com/x' } }).title, 'Opened example.com')

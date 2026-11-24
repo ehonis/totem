@@ -5,6 +5,8 @@
 import type { AgentInfo, AgentStep, ChatMessage, ToolPart } from './types'
 
 const MAX_AGENT_STEPS = 400
+/** Twin of MAX_TOOL_IMAGES in chat/store.mjs: the pictures one call's card keeps. */
+const MAX_TOOL_IMAGES = 20
 const AGENT_KEYS = ['provider', 'via', 'name', 'title', 'prompt', 'model', 'status', 'progress', 'summary', 'tokens', 'toolUses', 'log', 'startedAt', 'endedAt'] as const
 
 /** Twin of foldAgent in chat/subagents.mjs: one `agent` event into a card's agent. */
@@ -81,6 +83,15 @@ export function applyEvent(msg: ChatMessage, event: any, now = Date.now()): Chat
       if (!event.uploadId) return msg
       parts.push({ type: 'image', uploadId: event.uploadId, alt: event.alt || '', ...(event.url ? { url: event.url } : {}) })
       return next
+    case 'tool_image': {
+      // A picture a tool returned belongs to that call's card, folded with the
+      // steps; the reply shows one only when the agent puts it in its text.
+      const i = event.uploadId ? parts.findIndex((p) => p.type === 'tool' && p.id === event.toolId) : -1
+      const p = parts[i] as ToolPart | undefined
+      if (!p || (p.images?.length || 0) >= MAX_TOOL_IMAGES) return msg
+      parts[i] = { ...p, images: [...(p.images || []), { uploadId: event.uploadId, ...(event.url ? { url: event.url } : {}) }] }
+      return next
+    }
     case 'file':
       if (!event.file?.uploadId) return msg
       parts.push({ type: 'file', ...event.file })

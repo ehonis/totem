@@ -5,7 +5,9 @@ import React, { useCallback, useMemo, useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { useFocusEffect } from 'expo-router'
 import { useChat, threadTitle } from '../../lib/chat/store'
-import { DRAFTS_KEY, OPENED_KEY, readJson, recentChats } from '../../lib/chat/recents'
+import { OPENED_KEY, readJson, recentChats } from '../../lib/chat/recents'
+import { chatDraftPreviews } from '../../lib/chat/draftsShared'
+import { drafts as draftStore, useDraftsSnapshot } from '../chat/appDrafts'
 import { openChat } from '../../shell/nav'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
@@ -28,11 +30,12 @@ function ago(ts: number, now: number): string {
 
 export default function RecentChats() {
   const threads = useChat((s) => s.threads)
-  // Drafts and opened marks live in localStorage (ChatScreen, the chat store); read again whenever the Overview shows.
-  const [drafts, setDrafts] = useState<Record<string, string>>(() => readJson(localStorage, DRAFTS_KEY, {}))
+  // Redrawn when a chat's draft preview changes, not on every keystroke elsewhere.
+  const previews = useDraftsSnapshot(() => JSON.stringify(chatDraftPreviews(draftStore.get())))
+  const drafts = useMemo(() => JSON.parse(previews) as Record<string, string>, [previews])
+  // Opened marks live in localStorage (the chat store); read again whenever the Overview shows.
   const [opened, setOpened] = useState<Record<string, number>>(() => readJson(localStorage, OPENED_KEY, {}))
   useFocusEffect(useCallback(() => {
-    setDrafts(readJson(localStorage, DRAFTS_KEY, {}))
     setOpened(readJson(localStorage, OPENED_KEY, {}))
   }, []))
   const now = Date.now()

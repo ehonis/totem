@@ -15,7 +15,7 @@ import type { AwaySpan } from './away'
 import nacl from 'tweetnacl'
 import { bridgeFetch, bridgeUrl, clearSecretStored, getConnection, getStoredSecret, subscribeConnection, withAccess } from './connection'
 import { isAccessResponse } from './cfAccess'
-import { AccountChangedError, createHttpCache } from './httpCache'
+import { AccountChangedError, createHttpCache, type GetOptions } from './httpCache'
 import { cacheStorage } from './httpCacheStorage'
 import { approvalHeaders, type ApprovalCodeStatus } from './approvalCode'
 
@@ -97,8 +97,8 @@ subscribeConnection(() => {
   httpCache.setAccount(next)
 })
 
-async function getJSON<T = any>(url: string): Promise<T> {
-  return httpCache.get<T>(url, (headers, signal) => bridgeFetch(url, { headers: authHeaders(headers), signal }), readResponse)
+export async function getJSON<T = any>(url: string, options?: GetOptions): Promise<T> {
+  return httpCache.get<T>(url, (headers, signal) => bridgeFetch(url, { headers: authHeaders(headers), signal }), readResponse, options)
 }
 
 /** What the last GET of `url` answered, from the cache, without asking the bridge. */
@@ -341,7 +341,10 @@ export const removeMcpConnection = (id: string) => sendJSON('/api/mcp/remove', '
 
 // Cross-device chat history, persisted by the bridge.
 // The list as summaries (chat/store.mjs threadSummary): each chat's last turn as a preview, no history.
-export const getThreadSummaries = () => getJSON<{ threads: any[] }>('/api/threads?view=summary')
+// The list is never answered from the disk: the store already holds a newer copy
+// than that, and taking the stored one dropped every chat begun since it was saved.
+// It may take its time (hundreds of KB over a relayed link), but not iOS's whole minute.
+export const getThreadSummaries = () => getJSON<{ threads: any[] }>('/api/threads?view=summary', { stored: false, deadlineMs: 45_000 })
 // One chat, a window at a time (lib/chat/history.ts): the latest turns, or the page before `before`.
 const threadPageUrl = (id: string, before?: string | null, turns = 10) =>
   `/api/threads/${encodeURIComponent(id)}?turns=${turns}${before ? `&before=${encodeURIComponent(before)}` : ''}`
@@ -442,7 +445,16 @@ export const setAiUsageConfig = (patch: any) => sendJSON('/api/ai-usage/config',
 // Returns { generatedAt, viewer, repos, cached, ageMs }.
 export const getGithubRepos = (refresh = false) => getJSON(`/api/github/repos${refresh ? '?refresh=1' : ''}`)
 
-export const closeTodo = (id: string) => sendJSON('/api/todos/close', 'POST', { id })
+// A task's state changed (done, reopened, a sheet row marked): each chat carries the
+// bridge's reading of its task (`taskDoneAt`, lib/chat/settle.ts taskDoneSince), so the
+// chat store reads the list again (onTaskStatus in initChat) and a finished task's chats settle.
+const taskWatchers = new Set<() => void>()
+export function onTaskStatus(fn: () => void) { taskWatchers.add(fn); return () => { taskWatchers.delete(fn) } }
+function toldTasks<T>(answer: Promise<T>): Promise<T> {
+  return answer.then((value) => { taskWatchers.forEach((fn) => fn()); return value })
+}
+
+export const closeTodo = (id: string) => toldTasks(sendJSON('/api/todos/close', 'POST', { id }))
 
 // ---- Local-first todo board -------------------------------------------------
 // These canonical routes expose the SQLite model directly. The compatibility
@@ -468,15 +480,15 @@ export const createBoardTodo = (fields: TodoPatch & { title: string }) =>
 export const updateBoardTodo = (id: string, fields: TodoPatch) =>
   sendJSON(`/api/todos/${encodeURIComponent(id)}`, 'PATCH', fields) as Promise<{ todo: Todo }>
 export const moveBoardTodo = (id: string, status: TodoStatus, outcome?: TodoOutcome) =>
-  sendJSON(`/api/todos/${encodeURIComponent(id)}/move`, 'POST', { status, outcome }) as Promise<{ todo: Todo }>
+  toldTasks(sendJSON(`/api/todos/${encodeURIComponent(id)}/move`, 'POST', { status, outcome }) as Promise<{ todo: Todo }>)
 export const reorderBoardTodos = (status: TodoStatus, orderedIds: string[]) =>
   sendJSON('/api/todos/reorder', 'POST', { status, orderedIds }) as Promise<{ todos: Todo[] }>
 export const bulkBoardTodos = (ids: string[], operation: string, value?: unknown) =>
-  sendJSON('/api/todos/bulk', 'POST', { ids, operation, ...(value === undefined ? {} : { value }) }) as Promise<{ todos: Todo[] }>
+  toldTasks(sendJSON('/api/todos/bulk', 'POST', { ids, operation, ...(value === undefined ? {} : { value }) }) as Promise<{ todos: Todo[] }>)
 export const archiveBoardTodo = (id: string) => todoAction(id, 'archive')
 export const unarchiveBoardTodo = (id: string) => todoAction(id, 'unarchive')
-export const deleteBoardTodo = (id: string) => todoAction(id, 'delete')
-export const restoreBoardTodo = (id: string) => todoAction(id, 'restore')
+export const deleteBoardTodo = (id: string) => toldTasks(todoAction(id, 'delete'))
+export const restoreBoardTodo = (id: string) => toldTasks(todoAction(id, 'restore'))
 export const refreshBoardTodo = (id: string) => todoAction(id, 'refresh')
 export const addTodoNote = (id: string, body: string) =>
   sendJSON(`/api/todos/${encodeURIComponent(id)}/notes`, 'POST', { body }) as Promise<{ note: Todo['notes'][number] }>
@@ -508,7 +520,7 @@ export const fileSheetRow = (id: string, folderId: string | null) =>
  * in Totem, never written to the sheet (todos/sheet-marks.mjs). Answers the feed, as GET does.
  */
 export const markSheetRow = (id: string, state: 'done' | 'snoozed' | null, until: Date | null = null) =>
-  sendJSON('/api/todos/sheet/mark', 'POST', { id, state, ...(state === 'snoozed' && until ? { until: until.toISOString() } : {}) }) as Promise<SheetFeed>
+  toldTasks(sendJSON('/api/todos/sheet/mark', 'POST', { id, state, ...(state === 'snoozed' && until ? { until: until.toISOString() } : {}) }) as Promise<SheetFeed>)
 /** Set a task's GitHub issue link (https://github.com/<owner>/<repo>/issues/<n>), or clear it with null. */
 export const setIssueLink = (id: string, url: string | null) =>
   sendJSON(`/api/todos/${encodeURIComponent(id)}/issue-link`, 'PUT', { url }) as Promise<{ todo: Todo }>

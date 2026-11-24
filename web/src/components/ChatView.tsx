@@ -7,17 +7,18 @@ import {
   useChat, initChat, send, stop, steer, queueMessage, updateQueue, setActive, setThreadModel, keepThread, threadChoice, draftFor, type DraftPick,
   threadTitle, providerById, loadCapabilities, loadProviders, ensureModels, getState, takeVoiceRequest, regenerateTitle,
   openProject, threadProject, projectById, setProjectContext, settleThread, unsettleThread, wakeThread, markRead, setMembers,
-  loadFiles, openArtifact, openFile, openResource, takePendingFile, respondToApproval, openThread, loadEarlier, startTaskDraft,
+  loadFiles, openArtifact, openFile, openResource, takePendingFile, respondToApproval, openThread, loadEarlier,
 } from '../chat/store'
 import { compactBeforeSendTokens, contextSnapshot, isCompactionTurn, latestContext } from '../chat/context'
 import ContextMeter from '../chat/ContextMeter'
-import { draftKeyFor, moveDraft, placeAfter, type Destination } from '../chat/destinations'
-import { taskHome } from '../work/state'
+import { startDraftSync } from '../chat/draftsWeb'
+import { useChatDrafts, fileNames } from '../chat/useChatDrafts'
 import { isLoaded } from '../chat/history'
 import { pickAnchor, readScroll, rowBoxes, rowTop, saveScroll, type ScrollEntry } from '../chat/scrollMemory'
 import { useTotemDirectory } from '../totems/shared'
 import { GroupPicker } from './TotemsView'
 import { isSnoozed, settledAt, wakeDescription } from '../chat/settle'
+import { attentionOf } from '../chat/attention'
 import ProjectHome from '../chat/ProjectHome'
 import ProjectCard from '../chat/ProjectCard'
 import TaskBar from '../work/TaskBar'
@@ -71,10 +72,6 @@ const STARTERS: { text: string; fill?: boolean }[] = [
 
 // One empty list for a chat with nothing to draw, so effects keyed on it stay put.
 const NO_MESSAGES: ChatMessage[] = []
-const DRAFTS_KEY = 'totem.chat.drafts'
-function readDrafts(): Record<string, string> {
-  try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {} } catch { return {} }
-}
 
 /** The Totems tab, on one totem's settings when given its id. */
 function goTotems(id?: string) {
@@ -134,7 +131,6 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   // Home's new chat offers the projects to start in instead, most recently used first.
   const allProjects = useChat((s) => s.projects)
   const startInProjects = useMemo(() => allProjects.filter((p) => !p.parentId).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6), [allProjects])
-  const [drafts, setDrafts] = useState<Record<string, string>>(readDrafts)
   const [voice, setVoice] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
@@ -146,7 +142,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const composer = useRef<ComposerHandle>(null)
   const dragDepth = useRef(0)
 
-  useEffect(() => { initChat(onAuthError) }, [onAuthError])
+  useEffect(() => { initChat(onAuthError); startDraftSync() }, [onAuthError])
   // Finished replies push to the phone unless this chat is on screen.
   useChatPresence(activeId, visible)
   // and the running-chats panel leaves it out.
@@ -190,6 +186,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const autoSettleDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   // Opened from the Settled shelf, it stays settled while open; otherwise it keeps its place (settle.ts keptOpenId).
   const openedSettled = useChat((s) => s.openedSettled)
+  // A chat waiting on him is never settled on its own (settle.ts settledAt's `waiting`).
+  const handoffs = useChat((s) => s.handoffs)
   // An id in the URL that isn't a thread (deleted, expired) is a new chat —
   // but only once the bridge's list has arrived, not against a cold cache.
   const loaded = useChat((s) => s.loaded)
@@ -269,78 +267,34 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const contextOff = active ? !!active.projectContextOff : draftContextOff
   const kind = project ? 'regular' : active?.kind || draftKind
   const temporary = kind === 'temporary'
-  const draftKey = activeId || draftKeyFor({ taskId: draftTaskId, projectId: project?.id ?? null, kind })
-  // A new chat starts on what was picked for it here, else its folder's or
-  // project's model (threadChoice). A pick never follows him to another place,
-  // and an open chat keeps its own model.
-  const draft = draftFor(draftPick, draftKey, { open: !!active, projectId: project?.id })
-  const choice = threadChoice(active, draft)
   // A summary's messages are a preview of its last turn, never the chat: until its
   // window arrives (history.ts) the log says it is loading.
   const pending = !!active && !isLoaded(active)
   const threadLoad = useChat((s) => (activeId ? s.loads[activeId] : undefined))
   const messages = pending ? NO_MESSAGES : active?.messages || NO_MESSAGES
   const empty = !pending && messages.length === 0
+  // A queued message being edited in the composer, its words and files. The chat's
+  // draft waits in the store meanwhile and is back in the box once the edit ends.
+  const [queueEdit, setQueueEdit] = useState<{ id: string; threadId: string; text: string; files: Attachment[] } | null>(null)
+  const editing = !!queueEdit && queueEdit.threadId === activeId
+  const onEditFiles = useCallback((files: Attachment[]) => setQueueEdit((e) => (e ? { ...e, files } : e)), [])
+  // What the composer shows: an open chat's own draft, or the new-chat draft its place shows now.
+  const {
+    draftKey, input, setInput, askFresh, startIn, pickDestination, takeForSend, fromDraft, onDiscarded,
+    onAttachmentsChange, showEditFiles, missingFiles, removeMissing, keepEdit,
+  } = useChatDrafts({
+    activeId, active, scopeProject, draftTaskId, draftKind, setDraftKind, composer, visible, editing, onEditFiles,
+    slot: !visible ? '' : empty && project ? 'project' : empty && !narrow ? 'empty' : 'dock',
+  })
+  // A new chat starts on what was picked for it here, else its folder's or
+  // project's model (threadChoice). A pick never follows him to another place,
+  // and an open chat keeps its own model.
+  const draft = draftFor(draftPick, draftKey, { open: !!active, projectId: project?.id })
+  const choice = threadChoice(active, draft)
   useEffect(() => { if (activeId && pending && !threadLoad) openThread(activeId) }, [activeId, pending, threadLoad])
   const earlier: 'more' | 'loading' | 'error' | undefined = pending || !active?.history?.hasMore || !active.history.before ? undefined
     : threadLoad?.earlier === 'loading' ? 'loading' : threadLoad?.earlier === 'error' ? 'error' : 'more'
-  const input = drafts[draftKey] || ''
   useEffect(() => { ensureModels(choice.provider) }, [choice.provider])
-
-  const setInput = useCallback((v: string) => {
-    setDrafts((d) => {
-      const next = { ...d, [draftKey]: v }
-      if (!v) delete next[draftKey]
-      try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(next)) } catch {}
-      return next
-    })
-  }, [draftKey])
-
-  // A discarded unsent message goes back in the composer. Stable, so the message log stays memoized.
-  const onDiscarded = useCallback((text: string) => {
-    setInput(text)
-    requestAnimationFrame(() => composer.current?.focus())
-  }, [setInput])
-
-  /** Open a project for a new chat, taking what's already typed along. */
-  function startIn(id: string) {
-    if (input.trim()) {
-      setDrafts((d) => {
-        const next = moveDraft(d, draftKey, draftKeyFor({ taskId: null, projectId: id }), input)
-        try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(next)) } catch {}
-        return next
-      })
-    }
-    openProject(id)
-  }
-
-  // `$` in a new chat's composer: put it in a project or folder, or start it for a
-  // task (in the task's folder, as "New chat for this task" does). The words go
-  // to the new place's draft, and the tray's files follow once its composer is up.
-  const placedFiles = useRef<Attachment[] | null>(null)
-  const [placed, setPlaced] = useState(0)
-  const pickDestination = useCallback((d: Destination, text: string) => {
-    const next = placeAfter(d, { taskId: draftTaskId, projectId: scopeProject?.id ?? null }, taskHome)
-    const nextKey = draftKeyFor(next)
-    const files = composer.current?.takeAttachments() || []
-    placedFiles.current = files.length ? files : null
-    setDrafts((dr) => {
-      const n = moveDraft(dr, draftKey, nextKey, text)
-      try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(n)) } catch {}
-      return n
-    })
-    setDraftKind('regular')
-    if (next.taskId) startTaskDraft(next.taskId, next.projectId)
-    else openProject(next.projectId)
-    setPlaced((n) => n + 1)
-  }, [draftTaskId, scopeProject?.id, draftKey])
-  useEffect(() => {
-    const files = placedFiles.current
-    if (!files) return
-    placedFiles.current = null
-    composer.current?.setAttachments(files)
-    composer.current?.focus()
-  }, [placed])
 
   // --- scrolling ---------------------------------------------------------------
   // Follow the reply while you're at the bottom; stop the moment you scroll up to
@@ -424,9 +378,11 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     }
     restore.current = null
     follow.open()
-    scrollToBottom(false)
+    // A project's page is read from the top; a chat from its latest message.
+    if (empty) scrollRef.current?.scrollTo({ top: 0 })
+    else scrollToBottom(false)
     setAtBottom(true)
-  }, [activeId, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeId, visible, empty ? project?.id : null]) // eslint-disable-line react-hooks/exhaustive-deps
   // "Load earlier": the message that was first stays where it was on screen.
   const prepend = useRef<{ id: string; firstId: string; top: number; scrollTop: number } | null>(null)
   const onLoadEarlier = useCallback(() => {
@@ -449,7 +405,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   useLayoutEffect(() => { if (restore.current) applyRestore() }, [messages]) // eslint-disable-line react-hooks/exhaustive-deps
   const lastContent = messages[messages.length - 1]?.content.length || 0
   const lastParts = messages[messages.length - 1]?.parts?.length || 0
-  useLayoutEffect(() => { if (follow.following) scrollToBottom(false) }, [messages.length, lastContent, lastParts, run?.activity]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { if (follow.following && !empty) scrollToBottom(false) }, [messages.length, lastContent, lastParts, run?.activity]) // eslint-disable-line react-hooks/exhaustive-deps
   // A search hit lands on its message (landing.ts): no following the bottom until it
   // has landed (chat/follow.ts says why); if it never turns up, go back down. The
   // flash goes on the bubble or the reply's text, not the whole row. It wins over
@@ -488,7 +444,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     if (!el || typeof ResizeObserver === 'undefined') return undefined
     const ro = new ResizeObserver(() => {
       if (restore.current) applyRestore()
-      else if (follow.following) el.scrollTop = el.scrollHeight
+      // A project's page (no chat open) is read from the top: nothing to follow.
+      else if (follow.following && !empty) el.scrollTop = el.scrollHeight
     })
     ro.observe(el)
     if (el.firstElementChild) ro.observe(el.firstElementChild)
@@ -502,8 +459,14 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     setDraftKind(k)
     setDraftPick(null)
     setDraftContextOff(false)
+    askFresh()
     requestAnimationFrame(() => composer.current?.focus())
   }
+  useEffect(() => {
+    const onNew = () => newChat('regular')
+    window.addEventListener('totem:new-chat', onNew)
+    return () => window.removeEventListener('totem:new-chat', onNew)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useCommand(COMMANDS.chatNew, () => newChat('regular'))
   // A blank chat at Home from anywhere (⌘/Ctrl+Shift+O by default): out of any
   // project or task, ready to type into; `$` then puts it where it belongs.
@@ -528,12 +491,11 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   })
 
   function onSend({ text, attachments }: { text: string; attachments: Attachment[] }) {
-    const id = send({ threadId: activeId, text, attachments, kind: !active && draftTaskId ? 'regular' : kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, taskId: active ? undefined : draftTaskId || undefined, compactFirst: compactTokens != null && !keepHistory })
+    const onRefused = takeForSend()
+    const id = send({ threadId: activeId, text, attachments, kind: !active && draftTaskId ? 'regular' : kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, taskId: active ? undefined : draftTaskId || undefined, compactFirst: compactTokens != null && !keepHistory, onRefused })
     setKeepHistory(false)
-    setInput('')
     if (id !== activeId) {
       setDraftPick(null)
-      setDrafts((d) => { const n = { ...d }; delete n[draftKey]; return n })
       setActive(id)
     }
     requestAnimationFrame(glideToBottom)
@@ -552,41 +514,26 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     setting: compactIdle, text: input, idle: !busy, now: Date.now(),
   }) : null
   const queue = active?.queue || []
-  // A queued message being edited in the composer, and the draft it displaced.
-  const [queueEdit, setQueueEdit] = useState<{ id: string; threadId: string; draftKey: string; stash: { text: string; attachments: Attachment[] } } | null>(null)
-  const putBack = (stash: { text: string; attachments: Attachment[] }) => {
-    setInput(stash.text)
-    composer.current?.setAttachments(stash.attachments)
-  }
   function editQueued(q: QueuedMessage) {
     if (!activeId) return
-    const stash = queueEdit ? queueEdit.stash : { text: input, attachments: composer.current?.takeAttachments() || [] }
-    setQueueEdit({ id: q.id, threadId: activeId, draftKey, stash })
-    setInput(q.text)
-    composer.current?.setAttachments(q.attachments || [])
+    const files = q.attachments || []
+    setQueueEdit({ id: q.id, threadId: activeId, text: q.text, files })
+    showEditFiles(files)
     requestAnimationFrame(() => composer.current?.focus())
   }
-  function cancelQueueEdit() {
-    if (!queueEdit) return
-    putBack(queueEdit.stash)
-    setQueueEdit(null)
-  }
-  // Leaving the chat drops the edit; his own draft goes back where it was.
-  useEffect(() => {
-    if (queueEdit && queueEdit.threadId !== activeId) {
-      setDrafts((d) => ({ ...d, [queueEdit.draftKey]: queueEdit.stash.text }))
-      setQueueEdit(null)
-    }
-  }, [activeId, queueEdit])
+  const setEditText = (text: string) => setQueueEdit((e) => (e ? { ...e, text } : e))
+  const cancelQueueEdit = () => setQueueEdit(null)
+  // Leaving the chat drops the edit.
+  useEffect(() => { if (queueEdit && queueEdit.threadId !== activeId) setQueueEdit(null) }, [activeId, queueEdit])
   // It started (or another device removed it) mid-edit: as T3 Code does, keep
-  // the edit as the draft if the box had none, otherwise put his draft back.
+  // the edit as the draft if the chat had none, otherwise his draft comes back.
   const editGone = !!queueEdit && queueEdit.threadId === activeId && !queue.some((q) => q.id === queueEdit.id)
   useEffect(() => {
     if (!editGone || !queueEdit) return
-    const { stash } = queueEdit
     setQueueEdit(null)
-    if (!stash.text.trim() && !stash.attachments.length) pushToast('Queued message is no longer queued. Your unsaved edit was kept in the composer.', 'info')
-    else { putBack(stash); pushToast('Queued message is no longer queued. Your unsaved edit was discarded.', 'info') }
+    pushToast(keepEdit(queueEdit.threadId, queueEdit.text, queueEdit.files)
+      ? 'Queued message is no longer queued. Your unsaved edit was kept in the composer.'
+      : 'Queued message is no longer queued. Your unsaved edit was discarded.', 'info')
   }, [editGone])
   // A tool call waiting on his approval (chat/approvals.ts): as in T3 Code, a
   // message declines it and its words tell the agent why. Files go on as a steer.
@@ -597,14 +544,14 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     if (ok && p.attachments.length) await steer(activeId, '', p.attachments.map((a) => a.id))
     return ok
   }
-  const onQueue = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : activeId ? queueMessage(activeId, p.text, p.attachments) : false)
+  const onQueue = fromDraft((p) => (waitingApproval ? declineWith(p) : activeId ? queueMessage(activeId, p.text, p.attachments) : false))
   // A `/compact` running cannot take words mid-way: they wait behind it (T3).
   const compactingNow = busy && isCompactionTurn(messages[messages.length - 2])
-  const onSteerNow = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : !activeId ? false : compactingNow ? queueMessage(activeId, p.text, p.attachments) : steer(activeId, p.text, p.attachments.map((a) => a.id)))
+  const onSteerNow = fromDraft((p) => (waitingApproval ? declineWith(p) : !activeId ? false : compactingNow ? queueMessage(activeId, p.text, p.attachments) : steer(activeId, p.text, p.attachments.map((a) => a.id))))
   const saveQueueEdit = async (p: FollowUpPayload) => {
     if (!queueEdit) return false
     const ok = await updateQueue(queueEdit.threadId, { action: 'edit', id: queueEdit.id, text: p.text, attachments: p.attachments.map((a) => a.id) })
-    if (ok) { putBack(queueEdit.stash); setQueueEdit(null) }
+    if (ok) setQueueEdit(null)
     return ok
   }
   const queueEl = activeId && queue.length ? (
@@ -658,7 +605,14 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     displace: (text) => setInput(input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text),
   })
 
-  const destinations = useMemo(() => ({ projectId: scopeProject?.id ?? null, taskId: draftTaskId, onPick: pickDestination }), [scopeProject?.id, draftTaskId, pickDestination])
+  const destinations = { projectId: scopeProject?.id ?? null, taskId: draftTaskId, onPick: pickDestination }
+
+  const missingEl = missingFiles.length > 0 && !editing ? (
+    <div className="vc-draft-missing" role="status">
+      <span>{fileNames(missingFiles)} {missingFiles.length === 1 ? 'is' : 'are'} no longer on the server and won’t be sent.</span>
+      <button type="button" className="vc-btn sm ghost" onClick={removeMissing}>Remove</button>
+    </div>
+  ) : null
   // How full this chat's context is on the account it would send on (context.ts).
   const contextShown = active && !empty ? contextSnapshot(latestContext(messages, choice.provider)) : null
   const composerEl = (
@@ -674,17 +628,18 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
         </div>
       }
       ref={composer}
-      value={questionFlow ? questionFlow.value : input}
-      onChange={questionFlow ? questionFlow.onChange : setInput}
+      value={questionFlow ? questionFlow.value : editing && queueEdit ? queueEdit.text : input}
+      onChange={questionFlow ? questionFlow.onChange : editing ? setEditText : setInput}
+      onAttachmentsChange={onAttachmentsChange}
       answering={questionFlow?.answering}
       onSend={onSend}
       onStop={() => activeId && stop(activeId)}
       onSteer={onSteerNow}
       onQueue={empty ? undefined : onQueue}
       followUp={followUp}
-      queueEdit={queueEdit && queueEdit.threadId === activeId ? { onSave: saveQueueEdit } : undefined}
+      queueEdit={editing ? { onSave: saveQueueEdit } : undefined}
       onResume={!busy && active?.queueHeld && queue.length && activeId ? () => { void updateQueue(activeId, { action: 'resume' }) } : undefined}
-      above={<div className="vc-above"><TaskBar thread={active && !empty ? active : null} draftTaskId={active ? null : draftTaskId} projectId={project?.id || null} onShowPanel={onShowPanel} />{queueEl}</div>}
+      above={<div className="vc-above">{missingEl}<TaskBar thread={active && !empty ? active : null} draftTaskId={active ? null : draftTaskId} projectId={project?.id || null} />{queueEl}</div>}
       onVoice={() => setVoice(true)}
       busy={busy}
       autoFocus={visible}
@@ -708,7 +663,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
         </div>
       )
     }
-    if (!settledAt(active, at, autoSettleDays, false, active.id !== openedSettled)) return null
+    if (!settledAt(active, at, autoSettleDays, false, active.id !== openedSettled, !!attentionOf(active, handoffs[active.id]))) return null
     return (
       <div className="vc-parked">
         <span>This chat is settled. Send a message to bring it back.</span>

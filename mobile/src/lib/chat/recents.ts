@@ -1,10 +1,9 @@
 // The Overview's "Recent chats": the chats to get back into. First the ones with
-// words still in their composer (an unsent draft), then the ones most recently
-// opened here or answered. Totems' own chats and temporary chats stay out. Pure.
+// words or files still in their composer (an unsent draft, drafts.ts), then the
+// ones most recently opened here or answered. Totems' own chats and temporary chats stay out. Pure.
 import type { ChatThread } from './types'
 
 export const OPENED_KEY = 'totem.chat.opened.v1'
-export const DRAFTS_KEY = 'totem.chat.drafts'
 const OPENED_MAX = 200
 
 export interface RecentChat { thread: ChatThread; draft: string | null; at: number }

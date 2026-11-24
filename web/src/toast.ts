@@ -46,7 +46,7 @@ function emit() {
 export function pushToast(
   message: any,
   kind: ToastKind = 'error',
-  { duration, action }: { duration?: number; action?: ToastAction } = {},
+  { duration, action, onExpire }: { duration?: number; action?: ToastAction; onExpire?: () => void } = {},
 ): number | null {
   const text = typeof message === 'string' ? message : (message && message.message) || String(message || '')
   if (!text) return null
@@ -62,6 +62,7 @@ export function pushToast(
     return same.id
   }
   const id = ++seq
+  if (onExpire) expiries.set(id, onExpire)
   toasts = [...toasts, { id, text, kind, action, duration: ms, count: 1 }]
   for (const old of toasts.slice(0, Math.max(0, toasts.length - KEEP))) dismissToast(old.id, false)
   startTimer(id, ms)
@@ -77,7 +78,20 @@ function startTimer(id: number, ms: number) {
     : { handle: setTimeout(() => dismissToast(id), ms), endsAt: Date.now() + ms, left: ms })
 }
 
+// What a toast does once it has gone without its button being pressed (timed out, closed or pushed off the deck).
+const expiries = new Map<number, () => void>()
+
+/** The toast's button: the toast goes, not counting as expired, and its action runs. */
+export function runToastAction(t: Toast) {
+  expiries.delete(t.id)
+  dismissToast(t.id)
+  return t.action?.onClick()
+}
+
 export function dismissToast(id: number, notify = true) {
+  const expire = expiries.get(id)
+  expiries.delete(id)
+  if (expire) expire()
   const timer = timers.get(id)
   if (timer?.handle) clearTimeout(timer.handle)
   timers.delete(id)

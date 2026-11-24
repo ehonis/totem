@@ -13,3 +13,4 @@ export { default as IconArrowsMaximize } from '@tabler/icons-react-native/dist/e
 export { default as IconDownload } from '@tabler/icons-react-native/dist/esm/icons/IconDownload.mjs'
 export { default as IconFileOff } from '@tabler/icons-react-native/dist/esm/icons/IconFileOff.mjs'
 export { default as IconFileZip } from '@tabler/icons-react-native/dist/esm/icons/IconFileZip.mjs'
+export { default as IconArrowUpRight } from '@tabler/icons-react-native/dist/esm/icons/IconArrowUpRight.mjs'

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { shelve, shelfOf, settledAt, offersSettle, keptOpenId, snoozePresets, customSnooze, countdown, ago, wakeChange, nextWake, DAY_MS, HOUR_MS } from './settle'
+import { shelve, shelfOf, settledAt, offersSettle, taskDoneSince, ownerAt, keptOpenId, snoozePresets, customSnooze, countdown, ago, wakeChange, ownerMessageChange, nextWake, DAY_MS, HOUR_MS } from './settle'
 import type { ChatThread } from './types'
 
 const NOW = new Date(2026, 9, 6, 10, 0).getTime() // Tue 6 Oct 2026, 10:00 local
@@ -35,6 +35,43 @@ describe('shelves', () => {
     expect(offersSettle(done, 'active')).toBe(true)
     expect(offersSettle(done, 'settled')).toBe(false)
     expect(offersSettle(chat('plain'), 'active')).toBe(false)
+  })
+
+  it('settles a chat whose linked task was finished after he last wrote in it, as T3 does a merged pull request', () => {
+    const asked = { id: 'm1', role: 'user' as const, content: 'fix the printer', createdAt: NOW - 2 * HOUR_MS }
+    const linked = chat('t', { taskId: 'task-1', messages: [asked], createdAt: NOW - 3 * HOUR_MS, updatedAt: NOW - HOUR_MS })
+    // The task is open: nothing happens.
+    expect(settledAt(linked, NOW, 3)).toBe(0)
+    // Done after his last message: settled once the reply is read, at the later of the two.
+    const done = { ...linked, taskDoneAt: NOW - 30 * 60_000 }
+    expect(taskDoneSince(done)).toBe(NOW - 30 * 60_000)
+    expect(settledAt(done, NOW, 3)).toBe(NOW - 30 * 60_000)
+    expect(shelve([done], NOW, 3).settled.map((t) => t.id)).toEqual(['t'])
+    // Unread: still in play, with Settle on the row. On screen: it stays put.
+    expect(settledAt({ ...done, needsReply: true }, NOW, 3)).toBe(0)
+    expect(offersSettle({ ...done, needsReply: true }, 'active')).toBe(true)
+    expect(settledAt(done, NOW, 3, false, true)).toBe(0)
+    // He wrote in it after the task was done: he came back for something else.
+    const again = { ...done, messages: [asked, { ...asked, id: 'm2', createdAt: NOW - 10 * 60_000 }] }
+    expect(ownerAt(again)).toBe(NOW - 10 * 60_000)
+    expect(taskDoneSince(again)).toBe(0)
+    expect(settledAt(again, NOW, 3)).toBe(0)
+    expect(offersSettle(again, 'active')).toBe(false)
+    // Taken off the shelf by hand, pinned, running, or auto-settle off: it stays.
+    expect(settledAt({ ...done, settledOverride: 'active', unsettledAt: NOW - 60_000 }, NOW, 3)).toBe(0)
+    expect(settledAt({ ...done, pinned: true }, NOW, 3)).toBe(0)
+    expect(settledAt(done, NOW, 3, true)).toBe(0)
+    expect(settledAt(done, NOW, 0)).toBe(0)
+    // A chat started after the task was done (linked to finished work) doesn't settle for it.
+    expect(taskDoneSince({ ...done, messages: [], createdAt: NOW - 20 * 60_000 })).toBe(0)
+    // A summary cut past his latest message still knows it, from the bridge's lastOwnerAt.
+    expect(taskDoneSince({ ...done, messages: [], lastOwnerAt: NOW - 10 * 60_000 })).toBe(0)
+    // Waiting on him (a question, say): in play on every list, unless he settled it himself.
+    expect(shelfOf(done, NOW, 3, false, false, true)).toBe('active')
+    expect(shelve([done], NOW, 3, () => false, null, () => true).active.map((t) => t.id)).toEqual(['t'])
+    expect(shelfOf({ ...done, settledOverride: 'settled', settledAt: NOW }, NOW, 3, false, false, true)).toBe('settled')
+    // A /compact the bridge ran is not him writing.
+    expect(taskDoneSince({ ...done, messages: [asked, { ...asked, id: 'c', content: '/compact', command: 'compact', createdAt: NOW - 5 * 60_000 }] })).toBe(NOW - 30 * 60_000)
   })
 
   it('splits a list into active, snoozed (soonest first) and settled (latest first)', () => {
@@ -77,6 +114,32 @@ describe('shelves', () => {
   it('moves a chat woken early to the top; acknowledging a past wake does not', () => {
     expect(wakeChange(chat('a', { snoozedUntil: NOW + HOUR_MS }), NOW)).toMatchObject({ snoozedUntil: undefined, unsettledAt: NOW })
     expect(wakeChange(chat('a', { snoozedUntil: NOW - HOUR_MS }), NOW)).not.toHaveProperty('unsettledAt')
+  })
+
+})
+
+describe('writing in a chat', () => {
+  const written = (t: ChatThread) => ({ ...t, ...ownerMessageChange(t, NOW) })
+  it('brings a settled chat back to the top', () => {
+    const t = written(chat('s', { settledOverride: 'settled', settledAt: NOW - DAY_MS }))
+    expect(t).toMatchObject({ settledOverride: undefined, settledAt: undefined, unsettledAt: NOW })
+    expect(shelfOf(t, NOW, 3)).toBe('active')
+  })
+  it('wakes a snoozed chat, drops its timer and puts it at the top', () => {
+    const t = written(chat('z', { snoozedUntil: NOW + DAY_MS, snoozedAt: NOW - HOUR_MS }))
+    expect(t).toMatchObject({ snoozedUntil: undefined, snoozedAt: undefined, unsettledAt: NOW })
+    expect(shelve([chat('x', { updatedAt: NOW - 60_000 }), t], NOW, 3).active.map((c) => c.id)).toEqual(['z', 'x'])
+  })
+  it('hands a chat taken off the shelf by hand back to auto-settle', () => {
+    expect(written(chat('a', { settledOverride: 'active', unsettledAt: NOW - DAY_MS }))).toMatchObject({ settledOverride: undefined, unsettledAt: NOW - DAY_MS })
+  })
+  it('keeps a chat the agent marked done from settling as soon as it is read', () => {
+    const t = written(chat('d', { doneAt: NOW - 60_000, updatedAt: NOW - 30_000 }))
+    expect(t.doneAt).toBeUndefined()
+    expect(shelfOf(t, NOW, 3)).toBe('active')
+  })
+  it('leaves a chat already in play where it is', () => {
+    expect(ownerMessageChange(chat('p'), NOW)).not.toHaveProperty('unsettledAt')
   })
 })
 

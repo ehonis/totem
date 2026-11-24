@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createThreadStore, threadSummary, threadWindow, SUMMARY_TEXT } from './store.mjs'
+import { createThreadStore, threadSummary, threadWindow, lastOwnerAt, SUMMARY_TEXT } from './store.mjs'
 
 const tmp = () => mkdtemp(join(tmpdir(), 'totem-pages-'))
 const msgs = (turns) => Array.from({ length: turns }, (_, i) => [
@@ -66,6 +66,20 @@ test('a summary keeps the last turn, cut, and only what waits on the owner', () 
   assert.equal(t.messages.length, 8, 'the thread itself is untouched')
 })
 
+test('a summary says when the owner last wrote, even when its preview is cut past that message', () => {
+  const messages = [
+    { id: 'u1', role: 'user', content: 'first', createdAt: 10 },
+    { id: 'u2', role: 'user', content: 'again', createdAt: 20 },
+    { id: 'a1', role: 'assistant', content: 'one', createdAt: 21 },
+    { id: 'a2', role: 'assistant', content: 'two', createdAt: 22 },
+    { id: 'a3', role: 'assistant', content: 'three', createdAt: 23 },
+    { id: 'c', role: 'user', content: '/compact', command: 'compact', createdAt: 30 },
+  ]
+  const s = threadSummary({ id: 't', messages })
+  assert.equal(s.lastOwnerAt, 20)
+  assert.equal(lastOwnerAt([]), 0)
+})
+
 test('a card still waiting from an earlier turn stays in the summary, as a stub', () => {
   const t = {
     id: 't', updatedAt: 1,
@@ -101,6 +115,31 @@ test('summaries are cached by file and follow every write and delete', async () 
   assert.equal((await store.summaries()).find((t) => t.id === 'b').title, 'outside')
   await store.remove('b')
   assert.deepEqual((await store.summaries()).map((t) => t.id), ['a'])
+  await rm(dir, { recursive: true, force: true })
+})
+
+test('a chat whose file does not read is listed as unreadable, not left out', async () => {
+  const dir = await tmp()
+  const store = createThreadStore({ dir })
+  await store.update('a', (t) => { t.messages.push(...msgs(2)) }, { create: {} })
+  await writeFile(join(dir, 'broken.json'), '{"id": "broken", "messages": [')
+  await writeFile(join(dir, 'other.json'), JSON.stringify({ id: 'not-other', messages: [] }))
+  const list = await store.summaries()
+  assert.deepEqual(list.map((t) => t.id).sort(), ['a', 'broken', 'other'])
+  for (const id of ['broken', 'other']) {
+    const t = list.find((x) => x.id === id)
+    assert.equal(t.unreadable, true)
+    assert.deepEqual(t.messages, [])
+  }
+  assert.equal(list.find((t) => t.id === 'a').unreadable, undefined)
+  await rm(dir, { recursive: true, force: true })
+})
+
+test('a chats folder that cannot be read fails the list; one not made yet is no chats', async () => {
+  const dir = await tmp()
+  assert.deepEqual(await createThreadStore({ dir: join(dir, 'never-made') }).summaries(), [])
+  await writeFile(join(dir, 'a-file'), 'not a folder')
+  await assert.rejects(createThreadStore({ dir: join(dir, 'a-file') }).summaries(), /ENOTDIR/)
   await rm(dir, { recursive: true, force: true })
 })
 

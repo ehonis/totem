@@ -39,10 +39,11 @@ import {
 export interface ComposerHandle {
   /** An upload that already exists (Search's "Add to chat"). */
   addAttachment: (a: Attachment) => void
-  /** The box's finished uploads, taken out of it (not deleted): a queued edit stashes the draft. */
-  takeAttachments: () => Attachment[]
-  /** Put uploads in the box in place of what is there (a queued message being edited, a stashed draft). */
-  setAttachments: (list: Attachment[]) => void
+  /**
+   * Put uploads in the box in place of what is there (a queued message being edited, a draft opened).
+   * Those `own` says are the draft's alone are deleted when removed, as a fresh upload is.
+   */
+  setAttachments: (list: Attachment[], own?: (a: Attachment) => boolean) => void
   focus: () => void
   /** Start the mic: voice mode falls back to this when the bridge has no realtime voice. */
   dictate: () => void
@@ -54,6 +55,11 @@ export interface FollowUpPayload { text: string; attachments: Attachment[] }
 export interface ComposerProps {
   value: string
   onChange: (v: string) => void
+  /**
+   * The box's finished uploads changed, or how many are still uploading or failed
+   * (not on mounting): they belong to the open draft (lib/chat/drafts.ts).
+   */
+  onAttachmentsChange?: (attachments: Attachment[], unfinished: number) => void
   onSend: (payload: { text: string; attachments: Attachment[]; mode: ChatMode }) => void
   onStop: () => void
   /**
@@ -110,7 +116,7 @@ function rankCommands(catalog: ChatCommand[], prefix: string, term: string, alon
 }
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, above, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, leftSlot, rightSlot, compacting, onFocus, answering } = props
+  const { value, onChange, onAttachmentsChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, above, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, leftSlot, rightSlot, compacting, onFocus, answering } = props
   const input = useRef<TextInput>(null)
   const { height } = useWindowDimensions()
   const [drafts, setDrafts] = useState<Draft[]>([])
@@ -152,25 +158,18 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
       })
   }, [maxUploadBytes])
 
-  const addAttachment = useCallback((a: Attachment) => {
+  const addAttachment = useCallback((a: Attachment, own = false) => {
     setDrafts((d) => (d.some((x) => x.uploaded?.id === a.id) ? d : [...d, {
-      key: `ctx-${a.id}`, name: a.name, mime: a.mime, size: a.size, kind: a.kind, textPreview: a.preview, status: 'ready', uploaded: a,
+      key: `${own ? 'own' : 'ctx'}-${a.id}`, name: a.name, mime: a.mime, size: a.size, kind: a.kind, textPreview: a.preview, status: 'ready', uploaded: a,
     }]))
   }, [])
 
-  const draftsRef = useRef(drafts)
-  draftsRef.current = drafts
-  const takeAttachments = useCallback(() => {
-    const taken = draftsRef.current.filter((x) => x.status === 'ready' && x.uploaded).map((x) => x.uploaded!)
+  const setAttachments = useCallback((list: Attachment[], own?: (a: Attachment) => boolean) => {
     setDrafts([])
-    return taken
-  }, [])
-  const setAttachments = useCallback((list: Attachment[]) => {
-    setDrafts([])
-    list.forEach(addAttachment)
+    list.forEach((a) => addAttachment(a, !!own?.(a)))
   }, [addAttachment])
 
-  useImperativeHandle(ref, () => ({ addAttachment, takeAttachments, setAttachments, focus: () => input.current?.focus(), dictate: () => { void dictation.start() } }), [addAttachment, takeAttachments, setAttachments, dictation])
+  useImperativeHandle(ref, () => ({ addAttachment: (a: Attachment) => addAttachment(a), setAttachments, focus: () => input.current?.focus(), dictate: () => { void dictation.start() } }), [addAttachment, setAttachments, dictation])
 
   function removeDraft(key: string) {
     tap()
@@ -259,6 +258,14 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   const uploading = drafts.some((d) => d.status === 'uploading')
   const failed = drafts.some((d) => d.status === 'error')
   const ready = drafts.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
+  const unfinished = drafts.length - ready.length
+  const trayState = `${ready.map((a) => a.id).join(',')}|${unfinished}`
+  const reported = useRef(trayState)
+  useEffect(() => {
+    if (reported.current === trayState) return
+    reported.current = trayState
+    onAttachmentsChange?.(ready, unfinished)
+  }, [trayState]) // eslint-disable-line react-hooks/exhaustive-deps
   const hasContent = value.trim().length > 0 || drafts.length > 0
   const sendable = !uploading && !failed && (value.trim().length > 0 || ready.length > 0)
   const canSend = !busy && sendable

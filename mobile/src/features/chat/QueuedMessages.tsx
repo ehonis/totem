@@ -5,7 +5,8 @@
 import React, { useState } from 'react'
 import { Image, StyleSheet, View } from 'react-native'
 import type { QueuedMessage } from '../../lib/chat/types'
-import { imageSource } from './Message'
+import { plainRefs } from '../../lib/chat/refs'
+import { imageSource } from './imageSource'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { tap } from '../../ui/haptics'
@@ -39,7 +40,7 @@ export default function QueuedMessages({ queue, canSteer, editingId, onEdit, onC
         const editing = editingId === q.id
         const images = (q.attachments || []).filter((a) => a.kind === 'image')
         const files = (q.attachments || []).filter((a) => a.kind !== 'image')
-        const preview = q.text.trim().replace(/\s+/g, ' ') || (files.length ? files.map((f) => f.name).join(', ') : images.length ? '' : 'Queued message')
+        const preview = plainRefs(q.text).trim().replace(/\s+/g, ' ') || (files.length ? files.map((f) => f.name).join(', ') : images.length ? '' : 'Queued message')
         return (
           <View key={q.id} style={[st.row, editing && st.rowEditing]}>
             <View style={st.content}>

@@ -16,19 +16,18 @@ import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { impact, success } from '../../ui/haptics'
 import { showMenu } from '../../ui/menu'
-import { alpha, colors, fonts } from '../../theme'
-import { authHeaders } from '../../lib/api'
-import { bridgeUrl, getBaseUrl } from '../../lib/connection'
-import { headersFor } from '../../lib/links'
+import { colors, fonts } from '../../theme'
 import { openFile } from './openLink'
 import { openSelectText } from './selectText'
 import { useSmoothText } from '../../lib/chat/smooth'
 import { useTextTicks } from '../../lib/chat/ticks'
 import { POWER_NAMES } from '../../lib/chat/models'
 import { splitMentions } from '../../lib/chat/mentions'
+import { editableRefs, formatSize, middleTruncate, plainRefs, splitRefs } from '../../lib/chat/refs'
 import type { Attachment, ChangePart, ChatMessage, CompactionPart, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart, ApprovalPart, InboxPart, VisualPart } from '../../lib/chat/types'
 import { getChatCommands, subscribeChatCommands } from '../../lib/studio'
 import WorkLog from './WorkLog'
+import { imageSource } from './imageSource'
 import { foldWork } from './workFold'
 import { AgentGroup } from './AgentsPanel'
 import TurnStats, { TurnChip } from './TurnStats'
@@ -45,7 +44,7 @@ import { isRenderTool } from '../../lib/chat/visuals'
 import Spark, { WorkingLine } from './Spark'
 import { foldTotemCalls, type TotemAnswer } from '../../lib/chat/totemReply'
 import { TotemIcon, loadJobs, useJobs } from '../totems/shared'
-import { TI, ProviderLogo, formatBytes, formatDuration, vc } from './ui'
+import { TI, ProviderLogo, formatDuration, vc } from './ui'
 import { LandFlash } from '../../ui/landing'
 import {
   IconAlertCircle, IconCopy, IconCheck, IconRefresh, IconFileText, IconFileTypePdf, IconClipboardText,
@@ -56,12 +55,6 @@ import {
 const WRAP = Platform.OS === 'web' ? ({ wordBreak: 'break-word', overflowWrap: 'anywhere' } as any) : undefined
 
 // --- files and pictures ----------------------------------------------------------
-
-/** An image the bridge serves: signed URLs open anywhere; the bearer covers the rest, on the bridge's own origin only. */
-export const imageSource = (url?: string, uploadId?: string) => {
-  const uri = bridgeUrl(url || `/api/chat/uploads/${uploadId}`)
-  return { uri, headers: headersFor(uri, getBaseUrl(), authHeaders()) }
-}
 
 export function AttachmentChip({ a, onOpen, onRemove, status, progress, large }: {
   a: { name: string; kind: string; mime: string; size: number; url?: string; preview?: string; localUri?: string }
@@ -95,7 +88,7 @@ export function AttachmentChip({ a, onOpen, onRemove, status, progress, large }:
   const pasted = /^Pasted text/i.test(a.name)
   const meta = status === 'uploading' ? `Uploading ${Math.round((progress || 0) * 100)}%`
     : status === 'error' ? 'Upload failed'
-      : pasted ? `Pasted · ${formatBytes(a.size)}` : `${(a.name.split('.').pop() || 'file').toUpperCase()} · ${formatBytes(a.size)}`
+      : pasted ? `Pasted · ${formatSize(a.size)}` : `${(a.name.split('.').pop() || 'file').toUpperCase()} · ${formatSize(a.size)}`
   return (
     <View>
       <Press onPress={onOpen} style={[st.file, large && { backgroundColor: vc.bubble, borderColor: 'transparent' }]}>
@@ -195,12 +188,35 @@ export function useMentionSet() {
   }, [catalog])
 }
 
-/** His words, with each skill he cited tinted. */
-function MentionText({ text }: { text: string }) {
+// The web's --chip-* colours (web/src/chat/chat.css): T3 Code's hues, 4.5:1 on every background.
+const CHIP = { image: '#3cb0ef', file: '#3cb0ef', text: '#4cbd88', skill: '#d986e6' } as const
+
+/**
+ * His words, with each skill he cited tinted and each file he named (lib/chat/refs.ts)
+ * as its coloured name and size, from the message's own attachments.
+ */
+function MessageText({ text, attachments }: { text: string; attachments?: Attachment[] }) {
   const known = useMentionSet()
   return (
     <T size={15} lineHeight={23} color={colors.text} style={WRAP} selectable={Platform.OS === 'web'}>
-      {splitMentions(text, known).map((p, i) => (p.mention ? <Text key={i} style={st.mention}>{p.text}</Text> : p.text))}
+      {splitRefs(text).map((part, i) => {
+        if (part.ref) {
+          const a = attachments?.find((x) => x.id === part.ref.id)
+          if (!a) {
+            return (
+              <Text key={i} style={st.refGone} accessibilityLabel={`${part.ref.label}, not attached. This file was not sent with this message, so the agent did not get it.`}>
+                {middleTruncate(part.ref.label)}<Text style={st.refGoneNote}> not attached</Text>
+              </Text>
+            )
+          }
+          return (
+            <Text key={i} style={[st.ref, { color: CHIP[a.kind] }]} accessibilityLabel={`${a.name}, ${formatSize(a.size)}`}>
+              {middleTruncate(a.name)}<Text style={st.refSize}>{` ${formatSize(a.size)}`}</Text>
+            </Text>
+          )
+        }
+        return splitMentions(part.text, known).map((p, j) => (p.mention ? <Text key={`${i}-${j}`} style={st.mention}>{p.text}</Text> : p.text))
+      })}
     </T>
   )
 }
@@ -215,15 +231,17 @@ export const UserMessage = React.memo(function UserMessage({ m, canEdit, onEdit,
   flash?: boolean
 }) {
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(m.content)
+  // The edit box is plain text: each attached file shows as [name] and keeps its reference on save.
+  const editable = useMemo(() => editableRefs(m.content), [m.content])
+  const [draft, setDraft] = useState(editable.text)
   const [lightbox, setLightbox] = useState<{ uri: string; headers?: Record<string, string> } | null>(null)
   const [copied, setCopied] = useState(false)
   const badge = m.mode ? MODE_BADGE[m.mode] : null
-  const doCopy = () => { copy(m.content); setCopied(true); setTimeout(() => setCopied(false), 1200) }
-  const startEdit = () => { setDraft(m.content); setEditing(true) }
+  const doCopy = () => { copy(plainRefs(m.content)); setCopied(true); setTimeout(() => setCopied(false), 1200) }
+  const startEdit = () => { setDraft(editable.text); setEditing(true) }
   const items = [
     ...(m.content ? [{ id: 'copy', title: 'Copy', image: 'doc.on.doc', run: doCopy }] : []),
-    ...(m.content ? [{ id: 'select', title: 'Select text', image: 'character.cursor.ibeam', run: () => openSelectText(m.content) }] : []),
+    ...(m.content ? [{ id: 'select', title: 'Select text', image: 'character.cursor.ibeam', run: () => openSelectText(plainRefs(m.content)) }] : []),
     ...(canEdit && m.content && !m.unsent ? [{ id: 'edit', title: 'Edit', image: 'pencil', run: startEdit }] : []),
     ...(onRetry ? [{ id: 'retry', title: 'Try again', image: 'arrow.clockwise', run: onRetry }] : []),
   ]
@@ -262,11 +280,11 @@ export const UserMessage = React.memo(function UserMessage({ m, canEdit, onEdit,
             selectionColor={colors.accent}
           />
           <View style={st.editActions}>
-            <Press style={[st.vcBtn, st.vcBtnGhost]} onPress={() => { setEditing(false); setDraft(m.content) }}><T size={13} weight={500} color={vc.soft}>Cancel</T></Press>
+            <Press style={[st.vcBtn, st.vcBtnGhost]} onPress={() => { setEditing(false); setDraft(editable.text) }}><T size={13} weight={500} color={vc.soft}>Cancel</T></Press>
             <Press
               style={[st.vcBtn, st.vcBtnPrimary]}
               disabled={!draft.trim()}
-              onPress={() => { impact(); setEditing(false); onEdit(draft.trim()) }}
+              onPress={() => { impact(); setEditing(false); onEdit(editable.restore(draft).trim()) }}
             >
               <T size={13} weight={500} color="#0f1115">Send</T>
             </Press>
@@ -281,7 +299,7 @@ export const UserMessage = React.memo(function UserMessage({ m, canEdit, onEdit,
                 {m.voice ? <><TI icon={IconMicrophone} size={13} /><T size={12} color={vc.soft}>Voice</T></> : null}
               </View>
             ) : null}
-            <MentionText text={m.content} />
+            <MessageText text={m.content} attachments={m.attachments} />
             <LandFlash on={flash} radius={22} />
           </View>
         </MessageMenu>
@@ -417,7 +435,7 @@ function SteerNote({ part }: { part: SteerPart }) {
       )}
       {part.text ? (
         <View style={st.bubble}>
-          <T size={15} lineHeight={23} color={colors.text} style={WRAP}>{part.text}</T>
+          <MessageText text={part.text} attachments={part.attachments} />
         </View>
       ) : null}
       <Lightbox source={lightbox} onClose={() => setLightbox(null)} />
@@ -521,7 +539,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
   const body = (
     <View style={{ gap: 10, minWidth: 0 }}>
       {list.map((b, i) => {
-        if (b.kind === 'work') return <WorkLog key={b.key} items={b.items} live={live && i === list.length - 1} />
+        if (b.kind === 'work') return <WorkLog key={b.key} items={b.items} live={live && i === list.length - 1} onOpenImage={setLightbox} />
         if (b.kind === 'agents') return <AgentGroup key={b.key} tools={b.tools} />
         if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
         if (b.kind === 'change') return <ChangeCard key={b.key} part={b.part} />
@@ -588,7 +606,11 @@ export const st = StyleSheet.create({
   userAttachments: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginBottom: 8, maxWidth: '80%' },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 6, minHeight: 30 },
   act: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  mention: { color: '#b7c9ff', backgroundColor: alpha(colors.accent, 0.24), fontFamily: fonts[500] },
+  mention: { color: CHIP.skill, fontFamily: fonts[500] },
+  ref: { fontFamily: fonts[500] },
+  refSize: { fontSize: 11, fontFamily: fonts[500] },
+  refGone: { color: vc.faint, fontFamily: fonts[500] },
+  refGoneNote: { fontSize: 11, fontStyle: 'italic' },
   edit: { width: '100%', backgroundColor: vc.bubble, borderRadius: 22, paddingTop: 12, paddingHorizontal: 14, paddingBottom: 10 },
   editInput: { color: colors.text, fontSize: 15, lineHeight: 23, fontFamily: fonts[400], maxHeight: 320, padding: 0 },
   editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 6, marginTop: 6 },

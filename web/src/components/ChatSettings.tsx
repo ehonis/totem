@@ -2,6 +2,7 @@ import React, { useEffect } from 'react'
 import { useChat, ensureModels, savePrefs, providerById, type ChatPrefs } from '../chat/store'
 import { visibleModels, EFFORT_LABELS } from '../chat/models'
 import { pushError } from '../toast'
+import { DEFAULTS, setSetting, useSettings } from '../settings'
 import { SettingsPage, SettingsRow, SettingsSection, Switch } from './settings/ui'
 
 // Settings → Chat: what sending does mid-reply, how long chats keep their context
@@ -57,6 +58,7 @@ export default function ChatSettings({ onNavigate }: { onNavigate?: (section: st
   useEffect(() => { for (const p of providers) ensureModels(p.id) }, [providers])
   const save = (patch: Partial<ChatPrefs>) => savePrefs(patch).catch((e) => pushError(e.message))
   const titlesOn = !prefs.titles?.off
+  const { formatMarkdown } = useSettings()
   return (
     <SettingsPage>
       <SettingsSection
@@ -73,6 +75,13 @@ export default function ChatSettings({ onNavigate }: { onNavigate?: (section: st
               <option value="steer">Steer the reply</option>
             </select>
           }
+        />
+        <SettingsRow
+          id="format-markdown"
+          title="Format Markdown as you type"
+          description="Draws lists, tasks and code blocks as you type; the message is sent as the Markdown you typed. In a list, Ctrl/⌘ + Return sends, or does the other follow-up while a reply runs."
+          onReset={formatMarkdown !== DEFAULTS.formatMarkdown ? () => setSetting('formatMarkdown', DEFAULTS.formatMarkdown) : undefined}
+          control={<Switch label="Format Markdown as you type" checked={formatMarkdown} onChange={(v) => setSetting('formatMarkdown', v)} />}
         />
       </SettingsSection>
 

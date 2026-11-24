@@ -13,6 +13,12 @@
   --vc-line: var(--line-2);
 }
 .vc {
+  /* Inline chips (RefChip.tsx): T3 Code's hues, lightened to read at 4.5:1 or more
+     on every Settings → Appearance › Background surface (refChip.test.ts checks). */
+  --chip-image: #3cb0ef;
+  --chip-file: #3cb0ef;
+  --chip-text: #4cbd88;
+  --chip-skill: #d986e6;
   --vc-col: 768px;
   --vc-bubble: var(--bubble);
   --vc-surface: var(--surface);
@@ -315,10 +321,7 @@
 @media (prefers-reduced-motion: reduce) { .vc-turn-panel { transition: opacity .16s; } }
 
 .vc-edit { width: min(100%, 620px); background: var(--vc-bubble); border-radius: 22px; padding: 12px 14px 10px; }
-.vc-edit textarea {
-  width: 100%; resize: none; border: 0; outline: none; background: none; color: var(--text);
-  font: inherit; font-size: 15px; line-height: 1.55; max-height: 50vh;
-}
+.vc-edit .vc-ed { font-size: 15px; line-height: 1.55; max-height: 50vh; padding: 0; min-height: 0; }
 .vc-edit-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 
 /* --- assistant reply -------------------------------------------------------- */
@@ -462,8 +465,13 @@ body.panel-resizing .vc-assistant-body > .md, :root.window-resizing .vc-assistan
 .vc-tool-app { flex: none; font-size: 11.5px; color: var(--vc-soft); background: var(--vc-raise); padding: 1px 7px; border-radius: 999px; }
 .vc-tool-detail { color: var(--vc-faint); font: 12.5px ui-monospace, "SF Mono", Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
 .vc-tool-state { margin-left: auto; flex: none; color: var(--vc-faint); font-size: 12px; font-variant-numeric: tabular-nums; display: inline-flex; }
+.vc-tool-pics { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--vc-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
 .vc-tool-body { margin: 2px 0 8px 31px; display: flex; flex-direction: column; gap: 8px; }
 .vc-tool-io-label { font-size: 12px; color: var(--vc-faint); margin-bottom: 4px; }
+/* Pictures a call returned: small, since they are the agent's looking, not the answer. */
+.vc-tool-shots { display: flex; flex-wrap: wrap; gap: 6px; }
+.vc-tool-shot { padding: 0; border: 1px solid var(--vc-line); border-radius: 8px; overflow: hidden; background: #0b0d12; cursor: zoom-in; }
+.vc-tool-shot img { display: block; height: 96px; width: auto; max-width: 220px; object-fit: cover; }
 .vc-tool-io pre {
   margin: 0; max-height: 280px; overflow: auto; padding: 10px 12px; border-radius: 10px;
   background: #0b0d12; border: 1px solid var(--vc-line); color: #cfd4de;
@@ -536,25 +544,85 @@ body.panel-resizing .vc-assistant-body > .md, :root.window-resizing .vc-assistan
 .vc-box:focus-within { border-color: #ffffff2b; }
 /* Glow off (Settings → Chat): a plain page, so the composer is a solid surface. */
 .vc.no-glow .vc-box { background: var(--vc-surface); }
-.vc-box textarea {
-  display: block; width: 100%; resize: none; border: 0; outline: none; background: none; color: var(--text);
-  font: inherit; font-size: 16px; line-height: 1.5; padding: 6px 6px 4px; min-height: 36px;
+/* The message box: a TipTap editor (editor/PromptEditor.tsx), one paragraph per line. */
+.vc-input[hidden] { display: none; }
+.vc-ed-wrap { position: relative; }
+/* The plain box shown until the editor's chunk arrives (Composer.tsx PlainBox). */
+.vc-ed-plain { display: block; width: 100%; resize: none; border: 0; background: none; font: inherit; }
+.vc-ed-plain::placeholder { color: var(--vc-faint); }
+.vc-ed {
+  max-height: 40vh; overflow-y: auto; overflow-wrap: anywhere; white-space: pre-wrap; outline: none; color: var(--text);
+  font-size: 16px; line-height: 1.5; padding: 6px 6px 4px; min-height: 36px;
 }
-.vc-box textarea::placeholder { color: var(--vc-faint); }
-/* Cited skills are painted on a layer behind the textarea, laid out with the same
-   box and type so each <mark> sits under its own text. */
-.vc-input { position: relative; }
-.vc-input textarea { position: relative; }
-.vc-input-marks {
-  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
-  font: inherit; font-size: 16px; line-height: 1.5; padding: 6px 6px 4px;
-  white-space: pre-wrap; overflow-wrap: break-word; color: transparent;
+.vc-composer.compact .vc-ed { max-height: 160px; }
+.vc-ed p { margin: 0; }
+/* Markdown formatted as it is typed (editor/blocks.ts, #298). Each item draws the marker it was
+   typed with; its `value` keeps the number right where ::marker content is unsupported. */
+.vc-ed ol, .vc-ed ul { margin: 0; padding-inline-start: var(--list-gutter); }
+.vc-ed ul { --list-gutter: max(1.25em, 2ch); list-style-type: disc; }
+.vc-ed ul ul { list-style-type: circle; }
+.vc-ed ul ul ul { list-style-type: square; }
+.vc-ed ol { --list-gutter: 3ch; }
+.vc-ed li::marker { color: var(--vc-soft); font-variant-numeric: tabular-nums; }
+.vc-ed ol > li[data-marker]::marker { content: attr(data-marker) " "; }
+.vc-ed ol:has(> li[data-marker-width="3"]) { --list-gutter: 4ch; }
+.vc-ed ol:has(> li[data-marker-width="4"]) { --list-gutter: 5ch; }
+.vc-ed ol:has(> li[data-marker-width="5"]) { --list-gutter: 6ch; }
+.vc-ed ol:has(> li[data-marker-width="6"]) { --list-gutter: 7ch; }
+.vc-ed ol:has(> li[data-marker-width="7"]) { --list-gutter: 8ch; }
+.vc-ed ol:has(> li[data-marker-width="8"]) { --list-gutter: 9ch; }
+.vc-ed ol:has(> li[data-marker-width="9"]) { --list-gutter: 10ch; }
+.vc-ed ol:has(> li[data-marker-width="10"]) { --list-gutter: 11ch; }
+/* A task's box takes the place a bullet's marker has, so its text lines up with bullet text. */
+.vc-ed ul[data-type="taskList"] { list-style: none; padding-inline-start: 0; }
+.vc-ed li[data-check] { display: flex; align-items: flex-start; gap: .5em; }
+.vc-ed li[data-check] > label { display: flex; align-items: center; height: 1.5em; flex: none; cursor: pointer; }
+.vc-ed li[data-check] > label input { margin: 0; width: .95em; height: .95em; accent-color: var(--accent); cursor: pointer; }
+.vc-ed li[data-check] > div { flex: 1; min-width: 0; }
+.vc-ed pre {
+  position: relative; margin: 2px 0; padding: 8px 12px; border-radius: 10px; overflow-x: auto; white-space: pre;
+  background: var(--vc-surface); border: 1px solid var(--vc-line);
 }
-.vc-input-marks mark, .vc-mention {
-  background: color-mix(in srgb, var(--accent) 24%, transparent); border-radius: 5px;
+.vc-ed pre code { font: 13px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--vc-text); }
+.vc-ed pre:not([data-language=""])::before {
+  content: attr(data-language); position: absolute; top: 4px; right: 10px; font-size: 11px; color: var(--vc-faint); pointer-events: none;
 }
-.vc-input-marks mark { color: transparent; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent); }
-.vc-mention { padding: 1px 5px; color: color-mix(in srgb, var(--accent) 55%, var(--text)); font-weight: 500; }
+.vc-ed-placeholder {
+  position: absolute; inset: 0; padding: 6px 6px 4px; pointer-events: none;
+  font-size: 16px; line-height: 1.5; color: var(--vc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* A cited skill reads as T3 Code's skill chip: coloured text. */
+.vc-mention { color: var(--chip-skill); font-weight: 500; }
+
+/* An attachment named in the text: coloured text with a 1em thumbnail or icon and its size. */
+.vc-ref {
+  display: inline-flex; align-items: baseline; gap: .25em; max-width: 100%; vertical-align: baseline;
+  padding: 0; border: 0; background: none; font: inherit; font-weight: 500; line-height: inherit; color: var(--chip-file);
+  border-radius: 4px; white-space: nowrap;
+}
+.vc-ref.image { color: var(--chip-image); }
+.vc-ref.text { color: var(--chip-text); }
+.vc-ref.gone { color: var(--vc-faint); }
+.vc-ref .ti { align-self: center; width: 1em; height: 1em; }
+.vc-ref-thumb { align-self: center; width: 1em; height: 1em; border-radius: 3px; object-fit: cover; flex: none; }
+.vc-ref-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vc-ref-size { font-size: .72em; font-weight: 500; letter-spacing: .02em; flex: none; }
+.vc-ref.gone .vc-ref-size { font-style: italic; }
+button.vc-ref { cursor: pointer; }
+button.vc-ref:hover .vc-ref-name { text-decoration: underline; text-underline-offset: .2em; }
+button.vc-ref:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+.vc-ref-node { display: inline; }
+
+/* × on a tray item the text refers to asks first. */
+.vc-tray-confirm {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin: 0 4px 8px; padding: 8px 8px 8px 12px;
+  border-radius: 12px; background: var(--vc-surface); border: 1px solid var(--vc-line); font-size: 13.5px; color: var(--vc-soft);
+}
+.vc-tray-confirm > span:first-child { flex: 1 1 220px; }
+.vc-tray-confirm strong { color: var(--text); font-weight: 500; overflow-wrap: anywhere; }
+/* The tray item that × is asking about. */
+.vc-thumb.asking .vc-thumb-img, .vc-file.asking .vc-file-main, .vc-ref.asking { outline: 2px solid #ff7a8f; outline-offset: 1px; }
+.vc-tray-confirm-actions { display: flex; gap: 6px; margin-left: auto; }
 .vc-box-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; }
 .vc-box-left, .vc-box-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .vc-send {
@@ -658,12 +726,7 @@ body.panel-resizing .vc-assistant-body > .md, :root.window-resizing .vc-assistan
 /* A finished reply waiting on the owner: steady where the live dot breathes. */
 .vc-reply-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
 .vc-fail-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red, #f0879e); flex: none; }
-.vc-totem-paused .vc-thread-main { opacity: .55; }
 .vc-thread.waiting .vc-thread-title { color: var(--text); font-weight: 600; }
-.vc-thread[draggable=true] { cursor: default; }
-.vc-thread.drop-over, .vc-folder.drop-over > .vc-thread, .vc-proj-title.drop-over, .vc-icon-btn.drop-over {
-  background: color-mix(in srgb, var(--accent) 18%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
-}
 .vc-thread-more {
   display: grid; place-items: center; width: 28px; height: 28px; margin-right: 3px; border-radius: 7px; flex: none;
   background: none; border: 0; color: var(--muted); opacity: 0;
@@ -698,6 +761,39 @@ body.panel-resizing .vc-assistant-body > .md, :root.window-resizing .vc-assistan
   flex: none; padding: 1px 6px; border-radius: 6px; font-size: 11px; font-weight: 600;
   color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
+/* Unsent new-chat drafts (ChatsPanelDrafts.tsx), T3 Code's rows: a pencil, the place,
+   the first line, on a light amber surface, newest first, then a rule. A chat row with
+   unsent words wears the same pencil, which gives way to its hover actions. */
+.vc-drafts { display: flex; flex-direction: column; gap: 2px; padding: 6px 0 8px; margin-bottom: 2px; border-bottom: 1px solid var(--line); }
+.vc-draft {
+  display: flex; flex-direction: column; gap: 1px; padding: 5px 6px 6px 12px; border-radius: 9px; cursor: pointer; outline: none;
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+}
+.vc-draft:hover { background: color-mix(in srgb, var(--amber) 13%, transparent); }
+.vc-draft.active { background: var(--bg-hover); }
+.vc-draft:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent); }
+.vc-draft-head { display: flex; align-items: center; gap: 6px; height: 20px; min-width: 0; font-size: 12px; color: var(--muted); }
+.vc-draft-head > .ti, .vc-draft-head > .vc-proj-icon { flex: none; }
+.vc-draft-pen, .vc-thread-draft { color: var(--amber); }
+.vc-draft-place { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-draft-x {
+  display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; border: 0; flex: none;
+  background: none; color: var(--muted); opacity: 0; pointer-events: none;
+}
+.vc-draft:hover .vc-draft-x, .vc-draft:focus-within .vc-draft-x { opacity: 1; pointer-events: auto; }
+.vc-draft-x:hover { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
+/* On a touch screen the × is always there, and a finger-sized target that overhangs the row's corner. */
+@media (hover: none) {
+  .vc-draft { position: relative; padding-right: 40px; }
+  .vc-draft-x { opacity: 1; pointer-events: auto; position: absolute; top: 0; right: 0; width: 44px; height: 44px; border-radius: 9px; }
+}
+.vc-draft-text { font-size: 13.5px; color: color-mix(in srgb, var(--text) 90%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-thread-draft { display: inline-flex; flex: none; }
+.vc-thread:hover .vc-thread-draft, .vc-thread:focus-within .vc-thread-draft, .vc-thread.menu-open .vc-thread-draft { display: none; }
+@media (hover: none) { .vc-thread:hover .vc-thread-draft { display: inline-flex; } }
+/* A draft's file the bridge no longer has: named over the composer, never sent. */
+.vc-draft-missing { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; font-size: 12.5px; color: var(--amber); }
+.vc-draft-missing > span { flex: 1; min-width: 0; }
 /* A settled chat recedes until it's pointed at or open. */
 .vc-thread.shelf-settled:not(:hover):not(:focus-within):not(.active):not(.menu-open) .vc-thread-main { color: color-mix(in srgb, var(--muted) 72%, transparent); }
 .vc-thread.shelf-settled:not(:hover):not(:focus-within):not(.active):not(.menu-open) .vc-thread-main > :first-child,
@@ -718,8 +814,85 @@ body.panel-resizing .vc-assistant-body > .md, :root.window-resizing .vc-assistan
   background: none; border: 0; border-radius: 9px; color: var(--muted); font-size: 13px; text-align: left;
 }
 .vc-shelf-more:hover { color: var(--text); background: var(--bg-3); }
-.vc-folder-chats .vc-shelf { margin-top: 4px; }
-.vc-folder-chats .vc-shelf-head { padding-left: 12px; font-size: 11.5px; }
+/* --- the chats panel, T3 Code's sidebar (ChatsNav.tsx, sidebar.ts) ---------------- */
+/* The scope button over the list: every chat, Home, or one project. */
+.sb-scope { display: flex; align-items: center; gap: 2px; padding: 4px 4px 4px 4px; }
+.sb-scope-btn {
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0; height: 28px; padding: 0 8px; border-radius: 8px;
+  background: none; border: 0; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.sb-scope-btn:hover, .sb-scope-btn[aria-expanded="true"] { background: var(--bg-3); color: var(--text); }
+.sb-scope-btn.on { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.sb-scope-btn .ti, .sb-scope-btn .vc-proj-icon { flex: none; }
+.sb-scope-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-scope-chev { opacity: .6; }
+.sb-list { padding-top: 2px; gap: 1px; }
+.sb-divider { height: 1px; margin: 5px 10px; background: color-mix(in srgb, var(--line) 80%, transparent); }
+/* A card: where it lives and what it is doing, then its title, then its task. */
+.vc-thread.sb-card { flex-direction: column; align-items: stretch; padding: 7px 8px 7px 10px; gap: 3px; }
+.sb-card .vc-thread-main.sb-card-main { flex-direction: column; align-items: stretch; height: auto; gap: 3px; padding: 0; }
+.sb-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sb-place { height: 16px; font-size: 11.5px; color: color-mix(in srgb, var(--muted) 92%, transparent); }
+.sb-place .vc-proj-icon { color: color-mix(in srgb, var(--muted) 90%, transparent); }
+.sb-place-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-pin { flex: none; color: var(--muted); }
+.sb-title-line { height: 20px; font-size: 13.5px; font-weight: 500; color: var(--text); }
+.sb-title-line .vc-thread-icon { margin-left: -1px; }
+.sb-status { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.sb-time { font-weight: 400; color: color-mix(in srgb, var(--muted) 80%, transparent); }
+.sb-working { color: #8ec5ff; }
+.sb-done { color: #6fdd8b; }
+.sb-woke { color: var(--amber); }
+.sb-needs { color: var(--amber); }
+.sb-needs.questions { color: #a5b4fc; }
+.sb-needs.browser { color: #a5b4fc; }
+/* Read, and not waiting on anything: it recedes, as T3's read threads do. */
+.vc-thread.sb-card.receded:not(:hover):not(:focus-within):not(.menu-open) .sb-title-line { font-weight: 400; color: color-mix(in srgb, var(--text) 74%, transparent); }
+.sb-meta { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 21px; }
+.sb-meta-gap { flex: 1; }
+.sb-meta .vc-thread-done { margin-left: auto; height: 20px; }
+/* The hover actions and "…" sit over the first line's right end, where the status was. */
+.sb-card .vc-thread-actions { position: absolute; top: 3px; right: 32px; }
+.sb-card .vc-thread-more { position: absolute; top: 2px; right: 2px; width: 26px; height: 26px; margin: 0; }
+.sb-card:hover .sb-status, .sb-card:focus-within .sb-status, .sb-card.menu-open .sb-status { visibility: hidden; }
+.sb-card:hover .sb-place, .sb-card:focus-within .sb-place, .sb-card.menu-open .sb-place { padding-right: 84px; }
+/* The open chat's "…" waits for the pointer like the rest, so its status stays readable. */
+.sb-card.active:not(:hover):not(:focus-within):not(.menu-open) .vc-thread-more { opacity: 0; }
+@media (hover: none) {
+  .sb-card .sb-place, .sb-card:hover .sb-place { padding-right: 26px; }
+  .sb-card:hover .sb-status { visibility: visible; }
+  .sb-card.active .vc-thread-more { opacity: 1 !important; }
+}
+/* The chat's task (TaskBadge.tsx), T3's pull-request badge. */
+.sb-task {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; height: 20px; padding: 0 6px 0 4px; margin-left: -4px;
+  border: 0; border-radius: 6px; background: none; font: inherit; font-size: 11.5px; color: color-mix(in srgb, var(--text) 72%, transparent); cursor: pointer;
+}
+.sb-task:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.sb-task .ti { flex: none; }
+/* A shelf row: its title, and under it where the chat lives, dim (the shelves mix every project's chats). */
+.sb-shelf-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.vc-thread-main:has(.sb-shelf-text) { height: auto; min-height: 34px; padding-block: 5px; }
+.sb-shelf-place { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; line-height: 1.3; color: color-mix(in srgb, var(--text) 40%, transparent); }
+/* On a touch screen the badge is a thumb's 44 px: 32 of its own and 6 each way. */
+@media (pointer: coarse) { .sb-task { position: relative; height: 32px; } .sb-task::after { content: ''; position: absolute; inset: -6px -4px; } }
+.sb-task-icon { color: var(--accent); }
+.sb-task.today .sb-task-icon { color: var(--amber); }
+.sb-task.overdue .sb-task-icon { color: #ff8aa0; }
+.sb-task.done .sb-task-icon { color: var(--green); }
+.sb-task.done .sb-task-title { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 70%, transparent); color: var(--muted); }
+.sb-task.gone, .sb-task.loading { cursor: default; color: var(--muted); font-style: italic; }
+.sb-task.gone:hover, .sb-task.loading:hover { background: none; }
+.sb-task-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-task-due { flex: none; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--muted) 90%, transparent); }
+.sb-task-due.today { color: #f3c969; }
+.sb-task-due.overdue { color: #ff9aac; }
+/* Shelf heads say how many they hold, open or folded. */
+.vc-shelf-count { font-weight: 400; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--muted) 70%, transparent); }
+.vc-shelf-working .vc-shelf-head { color: #8ec5ff; }
+.vc-shelf-working .vc-shelf-rule { background: color-mix(in srgb, #8ec5ff 28%, transparent); }
+.vc-shelf-working .vc-thread.sb-card:not(:hover):not(.active):not(.menu-open) { opacity: .86; }
+
 /* The top of a chat loaded a window at a time (history.ts), and a chat whose window is on its way. */
 .vc-history { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 30px; color: var(--vc-faint); font-size: 13px; }
 .vc-history-note { font-size: 13px; }
@@ -1498,29 +1671,6 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-btn.danger { color: #ff7a8f; }
 .vc-btn.danger:hover { background: #ff7a8f1a; }
 .vc-proj-icon { flex: none; color: color-mix(in srgb, var(--text) 70%, transparent); }
-.vc-proj-count { margin-left: auto; padding: 0 6px; font-size: 11.5px; color: var(--vc-faint); font-variant-numeric: tabular-nums; }
-.vc-proj-section { padding-bottom: 4px; }
-/* The chats panel's Chats | Totems switch. */
-.vc-nav-tabs { display: flex; gap: 2px; margin: 6px 8px 2px; padding: 3px; border-radius: 10px; background: var(--bg-3); }
-.vc-nav-tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
-.vc-nav-tabs button.on { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / .25); }
-.vc-nav-note { padding: 8px 12px; font-size: 12.5px; color: var(--muted); }
-.vc-nav-group-pick { padding: 4px 6px 8px; }
-.vc-nav-group-pick .tm-group-pick { margin: 0; padding: 12px; }
-.vc-proj-fold { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; color: inherit; font: inherit; }
-.vc-proj-fold:hover { color: var(--text); }
-.vc-proj-empty {
-  display: flex; align-items: center; gap: 7px; width: 100%; height: 34px; padding: 0 12px; border-radius: 9px;
-  background: none; border: 0; color: var(--vc-soft); font-size: 13.5px; text-align: left;
-}
-.vc-proj-empty:hover { background: var(--bg-3); color: var(--text); }
-.vc-proj-head { display: flex; align-items: center; gap: 2px; padding: 8px 4px 2px 4px; }
-.vc-proj-title {
-  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 36px; padding: 0 8px; border-radius: 9px;
-  background: none; border: 0; color: var(--text); font-size: 14.5px; font-weight: 600; text-align: left;
-}
-.vc-proj-title span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.vc-proj-title:hover, .vc-proj-title.on { background: var(--bg-3); }
 
 .vc-top-project {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 40%; height: 30px; padding: 0 8px; border-radius: 8px;
@@ -1535,6 +1685,24 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-proj-hero h1 .vc-proj-icon { color: var(--vc-soft); }
 .vc-proj-composer .vc-composer { max-width: none; }
 .vc-proj-hero + .vc-proj-chats { margin-top: 22px; }
+/* On desktop the composer sits in the middle of the pane, as Home's does: an empty
+   track above the hero and the chats below share what is left (the lower a little
+   more, so it sits just above the middle as Home's does), and the hero rises only
+   as far as a longer list needs. The list is capped (FIRST_CHATS in ProjectHome.tsx). */
+@media (min-width: 721px) {
+  .vc-proj-page { display: flex; flex-direction: column; min-height: 100%; padding-top: 24px; }
+  .vc-proj-page::before { content: ''; flex: 1 1 0; }
+  .vc-proj-page > .vc-proj-chats { flex: 1.3 1 0; }
+  .vc-proj-page.loading { justify-content: center; }
+  .vc-proj-page.loading::before { content: none; }
+}
+.vc-proj-more { display: flex; align-items: center; gap: 4px; padding: 6px 0 0; }
+.vc-proj-more button {
+  height: 30px; padding: 0 10px; border-radius: 8px; background: none; border: 0;
+  color: var(--vc-soft); font-size: 13px;
+}
+.vc-proj-more button:hover { background: var(--vc-raise); color: var(--text); }
+.vc-proj-more-count { margin-left: auto; padding: 0 10px; font-size: 12.5px; color: var(--vc-faint); font-variant-numeric: tabular-nums; }
 
 /* A project's card (ProjectCard.tsx): the task card's frame (work.css), one row per
    thing its chats share, each opening under its row. Pinned at the top right on
@@ -1695,16 +1863,6 @@ button.vc-file-row:hover, .vc-file-row:hover { background: var(--vc-raise); }
 .vc-change.success { border-color: color-mix(in srgb, #4fd18b 30%, var(--vc-line)); }
 .vc-change.failure { border-color: color-mix(in srgb, var(--red) 35%, var(--vc-line)); }
 
-/* --- folders (projects inside a project) ------------------------------------- */
-.vc-folder { border-radius: 9px; }
-.vc-folder-fold {
-  display: grid; place-items: center; width: 20px; height: 34px; margin-left: 2px; flex: none;
-  background: none; border: 0; color: var(--vc-faint); border-radius: 6px;
-}
-.vc-folder-fold:hover { color: var(--text); }
-.vc-folder-main { padding-left: 2px; }
-.vc-folder-chats { padding-left: 14px; }
-.vc-folder-empty { padding: 6px 12px 8px; font-size: 12.5px; color: var(--vc-faint); }
 .vc-proj-crumb {
   display: inline-flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 2px 6px 2px 2px; border-radius: 7px;
   background: none; border: 0; color: var(--vc-soft); font-size: 13.5px;

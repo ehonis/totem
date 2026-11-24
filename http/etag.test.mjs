@@ -4,10 +4,13 @@ import http from 'node:http'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { etagEligible, etagMatches, etagResponse, weakEtag } from './etag.mjs'
+import { gunzipSync } from 'node:zlib'
+import { GZIP_MIN_BYTES, acceptsGzip, etagEligible, etagMatches, etagResponse, weakEtag } from './etag.mjs'
 import { closeTodoDatabase, openTodoDatabase } from '../todos/db.mjs'
 import { createGoalHttpHandler } from '../goals/http.mjs'
 import { createGoalService } from '../goals/service.mjs'
+import { createProjectStore } from '../chat/projects.mjs'
+import { createUploadStore } from '../chat/uploads.mjs'
 
 // A server shaped like the bridge's /api/ gate: etagResponse first, then a
 // handler that answers the way the bridge's modules do.
@@ -180,6 +183,32 @@ test('the real goals routes: the list is tagged, a typed search is not', async (
   assert.equal(search.headers.get('cache-control'), null)
 })
 
+test('the chat projects list is kept, one project with its memory and file list is not', async (t) => {
+  assert.ok(etagEligible('GET', '/api/chat/projects'))
+  assert.ok(!etagEligible('GET', '/api/chat/projects/p1'))
+  assert.ok(!etagEligible('GET', '/api/chat/projects/p1/files/abcdefgh'))
+  assert.ok(!etagEligible('POST', '/api/chat/projects'))
+
+  // Built as the bridge's projectSummary builds it, picture link and counts included:
+  // it reads the same twice, so the phone's 30 s poll is a bodiless 304.
+  const dir = mkdtempSync(join(tmpdir(), 'totem-etag-projects-'))
+  const store = createProjectStore({ dir: join(dir, 'projects') })
+  const uploads = createUploadStore({ dir: join(dir, 'uploads'), secret: 'test-secret' })
+  const work = await store.create({ name: 'Work', icon: 'briefcase', image: 'abcdefgh12345678' })
+  await store.create({ name: 'Launch', parentId: work.id })
+  const threads = [{ id: 'c1', projectId: work.id }]
+  const summary = (p) => ({ ...p, files: undefined, ...(p.image ? { imageUrl: uploads.urlFor(p.image) } : {}), fileCount: p.files.length, chatCount: threads.filter((x) => x.projectId === p.id).length })
+  const server = await serve(async (req, res) => sendJson(res, 200, { projects: (await store.list()).map(summary) }))
+  t.after(async () => { await server.close(); rmSync(dir, { recursive: true, force: true }) })
+
+  const list = await server.get('/api/chat/projects')
+  assert.equal(list.status, 200)
+  const body = await list.json()
+  assert.deepEqual(body.projects.map((p) => [p.name, p.chatCount, p.fileCount]), [['Launch', 0, 0], ['Work', 1, 0]])
+  assert.match(body.projects[1].imageUrl, /^\/api\/chat\/uploads\/abcdefgh12345678\?sig=/)
+  assert.equal((await server.get('/api/chat/projects', { 'if-none-match': list.headers.get('etag') })).status, 304)
+})
+
 test('the habits answer carries no clock or file path, so an unchanged tracker can 304', () => {
   const bridge = readFileSync(join(import.meta.dirname, '..', 'bridge.mjs'), 'utf8')
   const fn = bridge.slice(bridge.indexOf('async function buildHabitsPayload('))
@@ -201,4 +230,72 @@ test('the bridge tags only behind the /api/ sign-in gate, and HTML stays no-cach
   assert.match(serveStatic, /immutable \? \{ 'cache-control': 'public, max-age=31536000, immutable' \} : \{ 'cache-control': 'no-cache' \}/)
   assert.match(serveStatic, /'content-type': 'text\/html; charset=utf-8', 'cache-control': 'no-cache'/)
   assert.doesNotMatch(serveStatic, /etag/i)
+})
+
+// node:http, which neither asks for nor undoes gzip on its own, so the bytes on the wire show.
+function rawGet(port, path, headers) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port, path, headers }, (res) => {
+      const chunks = []
+      res.on('data', (c) => chunks.push(c))
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }))
+    }).on('error', reject)
+  })
+}
+
+test('a big tagged body goes gzipped to a client that takes it, under the same ETag', async (t) => {
+  const threads = Array.from({ length: 400 }, (_, i) => ({ id: `t${i}`, title: `Chat number ${i}`, messages: [{ content: 'hello '.repeat(20) }] }))
+  const server = http.createServer((req, res) => { etagResponse(req, res, '/api/threads'); sendJson(res, 200, { threads }) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const { port } = server.address()
+  const plain = JSON.stringify({ threads })
+  assert.ok(Buffer.byteLength(plain) > GZIP_MIN_BYTES)
+
+  const zipped = await rawGet(port, '/api/threads?view=summary', { 'accept-encoding': 'gzip, deflate, br' })
+  assert.equal(zipped.status, 200)
+  assert.equal(zipped.headers['content-encoding'], 'gzip')
+  assert.equal(zipped.headers.vary, 'accept-encoding')
+  assert.ok(zipped.body.length < plain.length / 2)
+  assert.equal(gunzipSync(zipped.body).toString(), plain)
+
+  const identity = await rawGet(port, '/api/threads?view=summary', {})
+  assert.equal(identity.headers['content-encoding'], undefined)
+  assert.equal(identity.body.toString(), plain)
+  // One body, one tag, whichever way it travelled: a 304 still answers either.
+  assert.equal(zipped.headers.etag, identity.headers.etag)
+  const again = await rawGet(port, '/api/threads?view=summary', { 'accept-encoding': 'gzip', 'if-none-match': zipped.headers.etag })
+  assert.equal(again.status, 304)
+  assert.equal(again.headers.vary, 'accept-encoding')
+  assert.equal(again.body.length, 0)
+
+  // fetch takes gzip and undoes it.
+  assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/threads?view=summary`)).json(), { threads })
+})
+
+test('a small body, or a client that refuses gzip, goes as it is', async (t) => {
+  const server = http.createServer((req, res) => {
+    etagResponse(req, res, '/api/todos')
+    sendJson(res, 200, req.url.includes('big') ? { pad: 'x'.repeat(GZIP_MIN_BYTES) } : { todos: [] })
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const { port } = server.address()
+  assert.equal((await rawGet(port, '/api/todos', { 'accept-encoding': 'gzip' })).headers['content-encoding'], undefined)
+  assert.equal((await rawGet(port, '/api/todos?big', { 'accept-encoding': 'gzip;q=0, identity' })).headers['content-encoding'], undefined)
+  assert.equal((await rawGet(port, '/api/todos?big', { 'accept-encoding': 'gzip' })).headers['content-encoding'], 'gzip')
+})
+
+test('acceptsGzip reads the header as RFC 9110 does', () => {
+  assert.equal(acceptsGzip('gzip, deflate, br'), true)
+  assert.equal(acceptsGzip('br;q=1.0, gzip;q=0.8, *;q=0.1'), true)
+  assert.equal(acceptsGzip('GZIP'), true)
+  assert.equal(acceptsGzip('*'), true)
+  assert.equal(acceptsGzip('gzip;q=0'), false)
+  assert.equal(acceptsGzip('gzip;q=0.0'), false)
+  assert.equal(acceptsGzip('identity'), false)
+  assert.equal(acceptsGzip('*;q=0.5, gzip;q=0'), false)
+  assert.equal(acceptsGzip('gzip;q=0.5, *;q=0'), true)
+  assert.equal(acceptsGzip(''), false)
+  assert.equal(acceptsGzip(undefined), false)
 })

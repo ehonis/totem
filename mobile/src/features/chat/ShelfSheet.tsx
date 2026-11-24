@@ -1,43 +1,52 @@
 // Sheet detents: [0.75, 1] (formSheet, grabber, corner radius 22; registered in src/app/_layout.tsx).
 //
-// One list's parked chats: Snoozed or Settled, switched at the top. Opened from
-// the shelf buttons in the drawer's foot (Home or the open project) or under a
-// folder's chats, so the drawer itself never scrolls a second list. Rows are the
+// The drawer list's parked chats: Snoozed or Settled, switched at the top, for the
+// scope the list shows (every chat, Home's, or one project's with its folders; one
+// Settled shelf for them all, as in T3 Code). Opened from the shelf buttons in the
+// drawer's foot, so the drawer itself never scrolls a second list. Rows are the
 // drawer's own (ChatsNav ThreadItem): tap opens the chat and closes the sheet and
-// the drawer; swipe left for Wake, Snooze or Un-settle; long-press for the rest.
+// the drawer; swipe left for Wake, Snooze or Un-settle; long-press for the rest
+// (Discard draft closes the sheet first, so its Undo line in the drawer is in sight).
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { FlatList, StyleSheet, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useChat } from '../../lib/chat/store'
-import { shelve, keptOpenId } from '../../lib/chat/settle'
+import { keptOpenId } from '../../lib/chat/settle'
+import { sidebarLists, scopeLabel, placeLabel } from '../../lib/chat/sidebar'
+import { attentionOf } from '../../lib/chat/attention'
 import type { ChatThread } from '../../lib/chat/types'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
 import { Segmented } from '../../ui/kit'
 import { closeDrawer } from '../../shell/drawerGesture'
 import { openChat } from '../../shell/nav'
-import { listThreads, useNow } from './threadOps'
+import { useNow } from './threadOps'
+import { scopeFrom } from './chatsScope'
 import { ThreadItem } from './ChatsNav'
 
 type Kind = 'snoozed' | 'settled'
 
 export default function ShelfSheet() {
-  const params = useLocalSearchParams<{ kind?: string; scope?: string }>()
-  const scope = params.scope || 'home'
+  const params = useLocalSearchParams<{ kind?: string; scope?: string; showing?: string }>()
   const [kind, setKind] = useState<Kind>(params.kind === 'snoozed' ? 'snoozed' : 'settled')
   const insets = useSafeAreaInsets()
   const allThreads = useChat((s) => s.threads) as ChatThread[]
   const projects = useChat((s) => s.projects)
   const runs = useChat((s) => s.runs)
+  const handoffs = useChat((s) => s.handoffs)
   const activeId = useChat((s) => s.activeId)
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
-  const threads = useMemo(() => listThreads(allThreads, projects, scope, activeId, runs), [allThreads, projects, scope, activeId, runs])
-  const now = useNow(threads)
-  const keep = keptOpenId(activeId, useChat((s) => s.openedSettled))
-  const { snoozed, settled } = useMemo(() => shelve(threads, now, autoDays, (id) => !!runs[id], keep), [threads, now, autoDays, runs, keep])
+  const scope = scopeFrom(params.scope, projects)
+  const now = useNow(allThreads)
+  // The open chat keeps its place only if the chat screen was showing it (the drawer's `chatShowing`).
+  const opened = keptOpenId(activeId, useChat((s) => s.openedSettled))
+  const keep = params.showing === '0' ? null : opened
+  const { snoozed, settled } = useMemo(() => sidebarLists(allThreads, {
+    now, autoDays, live: (id) => !!runs[id], needsYou: (t) => !!attentionOf(t, handoffs[t.id]), openId: keep, activeId, scope, projects,
+  }), [allThreads, now, autoDays, runs, handoffs, keep, activeId, scope, projects])
   const rows = kind === 'snoozed' ? snoozed : settled
-  const place = scope === 'home' ? 'Home' : projects.find((p) => p.id === scope)?.name || 'Project'
+  const place = scopeLabel(scope, projects)
 
   // Open on the chat that is showing, if it is on this shelf.
   const list = useRef<FlatList<ChatThread>>(null)
@@ -71,13 +80,13 @@ export default function ShelfSheet() {
       <T size={12.5} muted style={st.note}>
         {kind === 'snoozed'
           ? 'Back in your list when they wake. Swipe one to wake it now.'
-          : `Chats you settled, finished one-offs you've read, or ones left quiet for ${autoDays} ${autoDays === 1 ? 'day' : 'days'}. Swipe one to bring it back.`}
+          : `Chats you settled, finished ones you've read (marked done, or their task done), or ones left quiet for ${autoDays} ${autoDays === 1 ? 'day' : 'days'}. Swipe one to bring it back.`}
       </T>
       <FlatList
         ref={list}
         data={rows}
         keyExtractor={(t) => t.id}
-        renderItem={({ item }) => <ThreadItem t={item} shelf={kind} now={now} active={item.id === activeId} live={!!runs[item.id]} onOpen={open} />}
+        renderItem={({ item }) => <ThreadItem t={item} shelf={kind} now={now} active={item.id === activeId} live={!!runs[item.id]} onOpen={open} beforeDiscard={() => router.back()} place={{ project: null, label: placeLabel(item, projects) || 'Home' }} />}
         onScrollToIndexFailed={({ index, averageItemLength }) => list.current?.scrollToOffset({ offset: index * averageItemLength, animated: false })}
         contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: insets.bottom + 16 }}
         ListEmptyComponent={<T size={14} muted style={st.empty}>{kind === 'snoozed' ? 'Nothing snoozed here.' : 'Nothing settled here.'}</T>}

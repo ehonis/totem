@@ -1,7 +1,8 @@
 // Chat's bridge calls. Streaming endpoints are read as Server-Sent Events over
 // fetch (EventSource cannot send the bearer header).
-import { authHeaders, AuthError, api } from '../api'
+import { authHeaders, AuthError, api, getJSON, peekJSON } from '../api'
 import { bridgeFetch, bridgeUrl } from '../connection'
+import { PROJECTS_GET, PROJECTS_PATH } from './projectList'
 import type { ApprovalDecision, Attachment, ChatCapabilities, ChatMode, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
 
 export interface SendArgs {
@@ -16,6 +17,8 @@ export interface SendArgs {
   projectId?: string
   /** A new project chat that leaves the project's context out. */
   projectContextOff?: boolean
+  /** A new chat started from a task, linked to it from the first turn. */
+  taskId?: string
   modelSettings?: any
   mode?: ChatMode
   /** The owner asked for the browser on this message (off unless asked). */
@@ -150,6 +153,8 @@ export function uploadFile(file: Blob, name: string, { kind, onProgress }: { kin
 }
 
 export const deleteUpload = (id: string) => api(`/api/chat/uploads/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})
+/** Keep the uploads this phone's saved drafts hold past the bridge's orphan sweep; answers which are gone. */
+export const holdUploads = (ids: string[]) => api<{ held: string[]; missing: string[] }>('/api/chat/uploads/hold', json('POST', { ids }))
 
 export async function transcribe(audio: Blob): Promise<string> {
   const r = await bridgeFetch('/api/chat/transcribe', {
@@ -168,7 +173,8 @@ export const uploadUrl = (id: string, att?: { url?: string }) => bridgeUrl(att?.
 // --- projects -------------------------------------------------------------------
 const json = (method: string, body?: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
 
-export const listProjects = () => api<{ projects: Project[] }>('/api/chat/projects')
+export const listProjects = () => getJSON<{ projects: Project[] }>(PROJECTS_PATH, PROJECTS_GET)
+export const peekProjects = () => peekJSON<{ projects: Project[] }>(PROJECTS_PATH)
 export const getProject = (id: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`)
 export const createProjectApi = (body: Partial<Project>) => api<{ project: Project }>('/api/chat/projects', json('POST', body))
 export const patchProjectApi = (id: string, body: Record<string, unknown>) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('PATCH', body))

@@ -2,9 +2,13 @@
 // page slides right to reveal the sidebar, and follows a finger from the edge).
 import React, { useEffect } from 'react'
 import { useWindowDimensions } from 'react-native'
-import { Drawer } from 'expo-router/drawer'
+import { Drawer, useDrawerProgress, type DrawerContentComponentProps } from 'expo-router/drawer'
+import { KeyboardController } from 'react-native-keyboard-controller'
+import { useAnimatedReaction } from 'react-native-reanimated'
+import { scheduleOnRN } from 'react-native-worklets'
 import AppDrawer from '../../shell/AppDrawer'
 import { keepDrawerPan } from '../../shell/drawerGesture'
+import { startsOpening } from '../../shell/drawerKeyboard'
 import { useQuickActions } from '../../shell/quickActions'
 import { usePush } from '../../shell/push'
 import { useAccessReauth } from '../../shell/accessReauth'
@@ -13,6 +17,17 @@ import { navigateTo } from '../../shell/nav'
 import { PRODUCTIVITY_APPS, TOOL_LABELS } from '../../shell/routes'
 import { getSettings } from '../../lib/settings'
 import { colors } from '../../theme'
+
+const closeKeyboard = () => { void KeyboardController.dismiss() }
+
+// The keyboard goes down as the drawer starts to open (shell/drawerKeyboard.ts).
+function DrawerContent(props: DrawerContentComponentProps) {
+  const progress = useDrawerProgress()
+  useAnimatedReaction(() => progress.value, (now, before) => {
+    if (startsOpening(now, before)) scheduleOnRN(closeKeyboard)
+  })
+  return <AppDrawer {...props} />
+}
 
 export default function AppLayout() {
   const { width } = useWindowDimensions()
@@ -29,7 +44,7 @@ export default function AppLayout() {
   }, [])
   return (
     <Drawer
-      drawerContent={(props) => <AppDrawer {...props} />}
+      drawerContent={(props) => <DrawerContent {...props} />}
       screenOptions={{
         headerShown: false,
         drawerType: 'slide',

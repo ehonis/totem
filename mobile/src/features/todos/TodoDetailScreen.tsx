@@ -4,7 +4,8 @@
 // saves that field at once. Nothing waits for a Save button. Below: notes, related
 // tasks, the linked GitHub issue, and the task's history.
 // Opened from a card with ?focus=notes it lands on the note field, as "+ Add a note"
-// does on the web. A "sheet:…" id is a row of the shared task sheet, which opens
+// does on the web. Its Chats section (work/TaskChats.tsx) is the web task card's: the
+// chats working on it, and New chat for it. A "sheet:…" id is a row of the shared task sheet, which opens
 // SheetItemPage instead (the sheet's words, read-only; done and snooze for the owner only).
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { StyleSheet, TextInput, View } from 'react-native'
@@ -49,6 +50,7 @@ import { PRIORITY_COLOR, PRIORITY_WORD } from './compose/labels'
 import { issueKey, issueLinkOf, sheetName } from './list'
 import SheetItemPage, { isSheetId } from './SheetItemPage'
 import { askOncePerKey, shouldAskIssueState } from './issueLink'
+import TaskChats from '../work/TaskChats'
 
 const REPEAT_OPTIONS = [
   { value: '', label: 'Does not repeat' }, { value: 'daily', label: 'Daily' }, { value: 'weekdays', label: 'Weekdays' },
@@ -496,6 +498,8 @@ function TaskPage({ original, allTodos, issueStates, initialFocus }: {
             actions={folderMenu} onAction={onRow} menuTitle="File under" />
         </PropertyGroup>
         {feedback('fields', 'status')}
+
+        {binned ? null : <TaskChats taskRef={todo.id} />}
 
         <NotesSection
           notes={todo.notes}

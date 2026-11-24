@@ -55,6 +55,17 @@ export interface CacheOptions {
   blocked?: (r: Response) => boolean
 }
 
+export interface GetOptions {
+  /**
+   * Answer the stored copy when the bridge is slow or out of reach (the default).
+   * False for a caller that holds something newer than the disk itself, such as
+   * the chat list, which a stored copy would roll back.
+   */
+  stored?: boolean
+  /** With `stored: false`: give up after this long and fail, so one stuck download cannot hold the next. */
+  deadlineMs?: number
+}
+
 export function createHttpCache(storage: CacheStorage, {
   now = Date.now, timeoutMs = 8_000, maxEntries = 200, persistEveryMs = 10 * 60_000, blocked = () => false,
 }: CacheOptions = {}) {
@@ -153,9 +164,14 @@ export function createHttpCache(storage: CacheStorage, {
       path: string,
       send: (headers: Record<string, string>, signal: AbortSignal) => Promise<Response>,
       parse: (r: Response) => Promise<T>,
+      { stored = true, deadlineMs }: GetOptions = {},
     ): Promise<T> {
       const owner = account, began = epoch, mark = ++seq
       const entry = read(path)
+      // Without the stored fallback the stored copy only answers a 304, and a bridge
+      // slow or out of reach fails as it would with nothing stored.
+      const fallback = stored ? entry : null
+      const limit = fallback ? timeoutMs : stored ? 0 : deadlineMs || 0
       const ours = () => { if (owner !== account || began !== epoch) throw new AccountChangedError() }
       const fromCache = (e: Entry): T => {
         stale.set(path, { savedAt: e.savedAt, at: ++seq })
@@ -165,20 +181,20 @@ export function createHttpCache(storage: CacheStorage, {
 
       let response: Response
       const abort = new AbortController()
-      const timer = entry ? setTimeout(() => abort.abort(), timeoutMs) : null
+      const timer = limit ? setTimeout(() => abort.abort(), limit) : null
       try {
         response = await send(entry ? { 'if-none-match': entry.etag } : {}, abort.signal)
       } catch (cause) {
         ours()
-        if (entry) return fromCache(entry)
+        if (fallback) return fromCache(fallback)
         throw cause
       } finally {
         if (timer) clearTimeout(timer)
       }
       ours()
       // Not the bridge's answer: a stopped bridge behind a proxy, a sign-in or captive page.
-      if (entry && (UNREACHABLE.has(response.status) || blocked(response) || (response.status === 200 && !isJson(response)))) {
-        return fromCache(entry)
+      if (fallback && (UNREACHABLE.has(response.status) || blocked(response) || (response.status === 200 && !isJson(response)))) {
+        return fromCache(fallback)
       }
       if (entry && response.status === 304) {
         // A newer answer replaced this entry while the 304 was out: keep that one.

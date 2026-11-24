@@ -285,6 +285,48 @@ test('a cached GET that hangs is answered from the cache after the timeout', asy
   assert.equal(cache.getStatus().offline, true)
 })
 
+test('stored: false never answers the stored copy, but still revalidates against it', async () => {
+  const b = bridge({ threads: ['old'] })
+  const cache = cacheFor(undefined, { timeoutMs: 20 })
+  await cache.get('/api/threads?view=summary', b.send, parse, { stored: false })
+  // Unchanged: a 304 answers the stored body.
+  assert.deepEqual(await cache.get('/api/threads?view=summary', b.send, parse, { stored: false }), { threads: ['old'] })
+  assert.deepEqual(b.seen, [null, 'W/"v1"'])
+
+  // Out of reach: it fails rather than hand back the old list, and says nothing about Offline.
+  b.down = true
+  await assert.rejects(cache.get('/api/threads?view=summary', b.send, parse, { stored: false }), /Network request failed/)
+  assert.equal(cache.getStatus().offline, false)
+  b.down = false
+  b.status = 503
+  await assert.rejects(cache.get('/api/threads?view=summary', b.send, parse, { stored: false }), /HTTP 503/)
+  b.status = 200
+
+  // Slower than the timeout (a big list on a slow link): no abort, the answer is waited for.
+  b.body = { threads: ['old', 'new'] }
+  b.etag = 'W/"v2"'
+  let aborted = false
+  const slow = (headers, signal) => {
+    signal.addEventListener('abort', () => { aborted = true })
+    return new Promise((r) => setTimeout(r, 60)).then(() => b.send(headers))
+  }
+  assert.deepEqual(await cache.get('/api/threads?view=summary', slow, parse, { stored: false }), { threads: ['old', 'new'] })
+  assert.equal(aborted, false)
+  // And it is what a later 304 answers.
+  assert.deepEqual(await cache.get('/api/threads?view=summary', b.send, parse, { stored: false }), { threads: ['old', 'new'] })
+})
+
+test('stored: false with a deadline gives up and fails, never answering the stored copy', async () => {
+  const b = bridge({ threads: ['old'] })
+  const cache = cacheFor(undefined, { timeoutMs: 5 })
+  await cache.get('/api/threads?view=summary', b.send, parse, { stored: false })
+  const hang = (_headers, signal) => new Promise((_, reject) => {
+    signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+  })
+  await assert.rejects(cache.get('/api/threads?view=summary', hang, parse, { stored: false, deadlineMs: 30 }), /aborted/)
+  assert.equal(cache.getStatus().offline, false)
+})
+
 test('every caller gets its own copy of the body', async () => {
   const b = bridge({ todos: [3, 1, 2] })
   const cache = cacheFor()

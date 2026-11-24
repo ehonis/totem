@@ -1,8 +1,8 @@
 // A chat's "…" menu (web ThreadList's ThreadMenu, MoveMenu and SnoozeMenu) as
 // one native UIMenu: read state, settle, snooze with T3's presets in a submenu,
-// rename, regenerate the title, pin, move to a project or folder, project
-// context, keep, delete. Used by the drawer rows (long-press) and the chat's
-// title (tap).
+// rename, regenerate the title, pin, move to a project or folder, link to a
+// task, project context, keep, discard an unsent draft, delete. Used by the drawer
+// rows (long-press) and the chat's title (tap).
 import { router } from 'expo-router'
 import type { MenuAction } from '@react-native-menu/menu'
 import {
@@ -13,8 +13,10 @@ import type { ChatThread } from '../../lib/chat/types'
 import { pushToast } from '../../lib/toast'
 import { prompt } from '../../ui/menu'
 import { markRead, markUnread, setPinned, settleThread, snoozeThread, unsettleThread, wakeThread } from './threadOps'
+import { pickChatTask } from '../work/nav'
+import { discardDraft } from './appDrafts'
 
-export function threadMenu(t: ChatThread, shelf: Shelf, live: boolean): { actions: MenuAction[]; run: (id: string) => void } {
+export function threadMenu(t: ChatThread, shelf: Shelf, live: boolean, unsent = false): { actions: MenuAction[]; run: (id: string) => void } {
   const { projects } = getState()
   const inProject = !!(t.projectId && projects.some((p) => p.id === t.projectId))
   const presets = snoozePresets(new Date())
@@ -49,9 +51,15 @@ export function threadMenu(t: ChatThread, shelf: Shelf, live: boolean): { action
         ...(!projects.length ? [{ id: 'noop', title: 'No projects yet. Make one from the Projects list.', attributes: { disabled: true } }] : []),
       ],
     },
+    { id: 'task', title: t.taskId ? 'Change task…' : 'Link to task…', image: 'checklist' },
     ...(inProject ? [{ id: 'context', title: t.projectContextOff ? 'Use project context' : 'Leave out project context', image: t.projectContextOff ? 'folder' : 'folder.badge.minus' }] : []),
     ...(t.kind === 'temporary' ? [{ id: 'keep', title: 'Keep this chat', image: 'checkmark' }] : []),
-    { id: 'danger', title: '', displayInline: true, subactions: [{ id: 'delete', title: 'Delete', image: 'trash', attributes: { destructive: true } }] },
+    {
+      id: 'danger', title: '', displayInline: true, subactions: [
+        ...(unsent ? [{ id: 'discard-draft', title: 'Discard draft', image: 'xmark' }] : []),
+        { id: 'delete', title: 'Delete', image: 'trash', attributes: { destructive: true } },
+      ],
+    },
   ]
 
   const run = (id: string) => {
@@ -71,8 +79,10 @@ export function threadMenu(t: ChatThread, shelf: Shelf, live: boolean): { action
       const p = pid ? projects.find((x) => x.id === pid) : null
       moveThread(t.id, pid)
       pushToast(`Moved “${threadTitle(t)}” to ${p ? p.name : 'Home'}`, 'info')
-    } else if (id === 'context') setProjectContext(t.id, !!t.projectContextOff)
+    } else if (id === 'task') pickChatTask(t.id)
+    else if (id === 'context') setProjectContext(t.id, !!t.projectContextOff)
     else if (id === 'keep') keepThread(t.id)
+    else if (id === 'discard-draft') discardDraft(t.id)
     else if (id === 'delete') {
       removeThread(t.id)
       pushToast(`Deleted “${threadTitle(t)}”`, 'info')

@@ -79,8 +79,8 @@ import { createFleetHttpHandler, createFleetReportHandler, FLEET_REPORT_PATH } f
 import { createCollector as createFleetCollector } from './fleet/collect.mjs'
 import { createJournalStore } from './journal/store.mjs'
 import { createTranscriber } from './journal/transcribe.mjs'
-import { createThreadStore, validThreadId, validTaskRef } from './chat/store.mjs'
-import { createUploadStore, servedHeaders, validUploadId } from './chat/uploads.mjs'
+import { createThreadStore, validThreadId, validTaskRef, wakeOnOwnerMessage } from './chat/store.mjs'
+import { createUploadHolds, createUploadStore, servedHeaders, textUploadIds, validUploadId } from './chat/uploads.mjs'
 import { redactTokens } from './chat/redact.mjs'
 import { createFileAccess, chatFileRedirect, mimeFor as fileMime } from './chat/files.mjs'
 import { fetchFavicon } from './chat/favicon.mjs'
@@ -95,15 +95,17 @@ import { QUEUE_LIMIT, moveQueued, queueAfterRun } from './chat/queue.mjs'
 import { chatRefMeta, chatRefOf, cleanNote, createInboxOutcomes, inboxMarker, validInboxId } from './chat/inbox-outcome.mjs'
 import { AGENT_SPAWN, killTree, trackAgent } from './scripts/kill-tree.mjs'
 import { createSteering, progressNote, steerPrompt, steerText } from './chat/steer.mjs'
+import { contextSeal, inlineRefs, plainRefs, projectRefs } from './chat/refs.mjs'
 import { approvalPart, permissionResult, normalizeDecision, statusForDecision, sessionRules, mergeAllowedTools, createApprovalWaits } from './chat/approvals.mjs'
 import { ASK_TOOL, ASK_TOOL_DESCRIPTOR, QUESTION_RULES, DISMISSED_FOR_AGENT, QUESTIONS_LATER_FOR_AGENT, normalizeQuestions, normalizeAnswers, attachedIds, answersForAgent, answersMessage, createQuestionWaits, createHolds, holdableTimeout } from './chat/questions.mjs'
-import { DONE_TOOL, DONE_TOOL_DESCRIPTOR, DONE_RULES, DONE_RESULT } from './chat/done.mjs'
+import { DONE_TOOL, DONE_TOOL_DESCRIPTOR, DONE_RULES, doneResult } from './chat/done.mjs'
 import { PREVIEW_TOOL, RENDER_TOOL, VISUAL_RULES, visualToolDescriptors, previewVisual, storeVisual, renderedResult, visualToolError } from './chat/visuals.mjs'
 import { usageTally, addUsage, replyStats } from './chat/stats.mjs'
 import { createIdleCompactor } from './chat/compaction.mjs'
 import { COMPACT_UNSUPPORTED, DEFAULT_IDLE_COMPACTION, IDLE_COMPACTION_MODES, claudeAutoCompactThreshold, claudeAutoCompactWindow, claudeCompactionEvent, claudeContextUsage, claudeContextWindow, codexCompacted, codexContextUsage, isCompactCommand, normalizeAutoCompactWindow, opencodeContextUsage, reportedClaudeWindows } from './chat/context.mjs'
 import { memoryFileStats, outsideDir, MEMORY_HEAD_CHARS } from './chat/memory-ref.mjs'
 import { planHistory, renderTranscript, attachmentBlock, projectBlock, applyEvent, finalizeMessage, fallbackTitle, finalAnswer, failureText } from './chat/turn.mjs'
+import { createTaskDone } from './chat/task-done.mjs'
 import { listThreads as listOtherThreads, readThread as readOtherThread, threadsRule, findChatPlace, listChatPlaces, projectPath as chatProjectPath } from './chat/thread-tools.mjs'
 import { describeMcpCall, describeCommand, humanizeTool, stringifyInput, resultText, genericToolDetail, chatToolFromClaude, connectorLook } from './chat/tools.mjs'
 import { claudeRecordSteps, createCliAgentWatch, isClaudeAgentTool, watchSessionLog, agentLabel } from './chat/subagents.mjs'
@@ -3226,6 +3228,7 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
   const windowFor = (id) => claudeContextWindow(id || m, claudeReportedWindows.get(id || m))
   const seenTools = new Set()
   const toolNames = new Map() // tool_use id → name, to tell a browser snapshot from any other image
+  const readPaths = new Map() // tool_use id → the file a Read opened, so a picture it looked at can be shown later
   // Sub-agents launched in the background: their card stays open until Claude
   // reports the task finished (`task_notification`), not when the launch returns.
   const backgroundAgents = new Set()
@@ -3377,6 +3380,7 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
             seenTools.add(block.id)
             emitSafe(onActivity, describeClaudeTool(block), 'activity')
             if (block.id && block.name) toolNames.set(block.id, block.name)
+            if (block.name === 'Read' && typeof block.input?.file_path === 'string') readPaths.set(block.id, block.input.file_path)
             emitSafe(onTool, chatToolFromClaude(block, meta.find((m) => m?.id === block.id)), 'tool')
             if (isClaudeAgentTool(block.name)) {
               const input = block.input || {}
@@ -3387,8 +3391,10 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
         return
       }
       // Tool results come back in the user turn. A screenshot (computer use, a
-      // browser tool, Read on an image) arrives as an image block, which is
-      // worth showing in the chat rather than as "[image]".
+      // tool, Read on an image) arrives as an image block. It is the agent's
+      // looking, not its answer, so it goes onto the call's own card (`toolId`),
+      // folded with the steps; the reply shows a picture only when the agent puts
+      // ![…](path) in its text (browser/shots.mjs).
       if (event.type === 'user' && Array.isArray(event.message?.content)) {
         for (const block of event.message.content) {
           if (block?.type !== 'tool_result' || !block.tool_use_id) continue
@@ -3399,7 +3405,7 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
           if (Array.isArray(content) && !fromBrowser) {
             for (const c of content) {
               if (c?.type === 'image' && c.source?.type === 'base64' && c.source.data) {
-                emitSafe(onImage, { buffer: Buffer.from(c.source.data, 'base64'), mime: c.source.media_type || 'image/png' }, 'image')
+                emitSafe(onImage, { buffer: Buffer.from(c.source.data, 'base64'), mime: c.source.media_type || 'image/png', toolId: block.tool_use_id, path: readPaths.get(block.tool_use_id) || '' }, 'image')
               }
             }
           }
@@ -8713,6 +8719,8 @@ const chatUploads = createUploadStore({
   maxBytes: Math.max(1, Number(process.env.CHAT_MAX_UPLOAD_MB) || 25) * 1024 * 1024,
   log,
 })
+// Uploads a saved draft in some browser still holds (chat/uploads.mjs), kept past the sweep.
+const uploadHolds = createUploadHolds({ file: process.env.UPLOAD_HOLDS_FILE || join(HERE, 'data', 'upload-holds.json') })
 // The Files panel (chat/files.mjs) lists and serves what agents saved, so a path
 // on this box opens from any device. Chat outputs always; FILES_ROOTS (colon-
 // separated) adds more folders. Totem's data and secrets never, whatever the roots.
@@ -8727,24 +8735,31 @@ const projectStore = createProjectStore({ dir: CHAT_PROJECTS_DIR })
 const taskFolders = createTaskFolderStore({ file: process.env.TASK_FOLDERS_FILE || join(HERE, 'data', 'task-folders.json') })
 // The icon the owner picked for each connection (connections/icons.mjs).
 const connectionIcons = createConnectionIconStore({ file: process.env.CONNECTION_ICONS_FILE || join(HERE, 'data', 'connection-icons.json') })
-/** Uploads something other than a chat message keeps: project files and pictures, connection icons. */
-async function keptUploadIds() {
+/**
+ * Uploads something other than a chat message keeps: project files and pictures,
+ * connection icons, and (unless `holds` is false) files a saved draft holds.
+ */
+async function keptUploadIds({ holds = true } = {}) {
   const ids = await projectStore.fileIds()
   for (const id of await connectionIcons.imageIds()) ids.add(id)
+  if (holds) for (const id of await uploadHolds.ids()) ids.add(id)
   return ids
 }
 const threadStore = createThreadStore({
   dir: THREADS_DIR,
   log,
   // A deleted thread takes its attachments with it, except those a project
-  // keeps: a file shared into a project outlives the chat it arrived in.
+  // keeps: a file shared into a project outlives the chat it arrived in. A
+  // draft's hold does not: nearly every sent file was held while it was a draft.
   onDelete: async (thread) => {
-    const kept = await keptUploadIds().catch(() => new Set())
-    const drop = (id) => (kept.has(id) ? null : chatUploads.remove(id))
+    const kept = await keptUploadIds({ holds: false }).catch(() => new Set())
+    const dropped = []
+    const drop = async (id) => { if (!kept.has(id)) { await chatUploads.remove(id); dropped.push(id) } }
     for (const m of thread.messages || []) {
       for (const a of m.attachments || []) await drop(a.id)
       for (const id of partUploadIds(m)) await drop(id)
     }
+    if (dropped.length) await uploadHolds.release(dropped).catch(() => {})
     await rm(join(CHAT_OUTPUTS_DIR, thread.id), { recursive: true, force: true }).catch(() => {})
     await browserManager.closeSession(thread.id).catch(() => {})
   },
@@ -8840,7 +8855,8 @@ function grantChatAccess(threadId, push, { browser = false, ask = null, handoff 
   // which is no new way out for a run that has the browser, and would be one for
   // a run with no network of its own (Codex's sandbox). Neither launches anything until called.
   const charts = withBrowser ? visual : null
-  // `done`: mark_chat_done's callback (chat/done.mjs), which sets the thread's doneAt.
+  // `done`: mark_chat_done's callback (chat/done.mjs), which sets the thread's doneAt
+  // and says whether the reply has text yet (`{ answered }`).
   agentBrowserAccess.set(token, { threadId, push, browser: withBrowser, ask, handoff: handOver, change, visual: charts, done, holds, runId, inboxCard })
   return { token, url: BROWSER_MCP_URL, browser: withBrowser, ask: !!ask, handoff: !!handOver, change: !!change, visual: !!charts, done: !!done, holds, revoke: () => agentBrowserAccess.delete(token) }
 }
@@ -8984,8 +9000,7 @@ async function handleAgentMcp(req, res) {
   }
   if (method === 'tools/call' && params?.name === DONE_TOOL && access.done) {
     try {
-      await access.done()
-      return ok({ content: [{ type: 'text', text: DONE_RESULT }] })
+      return ok({ content: [{ type: 'text', text: doneResult(await access.done()) }] })
     } catch (e) {
       return ok({ content: [{ type: 'text', text: `Could not mark the chat done: ${e?.message || e}` }], isError: true })
     }
@@ -9045,8 +9060,9 @@ function signMessage(m) {
   if (!m) return m
   const out = { ...m }
   if (m.attachments) out.attachments = m.attachments.map((a) => ({ ...a, url: chatUploads.urlFor(a.id) }))
-  if (m.parts?.some((p) => p.type === 'image' || p.type === 'file' || p.type === 'visual' || p.attachments)) {
+  if (m.parts?.some((p) => p.type === 'image' || p.type === 'file' || p.type === 'visual' || p.attachments || p.images)) {
     out.parts = m.parts.map((p) => (p.type === 'image' || p.type === 'file' || p.type === 'visual' ? { ...p, url: chatUploads.urlFor(p.uploadId) }
+      : p.type === 'tool' && p.images ? { ...p, images: p.images.map((im) => ({ ...im, url: chatUploads.urlFor(im.uploadId) })) }
       : p.type === 'questions' && p.attachments ? { ...p, ...answerAttachments(p.attachments) }
       : p.type === 'steer' && p.attachments ? { ...p, attachments: signAttachments(p.attachments) } : p))
   }
@@ -9068,6 +9084,7 @@ function partUploadIds(m) {
   const ids = []
   for (const p of m.parts || []) {
     if (p.type === 'image' || p.type === 'file' || p.type === 'visual') ids.push(p.uploadId)
+    if (p.type === 'tool') for (const im of p.images || []) ids.push(im.uploadId)
     if (p.type === 'questions') for (const list of Object.values(p.attachments || {})) for (const a of list) ids.push(a.id)
   }
   return ids
@@ -9076,15 +9093,29 @@ const signAttachments = (list) => (list || []).map((a) => ({ ...a, url: chatUplo
 const signQueue = (queue) => (queue || []).map((q) => (q.attachments ? { ...q, attachments: signAttachments(q.attachments) } : q))
 const signThread = (t) => (t ? { ...t, messages: (t.messages || []).map(signMessage), ...(t.queue ? { queue: signQueue(t.queue) } : {}) } : t)
 
-const listThreads = async () => (await threadStore.list()).map(signThread)
+// Every chat read says when its linked task was finished (`taskDoneAt`, chat/task-done.mjs),
+// so a list settles it the way T3 Code settles a merged pull request's thread. Read
+// lazily: the task service and the sheet marks are made further down.
+const taskDone = createTaskDone({
+  task: (id) => todoService.get(id),
+  sheetMarks: () => sheetMarks.all(),
+  // The feed's own cache (120 s); its rows come marked or not, before the marks are applied.
+  // Never held up by Drive: past 1.5 s the chat is read without its task's finish (exact
+  // refs still match), and the read left running fills the cache for the next one.
+  sheetRefs: async () => {
+    const feed = await Promise.race([taskSheetFeed.read(), new Promise((resolve) => setTimeout(resolve, 1500, null).unref?.())])
+    return feed?.configured ? (feed.items || []).map((r) => r.id) : null
+  },
+})
+const listThreads = async () => (await taskDone.decorate(await threadStore.list())).map(signThread)
 // The list carries a browser handoff still waiting on the owner (browser/handoff.mjs).
 const listThreadSummaries = async () => {
   const open = new Set(browserManager.sessionKeys())
-  return (await threadStore.summaries()).map((t) => withHandoff(signThread(t), browserHandoffs, open))
+  return (await taskDone.decorate(await threadStore.summaries())).map((t) => withHandoff(signThread(t), browserHandoffs, open))
 }
-const readThread = async (id) => signThread(await threadStore.get(id))
-const readThreadPage = async (id, opts) => signThread(await threadStore.page(id, opts))
-const writeThread = async (id, body) => signThread(await threadStore.put(id, body))
+const readThread = async (id) => signThread(await taskDone.one(await threadStore.get(id)))
+const readThreadPage = async (id, opts) => signThread(await taskDone.one(await threadStore.page(id, opts)))
+const writeThread = async (id, body) => signThread(await taskDone.one(await threadStore.put(id, body)))
 const deleteThread = (id) => threadStore.remove(id)
 
 let chatModelsCache = { ts: 0, data: null }
@@ -9508,7 +9539,8 @@ const CHAT_MEMORY_RULES =
   + 'only matter to that project go in the project memory instead. Skip passing chatter, one-off questions, things only '
   + 'true for this conversation, and anything already recorded. Never store secrets. Memory notes are not tasks: still ask '
   + 'before creating tasks, events or goals he did not request. When you saved something, end your reply with one short '
-  + 'line saying what (e.g. "Noted in memory: you ride a 54 cm Domane.") so he can correct it.'
+  + 'line saying what (e.g. "Noted in memory: you ride a 54 cm Domane.") so he can correct it. Save the note before you '
+  + 'write your answer; that line comes after the full answer, never in place of it.'
 
 const ARTIFACT_EXT = /\.(md|markdown|html?|csv|tsv|txt|json|ya?ml|svg|pdf|xml|ics|xlsx?|docx?|pptx|png|jpe?g|webp|zip)$/i
 const WRITE_KINDS = new Set(['write', 'edit', 'Write', 'Edit', 'MultiEdit', 'create_file', 'edit_file'])
@@ -9690,7 +9722,9 @@ async function chatProjectContext(projectId, driver) {
   }
 }
 
-function chatPrompt({ thread, userIndex, provider, text, files, voice, fresh, reach = null, project = '' }) {
+// `after` follows the owner's request (a steer's note, its blocks held by `seal`).
+// The prompt is sealed as a whole (chat/refs.mjs contextSeal).
+function chatPrompt({ thread, userIndex, provider, text, files, voice, fresh, reach = null, project = '', after = '', seal = contextSeal() }) {
   const plan = fresh ? { resumeId: null, replay: thread.messages.slice(0, userIndex) } : planHistory(thread, provider, userIndex)
   const extras = [
     !voice && filesRule(join(CHAT_OUTPUTS_DIR, thread.id), { visuals: !!reach?.visual }), CHAT_MEMORY_RULES, !voice && WORK_RULES,
@@ -9699,20 +9733,21 @@ function chatPrompt({ thread, userIndex, provider, text, files, voice, fresh, re
     !voice && IMAGE_RULES, voice && VOICE_RULES,
   ].filter(Boolean)
   const extraBlock = extras.length ? `${extras.join('\n\n')}\n\n` : ''
-  const att = attachmentBlock(files)
-  const request = text || '(The owner sent only the attachments above. Look at them and respond.)'
+  const refs = projectRefs(text, files)
+  const att = attachmentBlock(refs.rest, refs.textLeft)
+  const request = [refs.text || (after ? '' : '(The owner sent only the attachments above. Look at them and respond.)'), seal.hold(refs.context), after].filter(Boolean).join('\n\n')
   const handoff = handoffReplay(thread, plan.replay, provider, { voice })
   if (plan.resumeId) {
     const missed = renderTranscript(plan.replay, handoff
       ? { ...handoff.options, heading: `Earlier in this chat, answered by ${handoff.names} while you were away. ${HANDOFF_CAVEAT}` }
       : { heading: 'Earlier in this chat, answered while you were away:' })
-    return { resumeId: plan.resumeId, prompt: `${temporalContext()}\n\n${extraBlock}${project}${missed}${att}${OWNER_NAME || 'Owner'}: ${request}` }
+    return { resumeId: plan.resumeId, prompt: seal.seal(`${temporalContext()}\n\n${extraBlock}${project}${missed}${att}${OWNER_NAME || 'Owner'}: ${request}`) }
   }
   const prompt =
     `${IDENTITY}\n\n${WEB_RULES}\n\n${MEMORY_RULES}\n\n${INBOX_RULES}\n\n${HABIT_RULES}\n\n${GOAL_RULES}` +
     `${stravaRule()}${appleRule()}${gmailRule()}${driveRule()}${screenRule()}${appToolsRule()}\n\n${extraBlock}${project}${temporalContext()}\n\n` +
     `${renderTranscript(plan.replay, handoff ? { ...handoff.options, heading: `This chat started with ${handoff.names} and you are taking it over. The conversation so far: ${HANDOFF_CAVEAT}` } : undefined)}${att}User request:\n${request}`
-  return { resumeId: null, prompt }
+  return { resumeId: null, prompt: seal.seal(prompt) }
 }
 
 // The chat moved here from another account (the owner switched in the model
@@ -9752,7 +9787,7 @@ const TITLE_FORMAT = 'Reply with exactly two lines and nothing else:\nTitle: <th
 
 const TITLE_PROMPT = (text) =>
   `Write a title for a chat that starts with the message below. ${TITLE_STYLE} ${ICON_STYLE()}\n\n${TITLE_FORMAT}`
-  + '\n\nMessage:\n' + truncate(text, 1500)
+  + '\n\nMessage:\n' + truncate(plainRefs(text), 1500)
 
 async function runTitleModel(prompt) {
   const t = chatSettings.titles || {}
@@ -9792,7 +9827,8 @@ async function regenerateChatTitle(thread) {
   const msgs = thread.messages.filter((m) => (m.content || '').trim())
   const first = msgs.find((m) => m.role === 'user')
   let transcript = renderTranscript(msgs, { budget: 7000, heading: 'Conversation:' })
-  if (first && !transcript.includes(first.content.trim().slice(0, 60))) transcript = `Opening request: ${truncate(first.content, 600)}\n\n${transcript}`
+  const opening = first ? plainRefs(first.content).trim() : ''
+  if (opening && !transcript.includes(opening.slice(0, 60))) transcript = `Opening request: ${truncate(opening, 600)}\n\n${transcript}`
   return parseTitleReply(await runTitleModel(RETITLE_PROMPT(transcript)))
 }
 
@@ -9836,7 +9872,7 @@ function replyForPush(assistant, finalText) {
 }
 
 function plainPreview(markdown, max = 160) {
-  return truncate(String(markdown || '')
+  return truncate(plainRefs(markdown)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
     .replace(/[#>*_`~|]/g, '')
@@ -9976,15 +10012,7 @@ async function startChatTurn(body, { idle = null } = {}) {
     // He answered: the chat no longer waits on him.
     delete t.needsReply
     delete t.keepUnread
-    // Writing in a settled or snoozed chat brings it back (and lets auto-settle
-    // have it again later); web/src/chat/settle.ts.
-    if (t.settledOverride === 'settled') t.unsettledAt = now
-    delete t.settledOverride
-    delete t.settledAt
-    delete t.snoozedUntil
-    delete t.snoozedAt
-    // A new turn is not the one the agent marked done (chat/done.mjs).
-    delete t.doneAt
+    wakeOnOwnerMessage(t, now)
     t.updatedAt = now
   }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(newTaskId ? { taskId: newTaskId } : {}), ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
 
@@ -10225,6 +10253,9 @@ async function startChatTurn(body, { idle = null } = {}) {
       }
       // change_start / change_finish (dev/change.mjs): the PR card joins the reply.
       // Stop, or the CLI giving up on the call, ends the work where it stands.
+      // Pictures a tool returned this turn, by the path it read: the reply may show
+      // one by that path, and gets the same upload (browser/shots.mjs).
+      const seenImages = new Map()
       const changeSignal = (gone) => AbortSignal.any([signal, gone].filter(Boolean))
       const changeTools = {
         [CHANGE_START]: (input, gone) => changeFlow.start(threadId, input, { signal: changeSignal(gone) })
@@ -10309,7 +10340,11 @@ async function startChatTurn(body, { idle = null } = {}) {
           browser: reach.browser, ask: canAsk ? askOwner : null, handoff: handOver, change: canAsk && CHANGE_FLOW_ENABLED && access === 'full' ? changeTools : null,
           visual: canAsk ? showVisual : null,
           // A one-off request finished (chat/done.mjs). Not in a totem's chat, which never waits on him.
-          done: canAsk && !thread.totemId ? () => threadStore.update(threadId, (t) => { t.doneAt = Date.now() }) : null,
+          // It answers whether the reply has any text yet, so the tool can say the answer is still owed.
+          done: canAsk && !thread.totemId ? async () => {
+            await threadStore.update(threadId, (t) => { t.doneAt = Date.now() })
+            return { answered: assistant.parts.some((p) => p.type === 'text' && String(p.text || '').trim()) }
+          } : null,
           // An inbox proposal this reply stages shows in it as a card (chat/inbox-outcome.mjs).
           runId: run.id, inboxCard: (card) => { forward({ type: 'inbox', inbox: card }); return save() },
         })
@@ -10323,8 +10358,6 @@ async function startChatTurn(body, { idle = null } = {}) {
           const steer = { id: randomUUID(), text: words, createdAt: Date.now(), files: sent, images }
           const via = steering.send(steer)
           if (!via) return null
-          // His words mid-reply: whatever the agent marked done before them isn't (chat/done.mjs).
-          threadStore.update(threadId, (t) => { delete t.doneAt }).catch((e) => log('chat: clear doneAt failed', e?.message || e))
           const attachments = sent.map((f) => ({ id: f.id, name: f.name, mime: f.mime, size: f.size, kind: f.kind, ...(f.preview ? { preview: f.preview } : {}) }))
           // Signed for the viewers; the saved part drops the url (normalizeAttachment).
           const shown = { id: steer.id, text: words, createdAt: steer.createdAt, via, ...(attachments.length ? { attachments: signAttachments(attachments) } : {}) }
@@ -10339,14 +10372,15 @@ async function startChatTurn(body, { idle = null } = {}) {
           const tag = attempts++ ? `~${attempts}` : ''
           let { prompt, resumeId } = chatPrompt({ thread, userIndex, provider, text, files, voice, fresh, reach: offered, project: promptContext })
           if (steers) {
-            const note = steerPrompt(steers, { owner: OWNER_NAME || 'Owner', progress: progressNote(assistant) })
+            const seal = contextSeal()
+            const note = steerPrompt(steers, { owner: OWNER_NAME || 'Owner', progress: progressNote(assistant), seal })
             // The session this run started, resumed with the owner's words; without
             // one (or when it is lost), the whole request again with them added.
             if (sessionId && !fresh) {
-              prompt = `${temporalContext()}\n\n${note}`
+              prompt = seal.seal(`${temporalContext()}\n\n${note}`)
               resumeId = sessionId
             } else {
-              ({ prompt } = chatPrompt({ thread, userIndex, provider, text: `${text}\n\n${note}`, files, voice, fresh: true, reach: offered, project: promptContext }))
+              ({ prompt } = chatPrompt({ thread, userIndex, provider, text, after: note, seal, files, voice, fresh: true, reach: offered, project: promptContext }))
               resumeId = null
             }
           }
@@ -10393,10 +10427,13 @@ async function startChatTurn(body, { idle = null } = {}) {
               // How full the context is, and the CLI's own compactions (chat/context.mjs).
               onContext: (ctx) => forward({ type: 'context', context: ctx }),
               onCompaction: (c) => forward({ type: 'compaction', compaction: c }),
-              onImage: async ({ buffer, mime, name }) => {
+              onImage: async ({ buffer, mime, name, toolId, path }) => {
                 const ext = (mime.split('/')[1] || 'png').replace('jpeg', 'jpg')
-                const up = await chatUploads.save({ buffer, name: name || `screenshot-${Date.now()}.${ext}`, mime })
-                forward({ type: 'image', uploadId: up.id, url: up.url })
+                const up = await chatUploads.save({ buffer, name: name || (path && basename(path)) || `screenshot-${Date.now()}.${ext}`, mime })
+                if (path) seenImages.set(path, up)
+                // A tool's picture goes on its card; `tool_image` so a client
+                // from before this ignores it rather than putting it in the reply.
+                forward(toolId ? { type: 'tool_image', toolId: `${toolId}${tag}`, uploadId: up.id, url: up.url } : { type: 'image', uploadId: up.id, url: up.url })
               },
             }).then((res) => { usage = addUsage(usage, res.usage); return res }),
             }
@@ -10466,6 +10503,7 @@ async function startChatTurn(body, { idle = null } = {}) {
         if (/!\[[^\]]*\]\(\s*<?(file:\/\/)?\//.test(assistant.content + finalText)) {
           const embed = (t) => embedLocalImages(t, {
             allowedDirs: [join(CHAT_OUTPUTS_DIR, threadId), tmpdir()],
+            seen: seenImages,
             save: ({ buffer, name, mime }) => chatUploads.save({ buffer, name, mime }),
           }).then((r) => r.text).catch(() => t)
           for (const part of assistant.parts || []) if (part.type === 'text') part.text = await embed(part.text)
@@ -10564,7 +10602,15 @@ async function steerRun(threadId, words, ids = []) {
   const files = await loadChatFiles(ids.map((id) => ({ id })))
   const images = await readSteerImages(files)
   // Looked up again: the run may have ended while the files were read.
-  return chatRuns.active(threadId)?.steer?.(words, { files, images }) || null
+  const steer = chatRuns.active(threadId)?.steer?.(words, { files, images }) || null
+  if (steer) await wakeThread(threadId)
+  return steer
+}
+
+/** He wrote in the chat without starting a turn (startChatTurn wakes its own): see wakeOnOwnerMessage. Saved before the caller answers. */
+async function wakeThread(threadId) {
+  await threadStore.update(threadId, (t) => { wakeOnOwnerMessage(t) })
+    .catch((e) => log('chat: waking the chat failed', e?.message || e))
 }
 
 const queueView = (t) => ({ queue: signQueue(t?.queue), queueHeld: !!t?.queueHeld })
@@ -10610,6 +10656,8 @@ async function changeChatQueue(body) {
         modelSettings: body.modelSettings,
         inbox: body.inbox,
       }]
+      // A follow-up is him writing in the chat, even before it goes.
+      wakeOnOwnerMessage(t)
     })
     announceQueue(threadId, t)
     // Nothing running any more (it ended as this was sent): it goes now.
@@ -10908,6 +10956,7 @@ async function handleChatApi(req, res, path) {
     }
     questionsHandled.add(partId)
     const status = dismiss ? 'dismissed' : 'answered'
+    if (!dismiss) await wakeThread(threadId)
     if (dismiss ? questionWaits.dismiss(partId) : questionWaits.answer(partId, clean, files)) return send(res, 200, { status, live: true })
     const patch = { id: partId, status, ...(clean ? { answers: clean, ...answerAttachments(files) } : {}), answeredAt: Date.now() }
     // A later run in the same reply (the call was cut off, the run went on) owns
@@ -10936,6 +10985,8 @@ async function handleChatApi(req, res, path) {
     if (approvalsHandled.has(partId)) return send(res, 409, { error: 'That request was already answered.' })
     if (approvalWaits.decide(partId, decision)) {
       approvalsHandled.add(partId)
+      // Declined with a reason typed in the composer: words of his in the chat.
+      if (decision.feedback) await wakeThread(threadId)
       return send(res, 200, { status: statusForDecision(decision.decision), live: true })
     }
     // Nothing waits. A live run already marked its own part; a part left pending
@@ -11002,8 +11053,20 @@ async function handleChatApi(req, res, path) {
     const kind = q.get('kind') === 'text' ? 'text' : undefined
     return send(res, 201, await chatUploads.save({ buffer, name: q.get('name') || '', mime: q.get('mime') || req.headers['content-type'] || '', kind }))
   }
+  // A browser's saved drafts naming the uploads they hold (web/src/chat/draftsWeb.ts):
+  // each is kept past the sweep for 30 days from now. Answers which are gone.
+  if (req.method === 'POST' && path === '/api/chat/uploads/hold') {
+    const body = await readJsonBody(req)
+    const ids = Array.isArray(body?.ids) ? [...new Set(body.ids.filter(validUploadId))] : null
+    if (!ids || ids.length > 2000) return send(res, 400, { error: 'ids must be a list of up to 2000 upload ids' })
+    const found = await Promise.all(ids.map(async (id) => !!(await chatUploads.meta(id))))
+    await uploadHolds.hold(ids.filter((_, i) => found[i]))
+    return send(res, 200, { held: ids.filter((_, i) => found[i]), missing: ids.filter((_, i) => !found[i]) })
+  }
   if (req.method === 'DELETE' && path.startsWith('/api/chat/uploads/')) {
     const id = path.slice('/api/chat/uploads/'.length)
+    // The draft removing its own file lets go of it first.
+    if (validUploadId(id)) await uploadHolds.release([id])
     // Only an attachment nobody sent yet: a sent one belongs to its thread, and
     // a project's file to its project.
     const used = (await threadUploadIds()).has(id) || (await keptUploadIds()).has(id)
@@ -11177,11 +11240,15 @@ async function handleVoiceApi(req, res, path) {
     if (!validThreadId(threadId) || !Array.isArray(turns) || !turns.length) return send(res, 400, { error: 'missing threadId or turns' })
     const now = Date.now()
     const cost = await voiceService.recordUsage({ threadId, usage, model })
+    let spoke = false
     const thread = await threadStore.update(threadId, (t) => {
       for (const turn of turns.slice(0, 20)) {
         const text = String(turn?.text || '').trim()
         if (turn?.role === 'user') {
-          if (text) t.messages.push({ id: randomUUID(), role: 'user', content: text, createdAt: now, voice: true })
+          if (text) {
+            t.messages.push({ id: randomUUID(), role: 'user', content: text, createdAt: now, voice: true })
+            spoke = true
+          }
           continue
         }
         const parts = []
@@ -11193,6 +11260,7 @@ async function handleVoiceApi(req, res, path) {
         if (parts.length) t.messages.push({ id: randomUUID(), role: 'assistant', content: text, parts, status: 'done', provider: 'openai-realtime', model: model || '', createdAt: now })
       }
       if (!t.title) t.title = fallbackTitle(turns.find((x) => x?.role === 'user')?.text || 'Voice chat')
+      if (spoke) wakeOnOwnerMessage(t, now)
       t.updatedAt = now
     }, { create: { id: threadId, kind: kind === 'temporary' ? 'temporary' : 'regular', createdAt: now, updatedAt: now, ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
     return send(res, 200, { ok: true, cost, thread: signThread(thread) })
@@ -11207,6 +11275,9 @@ async function threadUploadIds() {
     for (const m of t.messages) {
       for (const a of m.attachments || []) ids.add(a.id)
       for (const id of partUploadIds(m)) ids.add(id)
+      // A picture shown by its URL in the text (not dropped with the chat: the
+      // text could name another chat's upload; the sweep takes it a day later).
+      for (const text of [m.content, ...(m.parts || []).map((p) => p.type === 'text' && p.text)]) for (const id of textUploadIds(text)) ids.add(id)
     }
   }
   return ids
@@ -11459,7 +11530,7 @@ async function handleChatProjectsApi(req, res, path) {
   return send(res, 405, { error: 'method not allowed' })
 }
 
-// Unattached drafts' files, swept daily.
+// Unattached files no draft holds, swept every six hours.
 setInterval(async () => {
   try {
     const referenced = await threadUploadIds()
@@ -13431,7 +13502,7 @@ const MCP_TOOLS = [
           if (id) hits.set(id, [...(hits.get(id) || []), plainMarks(r.snippet)])
         }
       }
-      return listOtherThreads(await threadStore.list(), args, { projects, hits, isRunning: (id) => !!chatRuns.active(id), autoSettleDays: chatSettings.autoSettleDays })
+      return listOtherThreads(await taskDone.decorate(await threadStore.list()), args, { projects, hits, isRunning: (id) => !!chatRuns.active(id), autoSettleDays: chatSettings.autoSettleDays })
     },
   },
   {
@@ -13456,7 +13527,7 @@ const MCP_TOOLS = [
     handler: async (args) => {
       const t = await threadStore.get(String(args.id || ''))
       if (!t) throw new Error(`no chat with id ${args.id}`)
-      return readOtherThread(t, args, { projects: await projectStore.list(), running: !!chatRuns.active(t.id), autoSettleDays: chatSettings.autoSettleDays })
+      return readOtherThread(await taskDone.one(t), args, { projects: await projectStore.list(), running: !!chatRuns.active(t.id), autoSettleDays: chatSettings.autoSettleDays })
     },
   },
   // Making chats: a totem that finds new work (a ticket, an email) opens a chat
@@ -18529,7 +18600,7 @@ async function askTotemInChat({ chat, totem, message }) {
     totem: job, memory: await readTotemMemory(job.id), memoryPath,
     recentRuns: (await jobStore.runs({ jobId: job.id, limit: 5 })).reverse(),
     chatTitle: thread.title || '', others,
-    transcript: thread.messages.filter((m) => m.status !== 'streaming').map((m) => ({ role: m.role, content: m.content })),
+    transcript: thread.messages.filter((m) => m.status !== 'streaming').map((m) => ({ role: m.role, content: m.role === 'user' ? inlineRefs(m.content, m.attachments) : m.content })),
     message: question, browser: !!browser, filesDir: totemFilesDir(job.id),
   })
   const a = { id: `ask-${randomUUID().slice(0, 12)}`, chatId: thread.id, job, startedAt: Date.now(), result: null }

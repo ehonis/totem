@@ -4,7 +4,7 @@ import HandoffMark from './HandoffMark'
 import { providerSwitches } from './handoff'
 import { isCompactionTurn } from './context'
 import { discardUnsent, editAndResend, providerById, regenerate, retryUnsent } from './store'
-import type { ChatMessage, ModelRow, ProviderRow } from './types'
+import type { Attachment, ChatMessage, ModelRow, ProviderRow } from './types'
 
 // The chat's messages. Memoized, with every row memoized too and given only
 // stable props, so typing in the composer (the draft is the chat view's state)
@@ -22,23 +22,26 @@ interface Props {
   provider: string
   providers: ProviderRow[]
   models: Record<string, ModelRow[]>
-  /** Put a discarded unsent message's text back in the composer. */
-  onDiscarded: (text: string) => void
+  /**
+   * Put an unsent message's words and files back into a draft: discarded, or
+   * (`refusedIn`, the chat's id) retried and refused by the bridge.
+   */
+  onDiscarded: (text: string, attachments?: Attachment[], refusedIn?: string) => void
   /** Older messages the bridge has (history.ts): offer them, say they are coming, or that they failed. */
   earlier?: 'more' | 'loading' | 'error'
   /** Read the page before the first message here. Stable, so the log stays memoized. */
   onLoadEarlier?: () => void
 }
 
-const UserRow = React.memo(function UserRow({ threadId, m, busy, onDiscarded }: { threadId: string | null; m: ChatMessage; busy: boolean; onDiscarded: (text: string) => void }) {
+const UserRow = React.memo(function UserRow({ threadId, m, busy, onDiscarded }: { threadId: string | null; m: ChatMessage; busy: boolean; onDiscarded: (text: string, attachments?: Attachment[], refusedIn?: string) => void }) {
   const unsent = !!(m.unsent && threadId && !busy)
   return (
     <UserMessage
       m={m}
       canEdit={!busy && !m.id.startsWith('local-')}
       onEdit={(text) => { if (threadId) editAndResend(threadId, m.id, text) }}
-      onRetry={unsent ? () => retryUnsent(threadId!) : undefined}
-      onDiscard={unsent ? () => { const text = discardUnsent(threadId!); if (text) onDiscarded(text) } : undefined}
+      onRetry={unsent ? () => retryUnsent(threadId!, () => onDiscarded(m.content, m.attachments, threadId!)) : undefined}
+      onDiscard={unsent ? () => { const text = discardUnsent(threadId!); if (text || m.attachments?.length) onDiscarded(text, m.attachments) } : undefined}
     />
   )
 })

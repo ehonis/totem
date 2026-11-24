@@ -28,7 +28,17 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   entries at most, the least recently used evicted first. Each GET sends `If-None-Match`. A 304 answers the
   stored body (its new savedAt reaches the disk at most every ten minutes). So does anything that is not the
   bridge's answer: a network failure, no answer within 8 s, a 502/503/504, a Cloudflare Access response, or a
-  200 that is not JSON (a captive Wi-Fi page). Every caller gets its own parsed copy. Screens draw the stored
+  200 that is not JSON (a captive Wi-Fi page). React Native's `fetch` resolves only once the whole body is
+  in, so the 8 s covers the download too. A caller that holds something newer than the disk passes
+  `{ stored: false }`: the stored body still answers a 304, the 8 s deadline is off (its own `deadlineMs`,
+  45 s for the list, fails instead), and a failure throws as if nothing were stored. The chat list (`getThreadSummaries`) does: its stored copy is older than the
+  store's own, and answering it once dropped every chat begun since it was saved, from the drawer and its
+  folders, until a list came through. The projects list (`listProjects`) does too, for the same reason, but its
+  stored copy is what the store starts from (`lib/chat/projectList.ts`, `seed()` in `initChat`), so the drawer's
+  projects and folders, and the chats filed in them, are there on a cold start before a weak connection answers.
+  A list asked for before the phone's own change to a project (made, renamed, deleted: `takeChange`) is dropped,
+  and one that is not a list (a captive page) keeps what the store has.
+  Every caller gets its own parsed copy. Screens draw the stored
   body first through the `peek*` twins beside the getters (`peekTodos`, `peekHabits`, …; Overview and the
   todos, habits, lists and goals stores), then revalidate. While any screen shows a stored answer, the top bar
   (`Screen.tsx`) says "Offline · updated 5m ago"; the web has no such line. It goes once a call that began
@@ -39,6 +49,10 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   (named `AbortError`) rather than answering for the old account; screens and stores drop it silently
   (`isAccountChanged` in `api.ts`). Its tests run under the bridge's `npm test`
   (`src/lib/httpCache.test.mjs`): keep `httpCache.ts` free of React Native imports.
+- The chat list is pulled one at a time (`syncThreads` is `oneAtATime(pullThreads)`): a call while one is out
+  waits, then one more pull runs for every caller in between, so slow downloads queue rather than throw each
+  other's answers away. A chat this device followed a run in stays when a list asked for before that run
+  ended leaves it out (`runLeft`); a later list is the word.
 - Chats load as the web's do (docs/chat.md → Loading chats): the drawer from summaries, a chat's
   latest window on opening (`loadThread` in `lib/chat/store.ts`, drawn first from the stored answer via
   `peekThreadPage`), "Load earlier messages" as the list's header, and the scroll position per chat
@@ -47,6 +61,13 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   A chat stream silent past 50 s is dropped and re-attached (`lib/chat/api.ts`). The Overview's
   Recent chats (`features/overview/RecentChats.tsx`, `lib/chat/recents.ts`) puts chats with a composer
   draft first, then the ones opened (`totem.chat.opened.v1`) or answered last.
+- Saved drafts are the web's (docs/chat.md → Drafts → On the iPhone): `lib/chat/drafts.ts`, `draftsShared.ts` and
+  `refs.ts` are the web's files byte for byte (`features/chat/drafts.shared.test.mjs`): change the logic on the web
+  and copy it. `lib/chat/draftsApp.ts` is the app's storage (a record per bridge, saved as the app leaves the
+  foreground; tested by `draftsApp.test.mjs`), one store in `features/chat/appDrafts.ts`, the chat screen's draft in
+  `features/chat/useChatDrafts.ts`, the drawer's rows in `features/chat/ChatsNavDrafts.tsx`. A new way to write a
+  draft goes through that store, never localStorage. `lib/chat/storeDrafts.test.mjs` runs the real chat store in
+  node behind loader hooks that stand in for React Native and the bridge calls.
 - The approval code (`src/lib/approvalCode.ts`, ported from `web/src/approvalCode.ts`) is kept in the
   keychain beside the secret and sent by `api()` as `x-totem-approval-code`, on the approval routes
   only. The app signs in with the bridge secret, and the bridge refuses that alone on every approval
@@ -66,7 +87,13 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   again, is pushed as an error). The inline Undo line (`features/todos/detail/bits.tsx` `UndoLine`) closes
   after 8 s, except while a screen reader runs: then VoiceOver is moved onto it, it stays two minutes unless
   replaced or dismissed with the escape gesture, and the magic tap runs its Undo.
-- `src/shell/` is the frame: `AppDrawer` (the sidebar: Search, which opens the Search page, by the wordmark; Overview, the Productivity tools as a
+- The keyboard goes down as the drawer starts to open, by swipe or Menu, in one place: `DrawerContent` in
+  `(app)/_layout.tsx` watches the drawer's progress (`useDrawerProgress`) and calls `KeyboardController.dismiss()`
+  on the step `shell/drawerKeyboard.ts` names. The composer rides the keyboard over the drawer, so a keyboard left up
+  covered half of it. KeyboardController resigns whatever holds the keyboard, not only the input React Native's focus
+  tracker knows, which is all `Keyboard.dismiss()` blurs. A new way to open the drawer needs nothing more.
+- `src/shell/` is the frame: `AppDrawer` (the sidebar: Search, which opens the Search page, by the wordmark; Overview, Totems
+  (a dot while a totem's report waits; totems' chats are not in the list), the Productivity tools as a
   4 + 3 grid the heading's chevron folds away, remembered per device, then the chats, all in one scroll; a pinned foot
   with the list's Snoozed and Settled buttons, which open `features/chat/ShelfSheet.tsx`, and New chat and Settings on the right), `Screen` (top bar with the AI usage pill on the right, where the web phone bar has new chat; plus the voice/new-chat buttons), `nav.ts` (`navigateTo` takes the
   web's tab/app ids, `openChat`, `newChat`, `startVoice`), `routes.ts` (where each id lands, pure and
@@ -89,6 +116,22 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   `navigateTo('todos')`, `{ tab: 'productivity', app }`, notification links (`destination.ts`) and the
   landing-tab preference all go through `routes.ts`.
 
+- **The drawer's chats** (`features/chat/ChatsNav.tsx`, docs/chat.md → The chats panel): the web chats panel, T3 Code's
+  flat list. Every chat in every project and folder on one list (unsent drafts, Pinned, the chats still in play latest
+  first, then Working), each a card with its place, its status in words and its linked task (`features/work/TaskBadge.tsx`,
+  a tap opens the task's page); Snoozed and Settled are the foot's buttons, which open `ShelfSheet.tsx` on one shelf for
+  the whole scope. The shelves and scope are `lib/chat/sidebar.ts`, the web's file byte for byte
+  (`features/chat/history.shared.test.mjs`, with `settle.ts`). The scope button (All chats, Home, a project or folder;
+  a native menu, so folders are indented rows, never a submenu) is kept per device in `features/chat/chatsScope.ts`
+  under the web's key, and New chat (`shell/nav.ts` `newChat`) starts in the scoped project, else at Home. A chat whose
+  linked task is done settles once read, as T3 settles a merged PR (`settle.ts` `taskDoneSince`, from the bridge's
+  `taskDoneAt`); every task status call in `lib/api.ts` goes through `toldTasks`, which makes the chat store read the
+  list again (`onTaskStatus` in `initChat`), so a new call that finishes or reopens a task goes through it too.
+- **Tasks and chats** (`src/features/work/`): the task store the Tasks page uses (`features/work/state.ts` derives the
+  WorkTasks, it keeps no copy; `lib/work/groups.ts` is the web's `work/groups.ts` byte for byte,
+  `features/work/shared.test.mjs`). A task opens its page (`todo/[id]`), whose Chats section is the web card's;
+  a chat's task strip and Link to task… sheet (`chat/task`) link chats to tasks through `linkTask`/`startTaskDraft`
+  in `lib/chat/store.ts`. The drawer's Undo line is docked in its foot (`undoDock.tsx`).
 - **Settings** (`src/features/settings/`) is the web's sections in its groups and order (`lib/components/settings/sections.ts`
   and `searchIndex.ts` are byte-for-byte copies of the web's), drawn as iOS grouped lists from `features/settings/ui.tsx`
   (`Section`, `Row`, `Switch`, `Picker`, `Field`, `Notice`): a row keeps the web's id, so a search hit or a

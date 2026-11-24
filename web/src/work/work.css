@@ -1,87 +1,8 @@
-/* The chats panel's Tasks face (TasksPanel.tsx), its pickers (ComboPicker.tsx)
-   and the task strip over the composer (TaskBar.tsx). Rows reuse .vc-thread so a
-   task sits in the panel exactly as a chat does. */
+/* Tasks beside the chats: the pickers (ComboPicker.tsx), the task strip over the
+   composer (TaskBar.tsx), the task card (TaskCard.tsx) and a chat card's task
+   badge in the chats panel (TaskBadge.tsx). */
 
-/* --- toolbar ----------------------------------------------------------------- */
-.wk-toolbar { display: flex; align-items: center; gap: 4px; padding: 8px 6px 2px 8px; }
-.wk-search {
-  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 30px; padding: 0 8px; border-radius: 8px;
-  background: var(--bg-3); color: var(--muted); border: 1px solid transparent;
-}
-.wk-search:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
-.wk-search input { flex: 1; min-width: 0; border: 0; outline: none; background: none; color: var(--text); font: inherit; font-size: 13px; }
-.wk-search input::placeholder { color: color-mix(in srgb, var(--muted) 85%, transparent); }
-.wk-search-clear { display: grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: 5px; background: none; color: var(--muted); padding: 0; }
-.wk-search-clear:hover { color: var(--text); background: #ffffff10; }
-
-.wk-add { margin: 4px 4px 2px; border-radius: 9px; color: var(--muted); cursor: text; }
-.wk-add:hover, .wk-add:focus-within { background: var(--bg-3); }
-.wk-add:focus-within { color: var(--text); }
-.wk-add-line { display: flex; align-items: flex-start; gap: 8px; min-height: 32px; padding: 4px 3px 4px 13px; }
-.wk-add-plus { flex: none; margin-top: 4.5px; }
-/* One line that grows with a long title (field-sizing), up to five. */
-.wk-add textarea {
-  flex: 1; min-width: 0; min-height: 24px; max-height: 104px; padding: 2px 0; border: 0; outline: none; resize: none; overflow-y: auto;
-  field-sizing: content; background: none; color: var(--text); font: inherit; font-size: 13.5px; line-height: 20px;
-}
-.wk-add textarea::placeholder { color: color-mix(in srgb, var(--muted) 90%, transparent); }
-/* Where the task goes: always shown, so a folder with no open tasks (and so no group) is still one click away. */
-.wk-add-folder {
-  display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 52%; height: 24px; padding: 0 5px 0 6px;
-  border: 0; border-radius: 6px; background: color-mix(in srgb, var(--text) 6%, transparent);
-  color: color-mix(in srgb, var(--text) 80%, transparent); font: inherit; font-size: 12px; cursor: pointer;
-}
-.wk-add-folder:hover, .wk-add-folder[aria-expanded="true"] { background: color-mix(in srgb, var(--text) 11%, transparent); color: var(--text); }
-.wk-add-folder:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.wk-add-folder.personal { background: none; color: color-mix(in srgb, var(--muted) 92%, transparent); }
-.wk-add-folder.personal:hover, .wk-add-folder.personal[aria-expanded="true"] { background: color-mix(in srgb, var(--text) 7%, transparent); }
-/* Filed by a #folder in the title, as that word's chip is coloured. */
-.wk-add-folder.typed { background: color-mix(in srgb, var(--accent-2) 20%, transparent); color: var(--text); }
-.wk-add-folder .vc-proj-icon, .wk-add-folder .ti { flex: none; }
-.wk-add-folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wk-add-folder-chev { opacity: .55; }
-/* A phone gets a 44px hit area around the compact button. */
-@media (max-width: 720px) {
-  .wk-add-line { min-height: 44px; padding-top: 8px; padding-bottom: 8px; }
-  .wk-add-plus { margin-top: 6.5px; }
-  .wk-add textarea { min-height: 28px; font-size: 16px; line-height: 24px; }
-  .wk-add-folder { position: relative; height: 32px; }
-  .wk-add-folder::after { content: ''; position: absolute; inset: -6px -4px; }
-}
-.wk-add-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 8px 7px 36px; }
-
-.wk-view-menu { position: fixed; z-index: 75; min-width: 0; }
-.wk-view-menu > button { min-height: 34px; font-size: 13.5px; }
-.wk-view-menu .vc-seg { margin: 2px 4px 8px; }
-.wk-menu-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wk-row-menu { position: fixed; z-index: 75; min-width: 0; }
-.wk-row-menu > button { min-height: 34px; font-size: 13.5px; }
-.wk-error { color: #ff9aac; }
-
-/* --- groups -------------------------------------------------------------------- */
-.wk-group { padding-bottom: 2px; }
-.wk-group-head { display: flex; align-items: center; gap: 2px; padding: 10px 4px 2px 6px; }
-/* A folder right under its own project's group sits a step in, without naming the project again. */
-.wk-group.nested .wk-group-head { padding-left: 18px; padding-top: 4px; }
-.wk-group.nested .wk-task { margin-left: 8px; }
-.wk-group-fold {
-  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 24px; padding: 0 4px; border-radius: 6px;
-  background: none; border: 0; color: var(--muted); font: inherit; font-size: 12.5px; text-align: left;
-}
-.wk-group-fold:hover { color: var(--text); }
-.wk-group-chev { flex: none; opacity: .7; }
-.wk-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.wk-group-parent { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--muted) 65%, transparent); font-size: 11.5px; }
-.wk-group-count { margin-left: auto; padding-right: 2px; font-size: 11.5px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--muted) 75%, transparent); }
-.wk-group-add { opacity: 0; }
-.wk-group-head:hover .wk-group-add, .wk-group-add:focus-visible { opacity: 1; }
-@media (hover: none) { .wk-group-add { opacity: 1; } }
-
-/* --- a task -------------------------------------------------------------------- */
-.wk-task { border-radius: 10px; }
-.wk-task.open { background: color-mix(in srgb, var(--bg-3) 45%, transparent); }
-.wk-task.drop-over { background: color-mix(in srgb, var(--accent) 18%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
-.wk-task-row .vc-thread-main.wk-task-main { padding-left: 4px; gap: 6px; }
+/* --- a task's check and due day (the card) -------------------------------------------------------------------- */
 .wk-check {
   position: relative; display: grid; place-items: center; width: 24px; height: 24px; margin-left: 7px; flex: none;
   border: 0; border-radius: 50%; background: none; color: color-mix(in srgb, var(--muted) 85%, transparent); padding: 0;
@@ -98,26 +19,6 @@ button.wk-check:hover .wk-check-on { opacity: 1; transform: none; }
 .wk-due { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; padding: 1px 5px; border-radius: 6px; color: var(--muted); background: #ffffff0a; }
 .wk-due.overdue { color: #ff9aac; background: #f0506e1f; }
 .wk-due.today { color: #f3c969; background: #e3b3411c; }
-/* How many chats a task has: a button that unfolds them under it. */
-.wk-count {
-  display: inline-flex; align-items: center; gap: 1px; flex: none; height: 22px; margin-right: 2px; padding: 0 5px 0 3px;
-  border: 0; border-radius: 6px; background: none; font: inherit; font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: pointer;
-  color: color-mix(in srgb, var(--muted) 85%, transparent);
-}
-.wk-count:hover, .wk-count[aria-expanded="true"] { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
-.wk-task-acts { display: none; align-items: center; gap: 1px; padding-right: 3px; flex: none; }
-.wk-task-row:hover .wk-task-acts, .wk-task-row:focus-within .wk-task-acts, .wk-task-row.menu-open .wk-task-acts { display: flex; }
-.wk-task-row:hover .wk-due, .wk-task-row:focus-within .wk-due, .wk-task-row.menu-open .wk-due { display: none; }
-@media (hover: none) {
-  .wk-task-acts { display: flex; }
-  .wk-task-acts .wk-act-new { display: none; }
-  .wk-task-row .wk-due { display: inline; }
-}
-
-/* Its chats, indented under it on a thread line. */
-.wk-chats { position: relative; padding: 0 0 4px 22px; }
-.wk-chats::before { content: ''; position: absolute; left: 18px; top: 0; bottom: 8px; width: 1px; background: var(--line-2); }
-.wk-chats .vc-thread-main { height: 30px; font-size: 13px; padding-left: 10px; }
 
 /* --- the T3 Code-style combobox (portalled to <body>) ------------------------------ */
 .wk-combo {

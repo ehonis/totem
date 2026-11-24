@@ -479,14 +479,14 @@ test('a canvas widened at 1366 keeps its width while held and from its saved wid
   } finally { await browser.close() }
 })
 
-// The chats panel has three faces (chat/ProjectNav.tsx): Chats, Totems and Tasks.
-// Each must scroll inside the panel, or a list longer than the window is cut off
-// with no way down (the desktop app has no page scroll to fall back on): the Tasks
-// and Totems faces once put their rows straight into the non-scrolling .vc-threads.
-// This draws the real SidePanel and MobileDrawer around each face
-// (web/src/chat/ChatsPanel.harness.tsx) with fictional chats, totems and tasks,
-// and scrolls with the mouse wheel, as the owner does. On a phone the drawer stays
-// one scroll, with no list scrolling on its own inside it.
+// The chats panel (chat/ChatsNav.tsx) is one list of every chat, as cards, with
+// the scope button pinned above it. It must scroll inside the panel, or a list
+// longer than the window is cut off with no way down (the desktop app has no page
+// scroll to fall back on): the old Tasks and Totems faces once put their rows
+// straight into the non-scrolling .vc-threads. This draws the real SidePanel and
+// MobileDrawer (web/src/chat/ChatsPanel.harness.tsx) with fictional chats, some
+// linked to fictional tasks, and scrolls with the mouse wheel, as the owner does.
+// On a phone the drawer stays one scroll, with no list scrolling on its own inside it.
 const ago = (h) => new Date(Date.now() - h * 3600e3).toISOString()
 const panelApi = (url) => {
   const path = url.split('?')[0]
@@ -494,10 +494,9 @@ const panelApi = (url) => {
     // Minutes apart, so none is old enough to settle on its own.
     return { threads: Array.from({ length: 60 }, (_, i) => {
       const at = Date.now() - (i + 1) * 60e3
-      return { id: `c${i}`, kind: 'regular', title: `Fictional chat ${i}`, createdAt: at, updatedAt: at, messages: [{ id: `c${i}-u`, role: 'user', content: 'Fictional.', createdAt: at }], messageCount: 1, summary: true }
+      return { id: `c${i}`, kind: 'regular', title: `Fictional chat ${i}`, createdAt: at, updatedAt: at, messages: [{ id: `c${i}-u`, role: 'user', content: 'Fictional.', createdAt: at }], messageCount: 1, summary: true, ...(i % 3 === 0 ? { taskId: `k${i % 45}` } : {}) }
     }) }
   }
-  if (path === '/api/jobs') return { jobs: Array.from({ length: 40 }, (_, i) => ({ id: `t${i}`, name: `Fictional totem ${String(i).padStart(2, '0')}`, enabled: false, prompt: 'Fictional.', schedule: { type: 'daily', time: '07:00' } })) }
   if (path === '/api/todos/board') {
     return { counts: { archived: 0, snoozed: 0, deleted: 0 }, todos: Array.from({ length: 45 }, (_, i) => ({
       id: `k${i}`, title: `Fictional task ${String(i).padStart(2, '0')}`, description: '', area: 'Personal', ventureTag: null, status: 'todo', priority: 1, dueDate: null, recurrence: null,
@@ -508,37 +507,89 @@ const panelApi = (url) => {
   return null
 }
 
-test('every face of the chats panel scrolls to its last row, and the phone drawer stays one scroll', { skip: !executablePath || !esbuild }, async () => {
+test('the chats panel scrolls to its last chat, its cards fit, and the phone drawer stays one scroll', { skip: !executablePath || !esbuild }, async () => {
   const served = await serveHarness({ entry: 'chat/ChatsPanel.harness.tsx', styles: ['styles.css', 'shell.css', 'chat/chat.css', 'work/work.css'], api: panelApi })
   const browser = await chromium.launch({ executablePath })
-  // Rows per face, and the last one's title (Totems lists group chats first, then totems by name).
-  const faces = { chats: 'Fictional chat 59', totems: 'Fictional totem 39', tasks: 'Fictional task 44' }
+  const lastTitle = 'Fictional chat 59'
   try {
-    for (const [face, lastTitle] of Object.entries(faces)) {
-      for (const layout of [{ name: 'desktop' }, { name: 'macOS app', desktop: 'macos' }, { name: 'Windows app', desktop: 'windows' }, { name: 'phone', phone: true }]) {
-        const page = await browser.newPage({ viewport: layout.phone ? { width: 390, height: 700 } : { width: 1200, height: 600 } })
-        await page.goto(`${served.url}?face=${face}${layout.phone ? '&phone=1' : ''}${layout.desktop ? `&desktop=${layout.desktop}` : ''}`)
-        const frame = layout.phone ? '.sh-drawer' : '.sh-panel'
-        const where = `${face} face, ${layout.name}`
-        await page.waitForFunction(([frame, lastTitle]) => [...document.querySelectorAll(`${frame} .vc-thread-title`)].some((e) => e.textContent === lastTitle), [frame, lastTitle], { timeout: 10000 })
-          .catch(async () => assert.fail(`${where}: the harness never drew "${lastTitle}" (drew ${JSON.stringify(await page.evaluate((frame) => [...document.querySelectorAll(`${frame} .vc-thread-title`)].map((e) => e.textContent).slice(-3), frame))})`))
-        const box = await page.locator(frame).boundingBox()
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.75)
-        for (let i = 0; i < 40; i++) await page.mouse.wheel(0, 300)
-        await page.waitForTimeout(150)
-        const got = await page.evaluate(([frame, lastTitle]) => {
-          const f = document.querySelector(frame).getBoundingClientRect()
-          const last = [...document.querySelectorAll(`${frame} .vc-thread-title`)].find((e) => e.textContent === lastTitle).getBoundingClientRect()
-          const scrollers = [...document.querySelectorAll(`${frame} *`)].filter((e) => e.scrollHeight > e.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(e).overflowY)).map((e) => e.className)
-          const filter = document.querySelector(`${frame} .wk-search`)?.getBoundingClientRect()
-          return { frameTop: f.top, frameBottom: f.bottom, lastTop: last.top, lastBottom: last.bottom, scrollers, filterTop: filter ? filter.top : null, pageGrew: document.documentElement.scrollHeight > innerHeight }
-        }, [frame, lastTitle])
-        assert.ok(got.lastTop >= got.frameTop && got.lastBottom <= got.frameBottom + 1, `${where}: the wheel brings "${lastTitle}" into view (row ${got.lastTop}–${got.lastBottom}, panel ${got.frameTop}–${got.frameBottom})`)
-        assert.equal(got.pageGrew, false, `${where}: the page itself does not grow`)
-        if (layout.phone) assert.deepEqual(got.scrollers, ['sh-drawer-scroll'], `${where}: the drawer is the only scroller`)
-        else if (face === 'tasks') assert.ok(got.filterTop !== null && got.filterTop >= got.frameTop && got.filterTop < got.frameTop + 300, `${where}: the filter stays at the top while the tasks scroll (${got.filterTop})`)
-        await page.close()
-      }
+    for (const layout of [{ name: 'desktop' }, { name: 'macOS app', desktop: 'macos' }, { name: 'Windows app', desktop: 'windows' }, { name: 'phone', phone: true }]) {
+      const page = await browser.newPage({ viewport: layout.phone ? { width: 390, height: 700 } : { width: 1200, height: 600 } })
+      await page.goto(`${served.url}?${new URLSearchParams({ ...(layout.phone ? { phone: '1' } : {}), ...(layout.desktop ? { desktop: layout.desktop } : {}) })}`)
+      const frame = layout.phone ? '.sh-drawer' : '.sh-panel'
+      const where = layout.name
+      // Tasks load after the chats: wait for a card's task badge too.
+      await page.waitForFunction((frame) => [...document.querySelectorAll(`${frame} .sb-task-title`)].some((e) => e.textContent.startsWith('Fictional task')), frame, { timeout: 10000 })
+        .catch(() => assert.fail(`${where}: no card showed its linked task`))
+      await page.waitForFunction(([frame, lastTitle]) => [...document.querySelectorAll(`${frame} .vc-thread-title`)].some((e) => e.textContent === lastTitle), [frame, lastTitle], { timeout: 10000 })
+        .catch(async () => assert.fail(`${where}: the harness never drew "${lastTitle}" (drew ${JSON.stringify(await page.evaluate((frame) => [...document.querySelectorAll(`${frame} .vc-thread-title`)].map((e) => e.textContent).slice(-3), frame))})`))
+      const box = await page.locator(frame).boundingBox()
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.75)
+      for (let i = 0; i < 40; i++) await page.mouse.wheel(0, 300)
+      await page.waitForTimeout(150)
+      const got = await page.evaluate(([frame, lastTitle]) => {
+        const f = document.querySelector(frame).getBoundingClientRect()
+        const last = [...document.querySelectorAll(`${frame} .vc-thread-title`)].find((e) => e.textContent === lastTitle).getBoundingClientRect()
+        const scrollers = [...document.querySelectorAll(`${frame} *`)].filter((e) => e.scrollHeight > e.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(e).overflowY)).map((e) => e.className)
+        const scope = document.querySelector(`${frame} .sb-scope`)?.getBoundingClientRect()
+        const wide = [...document.querySelectorAll(`${frame} .sb-card`)].filter((c) => c.scrollWidth > c.clientWidth + 1 || c.getBoundingClientRect().right > f.right + 1).length
+        return { frameTop: f.top, frameBottom: f.bottom, lastTop: last.top, lastBottom: last.bottom, scrollers, scopeTop: scope ? scope.top : null, wide, pageGrew: document.documentElement.scrollHeight > innerHeight }
+      }, [frame, lastTitle])
+      assert.ok(got.lastTop >= got.frameTop && got.lastBottom <= got.frameBottom + 1, `${where}: the wheel brings "${lastTitle}" into view (row ${got.lastTop}–${got.lastBottom}, panel ${got.frameTop}–${got.frameBottom})`)
+      assert.equal(got.pageGrew, false, `${where}: the page itself does not grow`)
+      if (layout.phone) assert.deepEqual(got.scrollers, ['sh-drawer-scroll'], `${where}: the drawer is the only scroller`)
+      else assert.ok(got.scopeTop !== null && got.scopeTop >= got.frameTop && got.scopeTop < got.frameTop + 200, `${where}: the scope button stays at the top while the chats scroll (${got.scopeTop})`)
+      assert.equal(got.wide, 0, `${where}: every card fits the panel`)
+      await page.close()
+    }
+  } finally {
+    await browser.close()
+    served.close()
+  }
+})
+
+// Unsent drafts (chat/ChatsPanelDrafts.tsx) are a block at the top of the chats
+// panel's scrolling list, above the chats and under a rule, and a chat with unsent
+// words wears the pencil. With no drafts there is no block at all.
+test('draft rows sit at the top of the chats list, inside its scroller', { skip: !executablePath || !esbuild }, async () => {
+  const served = await serveHarness({ entry: 'chat/ChatsPanel.harness.tsx', styles: ['styles.css', 'shell.css', 'chat/chat.css', 'work/work.css'], api: panelApi })
+  const browser = await chromium.launch({ executablePath })
+  try {
+    for (const layout of [{ name: 'desktop' }, { name: 'phone', phone: true }]) {
+      const page = await browser.newPage({ viewport: layout.phone ? { width: 390, height: 700 } : { width: 1200, height: 600 } })
+      const frame = layout.phone ? '.sh-drawer' : '.sh-panel'
+      await page.goto(`${served.url}?drafts=1${layout.phone ? '&phone=1' : ''}`)
+      await page.waitForFunction((frame) => document.querySelectorAll(`${frame} .vc-thread-title`).length > 50, frame, { timeout: 10000 })
+      const got = await page.evaluate((frame) => {
+        const list = document.querySelector(`${frame} .vc-threads-list`)
+        const block = list?.querySelector(':scope > .vc-drafts')
+        const rows = [...(block?.querySelectorAll('.vc-draft') || [])]
+        const firstChat = list?.querySelector('.vc-thread')
+        const pencilOn = [...document.querySelectorAll(`${frame} .vc-thread`)].filter((r) => r.querySelector('.vc-thread-draft')).map((r) => r.querySelector('.vc-thread-title').textContent)
+        const style = block ? getComputedStyle(block) : null
+        const overflowing = rows.filter((r) => r.scrollWidth > r.clientWidth + 1 || r.getBoundingClientRect().right > list.getBoundingClientRect().right + 1).length
+        return {
+          first: list?.firstElementChild === block,
+          rows: rows.map((r) => r.querySelector('.vc-draft-text').textContent),
+          above: !!block && !!firstChat && block.getBoundingClientRect().bottom <= firstChat.getBoundingClientRect().top + 1,
+          rule: style ? parseFloat(style.borderBottomWidth) : 0,
+          pencilOn,
+          overflowing,
+        }
+      }, frame)
+      const where = `drafts, ${layout.name}`
+      assert.equal(got.first, true, `${where}: the block is the first thing in .vc-threads-list`)
+      assert.deepEqual(got.rows.sort(), ['1 attachment', 'Fictional draft about the week ahead'], `${where}: both new-chat drafts, not the chat's`)
+      assert.ok(got.above, `${where}: above the chats`)
+      assert.ok(got.rule >= 1, `${where}: a rule under the block`)
+      assert.deepEqual(got.pencilOn, ['Fictional chat 1'], `${where}: the chat with unsent words wears the pencil`)
+      assert.equal(got.overflowing, 0, `${where}: rows fit the panel`)
+      await page.close()
+      // A new page has its own storage, so none of those drafts.
+      const bare = await browser.newPage({ viewport: layout.phone ? { width: 390, height: 700 } : { width: 1200, height: 600 } })
+      await bare.goto(`${served.url}?x=1${layout.phone ? '&phone=1' : ''}`)
+      await bare.waitForFunction((frame) => document.querySelectorAll(`${frame} .vc-thread-title`).length > 50, frame, { timeout: 10000 })
+      assert.equal(await bare.locator(`${frame} .vc-drafts`).count(), 0, `${where}: no drafts, no block`)
+      await bare.close()
     }
   } finally {
     await browser.close()

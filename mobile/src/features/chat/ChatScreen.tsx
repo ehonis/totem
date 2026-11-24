@@ -18,8 +18,10 @@ import { isLoaded } from '../../lib/chat/history'
 import { createScrollMemory, restorePlan } from '../../lib/chat/scrollMemory'
 import { contextVersion, subscribeContext, takeContext } from '../../lib/chat/pendingContext'
 import { useViewing } from '../../lib/chat/onScreen'
+import { startQueueEdit, type QueueEdit } from '../../lib/chat/queueEdit'
 import { EFFORT_LABELS, visibleModels } from '../../lib/chat/models'
 import { isSnoozed, settledAt, shelfOf, wakeDescription, wokeAt } from '../../lib/chat/settle'
+import { attentionOf } from '../../lib/chat/attention'
 import type { ChatThread } from '../../lib/chat/types'
 import type { Attachment, ChatMessage, ChatMode, ModelSettings, QueuedMessage } from '../../lib/chat/types'
 import { useOwnerName } from '../../lib/useOwnerName'
@@ -37,6 +39,7 @@ import QueuedMessages from './QueuedMessages'
 import { UserMessage, AssistantMessage } from './Message'
 import { useQuestionFlow } from './QuestionsPanel'
 import HandoffBar from './HandoffBar'
+import TaskStrip from '../work/TaskStrip'
 import { pendingQuestions } from '../../lib/chat/questions'
 import { DECLINE_PLACEHOLDER, pendingApproval } from '../../lib/chat/approvals'
 import { ModelChip } from './ModelPicker'
@@ -54,6 +57,8 @@ import ProjectHome from './ProjectHome'
 import { threadMenu } from './threadMenu'
 import { markRead, unsettleThread, wakeThread } from './threadOps'
 import { useChatPresence } from './presence'
+import { useChatDrafts, fileNames } from './useChatDrafts'
+import { openedIsTemporary } from './appDrafts'
 import { TI, vc } from './ui'
 import { TotemRunButton } from '../totems/shared'
 import { PageGlow } from '../../ui/PageGlow'
@@ -78,12 +83,8 @@ const STARTERS: { text: string; fill?: boolean }[] = [
   { text: 'Remind me to ', fill: true },
 ]
 
-const DRAFTS_KEY = 'totem.chat.drafts'
 // Where he left each chat (lib/chat/scrollMemory.ts).
 const scrollMemory = createScrollMemory(localStorage)
-function readDrafts(): Record<string, string> {
-  try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}') || {} } catch { return {} }
-}
 
 export default function ChatScreen() {
   const glowOn = useSettings().chatGlow
@@ -103,15 +104,19 @@ export default function ChatScreen() {
   const autoSettleDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   // Opened from the Settled shelf, it stays settled while open; otherwise it keeps its place (settle.ts keptOpenId).
   const openedSettled = useChat((s) => s.openedSettled)
+  // A chat waiting on him is never settled on its own (settle.ts settledAt's `waiting`).
+  const handoffs = useChat((s) => s.handoffs)
   const scopeProject = useChat((s) => s.projects.find((p) => p.id === s.projectId))
+  // A new chat started from a task (a task's page): linked to it on its first send.
+  const draftTaskId = useChat((s) => (s.activeId ? null : s.draftTaskId))
   // Home's new chat offers the projects to start in, most recently used first.
   const allProjects = useChat((s) => s.projects)
   const startInProjects = useMemo(() => allProjects.filter((p) => !p.parentId).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6), [allProjects])
-  const [draftKind, setDraftKind] = useState<'regular' | 'temporary'>('regular')
+  // A temporary chat's draft opened from the drawer before this screen was first drawn starts it temporary.
+  const [draftKind, setDraftKind] = useState<'regular' | 'temporary'>(() => (openedIsTemporary() ? 'temporary' : 'regular'))
   // A model picked for a new chat, for the place (project, folder or Home) it was picked in.
   const [draftPick, setDraftPick] = useState<DraftPick | null>(null)
   const [draftContextOff, setDraftContextOff] = useState(false)
-  const [drafts, setDrafts] = useState<Record<string, string>>(readDrafts)
   const [atEnd, setAtEnd] = useState(true)
   const composer = useRef<ComposerHandle>(null)
   const frame = useRef<ChatFrameHandle>(null)
@@ -190,9 +195,22 @@ export default function ChatScreen() {
   const project = active ? threadProject(active) : scopeProject
   const parentProject = project?.parentId ? projectById(project.parentId) : undefined
   const contextOff = active ? !!active.projectContextOff : draftContextOff
-  const kind = project ? 'regular' : active?.kind || draftKind
+  // A task's chat is kept like any project's: never a temporary one, whatever the draft was set to.
+  const kind = project || (!active && draftTaskId) ? 'regular' : active?.kind || draftKind
   const temporary = kind === 'temporary'
-  const draftKey = activeId || (project ? `new:project:${project.id}` : `new:${kind}`)
+  // A queued message being edited in the composer, its words and files. The chat's
+  // draft waits in the store meanwhile and is back in the box once the edit ends.
+  const [queueEdit, setQueueEdit] = useState<QueueEdit | null>(null)
+  const editing = !!queueEdit && queueEdit.threadId === activeId
+  const onEditFiles = useCallback((files: Attachment[]) => setQueueEdit((e) => (e ? { ...e, files } : e)), [])
+  // What the composer shows: an open chat's own draft, or the new-chat draft its place shows now.
+  const {
+    draftKey, input, setInput, askFresh, startIn: moveTo, takeForSend, fromDraft, onDiscarded,
+    onAttachmentsChange, showEditFiles, missingFiles, removeMissing, keepEdit,
+  } = useChatDrafts({
+    activeId, active, scopeProject, draftTaskId, draftKind, setDraftKind, composer, focused, editing, onEditFiles,
+    onNewChat: () => newChat('regular', false),
+  })
   // A new chat starts on what was picked for it here, else its folder's or
   // project's model (threadChoice). A pick never follows him to another place,
   // and an open chat keeps its own model.
@@ -203,7 +221,6 @@ export default function ChatScreen() {
   const waiting = !!activeId && !busy && (active ? !isLoaded(active) : !loaded || !!page?.loading)
   const messages = waiting ? NO_MESSAGES : active?.messages || NO_MESSAGES
   const empty = !waiting && messages.length === 0
-  const input = drafts[draftKey] || ''
   // Compact idle threads → When you return (lib/chat/context.ts, web ChatView): an
   // idle Claude chat whose prompt cache went cold offers to compact before the
   // next send. Keep is per send.
@@ -256,46 +273,29 @@ export default function ChatScreen() {
     return () => { cancelled = true }
   }, [activeId, waiting]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const setInput = useCallback((v: string) => {
-    setDrafts((d) => {
-      const next = { ...d, [draftKey]: v }
-      if (!v) delete next[draftKey]
-      try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(next)) } catch {}
-      return next
-    })
-  }, [draftKey])
-
-  /** Open a project for a new chat, taking what's already typed along. */
+  /** Open a project for a new chat, taking the draft, words and files, along. */
   function startIn(id: string) {
     tap()
-    if (input.trim()) {
-      setDrafts((d) => {
-        const next = { ...d, [`new:project:${id}`]: d[`new:project:${id}`] || input }
-        delete next[draftKey]
-        try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(next)) } catch {}
-        return next
-      })
-    }
-    openProject(id)
+    moveTo(id)
   }
 
-  function newChat(k: 'regular' | 'temporary' = 'regular') {
-    impact()
+  function newChat(k: 'regular' | 'temporary' = 'regular', felt = true) {
+    if (felt) impact()
     setActive(null)
     setDraftKind(k)
     setDraftPick(null)
     setDraftContextOff(false)
+    askFresh()
   }
 
   // Every run may use the browser, computer use and the long task budget; the
   // agent decides, so the app sends neither a mode switch nor a browser flag.
   function onSend({ text, attachments, mode }: { text: string; attachments: Attachment[]; mode: ChatMode }) {
-    const id = send({ threadId: activeId, text, attachments, mode, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, compactFirst: compactTokens != null && !keepHistory })
+    const onRefused = takeForSend()
+    const id = send({ threadId: activeId, text, attachments, mode, kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, taskId: !active && draftTaskId ? draftTaskId : undefined, compactFirst: compactTokens != null && !keepHistory, onRefused })
     setKeepHistory(false)
-    setInput('')
     if (id !== activeId) {
       setDraftPick(null)
-      setDrafts((d) => { const n = { ...d }; delete n[draftKey]; return n })
       setActive(id)
     }
     setAtEnd(true)
@@ -320,41 +320,24 @@ export default function ChatScreen() {
   // Sending while a reply runs queues or steers, as Settings → Chat says; a long press the other.
   const followUp = useChat((s) => s.prefs.followUp ?? 'queue')
   const queue = active?.queue || []
-  // A queued message being edited in the composer, and the draft it displaced.
-  const [queueEdit, setQueueEdit] = useState<{ id: string; threadId: string; draftKey: string; stash: { text: string; attachments: Attachment[] } } | null>(null)
-  const putBack = (stash: { text: string; attachments: Attachment[] }) => {
-    setInput(stash.text)
-    composer.current?.setAttachments(stash.attachments)
-  }
   function editQueued(q: QueuedMessage) {
     if (!activeId) return
-    const stash = queueEdit ? queueEdit.stash : { text: input, attachments: composer.current?.takeAttachments() || [] }
-    setQueueEdit({ id: q.id, threadId: activeId, draftKey, stash })
-    setInput(q.text)
-    composer.current?.setAttachments(q.attachments || [])
+    setQueueEdit(startQueueEdit(q, activeId))
+    showEditFiles(q.attachments || [])
     requestAnimationFrame(() => composer.current?.focus())
   }
-  function cancelQueueEdit() {
-    if (!queueEdit) return
-    putBack(queueEdit.stash)
-    setQueueEdit(null)
-  }
-  // Leaving the chat drops the edit; his own draft goes back where it was.
-  useEffect(() => {
-    if (queueEdit && queueEdit.threadId !== activeId) {
-      setDrafts((d) => ({ ...d, [queueEdit.draftKey]: queueEdit.stash.text }))
-      setQueueEdit(null)
-    }
-  }, [activeId, queueEdit])
+  const setEditText = (text: string) => setQueueEdit((e) => (e ? { ...e, text } : e))
+  const cancelQueueEdit = () => setQueueEdit(null)
+  // Leaving the chat drops the edit.
+  useEffect(() => { if (queueEdit && queueEdit.threadId !== activeId) setQueueEdit(null) }, [activeId, queueEdit])
   // It started (or another device removed it) mid-edit: as T3 Code does, keep
-  // the edit as the draft if the box had none, otherwise put his draft back.
+  // the edit as the draft if the chat had none, otherwise his draft comes back.
   const editGone = !!queueEdit && queueEdit.threadId === activeId && !queue.some((q) => q.id === queueEdit.id)
   useEffect(() => {
     if (!editGone || !queueEdit) return
-    const { stash } = queueEdit
     setQueueEdit(null)
-    if (!stash.text.trim() && !stash.attachments.length) pushToast('Queued message is no longer queued. Your unsaved edit was kept in the composer.', 'info')
-    else { putBack(stash); pushToast('Queued message is no longer queued. Your unsaved edit was discarded.', 'error') }
+    if (keepEdit(queueEdit.threadId, queueEdit.restore(queueEdit.text), queueEdit.files)) pushToast('Queued message is no longer queued. Your unsaved edit was kept in the composer.', 'info')
+    else pushToast('Queued message is no longer queued. Your unsaved edit was discarded.', 'error')
   }, [editGone]) // eslint-disable-line react-hooks/exhaustive-deps
   // A tool call waiting on his approval (lib/chat/approvals.ts): as in T3 Code, a
   // message declines it and its words tell the agent why. Files go on as a steer.
@@ -365,21 +348,27 @@ export default function ChatScreen() {
     if (ok && p.attachments.length) await steer(activeId, '', p.attachments.map((a) => a.id))
     return ok
   }
-  const onQueue = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : activeId ? queueMessage(activeId, p.text, p.attachments) : false)
+  const onQueue = fromDraft((p) => (waitingApproval ? declineWith(p) : activeId ? queueMessage(activeId, p.text, p.attachments) : false))
   // A `/compact` running cannot take words mid-way: they wait behind it (T3).
   const compactingNow = busy && isCompactionTurn(messages[messages.length - 2])
-  const onSteerNow = (p: FollowUpPayload) => (waitingApproval ? declineWith(p) : !activeId ? false : compactingNow ? queueMessage(activeId, p.text, p.attachments) : steer(activeId, p.text, p.attachments.map((a) => a.id)))
+  const onSteerNow = fromDraft((p) => (waitingApproval ? declineWith(p) : !activeId ? false : compactingNow ? queueMessage(activeId, p.text, p.attachments) : steer(activeId, p.text, p.attachments.map((a) => a.id))))
   const saveQueueEdit = async (p: FollowUpPayload) => {
     if (!queueEdit) return false
-    const ok = await updateQueue(queueEdit.threadId, { action: 'edit', id: queueEdit.id, text: p.text, attachments: p.attachments.map((a) => a.id) })
-    if (ok) { putBack(queueEdit.stash); setQueueEdit(null) }
+    const ok = await updateQueue(queueEdit.threadId, { action: 'edit', id: queueEdit.id, text: queueEdit.restore(p.text), attachments: p.attachments.map((a) => a.id) })
+    if (ok) setQueueEdit(null)
     return ok
   }
+  const missingEl = missingFiles.length > 0 && !editing ? (
+    <View style={st.missing} accessibilityRole="alert">
+      <T size={13} color={vc.soft} style={{ flex: 1 }}>{fileNames(missingFiles)} {missingFiles.length === 1 ? 'is' : 'are'} no longer on the server and won’t be sent.</T>
+      <Press style={st.ghostBtn} onPress={() => { tap(); removeMissing() }}><T size={13} weight={500} color={vc.soft}>Remove</T></Press>
+    </View>
+  ) : null
   const queueEl = activeId && queue.length ? (
     <QueuedMessages
       queue={queue}
       canSteer={busy}
-      editingId={queueEdit?.threadId === activeId ? queueEdit.id : null}
+      editingId={editing ? queueEdit!.id : null}
       onEdit={editQueued}
       onCancelEdit={cancelQueueEdit}
       onSteer={(id) => { void updateQueue(activeId, { action: 'steer', id }) }}
@@ -423,7 +412,7 @@ export default function ChatScreen() {
         </View>
       )
     }
-    if (!settledAt(active, at, autoSettleDays, false, active.id !== openedSettled)) return null
+    if (!settledAt(active, at, autoSettleDays, false, active.id !== openedSettled, !!attentionOf(active, handoffs[active.id]))) return null
     return (
       <View style={st.parked}>
         <T size={13} color={vc.soft} style={{ flex: 1 }}>This chat is settled. Send a message to bring it back.</T>
@@ -492,8 +481,8 @@ export default function ChatScreen() {
             m={m}
             canEdit={!busy && !m.id.startsWith('local-')}
             onEdit={(text) => active && editAndResend(active.id, m.id, text)}
-            onRetry={m.unsent && active && !busy ? () => retryUnsent(active.id) : undefined}
-            onDiscard={m.unsent && active && !busy ? () => { const text = discardUnsent(active.id); if (text) setInput(text); requestAnimationFrame(() => composer.current?.focus()) } : undefined}
+            onRetry={m.unsent && active && !busy ? () => retryUnsent(active.id, () => onDiscarded(m.content, m.attachments, active.id)) : undefined}
+            onDiscard={m.unsent && active && !busy ? () => { const text = discardUnsent(active.id); if (text || m.attachments?.length) onDiscarded(text, m.attachments) } : undefined}
             flash={landed === m.id}
           />
         ) : (
@@ -568,7 +557,7 @@ export default function ChatScreen() {
   )
 
   const titleText = active && !empty ? threadTitle(active) : temporary ? 'Temporary chat' : 'New chat'
-  const titleMenu = active && !empty ? threadMenu(active, shelfOf(active, Date.now(), autoSettleDays, busy, active.id !== openedSettled), busy) : null
+  const titleMenu = active && !empty ? threadMenu(active, shelfOf(active, Date.now(), autoSettleDays, busy, active.id !== openedSettled, !!attentionOf(active, handoffs[active.id])), busy) : null
   const titleEl = (
     <View style={st.titleRow}>
       {active && !empty ? <ThreadIcon t={active} size={17} busy={retitling} /> : null}
@@ -645,7 +634,8 @@ export default function ChatScreen() {
           {temporary && active ? (
             <Press style={st.keep} onPress={() => { tap(); keepThread(active.id) }} accessibilityLabel="Keep this chat after midnight"><T size={13} weight={500}>Keep</T></Press>
           ) : null}
-          {(!active || empty) && !project ? (
+          {/* Not on a chat for a task: those are always kept, and the toggle would drop the task. */}
+          {(!active || empty) && !project && !draftTaskId ? (
             <Press
               style={[st.iconBtn, temporary && st.iconOn]}
               onPress={() => newChat(temporary ? 'regular' : 'temporary')}
@@ -687,7 +677,8 @@ export default function ChatScreen() {
             ) : null}
             <RunningChats />
             {questionFlow ? questionFlow.panel : <><HandoffBar threadId={activeId} />{parkedEl}{pendingHandoff}</>}
-            {empty && !project && !temporary && !questionFlow && startInProjects.length ? (
+            {questionFlow ? null : <TaskStrip thread={active} draftTaskId={draftTaskId} />}
+            {empty && !project && !temporary && !questionFlow && !draftTaskId && startInProjects.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={st.startIn} contentContainerStyle={st.startInRow}>
                 <T size={12.5} color={vc.soft} style={{ marginRight: 2 }}>Start in</T>
                 {startInProjects.map((p) => (
@@ -700,17 +691,18 @@ export default function ChatScreen() {
             ) : null}
             <Composer
               ref={composer}
-              value={questionFlow ? questionFlow.value : input}
-              onChange={questionFlow ? questionFlow.onChange : setInput}
+              value={questionFlow ? questionFlow.value : editing ? queueEdit!.text : input}
+              onChange={questionFlow ? questionFlow.onChange : editing ? setEditText : setInput}
+              onAttachmentsChange={onAttachmentsChange}
               answering={questionFlow?.answering}
               onSend={onSend}
               onStop={() => activeId && stop(activeId)}
               onSteer={onSteerNow}
               onQueue={empty ? undefined : onQueue}
               followUp={followUp}
-              queueEdit={queueEdit && queueEdit.threadId === activeId ? { onSave: saveQueueEdit } : undefined}
+              queueEdit={editing ? { onSave: saveQueueEdit } : undefined}
               onResume={!busy && active?.queueHeld && queue.length && activeId ? () => { void updateQueue(activeId, { action: 'resume' }) } : undefined}
-              above={queueEl}
+              above={missingEl || queueEl ? <>{missingEl}{queueEl}</> : null}
               onVoice={() => openVoice({ threadId: activeId, kind })}
               busy={busy}
               placeholder={waitingApproval ? DECLINE_PLACEHOLDER : temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
@@ -767,6 +759,7 @@ const st = StyleSheet.create({
   startIn: { marginHorizontal: -10, marginBottom: 8 },
   startInRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14 },
   startInChip: { flexDirection: 'row', alignItems: 'center', gap: 7, height: 30, paddingLeft: 10, paddingRight: 12, borderRadius: 999, borderWidth: 1, borderColor: vc.line },
+  missing: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6, paddingVertical: 4, paddingLeft: 14, paddingRight: 4, borderRadius: 12, backgroundColor: vc.raise },
   parked: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6, paddingVertical: 4, paddingLeft: 14, paddingRight: 4, borderRadius: 12, backgroundColor: vc.raise },
   ghostBtn: { height: 30, paddingHorizontal: 12, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
   jumpWrap: { position: 'absolute', top: -50, left: 0, right: 0, alignItems: 'center', zIndex: 3 },

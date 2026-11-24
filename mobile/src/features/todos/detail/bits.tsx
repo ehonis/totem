@@ -45,10 +45,16 @@ export function SavedMark({ pending, savedAt }: { pending: boolean; savedAt: num
   )
 }
 
-export interface UndoState { id: number; text: string; action?: { label: string; run: () => void } }
+export interface UndoState {
+  id: number
+  text: string
+  action?: { label: string; run: () => void }
+  /** Once the docked line has gone (timed out, replaced, dismissed or pressed), after its action has run. */
+  onGone?: () => void
+}
 
 /** Whether VoiceOver (or another screen reader) is running, kept up to date. */
-function useScreenReader() {
+export function useScreenReader() {
   const [on, setOn] = useState(false)
   useEffect(() => {
     let live = true

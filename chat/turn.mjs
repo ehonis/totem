@@ -15,11 +15,14 @@
 
 import { foldAgent } from './subagents.mjs'
 import { memoryEditable, memoryRef } from './memory-ref.mjs'
+import { TEXT_INLINE_LIMIT, inlineRefs, plainRefs } from './refs.mjs'
+
+/** The pictures one call's card keeps (a tool's screenshots, an image it read). Twin in web/src/chat/reduce.ts. */
+export const MAX_TOOL_IMAGES = 20
 
 // How the owner's lines are labelled when a transcript is replayed to an agent.
 const OWNER_LABEL = String(process.env.OWNER_NAME || '').trim() || 'Owner'
 
-const TEXT_INLINE_LIMIT = 60_000
 
 export function planHistory(thread, provider, userIndex) {
   const messages = thread?.messages || []
@@ -39,7 +42,7 @@ function describeAttachments(m) {
 // added mid-reply, what Totem said after. Null when there was no steer.
 function steeredText(m) {
   if (m?.role !== 'assistant' || !m.parts?.some((p) => p.type === 'steer')) return null
-  return m.parts.map((p) => (p.type === 'text' ? p.text : p.type === 'steer' ? `\n\n[${OWNER_LABEL}, mid-reply: ${[p.text, p.attachments?.length ? `(attached ${p.attachments.map((a) => a.name).join(', ')})` : ''].filter(Boolean).join(' ')}]\n\n` : '')).join('')
+  return m.parts.map((p) => (p.type === 'text' ? p.text : p.type === 'steer' ? `\n\n[${OWNER_LABEL}, mid-reply: ${[inlineRefs(p.text, p.attachments), p.attachments?.length ? `(attached ${p.attachments.map((a) => a.name).join(', ')})` : ''].filter(Boolean).join(' ')}]\n\n` : '')).join('')
 }
 
 const TOOL_LINES_PER_REPLY = 12
@@ -59,7 +62,7 @@ function toolLines(m) {
 }
 
 function transcriptLine(m, { tools }) {
-  const content = (steeredText(m) ?? m?.content ?? '').trim()
+  const content = (steeredText(m) ?? (m?.role === 'user' ? inlineRefs(m.content, m.attachments) : m?.content) ?? '').trim()
   const steps = tools && m?.role === 'assistant' ? toolLines(m) : ''
   if (!content && !m?.attachments?.length && !steps) return ''
   // A reply that failed carries no useful text; saying so beats replaying an
@@ -117,11 +120,11 @@ export function renderTranscript(messages, { budget = 16_000, heading = 'Convers
  * already read. Images are listed too even when the provider receives them
  * natively, so a model that wants to crop, OCR or forward one knows where it is.
  */
-export function attachmentBlock(files) {
+export function attachmentBlock(files, inlineBudget = TEXT_INLINE_LIMIT) {
   if (!files?.length) return ''
   const lines = []
   const pasted = []
-  let inlineLeft = TEXT_INLINE_LIMIT
+  let inlineLeft = inlineBudget
   for (const f of files) {
     const kb = Math.max(1, Math.round((f.size || 0) / 1024))
     if (f.kind === 'text' && typeof f.text === 'string' && f.text.length <= inlineLeft) {
@@ -248,6 +251,13 @@ export function applyEvent(msg, event, now = Date.now()) {
     case 'image':
       if (event.uploadId) msg.parts.push({ type: 'image', uploadId: event.uploadId, alt: event.alt || '' })
       break
+    case 'tool_image': {
+      // A picture a tool returned belongs to that call's card, folded with the
+      // steps; the reply shows one only when the agent puts it in its text.
+      const tool = event.uploadId && msg.parts.find((p) => p.type === 'tool' && p.id === event.toolId)
+      if (tool && (tool.images ||= []).length < MAX_TOOL_IMAGES) tool.images.push({ uploadId: event.uploadId })
+      break
+    }
     case 'file':
       if (event.file?.uploadId) msg.parts.push({ type: 'file', ...event.file })
       break
@@ -374,7 +384,7 @@ export function failureText(raw, providerName = 'The agent') {
 
 /** A short, human title from the first request, for when no AI title arrives. */
 export function fallbackTitle(text) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim()
+  const clean = plainRefs(text).replace(/\s+/g, ' ').trim()
   if (!clean) return ''
   if (clean.length <= 48) return clean
   const cut = clean.slice(0, 48)

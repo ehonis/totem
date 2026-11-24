@@ -1,5 +1,6 @@
 // The phone sidebar (Shell.tsx MobileDrawer): TOTEM with Search (the Search page);
-// then Overview, the Productivity tools and the chats in one scroll; and a foot
+// then Overview, Totems (a dot when a totem's report waits), the Productivity tools
+// and the chats (one list, T3 Code's way: features/chat/ChatsNav.tsx) in one scroll; and a foot
 // that stays put, with the chats' Snoozed and Settled buttons on the left and New
 // chat and Settings on the right, where the thumb is (the web drawer's foot has
 // Settings there too). New chat wears the corner button's light fill.
@@ -15,7 +16,7 @@
 // now lives in Settings. Search opens the Search page; the chat list has no search
 // box of its own.
 import React, { useEffect, useState } from 'react'
-import { LayoutAnimation, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import { Image as RNImage, LayoutAnimation, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { useReducedMotion } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, usePathname } from 'expo-router'
@@ -27,10 +28,13 @@ import { Hi, Squares2X2Icon, Cog6ToothIcon, ChevronRightIcon } from '../lib/icon
 import IconChevronDown from '@tabler/icons-react-native/dist/esm/icons/IconChevronDown.mjs'
 import IconChevronUp from '@tabler/icons-react-native/dist/esm/icons/IconChevronUp.mjs'
 import { useSettings } from '../lib/settings'
+import { useChat } from '../lib/chat/store'
 import { IconEdit, IconSearch } from '../lib/chat/icons'
 import { useInboxCount } from '../lib/useInboxCount'
 import { useUnreadNotifications } from '../features/notifications/useUnread'
 import ChatsNav, { DockedShelfButtons } from '../features/chat/ChatsNav'
+import ChatsNavDrafts from '../features/chat/ChatsNavDrafts'
+import { DockedUndo } from '../features/work/undoDock'
 import { keepDrawerClose } from './drawerGesture'
 import { newChat, openChat } from './nav'
 import { PRODUCTIVITY_APPS, TAB_ROUTES, TOOL_LABELS, productivityPage, productivityPath } from './routes'
@@ -67,6 +71,9 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
   const onOverview = path === '/' || path === ''
   const onSettings = path.startsWith('/settings')
   const onSearch = path.startsWith('/search')
+  const onTotems = path.startsWith(TAB_ROUTES.totems)
+  // A totem's report waiting in its chat: its chats are not in the list below, so the row says so.
+  const totemReports = useChat((s) => s.threads.some((t) => t.totemId && t.needsReply && !s.runs[t.id]))
   const onTool = productivityPage(path)
   const toolName = onToolName(path)
   // Highlighted on the hub, or folded away while one of its tools is open.
@@ -80,6 +87,7 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
   // A chat opened from the shelf sheet over the drawer closes the drawer too.
   useEffect(() => keepDrawerClose(() => navigation.closeDrawer()), [navigation])
   const go = (to: string) => { tap(); router.navigate(to as any); close() }
+  const openFromDrawer = (id: string | null) => { openChat(id); close() }
 
   return (
     <View style={[st.drawer, { paddingTop: insets.top }]}>
@@ -101,6 +109,12 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
             <Hi icon={Squares2X2Icon} size={20} color={onOverview ? colors.text : textAlpha(86)} />
             <T size={15.5} color={onOverview ? colors.text : textAlpha(86)} style={{ flex: 1 }}>Overview</T>
             <Badge count={inboxOpen} />
+          </Press>
+          <Press style={[st.item, onTotems && st.itemOn]} onPress={() => go(TAB_ROUTES.totems)} accessibilityRole="button" accessibilityLabel={totemReports ? 'Totems, a report is waiting' : 'Totems'}>
+            {/* The web rail's Totems mark, tinted like a glyph. */}
+            <RNImage source={require('../../assets/images/totems-icon.png')} style={{ width: 20, height: 20, tintColor: onTotems ? colors.text : textAlpha(86) }} />
+            <T size={15.5} color={onTotems ? colors.text : textAlpha(86)} style={{ flex: 1 }}>Totems</T>
+            {totemReports ? <View style={st.dot} /> : null}
           </Press>
         </View>
         <View style={st.tools}>
@@ -153,8 +167,14 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
             </View>
           )}
         </View>
-        <ChatsNav onOpenChat={(id) => { openChat(id); close() }} />
+        <ChatsNav
+          onOpenChat={openFromDrawer}
+          chatShowing={path.startsWith('/chat')}
+          drafts={(projectId, homeOnly) => <ChatsNavDrafts projectId={projectId} homeOnly={homeOnly} onOpen={close} />}
+        />
       </ScrollView>
+      {/* A discarded draft's Undo, kept in sight whatever the scroll. */}
+      <DockedUndo />
       <View style={[st.foot, { paddingBottom: Math.max(insets.bottom, 10) }]}>
         <View style={{ flex: 1 }}><DockedShelfButtons /></View>
         <Press haptic style={st.newChat} onPress={() => { newChat(); close() }} accessibilityRole="button" accessibilityLabel="New chat" hitSlop={4}>
@@ -185,6 +205,7 @@ const st = StyleSheet.create({
   newChat: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.text },
   item: { flexDirection: 'row', alignItems: 'center', gap: 13, minHeight: 44, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 10 },
   itemOn: { backgroundColor: colors.drawerOn },
+  dot: { width: 7, height: 7, borderRadius: 4, marginRight: 6, backgroundColor: colors.accent },
   tools: { paddingTop: 6, paddingBottom: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
   toolsHead: { flexDirection: 'row', alignItems: 'center' },
   toolsOpen: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 10 },

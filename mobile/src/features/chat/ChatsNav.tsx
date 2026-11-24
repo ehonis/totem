@@ -1,24 +1,35 @@
-// The chats in the phone drawer (web chat/ProjectNav.tsx's ChatsNav +
-// ThreadList.tsx): Home's projects and recents, or one project's header, folders
-// and chats. A list's parked chats (Snoozed and Settled, settle.ts) are not drawn
-// in the drawer, except the open one, under its shelf's name at the end of the
-// list: each shelf is a button with a count that opens ShelfSheet, so the drawer
-// has one scroll. Home's or the open project's buttons sit in the drawer's
-// foot beside Settings; a folder's sit under its chats. A row opens its chat on
-// tap; swiped left it shows Snooze, Settle and "…" (the full menu), and long-press
-// opens that menu too. A switch at the top turns it to Totems: group chats, then
-// every totem, the one that ran last on top, each opening its own chat.
-// Finding an older chat is the Search page's job; the list has no search box.
-import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+// The chats in the phone drawer (web chat/ChatsNav.tsx, T3 Code's sidebar): one list
+// of every chat in every project and folder, nothing filed away out of sight. Unsent
+// new-chat drafts first (ChatsNavDrafts.tsx, handed in), then Pinned, then everything
+// still in play (latest first), then Working, the chats answering right now. Each is
+// a card naming where it lives and what it is doing, with its linked task under the
+// title (features/work/TaskBadge.tsx) as T3 shows a thread's pull request. The rules
+// are lib/chat/sidebar.ts, the web's file byte for byte.
+//
+// Snoozed and Settled are not drawn in the drawer, except the open chat, under its
+// shelf's name at the end: each shelf is a button with a count in the drawer's foot
+// that opens ShelfSheet, so the drawer has one scroll. A row opens its chat on tap;
+// swiped left it shows Snooze, Settle and "…" (the full menu), and long-press opens
+// that menu too. A chat with unsent words wears an amber pencil.
+//
+// The scope button at the top narrows the list to Home or one project and its folders,
+// the way T3's project filter does (chatsScope.ts); ↗ opens that project's page, and a
+// dot says when a chat the scope hides is waiting on him. Totems' own chats are not
+// here: Totems is a page of its own in the drawer's nav. Finding an older chat is the
+// Search page's job; the list has no search box.
+import React, { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { MenuView } from '@react-native-menu/menu'
 import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated'
-import { useChat, openProject, createProject, foldersOf, threadTitle } from '../../lib/chat/store'
-import { attentionOf, attentionBadge, attentionTitle } from '../../lib/chat/attention'
+import { useDrawerStatus } from 'expo-router/drawer'
+import { useChat, openProject, createProject, threadTitle } from '../../lib/chat/store'
+import { attentionOf, attentionBadge, attentionTitle, type Attention } from '../../lib/chat/attention'
 import {
-  shelve, wokeAt, countdown, ago, settledAt, isSnoozed, snoozePresets, offersSettle, keptOpenId, type Shelf,
+  wokeAt, countdown, ago, activeAt, settledAt, snoozePresets, offersSettle, keptOpenId, type Shelf,
 } from '../../lib/chat/settle'
+import { sidebarLists, placeLabel, scopeLabel, inScope, type SidebarScope } from '../../lib/chat/sidebar'
+import { folderOrder } from '../../lib/work/groups'
 import type { ChatThread, Project } from '../../lib/chat/types'
 import { pushError } from '../../lib/toast'
 import { colors, textAlpha } from '../../theme'
@@ -26,41 +37,29 @@ import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
 import { impact, tap } from '../../ui/haptics'
 import { prompt, showActionTree } from '../../ui/menu'
-import { groupThreads, listThreads, useNow } from './threadOps'
+import { useNow } from './threadOps'
 import { threadMenu } from './threadMenu'
 import { ThreadIcon, ProjectIcon } from './ThreadIcon'
 import { TI } from './ui'
 import Spark from './Spark'
-import { totemNavRows, type TotemNavRow } from '../../lib/chat/totemNav'
-import { TotemIcon, ensureTotemChat, loadJobs, useJobs } from '../totems/shared'
 import {
-  IconDots, IconFolderPlus, IconArrowLeft, IconChevronDown, IconChevronRight, IconPlus,
-  IconUsersGroup, IconLayoutList, IconClock, IconCheck, IconArrowBackUp, IconAlarm,
+  IconDots, IconChevronDown, IconLayoutList, IconClock, IconCheck, IconArrowBackUp, IconAlarm, IconAlarmOff,
+  IconPencil, IconHome, IconPinned, IconCircleCheck, IconX, IconArrowUpRight,
 } from './icons'
+import { useHasDraft } from './appDrafts'
 import { router } from 'expo-router'
-import { navigateTo } from '../../shell/nav'
 import { drawerPan } from '../../shell/drawerGesture'
+import TaskBadge from '../work/TaskBadge'
+import { loadBoard, loadSheet } from '../todos/store'
+import { setSidebarScope, useSidebarScope } from './chatsScope'
 
-const FOLDED_KEY = 'totem.projects.folded'
-const OPEN_FOLDERS_KEY = 'totem.projects.openFolders'
 const muted80 = 'rgba(138, 145, 163, 0.8)'
+// The web card's status colours (chat.css .sb-working, .sb-done, .sb-needs).
+const WORKING = '#8ec5ff'
+const DONE = '#6fdd8b'
+const ASKING = '#a5b4fc'
 
-const readSet = (key: string) => { try { return new Set<string>(JSON.parse(localStorage.getItem(key) || '[]')) } catch { return new Set<string>() } }
-
-/** Some chat in these projects is waiting on the owner. A snoozed chat is out of the way until it wakes. */
-function useWaiting(ids: string[]) {
-  const key = ids.join(',')
-  return useChat((s) => s.threads.some((t) => t.needsReply && !s.runs[t.id] && !isSnoozed(t as ChatThread, Date.now()) && !!t.projectId && key.split(',').includes(t.projectId)))
-}
-
-/** Ask for a name natively, then make the project or folder. */
-async function nameAndCreate(title: string, body: (name: string) => Promise<unknown>) {
-  const name = await prompt(title, { placeholder: 'Name' })
-  if (!name) return
-  try { await body(name) } catch (e: any) { pushError(`Couldn't create it: ${e.message}`) }
-}
-
-function LiveDot() {
+export function LiveDot() {
   const v = useSharedValue(1)
   useEffect(() => { v.value = withRepeat(withTiming(0.5, { duration: 700 }), -1, true) }, [v])
   const style = useAnimatedStyle(() => ({ opacity: v.value, transform: [{ scale: 0.7 + 0.3 * v.value }] }))
@@ -69,63 +68,135 @@ function LiveDot() {
 
 // --- one chat --------------------------------------------------------------------------
 
-export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: { t: ChatThread; active: boolean; live: boolean; onOpen: (id: string) => void; shelf?: Shelf; now: number }) {
+/** A card's status, in words, T3's way: what it waits on him for, Working, Woke, Done (finished, unread), else how long since it moved. */
+function CardStatus({ t, needs, live, woke, unread, settle, now }: { t: ChatThread; needs: Attention | null; live: boolean; woke: boolean; unread: boolean; settle: boolean; now: number }) {
+  if (needs) {
+    const color = needs.kind === 'questions' || needs.kind === 'browser' ? ASKING : colors.amber
+    return <T size={11.5} weight={600} color={color} numberOfLines={1} style={st.status} accessibilityLabel={attentionTitle(needs)}>{attentionBadge(needs)}</T>
+  }
+  if (live) return <View style={st.statusRow} accessibilityLabel="Working"><Spark size={11} /><T size={11.5} weight={500} color={WORKING}>Working</T></View>
+  if (woke) return <View style={st.statusRow}><TI icon={IconAlarmOff} size={12} color={colors.accent} /><T size={11.5} weight={500} color={colors.accent}>Woke</T></View>
+  if (unread && !settle) return <View style={st.statusRow} accessibilityLabel="Done, waiting for you to read it"><TI icon={IconCircleCheck} size={12} color={DONE} /><T size={11.5} weight={500} color={DONE}>Done</T></View>
+  return <T size={11.5} color={muted80} style={st.status}>{ago(activeAt(t, now), now)}</T>
+}
+
+export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now, beforeDiscard, card = false, place }: {
+  t: ChatThread
+  active: boolean
+  live: boolean
+  onOpen: (id: string) => void
+  shelf?: Shelf
+  now: number
+  /** A sheet over the drawer closes first, so the discard's Undo line in the drawer's foot is in sight. */
+  beforeDiscard?: () => void
+  /** T3 Code's card (the drawer's live list): where the chat lives and what it is doing over the title, its task under it. */
+  card?: boolean
+  /** The chat's project or folder for a card's first line; a null project is Home. */
+  place?: { project: Project | null; label: string }
+}) {
   const retitling = useChat((s) => !!s.retitling[t.id])
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
   const title = threadTitle(t)
   const woke = shelf === 'active' && !!wokeAt(t, now) && !active
-  const waiting = (t.needsReply && !live) || woke
+  const unread = !!t.needsReply && !live
+  const waiting = unread || woke
   // What the chat waits on him for outranks everything else on the row, as in T3 (attention.ts).
   const handoff = useChat((s) => s.handoffs[t.id])
   const needs = attentionOf(t, handoff)
-  const menu = threadMenu(t, shelf, live)
+  // Words or files left unsent in it; the chat on screen shows its own in the composer.
+  const unsent = useHasDraft(t.id) && !active
+  const menu = threadMenu(t, shelf, live, unsent)
+  const run = (id: string) => { if (id === 'discard-draft') beforeDiscard?.(); menu.run(id) }
   const swipe = useRef<SwipeableMethods>(null)
   // Every swipe action is one of the menu's own ids, so both run the same code.
-  const act = (id: string) => { swipe.current?.close(); tap(); menu.run(id) }
-  const row = (
+  const act = (id: string) => { swipe.current?.close(); tap(); run(id) }
+  const settle = offersSettle(t, shelf, live)
+  // A card already read, and asking nothing, steps back so the ones that want him stand out.
+  const receded = card && !active && !waiting && !needs
+  const pen = unsent ? <View accessible accessibilityLabel="Unsent draft"><TI icon={IconPencil} size={13} color={colors.amber} /></View> : null
+  const titleText = (
+    <T
+      size={15}
+      weight={receded ? 400 : waiting || active || needs ? 600 : 400}
+      numberOfLines={1}
+      color={receded ? textAlpha(74) : active || waiting || needs ? colors.text : textAlpha(86)}
+      style={{ flex: 1, opacity: retitling ? 0.55 : 1 }}
+    >
+      {title}
+    </T>
+  )
+  const settleChip = settle ? (
+    <Press
+      style={st.doneBtn}
+      hitSlop={8}
+      onPress={() => act('settle')}
+      accessibilityRole="button"
+      accessibilityLabel={`Settle ${title}`}
+      accessibilityHint="Done; it also settles by itself once you've read it"
+    >
+      <TI icon={IconCheck} size={13} color={colors.green} stroke={2.2} />
+      <T size={11.5} weight={600} color={colors.green}>Settle</T>
+    </Press>
+  ) : null
+  const press = {
+    onPress: () => { tap(); onOpen(t.id) },
+    onLongPress: () => { impact(); showActionTree(menu.actions, (id) => { tap(); run(id) }, title) },
+    accessibilityRole: 'button' as const,
+    accessibilityLabel: `${title}${card || place?.label ? `, ${place?.label || 'Home'}` : ''}${unsent ? ', unsent draft' : ''}`,
+    // VoiceOver cannot swipe: the draft's discard is an action on the row.
+    accessibilityActions: unsent ? [{ name: 'discard-draft', label: 'Discard draft' }] : undefined,
+    onAccessibilityAction: unsent ? (e: { nativeEvent: { actionName: string } }) => { if (e.nativeEvent.actionName === 'discard-draft') act('discard-draft') } : undefined,
+    accessibilityState: { selected: active },
+    accessibilityHint: 'Swipe left or long-press for options',
+  }
+  const row = card ? (
+    <View style={[st.card, active ? st.threadOn : st.threadOff]}>
+      {active ? <View style={st.activeBar} /> : null}
+      <Press style={st.cardMain} {...press}>
+        <View style={st.line}>
+          {place?.project ? <ProjectIcon p={place.project} size={12} color={muted80} /> : <TI icon={IconHome} size={12} color={muted80} />}
+          <T size={11.5} color={muted80} numberOfLines={1} style={{ flex: 1 }}>{place?.label || 'Home'}</T>
+          {t.pinned ? <TI icon={IconPinned} size={11} color={muted80} /> : null}
+          <CardStatus t={t} needs={needs} live={live} woke={woke} unread={unread} settle={settle} now={now} />
+        </View>
+        <View style={st.line}>
+          <ThreadIcon t={t} size={15} busy={retitling} />
+          {titleText}
+          {pen}
+        </View>
+      </Press>
+      {/* The chat's task, as T3 Code shows a thread's pull request: under the title, a tap to its page. */}
+      {t.taskId || settleChip ? (
+        // Only its badge and chip take touches; the rest of the strip it overlaps belongs to the chat.
+        <View style={st.meta} pointerEvents="box-none">
+          {t.taskId ? <TaskBadge taskRef={t.taskId} /> : <View style={{ flex: 1 }} />}
+          {settleChip}
+        </View>
+      ) : null}
+    </View>
+  ) : (
     <View style={[st.thread, active ? st.threadOn : st.threadOff]}>
       {/* The open chat: a fill and an accent bar, so it is the first row the eye finds. */}
       {active ? <View style={st.activeBar} /> : null}
-      <Press
-        style={st.threadMain}
-        onPress={() => { tap(); onOpen(t.id) }}
-        onLongPress={() => { impact(); showActionTree(menu.actions, (id) => { tap(); menu.run(id) }, title) }}
-        accessibilityRole="button"
-        accessibilityLabel={title}
-        accessibilityState={{ selected: active }}
-        accessibilityHint="Swipe left or long-press for options"
-      >
+      <Press style={st.threadMain} {...press}>
         <ThreadIcon t={t} size={16} busy={retitling} />
-        <T
-          size={15}
-          weight={waiting || active ? 600 : 400}
-          numberOfLines={1}
-          color={active || waiting ? colors.text : textAlpha(86)}
-          style={{ flex: 1, opacity: retitling ? 0.55 : 1 }}
-        >
-          {title}
-        </T>
+        {place?.label ? (
+          // On a shelf every project's chats are mixed: where this one lives, dim, under its title.
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <T size={15} numberOfLines={1} color={active || waiting || needs ? colors.text : textAlpha(86)} weight={waiting || active || needs ? 600 : 400} style={{ opacity: retitling ? 0.55 : 1 }}>{title}</T>
+            <T size={12} numberOfLines={1} color={textAlpha(45)}>{place.label}</T>
+          </View>
+        ) : titleText}
+        {pen}
         {needs ? <View style={st.woke} accessibilityLabel={attentionTitle(needs)}><T size={11} weight={600} color={colors.accent}>{attentionBadge(needs)}</T></View>
           : live ? <LiveDot />
           : woke ? <View style={st.woke}><T size={11} weight={600} color={colors.accent}>Woke</T></View>
-            : t.needsReply && !offersSettle(t, shelf, live) ? <View style={st.dot} accessibilityLabel="Waiting on you" /> : null}
-        {shelf === 'snoozed' ? <T size={11.5} color={colors.accent} style={st.meta}>{countdown(t.snoozedUntil!, now)}</T> : null}
-        {shelf === 'settled' ? <T size={11.5} color={muted80} style={st.meta}>{ago(settledAt(t, now, autoDays), now)}</T> : null}
+            : t.needsReply && !settle ? <View style={st.dot} accessibilityLabel="Waiting on you" /> : null}
+        {shelf === 'snoozed' ? <T size={11.5} color={colors.accent} style={st.metaTime}>{countdown(t.snoozedUntil!, now)}</T> : null}
+        {shelf === 'settled' ? <T size={11.5} color={muted80} style={st.metaTime}>{ago(settledAt(t, now, autoDays), now)}</T> : null}
       </Press>
-      {/* The agent called the request finished (mark_chat_done): Settle without a swipe. */}
-      {offersSettle(t, shelf, live) ? (
-        <Press
-          style={st.doneBtn}
-          hitSlop={8}
-          onPress={() => act('settle')}
-          accessibilityRole="button"
-          accessibilityLabel={`Settle ${title}`}
-          accessibilityHint="Marked done; it also settles by itself once you've read it"
-        >
-          <TI icon={IconCheck} size={13} color={colors.green} stroke={2.2} />
-          <T size={11.5} weight={600} color={colors.green}>Settle</T>
-        </Press>
-      ) : null}
+      {/* Marked done, or its task finished: Settle without a swipe. */}
+      {settleChip}
     </View>
   )
   return (
@@ -142,7 +213,7 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: {
       renderRightActions={() => (
         <View style={st.swipe}>
           {shelf === 'snoozed' ? (
-            <SwipeBtn label="Wake" icon={IconAlarm} fill={colors.accent} ink={colors.white} onPress={() => act('wake')} />
+            <SwipeBtn label="Wake" icon={IconAlarm} fill={colors.accent} ink={colors.white} onPress={() => act('wake')} style={card && st.swipeTall} />
           ) : (
             <MenuView
               title="Snooze until"
@@ -153,17 +224,18 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: {
               themeVariant="dark"
               onOpenMenu={tap}
               onPressAction={({ nativeEvent }) => act(nativeEvent.event)}
+              style={card ? st.menuTall : undefined}
             >
-              <SwipeBtn label="Snooze" icon={IconClock} fill={colors.amber} ink="#1d1606" />
+              <SwipeBtn label="Snooze" icon={IconClock} fill={colors.amber} ink="#1d1606" style={card && st.swipeFill} />
             </MenuView>
           )}
           {shelf === 'settled' ? (
-            <SwipeBtn label="Un-settle" icon={IconArrowBackUp} fill={colors.bg3} ink={colors.text} onPress={() => act('unsettle')} />
+            <SwipeBtn label="Un-settle" icon={IconArrowBackUp} fill={colors.bg3} ink={colors.text} onPress={() => act('unsettle')} style={card && st.swipeTall} />
           ) : (
-            <SwipeBtn label="Settle" icon={IconCheck} fill={colors.toastSuccess} ink={colors.white} disabled={live} onPress={() => act('settle')} />
+            <SwipeBtn label="Settle" icon={IconCheck} fill={colors.toastSuccess} ink={colors.white} disabled={live} onPress={() => act('settle')} style={card && st.swipeTall} />
           )}
-          <MenuView actions={menu.actions} themeVariant="dark" onOpenMenu={tap} onPressAction={({ nativeEvent }) => act(nativeEvent.event)}>
-            <SwipeBtn label="More" icon={IconDots} fill={colors.drawerOn} ink={colors.text} />
+          <MenuView actions={menu.actions} themeVariant="dark" onOpenMenu={tap} onPressAction={({ nativeEvent }) => act(nativeEvent.event)} style={card ? st.menuTall : undefined}>
+            <SwipeBtn label="More" icon={IconDots} fill={colors.drawerOn} ink={colors.text} style={card && st.swipeFill} />
           </MenuView>
         </View>
       )}
@@ -173,9 +245,9 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now }: {
   )
 }
 
-/** One action behind a swiped chat row. Without onPress it is the face of a MenuView. */
-function SwipeBtn({ label, icon, fill, ink, disabled, onPress }: {
-  label: string; icon: typeof IconDots; fill: string; ink: string; disabled?: boolean; onPress?: () => void
+/** One action behind a swiped row (a chat's, a draft's). Without onPress it is the face of a MenuView. */
+export function SwipeBtn({ label, icon, fill, ink, disabled, onPress, style }: {
+  label: string; icon: typeof IconDots; fill: string; ink: string; disabled?: boolean; onPress?: () => void; style?: object | false
 }) {
   const face = (
     <>
@@ -183,9 +255,9 @@ function SwipeBtn({ label, icon, fill, ink, disabled, onPress }: {
       <T size={11} weight={600} color={ink}>{label}</T>
     </>
   )
-  if (!onPress) return <View style={[st.swipeBtn, { backgroundColor: fill }]} accessible accessibilityRole="button" accessibilityLabel={label}>{face}</View>
+  if (!onPress) return <View style={[st.swipeBtn, { backgroundColor: fill }, style]} accessible accessibilityRole="button" accessibilityLabel={label}>{face}</View>
   return (
-    <Press style={[st.swipeBtn, { backgroundColor: fill }, disabled && { opacity: 0.4 }]} disabled={disabled} onPress={onPress} accessibilityLabel={disabled ? `${label} once the reply finishes` : label}>
+    <Press style={[st.swipeBtn, { backgroundColor: fill }, disabled && { opacity: 0.4 }, style]} disabled={disabled} onPress={onPress} accessibilityLabel={disabled ? `${label} once the reply finishes` : label}>
       {face}
     </Press>
   )
@@ -195,20 +267,24 @@ function SwipeBtn({ label, icon, fill, ink, disabled, onPress }: {
 
 type ShelfKind = 'snoozed' | 'settled'
 
-/** Open a list's parked chats in the shelf sheet (ShelfSheet.tsx). */
-export function openShelf(kind: ShelfKind, scope: string) {
+/**
+ * Open the list's parked chats in the shelf sheet (ShelfSheet.tsx), for the scope the list shows.
+ * `showing`: the chat screen was on screen under the drawer, so the open chat keeps its place
+ * there too (the sheet's own route can't tell).
+ */
+export function openShelf(kind: ShelfKind, scope: string, showing = true) {
   tap()
-  router.push({ pathname: '/chat/shelf', params: { kind, scope } })
+  router.push({ pathname: '/chat/shelf', params: { kind, scope, showing: showing ? '1' : '0' } })
 }
 
 /** One shelf as a button: what it holds and how many. */
-function ShelfBtn({ kind, count, scope }: { kind: ShelfKind; count: number; scope: string }) {
+function ShelfBtn({ kind, count, scope, showing }: { kind: ShelfKind; count: number; scope: string; showing: boolean }) {
   const label = kind === 'snoozed' ? 'Snoozed' : 'Settled'
   return (
     <Press
       style={st.shelfBtn}
       hitSlop={4}
-      onPress={() => openShelf(kind, scope)}
+      onPress={() => openShelf(kind, scope, showing)}
       accessibilityRole="button"
       accessibilityLabel={`${label}, ${count} ${count === 1 ? 'chat' : 'chats'}`}
       accessibilityHint="Opens the list"
@@ -219,20 +295,20 @@ function ShelfBtn({ kind, count, scope }: { kind: ShelfKind; count: number; scop
   )
 }
 
-type ShelfCounts = { scope: string; snoozed: number; settled: number }
+type ShelfCounts = { scope: string; snoozed: number; settled: number; showing: boolean }
 
-export function ShelfButtons({ scope, snoozed, settled, style }: ShelfCounts & { style?: object }) {
+export function ShelfButtons({ scope, snoozed, settled, showing, style }: ShelfCounts & { style?: object }) {
   if (!snoozed && !settled) return null
   return (
     <View style={[st.shelfBtns, style]}>
-      {snoozed ? <ShelfBtn kind="snoozed" count={snoozed} scope={scope} /> : null}
-      {settled ? <ShelfBtn kind="settled" count={settled} scope={scope} /> : null}
+      {snoozed ? <ShelfBtn kind="snoozed" count={snoozed} scope={scope} showing={showing} /> : null}
+      {settled ? <ShelfBtn kind="settled" count={settled} scope={scope} showing={showing} /> : null}
     </View>
   )
 }
 
-// The drawer's main list publishes its shelf counts here; DockedShelfButtons,
-// mounted in the drawer's foot outside the scroll, draws them beside Settings.
+// The drawer's list publishes its shelf counts here; DockedShelfButtons, mounted
+// in the drawer's foot outside the scroll, draws them beside Settings.
 let dock: ShelfCounts | null = null
 const dockSubs = new Set<() => void>()
 function setDock(next: ShelfCounts | null) {
@@ -241,368 +317,191 @@ function setDock(next: ShelfCounts | null) {
 }
 const subscribeDock = (fn: () => void) => { dockSubs.add(fn); return () => { dockSubs.delete(fn) } }
 
-/** The main list's Snoozed and Settled buttons, for the drawer's foot. */
+/** The list's Snoozed and Settled buttons, for the drawer's foot. */
 export function DockedShelfButtons() {
   const d = useSyncExternalStore(subscribeDock, () => dock, () => dock)
   return d ? <ShelfButtons {...d} /> : null
 }
 
+// --- the scope ----------------------------------------------------------------------------
+
+const ALL = 'scope:all'
+const HOME = 'scope:home'
+
+/** The scope button: All chats, Home, or one project or folder from a native menu, with "New project…". */
+function ScopeBar({ value, projects, outside, onOpenPage }: { value: SidebarScope; projects: Project[]; outside: boolean; onOpenPage: () => void }) {
+  const project = value !== 'all' && value !== 'home' ? projects.find((p) => p.id === value) : undefined
+  const on = (key: string) => ((key === ALL && value === 'all') || (key === HOME && value === 'home') || key === `scope:${value}` ? 'on' as const : 'off' as const)
+  const actions = useMemo(() => [
+    { id: ALL, title: 'All chats', image: 'list.bullet', state: on(ALL) },
+    { id: HOME, title: 'Home', image: 'house', state: on(HOME) },
+    ...folderOrder(projects).map((p) => {
+      const parent = p.parentId ? projects.find((x) => x.id === p.parentId) : undefined
+      // One level only: a native menu drops anything nested deeper, so folders are indented rows.
+      return { id: `scope:${p.id}`, title: parent ? `   ${p.name}` : p.name, image: parent ? 'folder' : undefined, state: on(`scope:${p.id}`) }
+    }),
+    { id: 'new-project', title: 'New project…', image: 'folder.badge.plus' },
+  ], [projects, value]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pick = async (id: string) => {
+    tap()
+    if (id === 'new-project') {
+      const name = await prompt('New project', { placeholder: 'Name' })
+      if (!name) return
+      try { const p = await createProject({ name }); setSidebarScope(p.id) } catch (e: any) { pushError(`Couldn't create it: ${e.message}`) }
+      return
+    }
+    setSidebarScope(id === ALL ? 'all' : id === HOME ? 'home' : id.slice('scope:'.length))
+  }
+  const name = scopeLabel(value, projects)
+  return (
+    <View style={st.scope}>
+      <MenuView title="Show chats in" actions={actions} themeVariant="dark" onOpenMenu={tap} onPressAction={({ nativeEvent }) => { void pick(nativeEvent.event) }} style={{ flexShrink: 1 }}>
+        <View
+          style={[st.scopeBtn, value !== 'all' && st.scopeOn]}
+          accessible
+          accessibilityRole="button"
+          accessibilityLabel={`Showing ${name}${outside ? '. A chat outside this view is waiting on you' : ''}`}
+          accessibilityHint="Shows every chat, Home's, or one project's"
+        >
+          {project ? <ProjectIcon p={project} size={15} /> : <TI icon={value === 'home' ? IconHome : IconLayoutList} size={15} color={value === 'all' ? colors.muted : colors.text} />}
+          <T size={14} weight={500} numberOfLines={1} color={value === 'all' ? textAlpha(72) : colors.text} style={{ flexShrink: 1 }}>{name}</T>
+          {/* Something the scope hides is waiting on him: say so, so nothing hides behind the filter. */}
+          {outside ? <View style={st.dot} /> : null}
+          <TI icon={IconChevronDown} size={13} color={colors.muted} />
+        </View>
+      </MenuView>
+      <View style={{ flex: 1 }} />
+      {project ? (
+        <Press style={st.smBtn} onPress={() => { tap(); openProject(project.id); onOpenPage() }} accessibilityRole="button" accessibilityLabel={`Open ${project.name}: files, instructions and memory`}>
+          <TI icon={IconArrowUpRight} size={17} color={colors.muted} />
+        </Press>
+      ) : null}
+      {value !== 'all' ? (
+        <Press style={st.smBtn} onPress={() => { tap(); setSidebarScope('all') }} accessibilityRole="button" accessibilityLabel="Show all chats">
+          <TI icon={IconX} size={16} color={colors.muted} />
+        </Press>
+      ) : null}
+    </View>
+  )
+}
+
+// --- the list ----------------------------------------------------------------------------------
+
 /**
- * One list's in-play chats (drawn by the caller); the open chat if it is parked,
- * under its shelf's name, so the drawer always shows where he is; then the
- * parked ones as shelf buttons: in the drawer's foot when docked, else under the list.
+ * The drawer's chats. `onOpenChat(id)` opens a chat (and closes the drawer);
+ * `drafts` draws the unsent drafts for Home's list (null) or a project's.
  */
-function ShelvedChats({ threads, scope, activeId, onOpen, docked = false, children }: {
-  threads: ChatThread[]
-  scope: string
-  activeId: string | null
-  onOpen: (id: string) => void
-  docked?: boolean
-  children: (active: ChatThread[], now: number) => React.ReactNode
+export default function ChatsNav({ onOpenChat, drafts, chatShowing = true }: {
+  /** Open a chat, or with null the page of the project the store is scoped to; closes the drawer. */
+  onOpenChat: (id: string | null) => void
+  /** `homeOnly`: the list is scoped to Home, so drafts headed for a project are left out. */
+  drafts?: (projectId: string | null, homeOnly: boolean) => React.ReactNode
+  /** The chat screen is showing, so the open chat is in sight and keeps its place (settle.ts keptOpenId). */
+  chatShowing?: boolean
 }) {
+  const threads = useChat((s) => s.threads) as ChatThread[]
+  const projects = useChat((s) => s.projects)
   const runs = useChat((s) => s.runs)
+  const handoffs = useChat((s) => s.handoffs)
+  const activeId = useChat((s) => s.activeId)
+  const openedSettled = useChat((s) => s.openedSettled)
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
+  const loaded = useChat((s) => s.loaded)
+  const scope = useSidebarScope(projects)
   const now = useNow(threads)
-  const keep = keptOpenId(activeId, useChat((s) => s.openedSettled))
-  const { active, snoozed, settled } = useMemo(() => shelve(threads, now, autoDays, (id) => !!runs[id], keep), [threads, now, autoDays, runs, keep])
+  const lists = useMemo(() => sidebarLists(threads, {
+    now, autoDays, live: (id) => !!runs[id], needsYou: (t) => !!attentionOf(t, handoffs[t.id]),
+    openId: chatShowing ? keptOpenId(activeId, openedSettled) : null, activeId, scope, projects,
+  }), [threads, now, autoDays, runs, handoffs, activeId, openedSettled, chatShowing, scope, projects])
+  const { pinned, inbox, working, snoozed, settled } = lists
+  // Waiting on him somewhere the scope hides (finished and unread, or asking).
+  const outside = useMemo(() => scope !== 'all' && threads.some((t) => !t.totemId && !inScope(t, scope, projects) && ((t.needsReply && !runs[t.id]) || !!attentionOf(t, handoffs[t.id]))), [threads, scope, projects, runs, handoffs])
+
+  // The foot's shelf buttons follow this list.
+  useEffect(() => { setDock({ scope, snoozed: snoozed.length, settled: settled.length, showing: chatShowing }) }, [scope, snoozed.length, settled.length, chatShowing])
+  useEffect(() => () => setDock(null), [])
+
+  // The cards' tasks are read each time the drawer opens: it stays mounted, so a timer here would poll while it is closed.
+  const status = useDrawerStatus()
+  const namesTask = useMemo(() => [...pinned, ...inbox, ...working].some((t) => !!t.taskId), [pinned, inbox, working])
+  useEffect(() => {
+    if (status !== 'open' || !namesTask) return
+    void loadBoard()
+    void loadSheet()
+  }, [status, namesTask])
+
+  const card = (t: ChatThread) => {
+    const project = t.projectId ? projects.find((p) => p.id === t.projectId) || null : null
+    return <ThreadItem key={t.id} t={t} card now={now} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpenChat} place={{ project, label: placeLabel(t, projects) }} />
+  }
+  // The open chat on a shelf, under the shelf's name, so the drawer always shows where he is.
   const openSnoozed = snoozed.find((t) => t.id === activeId)
   const openParked = openSnoozed || settled.find((t) => t.id === activeId)
-  const counts: ShelfCounts = { scope, snoozed: snoozed.length, settled: settled.length }
-  useEffect(() => {
-    if (docked) setDock({ scope, snoozed: counts.snoozed, settled: counts.settled })
-  }, [docked, scope, counts.snoozed, counts.settled])
-  useEffect(() => (docked ? () => setDock(null) : undefined), [docked])
-  return (
-    <>
-      {children(active, now)}
-      {openParked ? (
-        <View style={{ marginTop: 8 }}>
-          <T size={13} color={muted80} style={st.groupLabel}>{openSnoozed ? 'Snoozed' : 'Settled'}</T>
-          <ThreadItem t={openParked} shelf={openSnoozed ? 'snoozed' : 'settled'} now={now} active live={!!runs[openParked.id]} onOpen={onOpen} />
-        </View>
-      ) : null}
-      {docked ? null : <ShelfButtons {...counts} style={{ paddingLeft: 8, paddingTop: 4, paddingBottom: 4 }} />}
-    </>
-  )
-}
-
-// --- the list (Recents, or a project's Chats) -----------------------------------------------
-
-function ThreadList({ activeId, onOpen, heading = 'Recents', projectId = null, before }: {
-  activeId: string | null
-  onOpen: (id: string) => void
-  heading?: string
-  projectId?: string | null
-  before?: React.ReactNode
-}) {
-  const allThreads = useChat((s) => s.threads) as ChatThread[]
-  const projects = useChat((s) => s.projects)
-  const runs = useChat((s) => s.runs)
-  const loaded = useChat((s) => s.loaded)
-  const threads = useMemo(() => listThreads(allThreads, projects, projectId || 'home', activeId, runs), [allThreads, projects, projectId, activeId, runs])
-
-  return (
-    <View>
-      {before}
-      <View style={st.head}><T size={13.5} color={colors.muted}>{heading}</T></View>
-      {loaded && !threads.length ? <T size={13.5} color={colors.muted} style={st.emptyNote}>{projectId ? 'Chats in this project will show up here.' : 'Your chats will show up here.'}</T> : null}
-      <ShelvedChats threads={threads} scope={projectId || 'home'} activeId={activeId} onOpen={onOpen} docked>
-        {(active, now) => groupThreads(active).map((g) => (
-          <View key={g.label} style={{ marginTop: 8 }}>
-            <T size={13} color={muted80} style={st.groupLabel}>{g.label}</T>
-            {g.threads.map((t) => <ThreadItem key={t.id} t={t} now={now} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpen} />)}
-          </View>
-        ))}
-      </ShelvedChats>
-    </View>
-  )
-}
-
-// --- projects --------------------------------------------------------------------------------
-
-function ProjectRow({ p, onOpen }: { p: Project; onOpen: () => void }) {
-  const projects = useChat((s) => s.projects)
-  const waiting = useWaiting([p.id, ...foldersOf(projects, p.id).map((f) => f.id)])
-  return (
-    <Press style={st.thread} onPress={() => { tap(); openProject(p.id); onOpen() }} accessibilityLabel={p.name}>
-      <View style={st.threadMain}>
-        <ProjectIcon p={p} size={16} />
-        <T size={15} numberOfLines={1} color={textAlpha(86)} style={{ flex: 1 }}>{p.name}</T>
-        {waiting ? <View style={st.dot} accessibilityLabel="A chat is waiting on you" /> : null}
-        {p.chatCount > 0 ? <T size={12} color={textAlpha(40)} style={{ paddingHorizontal: 6, fontVariant: ['tabular-nums'] }}>{p.chatCount}</T> : null}
-      </View>
-    </Press>
-  )
-}
-
-/** Home's list of projects, folding, with "New project". */
-function ProjectsSection({ onOpen }: { onOpen: () => void }) {
-  const all = useChat((s) => s.projects)
-  const projects = useMemo(() => all.filter((p) => !p.parentId), [all])
-  const [folded, setFolded] = useState(() => localStorage.getItem(FOLDED_KEY) === '1')
-  const fold = (v: boolean) => { tap(); setFolded(v); localStorage.setItem(FOLDED_KEY, v ? '1' : '0') }
-  const create = () => nameAndCreate('New project', async (name) => { await createProject({ name }); onOpen() })
-  return (
-    <View style={{ paddingBottom: 4 }}>
-      <View style={st.head}>
-        <Press style={st.fold} onPress={() => fold(!folded)} accessibilityState={{ expanded: !folded }}>
-          <T size={13.5} color={colors.muted}>Projects</T>
-          <TI icon={folded ? IconChevronRight : IconChevronDown} size={13} color={colors.muted} />
-        </Press>
-        <Press style={st.smBtn} onPress={() => { fold(false); create() }} accessibilityLabel="New project">
-          <TI icon={IconFolderPlus} size={17} color={colors.muted} />
-        </Press>
-      </View>
-      {!folded ? (
-        <>
-          {projects.map((p) => <ProjectRow key={p.id} p={p} onOpen={onOpen} />)}
-          {!projects.length ? (
-            <Press style={st.thread} onPress={create}>
-              <View style={st.threadMain}><TI icon={IconFolderPlus} size={16} color={colors.muted} /><T size={15} color={colors.muted}>New project</T></View>
-            </Press>
-          ) : null}
-        </>
-      ) : null}
-    </View>
-  )
-}
-
-// --- totems (web ProjectNav.tsx TotemsSection) ---------------------------------------------
-
-/** One totem: opens its chat. On the right, what it is doing and when it last ran. */
-function TotemNavItem({ row, active, onOpen, now }: { row: TotemNavRow; active: boolean; onOpen: () => void; now: number }) {
-  const { job, state, lastRanAt } = row
-  return (
-    <Press style={[st.thread, active && st.threadOn]} onPress={() => { tap(); onOpen() }} accessibilityLabel={`${job.name}${state === 'idle' ? '' : `, ${state}`}`}>
-      <View style={[st.threadMain, state === 'paused' && { opacity: 0.55 }]}>
-        <TotemIcon name={job.iconName} small />
-        <T size={15} numberOfLines={1} weight={state === 'unread' ? 600 : 400} color={active || state === 'unread' ? colors.text : textAlpha(86)} style={{ flex: 1 }}>{job.name}</T>
-        {state === 'running' ? <Spark size={12} />
-          : state === 'unread' ? <View style={st.dot} accessibilityLabel="A report is waiting" />
-            : state === 'failed' ? <View style={[st.dot, { backgroundColor: '#f0879e' }]} accessibilityLabel="Last run failed" /> : null}
-        <T size={12} color={textAlpha(40)} style={{ paddingHorizontal: 6, fontVariant: ['tabular-nums'] }}>{lastRanAt ? ago(lastRanAt, now) : ''}</T>
-      </View>
-    </Press>
-  )
-}
-
-/** The drawer's other face: group chats, then every totem with the one that ran last on top. */
-function TotemsPanel({ onOpenChat }: { onOpenChat: (id: string) => void }) {
-  const jobs = useJobs()
-  const threads = useChat((s) => s.threads)
-  const runs = useChat((s) => s.runs)
-  const activeId = useChat((s) => s.activeId)
-  const now = useNow(threads as ChatThread[])
-  // Runs happen on the bridge's clock, so keep the order and states fresh.
-  useEffect(() => {
-    void loadJobs()
-    const t = setInterval(() => { void loadJobs() }, 30_000)
-    return () => clearInterval(t)
-  }, [])
-  const rows = useMemo(() => totemNavRows(jobs || [], threads as ChatThread[], runs), [jobs, threads, runs])
-  const groups = useMemo(() => (threads as ChatThread[]).filter((t) => t.members?.length).sort((a, b) => b.updatedAt - a.updatedAt), [threads])
-  return (
-    <View>
-      <View style={st.head}>
-        <T size={13.5} color={colors.muted}>Group chats</T>
-        <Press style={st.smBtn} onPress={() => { tap(); router.push('/totem/group') }} accessibilityLabel="New group chat">
-          <TI icon={IconPlus} size={17} color={colors.muted} />
-        </Press>
-      </View>
-      {groups.map((t) => <ThreadItem key={t.id} t={t} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpenChat} now={now} />)}
-      {!groups.length ? (
-        <Press style={st.thread} onPress={() => { tap(); router.push('/totem/group') }}>
-          <View style={st.threadMain}><TI icon={IconUsersGroup} size={16} color={colors.muted} /><T size={15} color={colors.muted}>Start a group chat</T></View>
-        </Press>
-      ) : null}
-      <View style={st.head}>
-        <T size={13.5} color={colors.muted}>Totems</T>
-        <Press style={st.smBtn} onPress={() => { tap(); navigateTo('totems') }} accessibilityLabel="The Totems page">
-          <TI icon={IconLayoutList} size={17} color={colors.muted} />
-        </Press>
-      </View>
-      {rows.map((r) => (
-        <TotemNavItem
-          key={r.job.id}
-          row={r}
-          now={now}
-          active={!!r.thread && r.thread.id === activeId}
-          onOpen={async () => { const id = r.thread?.id || await ensureTotemChat(r.job); if (id) onOpenChat(id) }}
-        />
-      ))}
-      {jobs && !rows.length ? <T size={13} color={colors.muted} style={st.emptyNote}>No totems yet. Make one on the Totems page.</T> : null}
-    </View>
-  )
-}
-
-/** Which face the drawer shows: your chats, or your totems (web ProjectNav.tsx usePanelMode). */
-const PANEL_MODE_KEY = 'totem.panel.mode'
-function usePanelMode(): ['chats' | 'totems', (m: 'chats' | 'totems') => void] {
-  const [mode, setMode] = useState<'chats' | 'totems'>(() => (localStorage.getItem(PANEL_MODE_KEY) === 'totems' ? 'totems' : 'chats'))
-  return [mode, (m) => { tap(); setMode(m); localStorage.setItem(PANEL_MODE_KEY, m) }]
-}
-
-function PanelTabs({ mode, onMode }: { mode: 'chats' | 'totems'; onMode: (m: 'chats' | 'totems') => void }) {
-  // A report waiting in a totem's chat shows on the Totems tab from the Chats side.
-  const waiting = useChat((s) => s.threads.some((t) => t.totemId && t.needsReply))
-  return (
-    <View style={st.tabs} accessibilityRole="tablist">
-      {(['chats', 'totems'] as const).map((m) => (
-        <Press key={m} style={[st.tab, mode === m && st.tabOn]} onPress={() => onMode(m)} accessibilityRole="tab" accessibilityState={{ selected: mode === m }}>
-          <T size={13.5} weight={mode === m ? 600 : 400} color={mode === m ? colors.text : colors.muted}>{m === 'chats' ? 'Chats' : 'Totems'}</T>
-          {m === 'totems' && waiting && mode !== 'totems' ? <View style={st.dot} accessibilityLabel="A totem has a report waiting" /> : null}
-        </Press>
-      ))}
-    </View>
-  )
-}
-
-/** A folder in a project: opens its page, unfolds its chats (each list keeps its own shelves). */
-function FolderRow({ f, open, onToggle, onOpenChat }: { f: Project; open: boolean; onToggle: () => void; onOpenChat: (id: string) => void }) {
-  const activeId = useChat((s) => s.activeId)
-  const scoped = useChat((s) => s.projectId === f.id && !s.activeId)
-  const allThreads = useChat((s) => s.threads) as ChatThread[]
-  const runs = useChat((s) => s.runs)
-  const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
-  const projects = useChat((s) => s.projects)
-  const chats = useMemo(() => listThreads(allThreads, projects, f.id, activeId, runs), [allThreads, projects, f.id, activeId, runs])
-  const waiting = useWaiting([f.id])
-  // The count is what's still in play, not what's parked on the folder's shelves.
-  const keep = keptOpenId(activeId, useChat((s) => s.openedSettled))
-  const inPlay = chats.filter((t) => !isSnoozed(t, Date.now()) && !settledAt(t, Date.now(), autoDays, !!runs[t.id], t.id === keep)).length
-  return (
-    <View>
-      <View style={[st.thread, scoped && st.threadOn]}>
-        <Press style={st.foldBtn} onPress={() => { tap(); onToggle() }} accessibilityLabel={open ? `Fold ${f.name}` : `Unfold ${f.name}`}>
-          <TI icon={open ? IconChevronDown : IconChevronRight} size={13} color={colors.muted} />
-        </Press>
-        <Press style={[st.threadMain, { paddingLeft: 2 }]} onPress={() => { tap(); openProject(f.id) }} accessibilityLabel={`${f.name}: files, instructions and memory`}>
-          <ProjectIcon p={f} size={16} />
-          <T size={15} numberOfLines={1} color={textAlpha(86)} style={{ flex: 1 }}>{f.name}</T>
-          {waiting && !open ? <View style={st.dot} /> : null}
-          {inPlay > 0 ? <T size={12} color={textAlpha(40)} style={{ paddingHorizontal: 6 }}>{inPlay}</T> : null}
-        </Press>
-      </View>
-      {open ? (
-        <View style={{ paddingLeft: 14 }}>
-          <ShelvedChats threads={chats} scope={f.id} activeId={activeId} onOpen={onOpenChat}>
-            {(active, now) => active.map((t) => <ThreadItem key={t.id} t={t} now={now} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpenChat} />)}
-          </ShelvedChats>
-          {!chats.length ? <T size={13} color={colors.muted} style={st.emptyNote}>Move a chat here from its menu, or open the folder to start one.</T> : null}
-        </View>
-      ) : null}
-    </View>
-  )
-}
-
-function FoldersSection({ root, onOpenChat }: { root: Project; onOpenChat: (id: string) => void }) {
-  const all = useChat((s) => s.projects)
-  const folders = useMemo(() => foldersOf(all, root.id), [all, root.id])
-  const activeFolder = useChat((s) => {
-    const t = s.activeId ? s.threads.find((x) => x.id === s.activeId) : null
-    return t?.projectId && t.projectId !== root.id ? t.projectId : s.projectId !== root.id ? s.projectId : null
-  })
-  const [openSet, setOpenSet] = useState(() => readSet(OPEN_FOLDERS_KEY))
-  const toggle = (id: string) => setOpenSet((cur) => {
-    const next = new Set(cur)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    localStorage.setItem(OPEN_FOLDERS_KEY, JSON.stringify([...next]))
-    return next
-  })
-  if (!folders.length) return null
-  return (
-    <View style={{ paddingBottom: 4 }}>
-      <View style={st.head}><T size={13.5} color={colors.muted}>Folders</T></View>
-      {folders.map((f) => <FolderRow key={f.id} f={f} open={openSet.has(f.id) || activeFolder === f.id} onToggle={() => toggle(f.id)} onOpenChat={onOpenChat} />)}
-    </View>
-  )
-}
-
-/** The drawer's chats. `onOpenChat(id)` opens a chat (and closes the drawer). */
-export default function ChatsNav({ onOpenChat }: { onOpenChat: (id: string) => void }) {
-  const activeId = useChat((s) => s.activeId)
-  const scoped = useChat((s) => s.projects.find((p) => p.id === s.projectId))
-  // A folder shows inside its project's panel.
-  const project = useChat((s) => (scoped?.parentId ? s.projects.find((p) => p.id === scoped.parentId) : undefined)) || scoped
-  // A project's page shows in the chat screen with no chat open: the drawer's
-  // openChat(null) navigates there and keeps the project the store is scoped to.
-  const openPage = () => onOpenChat(null as unknown as string)
-  const [mode, setMode] = usePanelMode()
-  const tabs = <PanelTabs mode={mode} onMode={setMode} />
-
-  if (mode === 'totems') return <View style={{ paddingTop: 6 }}>{tabs}<TotemsPanel onOpenChat={onOpenChat} /></View>
-  if (project) {
-    return (
-      <View style={{ paddingTop: 6 }}>
-        {tabs}
-        <View style={st.projHead}>
-          <Press style={st.smBtn} onPress={() => { tap(); openProject(null) }} accessibilityLabel="Back to all chats">
-            <TI icon={IconArrowLeft} size={18} color={colors.muted} />
-          </Press>
-          <Press
-            style={[st.projTitle, !activeId && scoped?.id === project.id && st.threadOn]}
-            onPress={() => { tap(); openProject(project.id); openPage() }}
-            accessibilityLabel={`${project.name}: files, instructions and memory`}
-          >
-            <ProjectIcon p={project} size={17} />
-            <T size={15} weight={600} numberOfLines={1} style={{ flexShrink: 1 }}>{project.name}</T>
-          </Press>
-          <Press
-            style={st.smBtn}
-            onPress={() => { tap(); nameAndCreate('New folder', (name) => createProject({ name, parentId: project.id })) }}
-            accessibilityLabel="New folder: a side topic with its own memory and files"
-          >
-            <TI icon={IconFolderPlus} size={17} color={colors.muted} />
-          </Press>
-        </View>
-        <ThreadList
-          activeId={activeId}
-          onOpen={onOpenChat}
-          projectId={project.id}
-          heading="Chats"
-          before={<FoldersSection root={project} onOpenChat={onOpenChat} />}
-        />
-      </View>
-    )
-  }
+  const nothing = !pinned.length && !inbox.length && !working.length
+  const draftsProject = scope !== 'all' && scope !== 'home' ? scope : null
   return (
     <View style={{ paddingTop: 6 }}>
-      {tabs}
-      <ThreadList
-        activeId={activeId}
-        onOpen={onOpenChat}
-        projectId={null}
-        before={<ProjectsSection onOpen={openPage} />}
-      />
+      <ScopeBar value={scope} projects={projects} outside={outside} onOpenPage={() => onOpenChat(null)} />
+      {drafts?.(draftsProject, scope === 'home')}
+      {pinned.length ? <View accessibilityLabel="Pinned">{pinned.map(card)}</View> : null}
+      {pinned.length && inbox.length ? <View style={st.divider} /> : null}
+      {inbox.map(card)}
+      {loaded && nothing ? (
+        <T size={13.5} color={colors.muted} style={st.emptyNote}>
+          {snoozed.length || settled.length ? 'All settled. Nothing is waiting on you.' : scope === 'all' ? 'Your chats will show up here.' : 'Chats here will show up in this list.'}
+        </T>
+      ) : null}
+      {working.length ? (
+        <View style={{ marginTop: 10 }}>
+          <View style={st.shelfHead}>
+            <Spark size={11} />
+            <T size={13} weight={500} color={WORKING}>Working</T>
+            <T size={12.5} color={colors.muted} style={{ fontVariant: ['tabular-nums'] }}>{working.length}</T>
+          </View>
+          {working.map(card)}
+        </View>
+      ) : null}
+      {openParked ? (
+        <View style={{ marginTop: 10 }}>
+          <T size={13} color={muted80} style={st.groupLabel}>{openSnoozed ? 'Snoozed' : 'Settled'}</T>
+          <ThreadItem t={openParked} shelf={openSnoozed ? 'snoozed' : 'settled'} now={now} active live={!!runs[openParked.id]} onOpen={onOpenChat} />
+        </View>
+      ) : null}
     </View>
   )
 }
 
 const st = StyleSheet.create({
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 12, paddingBottom: 2, paddingLeft: 12, paddingRight: 4 },
-  fold: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 32 },
   smBtn: { width: 40, height: 40, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   emptyNote: { paddingVertical: 10, paddingHorizontal: 12 },
   groupLabel: { paddingTop: 6, paddingBottom: 4, paddingHorizontal: 12 },
+  shelfHead: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 6, paddingBottom: 4, paddingHorizontal: 12 },
   thread: { flexDirection: 'row', alignItems: 'center', borderRadius: 10 },
+  card: { borderRadius: 10, marginBottom: 2 },
+  cardMain: { gap: 3, paddingTop: 8, paddingBottom: 7, paddingLeft: 12, paddingRight: 10 },
+  line: { flexDirection: 'row', alignItems: 'center', gap: 7, minWidth: 0 },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, marginTop: -9, paddingTop: 6, paddingBottom: 6, paddingLeft: 12, paddingRight: 4 },
+  status: { flexShrink: 0, fontVariant: ['tabular-nums'] },
+  statusRow: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 4 },
   threadOn: { backgroundColor: colors.drawerOn },
   // Opaque, so the actions stay hidden until the row slides off them.
   threadOff: { backgroundColor: colors.bg2 },
   threadMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 44, paddingVertical: 6, paddingLeft: 12, paddingRight: 4 },
   activeBar: { position: 'absolute', left: 0, top: 11, bottom: 11, width: 3, borderRadius: 2, backgroundColor: colors.accent },
-  swipe: { flexDirection: 'row', gap: 4, paddingLeft: 6 },
+  swipe: { flexDirection: 'row', gap: 4, paddingLeft: 6, paddingBottom: 2 },
   swipeBtn: { width: 62, height: 44, alignItems: 'center', justifyContent: 'center', gap: 2, borderRadius: 10 },
+  // A card is taller than a row: its actions fill its height (alignSelf, since flex would leave them no width).
+  swipeTall: { height: undefined, alignSelf: 'stretch' },
+  menuTall: { alignSelf: 'stretch' },
+  swipeFill: { height: undefined, flex: 1 },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent },
   woke: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: 'rgba(91, 140, 255, 0.15)' },
-  meta: { paddingLeft: 4, fontVariant: ['tabular-nums'] },
-  doneBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 26, marginRight: 8, paddingLeft: 6, paddingRight: 8, borderRadius: 7, backgroundColor: 'rgba(63, 185, 80, 0.15)' },
+  metaTime: { paddingLeft: 4, fontVariant: ['tabular-nums'] },
+  doneBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 26, marginLeft: 'auto', marginRight: 8, paddingLeft: 6, paddingRight: 8, borderRadius: 7, backgroundColor: 'rgba(63, 185, 80, 0.15)' },
   shelfBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   shelfBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 36, paddingVertical: 6, paddingHorizontal: 11, borderRadius: 18, backgroundColor: colors.bg3 },
-  projHead: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingTop: 8, paddingBottom: 2, paddingHorizontal: 4 },
-  projTitle: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8, height: 38, paddingHorizontal: 8, borderRadius: 9 },
-  foldBtn: { width: 32, height: 44, alignItems: 'center', justifyContent: 'center', marginLeft: 2 },
-  tabs: { flexDirection: 'row', gap: 2, marginHorizontal: 8, marginTop: 2, marginBottom: 2, padding: 3, borderRadius: 10, backgroundColor: colors.bg3 },
-  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 36, borderRadius: 8 },
-  tabOn: { backgroundColor: colors.bg },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.line, marginVertical: 6, marginHorizontal: 12 },
+  scope: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingTop: 4, paddingBottom: 6, paddingHorizontal: 2 },
+  scopeBtn: { flexDirection: 'row', alignItems: 'center', gap: 7, minHeight: 40, paddingHorizontal: 10, borderRadius: 10 },
+  scopeOn: { backgroundColor: colors.bg3 },
 })
