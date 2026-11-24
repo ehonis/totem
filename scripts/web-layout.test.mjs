@@ -485,7 +485,9 @@ test('a canvas widened at 1366 keeps its width while held and from its saved wid
 // scroll to fall back on): the old Tasks and Totems faces once put their rows
 // straight into the non-scrolling .vc-threads. This draws the real SidePanel and
 // MobileDrawer (web/src/chat/ChatsPanel.harness.tsx) with fictional chats, some
-// linked to fictional tasks, and scrolls with the mouse wheel, as the owner does.
+// linked to fictional tasks, and scrolls with the mouse wheel, as the owner does,
+// in both orders: Recent (each linked chat a card with its task's badge) and By task
+// (tasksnav/: linked chats gathered under their task's row, the next tasks below).
 // On a phone the drawer stays one scroll, with no list scrolling on its own inside it.
 const ago = (h) => new Date(Date.now() - h * 3600e3).toISOString()
 const panelApi = (url) => {
@@ -508,18 +510,33 @@ const panelApi = (url) => {
 }
 
 test('the chats panel scrolls to its last chat, its cards fit, and the phone drawer stays one scroll', { skip: !executablePath || !esbuild }, async () => {
-  const served = await serveHarness({ entry: 'chat/ChatsPanel.harness.tsx', styles: ['styles.css', 'shell.css', 'chat/chat.css', 'work/work.css'], api: panelApi })
+  const served = await serveHarness({ entry: 'chat/ChatsPanel.harness.tsx', styles: ['styles.css', 'shell.css', 'chat/chat.css', 'work/work.css', 'tasksnav/tasksnav.css'], api: panelApi })
   const browser = await chromium.launch({ executablePath })
   const lastTitle = 'Fictional chat 59'
   try {
-    for (const layout of [{ name: 'desktop' }, { name: 'macOS app', desktop: 'macos' }, { name: 'Windows app', desktop: 'windows' }, { name: 'phone', phone: true }]) {
+    const layouts = [{ name: 'desktop' }, { name: 'macOS app', desktop: 'macos' }, { name: 'Windows app', desktop: 'windows' }, { name: 'phone', phone: true }]
+    for (const [layout, order] of layouts.flatMap((l) => [[l, 'recent'], [l, 'task']])) {
       const page = await browser.newPage({ viewport: layout.phone ? { width: 390, height: 700 } : { width: 1200, height: 600 } })
+      await page.addInitScript((order) => localStorage.setItem('totem.chats.order', order), order)
       await page.goto(`${served.url}?${new URLSearchParams({ ...(layout.phone ? { phone: '1' } : {}), ...(layout.desktop ? { desktop: layout.desktop } : {}) })}`)
       const frame = layout.phone ? '.sh-drawer' : '.sh-panel'
-      const where = layout.name
-      // Tasks load after the chats: wait for a card's task badge too.
-      await page.waitForFunction((frame) => [...document.querySelectorAll(`${frame} .sb-task-title`)].some((e) => e.textContent.startsWith('Fictional task')), frame, { timeout: 10000 })
-        .catch(() => assert.fail(`${where}: no card showed its linked task`))
+      const where = `${layout.name}, ${order === 'task' ? 'by task' : 'recent'}`
+      // Tasks load after the chats: wait for a card's task badge, or a group's task row, too.
+      const taskSel = order === 'task' ? '.tn-group .st-task-name' : '.sb-task-title'
+      await page.waitForFunction(([frame, sel]) => [...document.querySelectorAll(`${frame} ${sel}`)].some((e) => e.textContent.startsWith('Fictional task')), [frame, taskSel], { timeout: 10000 })
+        .catch(() => assert.fail(`${where}: no ${order === 'task' ? 'group showed its task' : 'card showed its linked task'}`))
+      if (order === 'task') {
+        const shape = await page.evaluate((frame) => ({
+          groups: document.querySelectorAll(`${frame} .tn-group`).length,
+          pairs: [...document.querySelectorAll(`${frame} .tn-group-chats`)].filter((g) => g.children.length === 2).length,
+          badges: document.querySelectorAll(`${frame} .sb-task-title`).length,
+          next: !!document.querySelector(`${frame} .vc-threads-list > .tn-next`),
+        }), frame)
+        // 20 linked chats on 15 tasks (k0–k42 by 3, then k0–k12 again): five tasks hold two chats.
+        assert.deepEqual([shape.groups, shape.pairs], [15, 5], `${where}: one group per task, its chats under it`)
+        assert.equal(shape.badges, 0, `${where}: a grouped chat drops the badge its group's row already shows`)
+        assert.ok(shape.next, `${where}: the next tasks sit inside the scrolling list`)
+      }
       await page.waitForFunction(([frame, lastTitle]) => [...document.querySelectorAll(`${frame} .vc-thread-title`)].some((e) => e.textContent === lastTitle), [frame, lastTitle], { timeout: 10000 })
         .catch(async () => assert.fail(`${where}: the harness never drew "${lastTitle}" (drew ${JSON.stringify(await page.evaluate((frame) => [...document.querySelectorAll(`${frame} .vc-thread-title`)].map((e) => e.textContent).slice(-3), frame))})`))
       const box = await page.locator(frame).boundingBox()

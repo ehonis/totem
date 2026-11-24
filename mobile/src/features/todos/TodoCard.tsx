@@ -98,7 +98,7 @@ function dueActions(todo: Todo, now: Date, nested = false): MenuAction[] {
 
 function snoozeActions(todo: Todo, now: Date, nested = false): MenuAction[] {
   return [
-    ...snoozeTimes(now, todo.dueDate).map((option): MenuAction => ({
+    ...snoozeTimes(now).map((option): MenuAction => ({
       id: `snooze:${option.value.toISOString()}`, title: option.label, subtitle: option.detail,
     })),
     ...group('snooze-more', [{ id: 'snooze:pick', title: 'Pick a date and time', image: 'calendar' }], nested),
@@ -427,7 +427,7 @@ export default function TodoCard({
           ) : null}
           {!done && onSnooze ? (
             <MenuView
-              title="Snooze until"
+              title="Snooze"
               actions={snoozeActions(todo, now())}
               themeVariant="dark"
               onPressAction={({ nativeEvent }) => { swipe.current?.close(); act(nativeEvent.event) }}

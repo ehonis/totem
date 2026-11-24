@@ -1433,7 +1433,10 @@ is T3 Code's sidebar: one list of every chat, whatever project or folder it is f
 chat started three folders down is never out of sight. The rules are pure, in
 `web/src/chat/sidebar.ts` (`sidebarLists`, tested in `sidebar.test.ts`). Top to bottom:
 
-- **New chat**, then the **scope button** ("All chats"). It narrows the list to Home or one
+- **New chat**, then **Recent / By task**, which orders what is in play (below; kept per
+  device, `totem.chats.order`, By task unless he picks Recent). A count on By task is how many
+  tasks in the scope are due today or overdue.
+- The **scope button** ("All chats"). It narrows the list to Home or one
   project (with its folders) or folder, the way T3's project filter does, and is kept per
   device (`totem.chats.scope`). It never moves the page: when scoped to a project, ↗ opens
   that project's page and × goes back to every chat. A dot on it means a chat the scope hides
@@ -1448,6 +1451,22 @@ chat started three folders down is never out of sight. The rules are pure, in
   there at the top.
 - **Snoozed** and **Settled**, folded, at the bottom: one of each for the whole panel, not one
   per project, left out while empty. Settled shows ten, then Show more.
+
+**By task** (`web/src/tasksnav/`, the pure part in `lists.ts`, `playByTask`) keeps that
+list but folds Working into it, and gathers the chats in play that work on one open task under
+that task's row, the group placed where its latest chat would be. A chat with no task, or
+whose task is done, stays a card of its own. Under the chats come the owner's **next tasks**
+in the scope (a task's folder stands where a chat's project does), less those already
+heading a group: Overdue, Today, Next 7 days, Later and No date, each a folding heading
+(Later and No date start folded, kept per device as `totem.nav.folded`), then a folded
+Snoozed tasks with Wake now on each. A task's row shows its check (done; for a sheet row, done for
+him alone), title, folder and due day, a dot when one of its chats is answering or waiting
+on him, and on hover Snooze (Tomorrow, For 3 days, For a week, or a time) and New chat. A
+click on the row starts a chat for it in its folder (`tasksnav/pick.ts`): from a new chat's
+page the words already typed go with it (`useChatDrafts.startForTask`); from an open chat it
+starts a new one and leaves that chat's draft alone. The task picked for the chat being
+written is highlighted, and stays in sight in a folded section. The tasks load while the
+panel is up (`useWork` polls each minute). Snoozed and Settled stay at the bottom.
 
 Each chat in the list, Pinned and Working is a **card**: its place (project icon and
 "Project › Folder", or Home) and on the right what it is doing (Awaiting input, Awaiting
@@ -1799,8 +1818,9 @@ timer (`pauseToast`/`resumeToast` in `web/src/toast.ts`).
 A chat can name the task it works on, and the chats panel shows it on the chat's card
 (The chats panel), the way T3 Code shows a thread's pull request. Action items get worked
 on in chats; this is where the two meet (`web/src/work/`). Until 1.1 the panel had a Tasks
-face listing every open task with its chats; the Tasks page is now where tasks are listed,
-added and sorted.
+face listing every open task with its chats; now its By task order gathers chats under their
+task and lists the next tasks under them (The chats panel), and the Tasks page is where tasks
+are added, edited and sorted.
 
 - **Folders.** A task is filed under a chat project or folder, or nowhere ("Personal"): the
   same folders the Tasks page shows (`docs/tasks.md` → Folders). A local task carries its
@@ -1909,9 +1929,19 @@ project. Working is a section of cards at the end of the list; Snoozed and Settl
 buttons (Settled and snoozed, above). Totems is a drawer row of its own under Overview, with a dot
 for a report waiting, and the drawer's Tasks face is gone, as on the web. It is built for a thumb:
 
+- **Recent / By task** sits at the top, as on the web (`features/chat/chatsOrder.ts`, the web's
+  key; By task by default; the rules are `mobile/src/lib/tasksnav/lists.ts`, the web's
+  `tasksnav/lists.ts` byte for byte, checked by `features/work/shared.test.mjs`). By task folds
+  Working into the list, puts a task's chats in play under its row as slim rows, and lists the
+  next tasks below (`features/chat/TaskRows.tsx`), with Later, No date and Snoozed tasks folded.
+  A task's row: its ring finishes it, a tap starts a new chat for it in its folder
+  (`newTaskChat`; the words in a new chat's composer are not carried over, as they are on the
+  web), swiped right it is done, swiped left it shows Snooze (Tomorrow, 3 days, a week) and Open
+  (its page), and a long-press has all four. Done and Snooze leave the drawer's Undo line.
+
 - **No second list.** The tasks are the app's own task store (`features/todos/store.ts`), so the
   Tasks page, a task's page and the drawer never disagree; the drawer reads them each time it
-  opens, only when a card names a task, never on a timer. Every call that finishes or reopens a
+  opens, never on a timer. Every call that finishes or reopens a
   task (`lib/api.ts`, `toldTasks`) makes the chat store read the list again, so its chats settle
   or come back at once.
 - **A task opens its page**, the sheet the Tasks page opens (`todo/[id]`, a sheet row's too), in place

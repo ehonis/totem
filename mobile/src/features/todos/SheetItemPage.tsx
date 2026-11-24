@@ -87,10 +87,10 @@ export default function SheetItemPage({ item, source, fetchedAt }: { item: Sheet
       .catch((cause) => { warn(); setMarkError(cause instanceof Error && cause.message ? cause.message : 'The row could not be marked.') })
   }
   const snoozeMenu = () => showMenu([
-    ...snoozeTimes(now, item.dueDate).map((option) => ({ label: `${option.label} (${option.detail})`, onPress: () => setMark('snoozed', option.value) })),
+    ...snoozeTimes(now).map((option) => ({ label: `${option.label} (${option.detail})`, onPress: () => setMark('snoozed', option.value) })),
     // The picker waits for the action sheet to finish closing: iOS refuses a second presentation mid-animation.
     { label: 'Pick a date and time', onPress: () => void setTimeout(() => setPick(true), 400) },
-  ], { title: 'Snooze until', message: `For you only; ${source} is unchanged.` })
+  ], { title: 'Snooze', message: `For you only; ${source} is unchanged.` })
   const due = item.dueDate ? dueTone(item.dueDate, now, 'todo') : ''
   const dueColor = due === 'overdue' ? tone.red.color : due === 'today' ? tone.amber.color : colors.text
   return (

@@ -78,8 +78,8 @@ mirrored byte for byte to `mobile/src/lib/todos/`.
 - **Select tasks** (the "…" menu) acts on many at once. Done's Undo reopens only the
   tasks it finished that did not roll (never one already done before); the toast says how
   many repeating tasks rolled to their next date.
-- **Snooze** (`s`, or the hover button) offers `snoozeTimes` plus a picked time; Undo
-  wakes it. **Not doing** and **delete** (Delete/Backspace) offer Undo too.
+- **Snooze** (`s`, or the hover button) offers `snoozeTimes` (Tomorrow, For 3 days, For a
+  week, each to 9:00 local, stepped by calendar day) plus a picked time; Undo wakes it. **Not doing** and **delete** (Delete/Backspace) offer Undo too.
 - **The pane** opens the selected row on the right (Enter or a click) and follows the
   keyboard cursor. Everything saves as it changes, with no Save button: title (Enter or
   leaving the field), description, Due, Priority, Folder (the chats panel's folder picker,

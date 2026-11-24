@@ -1,5 +1,6 @@
 // The drawer's task badges, a chat's strip and the link sheet read the web's task rules (web/src/work/groups.ts),
-// copied byte for byte to mobile/src/lib/work/groups.ts. Their behaviour is tested
+// copied byte for byte to mobile/src/lib/work/groups.ts, and the drawer's By task order reads
+// web/src/tasksnav/lists.ts, copied to mobile/src/lib/tasksnav/lists.ts (tested on the web too). Their behaviour is tested
 // once, on the web (web/src/work/groups.test.ts); this file checks the copy has not
 // drifted, imports nothing at run time, and that node loads it as the app does.
 // Run with `node --test mobile/src/features/work/*.test.mjs` (also in the root npm test).
@@ -16,6 +17,10 @@ const read = (path) => readFileSync(join(repo, path), 'utf8')
 
 test('lib/work/groups.ts is the web’s, byte for byte', () => {
   assert.equal(read('mobile/src/lib/work/groups.ts'), read('web/src/work/groups.ts'), 'mobile/src/lib/work/groups.ts has drifted from web/src/work/groups.ts')
+})
+
+test('lib/tasksnav/lists.ts (the drawer\u2019s By task order) is the web\u2019s, byte for byte', () => {
+  assert.equal(read('mobile/src/lib/tasksnav/lists.ts'), read('web/src/tasksnav/lists.ts'), 'mobile/src/lib/tasksnav/lists.ts has drifted from web/src/tasksnav/lists.ts')
 })
 
 test('it imports only types, so it carries nothing of the web or React Native', () => {

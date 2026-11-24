@@ -81,6 +81,12 @@ export function useChatDrafts({ activeId, active, scopeProject, draftTaskId, dra
     else openProject(next.projectId)
   }
   const startIn = (id: string) => placeDraft({ taskId: null, projectId: id })
+  /** A task picked in the chats panel: what he has typed in a new chat goes with it, as with `$`. */
+  const startForTask = (ref: string) => {
+    // Beside an open chat (the side panel) the composer holds that chat's own draft, which stays with it.
+    if (activeId) { startTaskDraft(ref, taskHome(ref)); return }
+    placeDraft({ taskId: ref, projectId: taskHome(ref) })
+  }
   /** `$`: the words, less the `$…`, and the tray's files go to the picked place. */
   const pickDestination = (d: Destination, text: string) => {
     drafts.write(draftKey, { text }, at)
@@ -169,7 +175,7 @@ export function useChatDrafts({ activeId, active, scopeProject, draftTaskId, dra
   const keepEdit = (threadId: string, text: string, files: Attachment[]) => keepEditIn(drafts, threadId, text, files, atRef.current)
 
   return {
-    draftKey, input: rec?.text || '', setInput, askFresh, startIn, pickDestination, takeForSend, fromDraft, onDiscarded,
+    draftKey, input: rec?.text || '', setInput, askFresh, startIn, startForTask, pickDestination, takeForSend, fromDraft, onDiscarded,
     onAttachmentsChange, showEditFiles, missingFiles, removeMissing, keepEdit,
   }
 }

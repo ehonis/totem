@@ -779,7 +779,7 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
       )}
       {bulkMenu?.kind === 'snooze' && (
         <Menu anchor={bulkMenu.anchor} label="Snooze selected" onClose={() => setBulkMenu(null)}
-          items={[{ heading: 'Snooze until' }, ...snoozeTimes(now).map((option) => ({ key: option.label, label: option.label, detail: option.detail, onSelect: () => { void board.bulk(selectedIds, 'snooze', option.value.toISOString()); setSelection(new Set()) } }))]} />
+          items={[{ heading: 'Snooze' }, ...snoozeTimes(now).map((option) => ({ key: option.label, label: option.label, detail: option.detail, onSelect: () => { void board.bulk(selectedIds, 'snooze', option.value.toISOString()); setSelection(new Set()) } }))]} />
       )}
       {bulkMenu?.kind === 'priority' && (
         <Menu anchor={bulkMenu.anchor} label="Priority for selected" width={220} onClose={() => setBulkMenu(null)}

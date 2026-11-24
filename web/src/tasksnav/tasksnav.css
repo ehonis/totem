@@ -1,0 +1,101 @@
+/* The chats panel's By task order (tasksnav/, ChatsNav.tsx): chats gathered under
+   their task, the next tasks below. Namespaced st-* (a task's row) and
+   tn-* (the panel's pieces). Colours come from the shell's variables, so every
+   background palette applies; the panel is outside .vc, so it brings the chat's. */
+.sb-panel {
+  --vc-text: color-mix(in srgb, var(--text) 94%, transparent);
+  --vc-soft: color-mix(in srgb, var(--text) 62%, transparent);
+  --vc-faint: color-mix(in srgb, var(--text) 40%, transparent);
+  --vc-line: var(--line-2);
+}
+
+/* --- shared bits ----------------------------------------------------------------------- */
+.st-empty { margin: 10px 4px; color: var(--vc-faint); font-size: 13px; }
+.st-error { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: #f0cd72; }
+.st-error .st-more { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
+
+/* A task's row: check, title over folder, due chip, then Snooze and New chat on hover. */
+.st-task {
+  position: relative; display: flex; align-items: center; gap: 6px; min-height: 46px; padding: 4px 6px 4px 0; border-radius: 10px;
+}
+.st-task:hover, .st-task:focus-within, .st-task.menu-open { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.st-task.on { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+.st-task.compact { min-height: 40px; }
+.st-check { margin-left: 4px; }
+.st-task-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 2px 0;
+  background: none; border: 0; color: inherit; text-align: left; font: inherit; cursor: pointer;
+}
+.st-task-main.static { cursor: default; }
+.st-task-title { display: flex; align-items: center; gap: 7px; max-width: 100%; }
+.st-task-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--vc-text); }
+.st-task.compact .st-task-name { font-size: 13.5px; }
+.st-task-sub { display: flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; font-size: 12px; color: var(--vc-faint); }
+.st-folder { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.st-folder > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-folder .ti, .st-folder .vc-proj-icon { flex: none; opacity: .85; }
+.st-count { flex: none; }
+.st-task .wk-due { margin-right: 2px; }
+.st-task-acts { display: flex; align-items: center; gap: 1px; flex: none; }
+/* Pointer devices see the actions on hover; touch always sees them. */
+@media (hover: hover) {
+  /* Over the due chip, as the chats panel's cards do, so a resting row keeps its full width. */
+  .st-task-acts { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); }
+  .st-task:not(:hover):not(:focus-within):not(.menu-open) .st-task-acts { opacity: 0; pointer-events: none; }
+  .st-task:is(:hover, :focus-within, .menu-open) > .wk-due { visibility: hidden; }
+  .st-task-main { padding-right: 4px; }
+}
+.st-task.snoozed { min-height: 40px; padding-left: 10px; }
+.st-snoozed-glyph { color: var(--vc-faint); flex: none; }
+.st-wake { flex: none; white-space: nowrap; }
+.st-wake::before { content: '·'; margin-right: 8px; }
+
+.st-more {
+  align-self: flex-start; margin: 4px 4px 0; height: 28px; padding: 0 10px; border-radius: 8px;
+  background: none; border: 0; color: var(--vc-soft); font-size: 12.5px; cursor: pointer;
+}
+.st-more:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
+
+
+/* --- in the panel -------------------------------------------------------------------- */
+.sb-panel .st-task { padding-right: 4px; border-radius: 9px; }
+.sb-panel .st-task.compact { min-height: 38px; }
+.sb-panel .st-task-name { font-size: 13px; }
+.sb-panel .st-task-sub { font-size: 11.5px; }
+.sb-panel .st-check { margin-left: 2px; }
+.sb-panel .wk-due { font-size: 11.5px; }
+
+/* The switch at the top: Recent / By task. */
+.tn-top { padding: 2px 6px 2px; }
+.tn-seg { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: color-mix(in srgb, var(--text) 5%, transparent); }
+.tn-seg button {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 26px; border: 0; border-radius: 7px;
+  background: none; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+}
+.tn-seg button:hover { color: var(--text); }
+.tn-seg button.on { background: var(--raise, var(--bg-3)); color: var(--text); box-shadow: 0 1px 2px #0005; }
+.tn-badge {
+  display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px;
+  background: color-mix(in srgb, var(--amber) 22%, transparent); color: var(--amber); font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+
+/* Section heads in the task lists: the shelves' look. */
+.tn-section { display: flex; flex-direction: column; gap: 1px; margin-top: 6px; }
+.tn-section.overdue .tn-section-head { color: #ff9aac; }
+.tn-section.today .tn-section-head { color: #f3c969; }
+
+/* A task with its chats under it: the task's row, then its chats on a thread line. */
+.tn-group { display: flex; flex-direction: column; margin: 2px 0; }
+.tn-group .st-task.head .st-task-name { font-weight: 600; }
+.tn-group-chats { position: relative; margin-left: 13px; padding-left: 8px; border-left: 1px solid color-mix(in srgb, var(--text) 12%, transparent); }
+.tn-group-chats .vc-thread-main { height: 30px; }
+.tn-group-chats .vc-thread-title { font-size: 13px; }
+
+
+/* The next tasks sit under the chats in play, ruled off above and below from the chats' shelves. */
+.tn-next {
+  margin: 10px 0 8px; padding: 4px 0 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--line) 90%, transparent);
+  border-bottom: 1px dashed color-mix(in srgb, var(--line) 90%, transparent);
+}
+.tn-next:not(:has(.tn-section, .st-empty)) { display: none; }

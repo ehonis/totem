@@ -51,3 +51,26 @@ describe('a retried message the bridge refused', () => {
     expect(drafts.keyAt({ kind: 'home' })).toBe(before)
   })
 })
+
+describe('a task picked from the new-chat page', () => {
+  const pickWith = (activeId: string | null) => renderHook(() => useChatDrafts({
+    activeId, active: null, scopeProject: undefined, draftTaskId: null, draftKind: 'regular', setDraftKind: () => {},
+    composer: { current: null }, slot: '', visible: false, editing: false, onEditFiles: () => {},
+  })).result.current
+
+  it('takes what was typed on Home with it', () => {
+    fake.threads = []
+    const home = drafts.keyAt({ kind: 'home' })
+    drafts.write(home, { text: 'draft a reply' }, Date.now())
+    pickWith(null).startForTask('t1')
+    expect(drafts.get().drafts[drafts.keyAt({ kind: 'task', id: 't1' })]?.text).toBe('draft a reply')
+  })
+
+  it('leaves an open chat’s own draft with that chat (the side panel beside a chat)', () => {
+    fake.threads = [thread('c1', { messageCount: 2 })]
+    drafts.write('c1', { text: 'half a reply' }, Date.now())
+    pickWith('c1').startForTask('t2')
+    expect(drafts.get().drafts.c1.text).toBe('half a reply')
+    expect(drafts.keyAt({ kind: 'task', id: 't2' })).not.toBe('c1')
+  })
+})
