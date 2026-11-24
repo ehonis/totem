@@ -70,7 +70,9 @@ const call = async (method, path, body, raw) => {
   return text ? JSON.parse(text.startsWith('data:') ? 'null' : text) : null
 }
 const upload = (name, mime, body) => call('POST', `/api/chat/uploads?name=${encodeURIComponent(name)}&mime=${encodeURIComponent(mime)}`, null, Buffer.from(body))
-const prompts = () => readFileSync(B.log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l).prompt)
+// The fake appends a line while this polls, so the last one may be half written:
+// only lines that end in a newline are read.
+const prompts = () => readFileSync(B.log, 'utf8').split('\n').slice(0, -1).filter(Boolean).map((l) => JSON.parse(l).prompt)
 const until = async (fn, ms = 15_000) => {
   const deadline = Date.now() + ms
   for (;;) {
