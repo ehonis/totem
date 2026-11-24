@@ -231,7 +231,9 @@ test('--status against a hung manifest exits within the budget and names the hun
 
 test('serving: initialize is answered at once, tools/list waits for the budget and lists built-ins', { timeout: 15_000 }, async (t) => {
   const { dir, pidFile } = tempDir(t)
-  const timeouts = { handshakeMs: 1500, pageMs: 1500, serverMs: 2000 }
+  // Wide enough that a slow Node start on a busy runner still answers inside the
+  // hung server's handshake budget; a gateway that waited for it could not.
+  const timeouts = { handshakeMs: 4000, pageMs: 4000, serverMs: 5000 }
   const { child, exited } = spawnGateway(t, [], gatewayEnv(dir, { stuck: stdioServer('launcher', pidFile) }, timeouts))
   const replies = new Map()
   createInterface({ input: child.stdout }).on('line', (line) => { const m = JSON.parse(line); replies.set(m.id, { ...m, at: Date.now() }) })
@@ -244,7 +246,7 @@ test('serving: initialize is answered at once, tools/list waits for the budget a
 
   send({ method: 'notifications/initialized' })
   send({ id: 2, method: 'tools/list' })
-  assert.ok(await waitFor(() => replies.has(2), 8000))
+  assert.ok(await waitFor(() => replies.has(2), 10_000))
   const names = replies.get(2).result.tools.map((tool) => tool.name)
   assert.ok(names.includes('tasks__get_tasks'))
   assert.ok(!names.some((n) => n.startsWith('stuck__')))

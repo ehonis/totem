@@ -32,23 +32,43 @@ const canConnect = (port) => new Promise((resolve) => {
   socket.once('error', () => resolve(false))
 })
 
-// Claude Code's stream-json, trimmed to what the bridge reads; the reply waits
-// for a file named after the prompt, so a test can steer and queue while it runs.
+// Claude Code's stream-json, trimmed to what the bridge reads; a reply whose
+// message says hold-<name> waits for a file of that name, so a test can steer
+// and queue while it runs. A chat run sends its prompt on stdin (it can be
+// steered), not after "--", so the fake reads it from there as the CLI does;
+// read from argv it saw "-p", held nothing, and every test raced its exit.
 const FAKE_CLAUDE = `#!/usr/bin/env node
 const fs = require('node:fs')
 const path = require('node:path')
 const args = process.argv.slice(2)
-const prompt = args[args.indexOf('--') + 1] || ''
 const out = (e) => process.stdout.write(JSON.stringify({ session_id: 'sess-1', ...e }) + '\\n')
 out({ type: 'system', subtype: 'init', model: 'claude-opus-5-5' })
-const release = path.join(process.env.FAKE_RELEASE_DIR, prompt.replace(/[^a-z0-9-]/gi, '_'))
 const finish = () => {
   out({ type: 'assistant', parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 10, output_tokens: 1 } } })
   out({ type: 'result', subtype: 'success', result: 'ok', usage: { input_tokens: 10, output_tokens: 1 } })
   process.exit(0)
 }
-if (!prompt.startsWith('hold')) finish()
-else setInterval(() => { if (fs.existsSync(release)) finish() }, 50)
+const begin = (prompt) => {
+  const hold = [...prompt.matchAll(/\\bhold-[a-z0-9-]+/gi)].pop()?.[0]
+  if (!hold) return finish()
+  const release = path.join(process.env.FAKE_RELEASE_DIR, hold.replace(/[^a-z0-9-]/gi, '_'))
+  setInterval(() => { if (fs.existsSync(release)) finish() }, 50)
+}
+if (args.includes('--')) begin(args[args.indexOf('--') + 1] || '')
+else {
+  // The first stdin line is the message; later ones are steers, which only need taking.
+  let buf = ''
+  let started = false
+  process.stdin.on('data', (d) => {
+    if (started) return
+    buf += d
+    const nl = buf.indexOf('\\n')
+    if (nl < 0) return
+    started = true
+    const content = JSON.parse(buf.slice(0, nl)).message?.content
+    begin(typeof content === 'string' ? content : (content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\\n'))
+  })
+}
 process.stdin.resume()
 `
 

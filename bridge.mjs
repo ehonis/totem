@@ -10060,6 +10060,11 @@ async function startChatTurn(body, { idle = null } = {}) {
     assistantMessageId: assistantId,
     execute: async ({ emit: push, signal, run }) => {
       const t0 = Date.now()
+      // Steering is wired up only after `start` and some async work (skills, the
+      // browser grant), so a steer landing in between waits here (steerableRun)
+      // rather than being refused. Settled false where this reply takes none.
+      let steerReady = () => {}
+      run.steerReady = new Promise((resolve) => { steerReady = resolve })
       // A new message settles a browser handoff left waiting from an earlier reply.
       const leftOver = browserHandoffs.get(threadId)
       if (leftOver) { dropHandoff(threadId); handoffWaits.dismiss(leftOver.id); push({ type: 'handoff', handoff: null }) }
@@ -10276,6 +10281,7 @@ async function startChatTurn(body, { idle = null } = {}) {
         // `/compact` (chat/context.mjs): the chat's own session summarises itself.
         // The reply is only its divider, so it never counts as an answer to read.
         if (isCompaction) {
+          steerReady(false)
           const part = { id: `cmp-${assistant.id.slice(0, 8)}`, trigger: compactTrigger || 'manual' }
           const fail = (reason) => forward({ type: 'compaction', compaction: { ...part, status: 'failed', reason, endedAt: Date.now() } })
           const own = thread.sessions?.[provider]
@@ -10305,6 +10311,7 @@ async function startChatTurn(body, { idle = null } = {}) {
         // A skill command ($morning, /journal, …) runs the skill rather than chatting.
         const matchedSkill = !body.regenerate && !files.length ? await lookupSkillCommand(text.toLowerCase(), text) : null
         if (matchedSkill) {
+          steerReady(false)
           const agentOptions = { onActivity: (a) => push({ type: 'activity', text: a }), cursorModel: choice.cursorModel }
           const channel = SKILL_CHAT_CHANNELS[matchedSkill.id] || 'web'
           const viaRunner = SKILL_CHAT_RUNNERS[matchedSkill.id]
@@ -10365,6 +10372,7 @@ async function startChatTurn(body, { idle = null } = {}) {
           log(`web chat [${provider}] steered (${via}):`, words.slice(0, 100), attachments.length ? `+${attachments.length} files` : '')
           return shown
         }
+        steerReady(true)
         let attempts = 0
         const runOnce = async ({ fresh, steers = null }) => {
           // Codex numbers its items per process (item_0, item_1…), so a resumed
@@ -10496,6 +10504,7 @@ async function startChatTurn(body, { idle = null } = {}) {
         error = status === 'error' ? String(e?.message || e) : ''
       } finally {
         steering.close()
+        steerReady(false)
         delete run.steer
         delete run.questions
         if (pending) { clearTimeout(pending); pending = null }
@@ -10596,9 +10605,25 @@ async function startChatTurn(body, { idle = null } = {}) {
 
 const uploadIds = (list) => (Array.isArray(list) ? list : []).map((a) => (typeof a === 'string' ? a : a?.id)).filter(validUploadId).slice(0, 20)
 
+/**
+ * The thread's running reply once it can take a steer, or null if it never will.
+ * A reply sends `start` before its steering is set up, so a steer sent straight
+ * after waits for it (run.steerReady) rather than being refused.
+ */
+async function steerableRun(threadId, ms = 10_000) {
+  const run = chatRuns.active(threadId)
+  if (!run || run.steer) return run?.steer ? run : null
+  if (!run.steerReady) return null
+  let timer
+  await Promise.race([run.steerReady, new Promise((resolve) => { timer = setTimeout(resolve, ms) })])
+  clearTimeout(timer)
+  const now = chatRuns.active(threadId)
+  return now?.steer ? now : null
+}
+
 /** Send the owner's words (and files) into the thread's running reply. Null when nothing is running that can take them. */
 async function steerRun(threadId, words, ids = []) {
-  if (!chatRuns.active(threadId)?.steer) return null
+  if (!await steerableRun(threadId)) return null
   const files = await loadChatFiles(ids.map((id) => ({ id })))
   const images = await readSteerImages(files)
   // Looked up again: the run may have ended while the files were read.
@@ -10673,6 +10698,7 @@ async function changeChatQueue(body) {
     return queueView(t)
   }
   if (action === 'steer') {
+    await steerableRun(threadId)
     let item = null
     const t = await threadStore.update(threadId, (t) => {
       item = t.queue?.find((x) => x.id === id)
