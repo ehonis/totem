@@ -1,5 +1,5 @@
 import { POWER_NAMES } from './models'
-import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import Markdown from '../components/Markdown'
 import TotemProposal from './TotemProposal'
@@ -17,7 +17,7 @@ import { foldWork } from './workFold'
 import { AgentGroup } from './AgentsPanel'
 import TurnStats from './TurnStats'
 import type { ApprovalPart, Attachment, ChangePart, ChatMessage, CompactionPart, InboxPart, Part, ProviderRow, QuestionsPart, SteerPart, ToolPart, VisualPart } from './types'
-import { TI, ProviderLogo, formatBytes, formatDuration } from './ui'
+import { TI, ProviderLogo, formatDuration } from './ui'
 import { IconAlertCircle,
   IconCopy, IconCheck, IconRefresh, IconVolume, IconPencil, IconFileText, IconFileTypePdf, IconClipboardText,
   IconPlayerPause, IconBolt, IconDeviceDesktop, IconMicrophone, IconX, IconArrowForwardUp,
@@ -29,23 +29,26 @@ import { downloads, downloadUrl } from '../downloads'
 import { useSmoothText } from './smooth'
 import { useTextTicks } from './ticks'
 import { getChatCommands, subscribeChatCommands } from '../studio'
-import { splitMentions } from './mentions'
+import { RefText, chipInfo } from './RefChip'
+import { formatSize, plainRefs } from './refs'
 import Spark, { WorkingLine } from './Spark'
 import { foldTotemCalls, type TotemAnswer } from './totemReply'
 import { TotemIcon, useTotemDirectory } from '../totems/shared'
 
 // --- attachments ---------------------------------------------------------------
 
-export function AttachmentChip({ a, onOpen, onRemove, status, progress }: {
+export function AttachmentChip({ a, onOpen, onRemove, status, progress, asking }: {
   a: { name: string; kind: string; mime: string; size: number; url?: string; preview?: string }
   onOpen?: () => void
   onRemove?: () => void
   status?: 'uploading' | 'ready' | 'error'
   progress?: number
+  /** Its × is asking first (the composer's remove confirm): marked so it is clear which. */
+  asking?: boolean
 }) {
   if (a.kind === 'image' && a.url) {
     return (
-      <div className={`vc-thumb ${status || ''}`}>
+      <div className={`vc-thumb ${status || ''}${asking ? ' asking' : ''}`}>
         <button type="button" className="vc-thumb-img" onClick={onOpen} title={a.name}>
           <img src={a.url} alt={a.name} loading="lazy" />
         </button>
@@ -57,12 +60,12 @@ export function AttachmentChip({ a, onOpen, onRemove, status, progress }: {
   const icon = a.kind === 'text' ? IconClipboardText : /pdf/.test(a.mime) ? IconFileTypePdf : IconFileText
   const pasted = /^Pasted text/i.test(a.name)
   return (
-    <div className={`vc-file ${status || ''}`}>
+    <div className={`vc-file ${status || ''}${asking ? ' asking' : ''}`}>
       <button type="button" className="vc-file-main" onClick={onOpen} title={a.name}>
         <span className="vc-file-icon"><TI icon={icon} size={18} /></span>
         <span className="vc-file-text">
           <span className="vc-file-name">{pasted ? (a.preview || 'Pasted text') : a.name}</span>
-          <span className="vc-file-meta">{status === 'uploading' ? `Uploading ${Math.round((progress || 0) * 100)}%` : status === 'error' ? 'Upload failed' : pasted ? `Pasted · ${formatBytes(a.size)}` : `${(a.name.split('.').pop() || 'file').toUpperCase()} · ${formatBytes(a.size)}`}</span>
+          <span className="vc-file-meta">{status === 'uploading' ? `Uploading ${Math.round((progress || 0) * 100)}%` : status === 'error' ? 'Upload failed' : pasted ? `Pasted · ${formatSize(a.size)}` : `${(a.name.split('.').pop() || 'file').toUpperCase()} · ${formatSize(a.size)}`}</span>
         </span>
       </button>
       {onRemove && <button type="button" className="vc-chip-x" onClick={onRemove} aria-label={`Remove ${a.name}`}><TI icon={IconX} size={12} /></button>}
@@ -119,33 +122,31 @@ export function useMentionSet() {
   }, [catalog])
 }
 
-function MentionText({ text }: { text: string }) {
+/** His words: each skill he cited tinted, each file he named a chip from the message's own attachments. */
+function MessageText({ text, attachments, onOpen }: { text: string; attachments?: Attachment[]; onOpen?: (a: Attachment) => void }) {
   const known = useMentionSet()
   const commands = useSyncExternalStore(subscribeChatCommands, getChatCommands, getChatCommands)
-  return (
-    <>
-      {splitMentions(text, known).map((p, i) => {
-        if (!p.mention) return <React.Fragment key={i}>{p.text}</React.Fragment>
-        const c = commands.find((x) => x.cmd.slice(1).toLowerCase() === p.mention!.slice(1))
-        return <span key={i} className="vc-mention" title={c ? `${c.title}${c.source ? ` · ${c.source} skill` : ''}\n${c.desc}` : undefined}>{p.text}</span>
-      })}
-    </>
-  )
+  const describe = useCallback((mention: string) => {
+    const c = commands.find((x) => x.cmd.slice(1).toLowerCase() === mention.slice(1))
+    return c ? `${c.title}${c.source ? ` · ${c.source} skill` : ''}\n${c.desc}` : undefined
+  }, [commands])
+  return <RefText text={text} attachments={attachments} known={known} describe={describe} onOpen={onOpen} />
 }
+
+// The box for editing a sent message is the composer's editor, so its chips stay chips.
+const PromptEditor = lazy(() => import('./editor/PromptEditor'))
 
 export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: ChatMessage; canEdit: boolean; onEdit: (text: string) => void; onRetry?: () => void; onDiscard?: () => void }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(m.content)
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
   const [copied, setCopied] = useState(false)
-  const ref = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    if (editing && ref.current) {
-      ref.current.focus()
-      ref.current.style.height = 'auto'
-      ref.current.style.height = `${ref.current.scrollHeight}px`
-    }
-  }, [editing])
+  const known = useMentionSet()
+  const lookup = useMemo(() => {
+    const byId = new Map((m.attachments || []).map((a) => [a.id, chipInfo(a)]))
+    return (id: string) => byId.get(id)
+  }, [m.attachments])
+  const open = useCallback((a: Attachment) => openAttachment(a, setLightbox), [])
   const badge = m.mode ? MODE_BADGE[m.mode] : null
   // His decision on an inbox card, written by the bridge for the agent: a label, and his note if he wrote one.
   const outcome = outcomeLabel(m)
@@ -153,7 +154,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
     return (
       <div className="vc-steer vc-inbox-outcome" data-land={`msg:${m.id}`}>
         <div className="vc-steer-label" title={m.content}><TI icon={IconArrowForwardUp} size={12} />{outcome.label}</div>
-        {outcome.text && <div className="vc-bubble"><MentionText text={outcome.text} /></div>}
+        {outcome.text && <div className="vc-bubble"><MessageText text={outcome.text} /></div>}
       </div>
     )
   }
@@ -161,20 +162,26 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
     <div className={`vc-row vc-user ${m.unsent ? 'unsent' : ''}`} data-land={`msg:${m.id}`}>
       {!!m.attachments?.length && (
         <div className="vc-user-attachments">
-          {m.attachments.map((a) => <AttachmentChip key={a.id} a={a} onOpen={() => openAttachment(a, setLightbox)} />)}
+          {m.attachments.map((a) => <AttachmentChip key={a.id} a={a} onOpen={() => open(a)} />)}
         </div>
       )}
       {editing ? (
         <div className="vc-edit">
-          <textarea
-            ref={ref}
-            value={draft}
-            onChange={(e) => { setDraft(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px` }}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setDraft(m.content) }
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (draft.trim()) { setEditing(false); onEdit(draft.trim()) } }
-            }}
-          />
+          <Suspense fallback={<div className="vc-ed" />}>
+            <PromptEditor
+              value={draft}
+              onChange={setDraft}
+              lookup={lookup}
+              known={known}
+              label="Edit message"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') { setEditing(false); setDraft(m.content); return true }
+                if (e.key === 'Enter' && !e.shiftKey) { if (draft.trim()) { setEditing(false); onEdit(draft.trim()) } return true }
+                return false
+              }}
+            />
+          </Suspense>
           <div className="vc-edit-actions">
             <button type="button" className="vc-btn ghost" onClick={() => { setEditing(false); setDraft(m.content) }}>Cancel</button>
             <button type="button" className="vc-btn primary" disabled={!draft.trim()} onClick={() => { setEditing(false); onEdit(draft.trim()) }}>Send</button>
@@ -188,7 +195,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
               {m.voice && <><TI icon={IconMicrophone} size={13} />Voice</>}
             </span>
           )}
-          <MentionText text={m.content} />
+          <MessageText text={m.content} attachments={m.attachments} onOpen={open} />
         </div>
       ) : null}
       {m.unsent && (
@@ -201,7 +208,7 @@ export function UserMessage({ m, canEdit, onEdit, onRetry, onDiscard }: { m: Cha
       )}
       {!editing && m.content && !m.unsent && (
         <div className="vc-actions vc-actions-user">
-          <button type="button" className="vc-act" title={copied ? 'Copied' : 'Copy'} onClick={() => { navigator.clipboard?.writeText(m.content); setCopied(true); setTimeout(() => setCopied(false), 1200) }}>
+          <button type="button" className="vc-act" title={copied ? 'Copied' : 'Copy'} onClick={() => { navigator.clipboard?.writeText(plainRefs(m.content)); setCopied(true); setTimeout(() => setCopied(false), 1200) }}>
             <TI icon={copied ? IconCheck : IconCopy} size={15} />
           </button>
           {canEdit && <button type="button" className="vc-act" title="Edit" onClick={() => { setDraft(m.content); setEditing(true) }}><TI icon={IconPencil} size={15} /></button>}
@@ -299,7 +306,7 @@ function SteerNote({ part }: { part: SteerPart }) {
           {part.attachments.map((a) => <AttachmentChip key={a.id} a={a} onOpen={() => openAttachment(a, setLightbox)} />)}
         </div>
       )}
-      {part.text && <div className="vc-bubble">{part.text}</div>}
+      {part.text && <div className="vc-bubble"><MessageText text={part.text} attachments={part.attachments} onOpen={(a) => openAttachment(a, setLightbox)} /></div>}
       {lightbox && <Lightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} />}
     </div>
   )
@@ -338,6 +345,8 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
   const [copied, setCopied] = useState(false)
   const [speaking, setSpeaking] = useState<null | (() => void)>(null)
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null)
+  // A picture a step returned, opened from the steps (WorkLog.tsx).
+  const openShot = useCallback((src: string, alt: string) => setLightbox({ src, alt }), [])
   // The steps before the answer fold into one line above it once the reply is
   // in (workFold.ts); a stopped or failed reply has no answer, so it stays open.
   const settled = !live && m.status !== 'stopped' && m.status !== 'error'
@@ -363,7 +372,7 @@ export function AssistantMessage({ m, live, activity, provider, modelName, isLas
     <div className={`vc-row vc-assistant ${live ? 'live' : ''}`} data-land={`msg:${m.id}`}>
       <div className="vc-assistant-body">
         {list.map((b, i) => {
-          if (b.kind === 'work') return <WorkLog key={b.key} items={b.items} live={live && i === list.length - 1} />
+          if (b.kind === 'work') return <WorkLog key={b.key} items={b.items} live={live && i === list.length - 1} onOpenImage={openShot} />
           if (b.kind === 'agents') return <AgentGroup key={b.key} tools={b.tools} />
           if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
           if (b.kind === 'change') return <ChangeCard key={b.key} part={b.part} />

@@ -2,10 +2,9 @@
 
 A totem is a standing agent: it wakes on a schedule, or when something it watches
 changes, to do one job, remembers what it saw between runs, and tells the owner
-only what matters. Totems replaced Studio. They live in the chats panel (its
-Totems switch); the Totems page (`/totems`, off the nav rail since 2026-10-21) is
-where one is built or edited, reached from the panel's "All totems" button or a
-totem chat's gear. This is the spec; AGENTS.md has the summary.
+only what matters. Totems replaced Studio. They live on the Totems page (`/totems`,
+on the rail after Chat since 1.1, with a badge for reports waiting), where one is
+built or edited, and in each totem's own chat (its gear opens its page). This is the spec; AGENTS.md has the summary.
 
 ## Every job is a totem
 
@@ -188,14 +187,12 @@ until the run ends and its report lands in the chat (`TotemRunButton` in
 Group chats are listed above the totems, drafts between. There is no 3D lobby any
 more (it was removed in favour of the list).
 
-**The chats panel has a Totems face.** A Chats | Totems switch at the top of the
-desktop panel and the phone drawer (`totem.panel.mode`, kept per device) turns it
-from your chats to your totems: group chats first (with "+" for a new one), then
-every totem, the one that ran last on top, each opening its own chat. The right of
-each row says what it is doing (`totemNavRows` in `web/src/chat/totemNav.ts`,
-ported to `mobile/src/lib/chat/`): running now, a report waiting, the last run
-failed, or paused (dimmed), and how long ago it last ran. A waiting report puts a
-dot on the Totems tab while the panel shows Chats.
+**On the rail, not in the chats panel.** Until 1.1 the web's chats panel had a
+Chats | Totems switch; since then the panel lists only the owner's chats (group chats
+included, a totem's own chat not), and Totems is a rail item after Chat whose badge
+counts totem chats with a report he hasn't read. The iPhone drawer is the same: its
+chats list leaves totems' chats out, and Totems is a drawer row under Overview with a dot
+for a report waiting.
 
 ## Group chats and totems in any chat
 

@@ -44,6 +44,22 @@ recorded, and the leader and sequence recorders, carry `data-hotkey-capture`, so
 pressed there is not also fired. Letters and digits are read from the key's position
 (`e.code`), so ⌥O on a Mac (which types "ø") is still `alt+o`. The Keyboard shortcuts switch turns hotkeys off with the leader.
 
+## In the message box
+
+The composer's own keys are not shortcuts (they never go through the leader or a hotkey), but
+they are keys worth knowing. In a list or a code block, Return and Tab edit it:
+
+| Key | In a list | In a code block |
+|---|---|---|
+| Return | Next item (renumbering the rest); on an empty item, up a level, then out of the list | New line, keeping the indent; leaves after a closing fence or the third blank line |
+| Shift+Return | A new line in the same item | A new line |
+| Tab / Shift+Tab | Nest under the item above / lift to follow the parent (every selected item) | Indent / outdent two spaces |
+| ⌘/Ctrl+Return | Send (while a reply runs, the other follow-up action) | Same |
+
+Everywhere else Return sends (or queues or steers while a reply runs, per Settings → Chat), and
+Tab moves focus. The full table, with Backspace and Delete, is in `docs/chat.md` → Lists and
+code in the message box.
+
 ## Why it looks like this
 
 A leader key, a panel listing what one more press would do, and plain letters rather

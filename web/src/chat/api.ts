@@ -132,6 +132,8 @@ export function uploadFile(file: Blob, name: string, { kind, onProgress }: { kin
 }
 
 export const deleteUpload = (id: string) => api(`/api/chat/uploads/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {})
+/** Keep the uploads this browser's saved drafts hold past the bridge's orphan sweep; answers which are gone. */
+export const holdUploads = (ids: string[]) => api<{ held: string[]; missing: string[] }>('/api/chat/uploads/hold', json('POST', { ids }))
 
 export async function transcribe(audio: Blob): Promise<string> {
   const r = await fetch('/api/chat/transcribe', {

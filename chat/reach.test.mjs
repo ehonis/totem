@@ -88,3 +88,12 @@ test('offering the browser costs nothing: Chromium starts on the first tool call
   assert.ok(opened.isError)
   assert.equal(launches, 1)
 })
+
+test('the work rules say thinking is never shown and the answer follows housekeeping', () => {
+  assert.match(WORK_RULES, /never your thinking/)
+  assert.match(WORK_RULES, /after your last tool call/)
+  // Pictures the agent looked at stay in its steps; it shows one by naming its path.
+  assert.match(WORK_RULES, /folded in your steps/)
+  assert.match(WORK_RULES, /!\[what it shows\]\(\/absolute\/path/)
+  assert.match(WORK_RULES, /outputs folder/) // the one place every backend's picture can be shown from
+})

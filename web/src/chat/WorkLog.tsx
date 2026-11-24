@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import type { ToolPart } from './types'
 import { TI, toolApp, toolIcon, formatDuration } from './ui'
-import { IconChevronRight, IconX, IconCheck } from './icons'
+import { IconChevronRight, IconX, IconCheck, IconPhoto } from './icons'
 import { summarizeWork, workElapsed, workSources, type WorkItem, type WorkSource } from './workFold'
 import Markdown from '../components/Markdown'
 import Spark from './Spark'
@@ -10,7 +10,9 @@ import Spark from './Spark'
 // the agent is doing right now while it works, a summary once it has finished,
 // led by the logos of the connectors it used — because the answer is the point
 // and the steps are the receipt. Expanded, it reads in order: what the agent
-// said along the way, and each call as a card with what went in and came back.
+// said along the way, and each call as a card with what went in and came back,
+// including any pictures it returned: what the agent looked at stays here, and
+// the reply shows a picture only when the agent puts it in its text.
 
 /** A connector's own logo, or its glyph when it has none or the image fails. */
 export function Logo({ logo, server, kind = 'mcp', detail, size }: { logo?: string; server?: string; kind?: string; detail?: string; size: number }) {
@@ -31,18 +33,33 @@ function SourceStack({ sources }: { sources: WorkSource[] }) {
   )
 }
 
-function ToolCard({ tool }: { tool: ToolPart }) {
+export type ToolImage = NonNullable<ToolPart['images']>[number]
+const shotSrc = (im: ToolImage) => im.url || `/api/chat/uploads/${im.uploadId}`
+/** A card holding pictures names its file, not the path: on a phone a long shared path cut off every row the same. */
+const shotName = (detail = '') => (/^(~|\/|[A-Za-z]:\\)/.test(detail) ? detail.split(/[\\/]/).pop() || detail : detail)
+
+function ToolCard({ tool, onOpenImage }: { tool: ToolPart; onOpenImage?: (src: string, alt: string) => void }) {
   const [open, setOpen] = useState(false)
   const app = tool.app || toolApp(tool.server)?.label
-  const hasBody = !!(tool.input || tool.output)
+  const images = tool.images || []
+  // A result that was only pictures reads "[image]" as text; the pictures say it better.
+  const output = images.length && /^(\[image\]\s*)+$/.test(tool.output || '') ? '' : tool.output
+  const hasBody = !!(tool.input || output || images.length)
   const ms = tool.endedAt && tool.startedAt ? tool.endedAt - tool.startedAt : 0
+  const detail = images.length ? shotName(tool.detail) : tool.detail
+  const label = (i: number) => `Open ${detail || 'picture'}${images.length > 1 ? ` (${i + 1} of ${images.length})` : ''}`
   return (
     <div className={`vc-tool ${tool.status}`}>
       <button type="button" className="vc-tool-head" onClick={() => hasBody && setOpen((o) => !o)} aria-expanded={open} disabled={!hasBody}>
         <span className="vc-tool-icon"><Logo logo={tool.logo} server={tool.server} kind={tool.kind} detail={tool.detail} size={15} /></span>
         <span className="vc-tool-title">{tool.title}</span>
         {app && <span className="vc-tool-app">{app}</span>}
-        {tool.detail && <span className="vc-tool-detail">{tool.detail}</span>}
+        {detail && <span className="vc-tool-detail" title={detail !== tool.detail ? tool.detail : undefined}>{detail}</span>}
+        {images.length > 0 && (
+          <span className="vc-tool-pics" title={`${images.length} picture${images.length > 1 ? 's' : ''}`}>
+            <TI icon={IconPhoto} size={13} />{images.length > 1 && images.length}
+          </span>
+        )}
         <span className="vc-tool-state">
           {tool.status === 'running' ? <Spark size={13} />
             : tool.status === 'error' ? <TI icon={IconX} size={14} />
@@ -58,10 +75,19 @@ function ToolCard({ tool }: { tool: ToolPart }) {
               <pre>{tool.input}</pre>
             </div>
           )}
-          {tool.output && (
+          {output && (
             <div className="vc-tool-io">
               <div className="vc-tool-io-label">{tool.status === 'error' ? 'Error' : 'Result'}</div>
-              <pre>{tool.output}</pre>
+              <pre>{output}</pre>
+            </div>
+          )}
+          {images.length > 0 && (
+            <div className="vc-tool-shots">
+              {images.map((im, i) => (
+                <button key={im.uploadId} type="button" className="vc-tool-shot" onClick={() => onOpenImage?.(shotSrc(im), detail || tool.title)} aria-label={label(i)}>
+                  <img src={shotSrc(im)} alt="" loading="lazy" />
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -70,7 +96,7 @@ function ToolCard({ tool }: { tool: ToolPart }) {
   )
 }
 
-export default function WorkLog({ items, live }: { items: WorkItem[]; live: boolean }) {
+export default function WorkLog({ items, live, onOpenImage }: { items: WorkItem[]; live: boolean; onOpenImage?: (src: string, alt: string) => void }) {
   const [open, setOpen] = useState(false)
   const tools = items.flatMap((i) => (i.kind === 'tools' ? i.tools : []))
   const { text, running } = summarizeWork(tools, live)
@@ -91,7 +117,7 @@ export default function WorkLog({ items, live }: { items: WorkItem[]; live: bool
         <div className="vc-worklog-list">
           {items.map((i) => i.kind === 'text'
             ? <Markdown key={i.key} text={i.text} className="vc-worklog-note" />
-            : i.tools.map((t) => <ToolCard key={t.id} tool={t} />))}
+            : i.tools.map((t) => <ToolCard key={t.id} tool={t} onOpenImage={onOpenImage} />))}
         </div>
       )}
     </div>

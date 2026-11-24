@@ -7,6 +7,7 @@
 // its notes, a list carries its items.
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
+import { plainRefs } from '../chat/refs.mjs'
 
 export const KINDS = ['note', 'journal', 'chat', 'task', 'goal', 'list', 'project', 'totem']
 
@@ -107,10 +108,10 @@ export function chatSource({ threads }) {
       const docs = []
       for (const t of await threads.list()) {
         // An untitled chat goes by its first question, the way the chat list shows it.
-        const first = (t.messages || []).find((m) => m.role === 'user')?.content?.replace(/\s+/g, ' ').trim() || ''
+        const first = plainRefs((t.messages || []).find((m) => m.role === 'user')?.content).replace(/\s+/g, ' ').trim()
         const title = t.title || (first ? (first.length > 48 ? `${first.slice(0, 48)}…` : first) : 'Untitled chat')
         ;(t.messages || []).forEach((m, i) => {
-          const body = String(m.content || '').trim()
+          const body = plainRefs(m.content).trim()
           if (!body || (m.role !== 'user' && m.role !== 'assistant')) return
           docs.push({
             id: `${t.id}/${m.id || i}`,

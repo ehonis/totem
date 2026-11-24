@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createThreadStore } from './store.mjs'
+import { createThreadStore, wakeOnOwnerMessage } from './store.mjs'
 import { createUploadStore } from './uploads.mjs'
 import { createChatRuns } from './runs.mjs'
 import { planHistory, renderTranscript, attachmentBlock, applyEvent, finalizeMessage, fallbackTitle, failureText } from './turn.mjs'
@@ -159,6 +159,25 @@ test('applyEvent builds ordered text and tool parts, and settles tools', () => {
   assert.equal(msg.status, 'stopped')
 })
 
+test('a picture a tool returned goes on its card, not in the reply, and survives a save', () => {
+  const msg = { role: 'assistant', content: '' }
+  applyEvent(msg, { type: 'tool', tool: { id: 'r1', phase: 'start', title: 'Read a file' } })
+  applyEvent(msg, { type: 'tool_image', uploadId: 'up1', toolId: 'r1' })
+  applyEvent(msg, { type: 'tool', tool: { id: 'r1', phase: 'end', status: 'done', output: '[image]' } })
+  // A call this reply never saw (another attempt's) drops its picture rather than showing it.
+  applyEvent(msg, { type: 'tool_image', uploadId: 'up2', toolId: 'gone' })
+  // An image the CLI made, with no call, still stands in the reply.
+  applyEvent(msg, { type: 'image', uploadId: 'up3' })
+  assert.deepEqual(msg.parts.map((p) => p.type), ['tool', 'image'])
+  assert.deepEqual(msg.parts[0].images, [{ uploadId: 'up1' }])
+  assert.equal(msg.parts[1].uploadId, 'up3')
+  const saved = normalizeMessage({ ...msg, id: 'm1' })
+  assert.deepEqual(saved.parts[0].images, [{ uploadId: 'up1' }])
+  // A bad id in a saved file is dropped.
+  const bad = normalizeMessage({ id: 'm2', role: 'assistant', content: '', parts: [{ type: 'tool', id: 't', images: [{ uploadId: '../x' }] }] })
+  assert.equal(bad.parts[0].images, undefined)
+})
+
 test('finalizeMessage records a final reply that never streamed', () => {
   const msg = { role: 'assistant', content: '', parts: [] }
   finalizeMessage(msg, { status: 'done', finalText: 'All set.' })
@@ -309,4 +328,27 @@ test('a tool part keeps its connector name and only an https logo', () => {
   const saved = normalizeMessage({ id: 'm1', role: 'assistant', content: '', parts: [msg.parts[0], { ...msg.parts[0], id: 'y', logo: 'http://evil/x.png' }] })
   assert.equal(saved.parts[0].logo, 'https://claude.ai/m365.png')
   assert.equal(saved.parts[1].logo, undefined)
+})
+
+const WOKEN_AT = 1_800_000_000_000
+const woken = (t) => { wakeOnOwnerMessage(t, WOKEN_AT); return t }
+
+test('writing in a settled chat brings it back to the top', () => {
+  assert.deepEqual(woken({ settledOverride: 'settled', settledAt: WOKEN_AT - 1000 }), { unsettledAt: WOKEN_AT })
+})
+
+test('writing in a snoozed chat wakes it and drops the timer', () => {
+  assert.deepEqual(woken({ snoozedUntil: WOKEN_AT + 3_600_000, snoozedAt: WOKEN_AT - 1000 }), { unsettledAt: WOKEN_AT })
+})
+
+test('writing in a chat that already woke clears the Woke mark and leaves its place', () => {
+  assert.deepEqual(woken({ snoozedUntil: WOKEN_AT - 1000, snoozedAt: WOKEN_AT - 5000, unsettledAt: WOKEN_AT - 9000 }), { unsettledAt: WOKEN_AT - 9000 })
+})
+
+test('writing in a chat taken off the shelf by hand hands it back to auto-settle', () => {
+  assert.deepEqual(woken({ settledOverride: 'active', unsettledAt: WOKEN_AT - 9000 }), { unsettledAt: WOKEN_AT - 9000 })
+})
+
+test('writing in a chat the agent marked done means it is not done', () => {
+  assert.deepEqual(woken({ doneAt: WOKEN_AT - 1000, settledOverride: 'active' }), {})
 })

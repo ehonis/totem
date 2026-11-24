@@ -1,5 +1,8 @@
 import React, { useState } from 'react'
 import type { QueuedMessage } from './types'
+import { RefText } from './RefChip'
+import { useMentionSet } from './Message'
+import { plainRefs } from './refs'
 import { TI } from './ui'
 import { IconListNumbers, IconChevronDown, IconGripVertical, IconPencil, IconCornerUpRight, IconX } from './icons'
 
@@ -23,6 +26,7 @@ export default function QueuedMessages({ queue, canSteer, editingId, onEdit, onC
   onMove: (id: string, beforeId: string | null) => void
 }) {
   const [expanded, setExpanded] = useState(true)
+  const known = useMentionSet()
   const [dragging, setDragging] = useState<string | null>(null)
   // Where the dragged row would land: before this index (queue.length = last).
   const [dropAt, setDropAt] = useState<number | null>(null)
@@ -84,11 +88,11 @@ export default function QueuedMessages({ queue, canSteer, editingId, onEdit, onC
                     <TI icon={IconGripVertical} size={13} />
                   </button>
                 ) : <span className="vc-queue-grip-space" />}
-                <span className="vc-queue-content" title={q.text || undefined}>
+                <span className="vc-queue-content" title={plainRefs(q.text) || undefined}>
                   {images.map((a) => (
                     <span key={a.id} className="vc-queue-thumb">{a.url && <img src={a.url} alt="" />}</span>
                   ))}
-                  <span className="vc-queue-text">{preview}</span>
+                  <span className="vc-queue-text"><RefText text={preview} attachments={q.attachments} known={known} /></span>
                 </span>
                 <span className="vc-queue-actions">
                   {editing ? (

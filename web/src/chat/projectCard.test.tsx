@@ -8,8 +8,8 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ProjectCard, { openProjectSection } from './ProjectCard'
-import ProjectHome from './ProjectHome'
-import { loadProject, loadProjects } from './store'
+import ProjectHome, { FIRST_CHATS, MORE_CHATS, firstRows } from './ProjectHome'
+import { adoptThread, getState, loadProject, loadProjects, removeThread } from './store'
 import { requestLanding } from '../landing'
 
 const ACME = {
@@ -151,5 +151,62 @@ describe('a project’s page', () => {
     render(<div className="vc"><ProjectHome projectId="acme" composer={<div>composer</div>} cardInline /></div>)
     const card = screen.getByRole('complementary', { name: 'Project: Acme' })
     expect(await within(card).findByRole('region', { name: 'Memory' })).toBeVisible()
+  })
+})
+
+describe('a project’s page lists its latest chats, not all of them', () => {
+  const chat = (n: number, extra: Record<string, unknown> = {}) => ({
+    id: `c${n}`, kind: 'regular', title: `Chat ${n}`, projectId: 'acme', createdAt: 1, updatedAt: Date.now() - n * 60_000,
+    messages: [{ id: `m${n}`, role: 'user', content: 'hi', createdAt: 1 }], ...extra,
+  }) as any
+  afterEach(() => { for (const t of [...getState().threads]) if (t.projectId === 'acme') removeThread(t.id) })
+
+  it('cuts the groups at the limit, in order, and drops the ones left empty', () => {
+    const t = (id: string) => ({ id }) as any
+    const groups = [{ label: 'Today', threads: [t('a'), t('b')] }, { label: 'Settled', threads: [t('c'), t('d')] }, { label: 'Old', threads: [t('e')] }]
+    expect(firstRows(groups, 3)).toEqual([{ label: 'Today', threads: [t('a'), t('b')] }, { label: 'Settled', threads: [t('c')] }])
+    expect(firstRows(groups, 99)).toEqual(groups)
+  })
+
+  it('shows five, then pages on with Show more, and folds back with Show fewer', async () => {
+    const user = userEvent.setup()
+    const total = FIRST_CHATS + MORE_CHATS + 3
+    act(() => { for (let n = 1; n <= total; n++) adoptThread(chat(n)) })
+    render(<div className="vc"><ProjectHome projectId="acme" composer={<div>composer</div>} /></div>)
+    const rows = () => screen.queryAllByText(/^Chat \d+$/).map((el) => el.textContent)
+    expect(rows()).toEqual(['Chat 1', 'Chat 2', 'Chat 3', 'Chat 4', 'Chat 5'])
+    // Folded, one heading over the five; the date groups come back with Show more.
+    const headings = () => [...document.querySelectorAll('.vc-proj-group')].map((g) => g.textContent).filter((h) => h !== 'Folders')
+    expect(headings()).toEqual(['Chats'])
+    expect(screen.getByText(`${total} chats`)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Show fewer' })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: `Show ${MORE_CHATS} more` }))
+    expect(rows()).toHaveLength(FIRST_CHATS + MORE_CHATS)
+    expect(headings()).not.toContain('Chats')
+    await user.click(screen.getByRole('button', { name: 'Show 3 more' }))
+    expect(rows()).toHaveLength(total)
+    expect(screen.queryByRole('button', { name: /^Show \d+ more$/ })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Show fewer' }))
+    expect(rows()).toHaveLength(FIRST_CHATS)
+  })
+
+  it('keeps the Settled heading for a settled chat among the first five', () => {
+    act(() => {
+      for (let n = 1; n <= 3; n++) adoptThread(chat(n))
+      for (let n = 4; n <= 8; n++) adoptThread(chat(n, { settledOverride: 'settled', settledAt: Date.now() }))
+    })
+    render(<div className="vc"><ProjectHome projectId="acme" composer={<div>composer</div>} /></div>)
+    const headings = [...document.querySelectorAll('.vc-proj-group')].map((g) => g.textContent).filter((h) => h !== 'Folders')
+    expect(headings).toEqual(['Chats', 'Settled'])
+    expect(screen.queryAllByText(/^Chat \d+$/)).toHaveLength(FIRST_CHATS)
+  })
+
+  it('has no Show more row when every chat fits', () => {
+    act(() => { for (let n = 1; n <= FIRST_CHATS; n++) adoptThread(chat(n)) })
+    render(<div className="vc"><ProjectHome projectId="acme" composer={<div>composer</div>} /></div>)
+    expect(screen.queryAllByText(/^Chat \d+$/)).toHaveLength(FIRST_CHATS)
+    expect(screen.queryByRole('button', { name: /more|fewer/ })).toBeNull()
   })
 })

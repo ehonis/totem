@@ -4,6 +4,8 @@
 import { router } from 'expo-router'
 import { DrawerActions } from 'expo-router/react-navigation'
 import { setActive, requestVoice } from '../lib/chat/store'
+import { requestNewChat } from '../features/chat/appDrafts'
+import { newChatInScope } from '../features/chat/chatsScope'
 import { resolveNav, type NavTarget } from './routes'
 
 // What nav.ts exported before routes.ts existed, so code written against it keeps working.
@@ -26,7 +28,10 @@ export function openChat(threadId: string | null = null) {
 }
 
 export function newChat() {
+  // In the project the drawer's list is scoped to, else at Home (features/chat/chatsScope.ts).
+  newChatInScope()
   openChat(null)
+  requestNewChat()
 }
 
 /** One-tap voice: a fresh chat that opens straight into voice mode. */

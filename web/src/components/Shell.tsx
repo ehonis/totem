@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { Hi } from '../icons'
 import totemLogo from '../assets/totem-logo.png'
-import { ChatsNav } from '../chat/ProjectNav'
-import { setActive } from '../chat/store'
+import { ChatsNav, newChatInScope } from '../chat/ChatsNav'
+import { requestNewChat } from '../chat/draftsWeb'
 import { TI } from '../chat/ui'
 import UsageChips from '../chat/UsageChips'
 import DesktopUpdate from './DesktopUpdate'
@@ -168,8 +168,10 @@ function Brand() {
   return <span className="sh-brand"><span className="brand-name">Totem</span></span>
 }
 
-export function SidePanel({ onOpenChat, onNotifications, unread, onCollapse }: {
+export function SidePanel({ onOpenChat, onNotifications, unread, onCollapse, chatShowing }: {
   onOpenChat: () => void
+  /** The chat page is on screen (ChatsNav's `chatShowing`). */
+  chatShowing: boolean
   onNotifications: () => void
   unread: number
   onCollapse: () => void
@@ -189,10 +191,10 @@ export function SidePanel({ onOpenChat, onNotifications, unread, onCollapse }: {
           </button>
         </div>
       </div>
-      <button type="button" className="sh-new" onClick={() => { setActive(null); onOpenChat() }}>
+      <button type="button" className="sh-new" onClick={() => { newChatInScope(); requestNewChat(); onOpenChat() }}>
         <TI icon={IconEdit} size={18} />New chat
       </button>
-      <ChatsNav onOpenChat={onOpenChat} />
+      <ChatsNav onOpenChat={onOpenChat} chatShowing={chatShowing} />
     </aside>
   )
 }
@@ -262,7 +264,7 @@ export function MobileDrawer({ open, onClose, tabs, bottom, active, onSelect, on
           </div>
         </div>
         <div className="sh-drawer-scroll">
-          <button type="button" className="sh-new" onClick={() => { setActive(null); onOpenChat(); onClose() }}>
+          <button type="button" className="sh-new" onClick={() => { newChatInScope(); requestNewChat(); onOpenChat(); onClose() }}>
             <TI icon={IconEdit} size={19} />New chat
           </button>
           <div className="sh-drawer-nav">
@@ -274,7 +276,7 @@ export function MobileDrawer({ open, onClose, tabs, bottom, active, onSelect, on
               </button>
             ))}
           </div>
-          <ChatsNav onOpenChat={() => { onOpenChat(); onClose() }} />
+          <ChatsNav onOpenChat={() => { onOpenChat(); onClose() }} chatShowing={active === 'chat'} />
         </div>
         <div className="sh-drawer-foot">
           <Version inline />

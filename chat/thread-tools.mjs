@@ -10,9 +10,12 @@
 // the live bits: which chats have a run going, the projects, keyword hits from
 // the search index.
 
+import { plainRefs } from './refs.mjs'
+
 const DAY_MS = 86_400_000
+// An attachment named in the text reads as its name (chat/refs.mjs).
 const clip = (s, n) => {
-  const t = String(s || '').replace(/\s+/g, ' ').trim()
+  const t = plainRefs(s).replace(/\s+/g, ' ').trim()
   return t.length > n ? `${t.slice(0, n - 1)}…` : t
 }
 const iso = (ms) => (ms ? new Date(ms).toISOString() : null)
@@ -32,6 +35,10 @@ export function projectPath(projectId, projects) {
   return parent ? `${parent.name} / ${p.name}` : p.name
 }
 
+/** When the owner last wrote in it, took it off the shelf or started it (settle.ts ownerAt). */
+const ownerAt = (t) => (t.messages || []).reduce((at, m) => (m.role === 'user' && m.command !== 'compact' && m.createdAt > at ? m.createdAt : at), Math.max(t.createdAt || 0, t.unsettledAt || 0))
+const taskDoneSince = (t) => (t.taskDoneAt && t.taskDoneAt >= ownerAt(t) ? t.taskDoneAt : 0)
+
 /**
  * Where the chat sits in the owner's list: active, snoozed or settled. A mirror
  * of web/src/chat/settle.ts (auto-settle included), so the agent and the panel agree.
@@ -40,8 +47,9 @@ export function shelfOf(t, { now = Date.now(), autoSettleDays = 3, running = fal
   if (t.snoozedUntil && t.snoozedUntil > now) return 'snoozed'
   if (t.settledOverride === 'settled') return 'settled'
   if (t.settledOverride === 'active' || t.pinned || running || !autoSettleDays) return 'active'
-  // Marked done by its agent (chat/done.mjs) and read: settled.
-  if (t.doneAt && !t.needsReply) return 'settled'
+  // Marked done by its agent (chat/done.mjs), or its linked task finished since the owner
+  // last wrote in it (`taskDoneAt`, chat/task-done.mjs; settle.ts taskDoneSince), and read: settled.
+  if ((t.doneAt || taskDoneSince(t)) && !t.needsReply) return 'settled'
   const at = Math.max(t.updatedAt || 0, t.unsettledAt || 0, t.snoozedUntil || 0)
   return now - at >= autoSettleDays * DAY_MS ? 'settled' : 'active'
 }

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useToasts, dismissToast, holdToasts, type Toast } from '../toast'
+import { useToasts, dismissToast, holdToasts, runToastAction, type Toast } from '../toast'
 import { Hi, XMarkIcon, ArrowUturnLeftIcon, ExclamationTriangleIcon, CheckCircleIcon, InformationCircleIcon } from '../icons'
 
 // Glyph per toast kind; errors default.
@@ -73,7 +73,7 @@ function Item({ t, index, open, offset, frontHeight, onHeight, top }: {
         {t.action && (
           <button
             className="flex-none inline-flex items-center gap-1 self-center px-2.5 py-1.5 min-h-[32px] bg-white/15 border-0 rounded-lg text-white text-[12px] font-semibold cursor-pointer hover:bg-white/25"
-            onClick={() => { const run = t.action!.onClick; dismissToast(t.id); run() }}
+            onClick={() => { void runToastAction(t) }}
           >
             {t.action.icon !== null && <Hi icon={t.action.icon || ArrowUturnLeftIcon} size={13} />} {t.action.label}
           </button>

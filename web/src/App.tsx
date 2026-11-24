@@ -29,7 +29,9 @@ import ScreenView from './screen/ScreenView'
 import { useScreenStatus } from './screen/useScreenStatus'
 import { screenEnabled } from './screen/api'
 import { Rail, SidePanel, MobileBar, MobileDrawer, NewChatFab, usePanelOpen, useEdgeSwipe } from './components/Shell'
-import { setActive, requestVoice } from './chat/store'
+import { requestVoice, useChat } from './chat/store'
+import { newChatInScope } from './chat/ChatsNav'
+import { requestNewChat } from './chat/draftsWeb'
 import TotemsView from './components/TotemsView'
 import TotemsIcon from './components/TotemsIcon'
 import SettingsView from './components/SettingsView'
@@ -83,9 +85,9 @@ const PRIMARY_TABS: TabDef[] = [
 ]
 
 // No longer on the nav: Brain opens from the Overview's app row, Code is the last
-// section of Dev, the AI workshop (Studio's skills/jobs/connections, and Logs)
-// lives in Settings, and Totems live in the chats panel (its Totems switch, and a
-// totem chat's gear opens /totems on that totem's settings).
+// section of Dev, and the AI workshop (Studio's skills/jobs/connections, and Logs)
+// lives in Settings. Totems are on the rail, after Chat (TOTEMS_TAB_DEF): the
+// chats panel lists the owner's chats only.
 // Their routes still work, so links and shortcuts to them keep landing.
 const MORE_TABS: TabDef[] = []
 
@@ -102,7 +104,7 @@ const SCREEN_TAB_DEF: TabDef = { id: 'screen', label: 'Screen', icon: ComputerDe
 // (CLIPROXY_URL and a key); /cliproxy explains itself either way.
 const CLIPROXY_TAB_DEF: TabDef = { id: 'cliproxy', label: 'CLIProxy', icon: KeyIcon }
 
-// Off the nav (see MORE_TABS), but /totems still needs a name in the phone's top bar.
+// On the rail and in the drawer right after Chat, with a badge for reports waiting.
 const TOTEMS_TAB_DEF: TabDef = { id: 'totems', label: 'Totems', icon: TotemsIcon }
 
 // Settings lives at the bottom of the sidebar (replacing the old Disconnect link).
@@ -148,6 +150,8 @@ export default function App() {
   const unlock = useCallback(() => setUnlocked(true), [])
   // Only polls once past the secret gate — before that every request 401s.
   const { open: inboxOpen, byKind: inboxByKind } = useInboxCount(unlocked)
+  // A totem's chat with a report he hasn't read: the Totems tab says how many.
+  const totemReports = useChat((s) => s.threads.reduce((n, t) => n + (t.totemId && t.needsReply && !s.runs[t.id] ? 1 : 0), 0))
   // The URL is the source of truth for where you are: /productivity/calendar,
   // /settings/providers, /chat?thread=…. See router.ts.
   const [route, setRoute] = useState<Route>(() => parseLocation(window.location, getSettings().landingTab))
@@ -392,17 +396,22 @@ export default function App() {
 
   // Every tab is on the rail (desktop) or in the drawer (phone); nothing is
   // folded under "More" any more.
-  const allTabs = [...PRIMARY_TABS, ...MORE_TABS]
+  const chatAt = PRIMARY_TABS.findIndex((t) => t.id === 'chat') + 1
+  const allTabs = [...PRIMARY_TABS.slice(0, chatAt), TOTEMS_TAB_DEF, ...PRIMARY_TABS.slice(chatAt), ...MORE_TABS]
   const railTabs = [
     ...allTabs,
     ...(cliproxyConfigured ? [CLIPROXY_TAB_DEF] : []),
     ...(screenEnabled(screenStatus) ? [SCREEN_TAB_DEF] : []),
     ...(appleEnabled(appleStatus) ? [MESSAGES_TAB_DEF] : []),
   ]
-  const badges = inboxOpen ? { inbox: { count: inboxOpen, title: describeInboxCount(inboxOpen, inboxByKind) } } : {}
-  const tabLabel = [...allTabs, CLIPROXY_TAB_DEF, MESSAGES_TAB_DEF, SCREEN_TAB_DEF, TOTEMS_TAB_DEF].find((t) => t.id === pageTab)?.label || 'Totem'
+  const badges: Record<string, { count: number; title?: string }> = {
+    ...(inboxOpen ? { inbox: { count: inboxOpen, title: describeInboxCount(inboxOpen, inboxByKind) } } : {}),
+    ...(totemReports ? { totems: { count: totemReports, title: totemReports === 1 ? 'A totem has a report waiting' : `${totemReports} totems have reports waiting` } } : {}),
+  }
+  const tabLabel = [...allTabs, CLIPROXY_TAB_DEF, MESSAGES_TAB_DEF, SCREEN_TAB_DEF].find((t) => t.id === pageTab)?.label || 'Totem'
   const openChat = () => selectTab('chat')
-  const newChat = () => { setActive(null); selectTab('chat') }
+  // As the panel's New chat: in the project the list is scoped to, else at Home (chat/ChatsNav.tsx).
+  const newChat = () => { newChatInScope(); requestNewChat(); selectTab('chat') }
   const showPanel = useCallback(() => { if (!narrow) setPanelOpen(true) }, [narrow, setPanelOpen])
 
   if (!unlocked) return <AuthGate onUnlock={unlock} />
@@ -413,7 +422,7 @@ export default function App() {
         <Rail
           tabs={railTabs}
           bottom={SETTINGS_TAB_DEF}
-          active={tab === 'totems' ? 'chat' : tab}
+          active={tab}
           onSelect={selectTab}
           panelOpen={panelOpen}
           onTogglePanel={() => setPanelOpen(!panelOpen)}
@@ -422,7 +431,7 @@ export default function App() {
         />
       )}
       {!narrow && panelOpen && (
-        <SidePanel onOpenChat={openChat} onNotifications={() => setNotificationsOpen(true)} unread={unreadNotifications} onCollapse={() => setPanelOpen(false)} />
+        <SidePanel onOpenChat={openChat} chatShowing={pageTab === 'chat'} onNotifications={() => setNotificationsOpen(true)} unread={unreadNotifications} onCollapse={() => setPanelOpen(false)} />
       )}
       <main className="main" data-glow={GLOW_TABS.has(pageTab) ? pageTab : undefined}>
         {GLOW_TABS.has(pageTab) && <div className="page-glow" aria-hidden />}
@@ -476,7 +485,7 @@ export default function App() {
           // still opens, and agents still read Messages through apple__*.
           tabs={allTabs}
           bottom={SETTINGS_TAB_DEF}
-          active={tab === 'totems' ? 'chat' : tab}
+          active={tab}
           onSelect={selectTab}
           onOpenChat={openChat}
           badges={badges}

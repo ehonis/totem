@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { draftKeyFor, matchScore, moveDraft, placeAfter, rankDestinations, slug, stripToken } from './destinations'
+import { matchScore, placeAfter, rankDestinations, slug, stripToken } from './destinations'
 import type { Project } from './types'
 import type { WorkTask } from '../work/groups'
 
@@ -87,7 +87,7 @@ describe('stripToken', () => {
   })
 })
 
-describe('placeAfter and draftKeyFor', () => {
+describe('placeAfter', () => {
   const home = () => null
   it('a place keeps the task; a task takes its own folder, else stays put', () => {
     const now = { taskId: 't1', projectId: null }
@@ -97,27 +97,5 @@ describe('placeAfter and draftKeyFor', () => {
     const t2 = { kind: 'task' as const, key: 't:t2', name: 'x', task: tasks[1] }
     expect(placeAfter(t2, { taskId: null, projectId: 'wp' }, home)).toEqual({ taskId: 't2', projectId: 'wp' })
     expect(placeAfter(t2, { taskId: null, projectId: 'wp' }, () => 'harbor')).toEqual({ taskId: 't2', projectId: 'harbor' })
-  })
-
-  it('matches the draft keys ChatView keeps', () => {
-    expect(draftKeyFor({ taskId: 't1', projectId: 'wp' })).toBe('new:task:t1')
-    expect(draftKeyFor({ taskId: null, projectId: 'wp' })).toBe('new:project:wp')
-    expect(draftKeyFor({ taskId: null, projectId: null })).toBe('new:regular')
-    expect(draftKeyFor({ taskId: null, projectId: null, kind: 'temporary' })).toBe('new:temporary')
-  })
-})
-
-describe('moveDraft', () => {
-  it('adds the words under a draft already waiting there, and clears where they came from', () => {
-    const drafts = { 'new:regular': 'fix the map', 'new:project:harbor': 'plan the trip', other: 'kept' }
-    expect(moveDraft(drafts, 'new:regular', 'new:project:harbor', 'fix the map'))
-      .toEqual({ 'new:project:harbor': 'plan the trip\nfix the map', other: 'kept' })
-    expect(moveDraft(drafts, 'new:regular', 'new:project:wp', 'fix the map'))
-      .toEqual({ 'new:project:harbor': 'plan the trip', 'new:project:wp': 'fix the map', other: 'kept' })
-  })
-
-  it('keeps one copy when the key stays, and leaves no empty draft', () => {
-    expect(moveDraft({ 'new:task:t1': 'old' }, 'new:task:t1', 'new:task:t1', 'new words')).toEqual({ 'new:task:t1': 'new words' })
-    expect(moveDraft({ 'new:regular': '$harb' }, 'new:regular', 'new:project:harbor', '  ')).toEqual({})
   })
 })

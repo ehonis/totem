@@ -12,7 +12,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { pushError } from '../toast'
-import { patchMessagePart } from './store'
+import { patchMessagePart, wakeOnOwnerMessage } from './store'
 import { AttachmentChip } from './Message'
 import { ARTIFACT_PREVIEWABLE } from './ArtifactPanel'
 import { downloads } from '../downloads'
@@ -82,6 +82,7 @@ export function useQuestionFlow({ threadId, pending, sendText, displace }: {
         body: JSON.stringify({ threadId, messageId: pending.message.id, partId: pending.part.id, action, answers, attachments }),
       })
       patchMessagePart(threadId, pending.message.id, pending.part.id, { status: r.status, ...(answers ? { answers, attachments: files } : {}), answeredAt: Date.now() })
+      if (answers) wakeOnOwnerMessage(threadId)
       if (!r.live && r.message) sendText(r.message, Object.values(files).flat())
     } catch (e: any) {
       pushError(e.message)

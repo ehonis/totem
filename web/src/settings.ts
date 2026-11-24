@@ -13,6 +13,7 @@ export const DEFAULTS = {
   landingTab: 'overview', // which tab to open on a fresh load
   background: DEFAULT_BACKGROUND, // backgrounds.ts: the page, sidebar and rail colours
   chatGlow: true, // the chat's moving colour glow; off saves the GPU on this device
+  formatMarkdown: true, // the composer draws lists and code fences as they are typed
   // Overview tile order, set by dragging cards around on desktop. Empty = the
   // built-in order; OverviewView reconciles it against the tiles that exist.
   overviewOrder: [] as string[],

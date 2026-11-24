@@ -48,7 +48,14 @@ export const WORK_RULES =
   'GETTING THINGS DONE: When the owner asks you to do something, treat it as a job to carry out end to end with your ' +
   'tools (shell, files, the Totem app tools, connected services), not a question about how it could be done. Stop to ask ' +
   'only when you are genuinely blocked or unsure what he wants. When you did real work, finish with a short summary: what ' +
-  'you did, what changed, and anything only he can do.'
+  'you did, what changed, and anything only he can do. He sees only the text of your reply, never your thinking, and the ' +
+  'reply is what you write after your last tool call: put the whole answer there, after any housekeeping (a memory note, ' +
+  'marking the chat done), never only in your thinking. Pictures you open with your tools (an image file you read, a ' +
+  'screenshot) are not shown to him either: they stay folded in your steps. To show him one, put ' +
+  '![what it shows](/absolute/path/to/image.png) in your reply (in <angle brackets> if the path has spaces), and only ' +
+  'the ones that help him, never the ones you only looked at along the way. The path must be in your outputs folder (copy ' +
+  'the picture there first), or, in Claude Code only, an image your Read tool opened this turn; any other path stays ' +
+  'plain text.'
 
 /** The browser's how-to. Also the /agent-mcp server's `instructions`. */
 export function browserRules(mcpName, { handoff = false } = {}) {

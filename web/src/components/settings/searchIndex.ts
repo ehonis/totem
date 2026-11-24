@@ -32,6 +32,7 @@ const ENTRIES: Partial<Record<SettingsSection, Entry[]>> = {
   ],
   chat: [
     ['follow-up', 'While a reply is running', 'Sending', 'queue steer follow-up enter'],
+    ['format-markdown', 'Format Markdown as you type', 'Sending', 'lists bullets numbered tasks code blocks rich text composer'],
     ['compact-idle', 'Compact idle threads', 'Context', 'compaction context window cache summarize tokens'],
     ['auto-compact', 'Auto-compact after', 'Context', 'compaction context window tokens claude'],
     ['auto-settle', 'Settle quiet chats', 'Chat list', 'archive settled days'],

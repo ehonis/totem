@@ -12,10 +12,10 @@ import type { SheetFeed, Todo } from '../todos/types'
 import { withSheetMark } from '../todos/board'
 import TaskCardHost, { PinnedTask } from './TaskCard'
 import TaskBar from './TaskBar'
-import TasksPanel from './TasksPanel'
+import TaskBadge from './TaskBadge'
 import { closeTaskCard, installTaskNav, openTaskCard } from './card'
 import { createTask, loadWork } from './state'
-import { loadProjects } from '../chat/store'
+import { getState, loadProjects } from '../chat/store'
 
 const NOW = new Date(2026, 10, 9, 10, 0, 0)
 
@@ -54,6 +54,8 @@ function route(url: string, method: string, body: any): Response {
   if (path === '/api/todos/sheet') return json(sheet)
   if (path === '/api/todos/completed') return json({ todos: [] })
   if (path === '/api/chat/projects') return json({ projects: PROJECTS })
+  const project = PROJECTS.find((p) => path === `/api/chat/projects/${p.id}`)
+  if (project && method === 'GET') return json({ project: { ...project, files: [], memory: '' } })
   if (path.startsWith('/api/chat/task-folders/') && method === 'PUT') {
     const id = decodeURIComponent(path.slice('/api/chat/task-folders/'.length))
     sheet = { ...sheet, items: sheet.items.map((item) => (item.id === id ? { ...item, folderId: body.projectId } : item)) } as SheetFeed
@@ -202,18 +204,29 @@ describe('task card', () => {
 })
 
 describe('the composer’s task strip', () => {
-  it('opens the task’s card and turns the chats panel to Tasks (it used to only do the latter)', async () => {
+  it('opens the task’s card', async () => {
     const user = userEvent.setup()
-    const modes: string[] = []
-    const onMode = (e: Event) => modes.push((e as CustomEvent).detail)
-    window.addEventListener('totem:panel-mode', onMode)
-    const shown = vi.fn()
-    render(<><TaskBar thread={null} draftTaskId="today" projectId={null} onShowPanel={shown} /><TaskCardHost /></>)
+    render(<><TaskBar thread={null} draftTaskId="today" projectId={null} /><TaskCardHost /></>)
     await user.click(await screen.findByRole('button', { name: /Call the bank/ }))
     expect(await screen.findByRole('dialog', { name: 'Task: Call the bank' })).toBeVisible()
-    expect(modes).toEqual(['tasks'])
-    expect(shown).toHaveBeenCalled()
-    window.removeEventListener('totem:panel-mode', onMode)
+  })
+})
+
+describe('a chat card’s task badge', () => {
+  it('names the task and its due day, and opens its card without opening the chat', async () => {
+    const user = userEvent.setup()
+    const row = vi.fn()
+    render(<><div onClick={row}><TaskBadge taskRef="today" /></div><TaskCardHost /></>)
+    const badge = await screen.findByRole('button', { name: /^Task: Call the bank, due today\./ })
+    expect(badge).toHaveTextContent('Today')
+    await user.click(badge)
+    expect(await screen.findByRole('dialog', { name: 'Task: Call the bank' })).toBeVisible()
+    expect(row).not.toHaveBeenCalled()
+  })
+
+  it('says so when the task is gone', async () => {
+    render(<TaskBadge taskRef="no-such-task" />)
+    expect(await screen.findByText('Task removed')).toBeVisible()
   })
 })
 
@@ -274,142 +287,3 @@ describe('the chat’s pinned task', () => {
 
 function last<T>(list: T[]) { return list[list.length - 1] }
 
-describe('the chats panel’s task rows', () => {
-  it('snooze a task from its row in one click, with Undo', async () => {
-    const user = userEvent.setup()
-    render(<><TasksPanel onOpenChat={() => {}} /><ToastHost /></>)
-    await user.click(await screen.findByRole('button', { name: 'Snooze “Call the bank”' }))
-    await user.click(await screen.findByRole('menuitem', { name: /Tomorrow/ }))
-    const tomorrow = new Date(2026, 10, 10, 9, 0, 0).toISOString()
-    await waitFor(() => expect(sent('PATCH', /\/api\/todos\/today$/)[0]?.body).toEqual({ snoozedUntil: tomorrow }))
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Snooze “Call the bank”' })).toBeNull())
-    expect(screen.queryByRole('menu')).toBeNull()
-    await user.click(await screen.findByRole('button', { name: 'Undo' }))
-    await waitFor(() => expect(sent('PATCH', /\/api\/todos\/today$/)[1]?.body).toEqual({ snoozedUntil: null }))
-  })
-
-  it('snoozes or marks a sheet row done for the owner only; the sheet is never written', async () => {
-    const user = userEvent.setup()
-    render(<><TasksPanel onOpenChat={() => {}} /><ToastHost /></>)
-    await user.click(await screen.findByRole('button', { name: 'Snooze “Order banner stands”' }))
-    await user.click(await screen.findByRole('menuitem', { name: /Tomorrow/ }))
-    const tomorrow = new Date(2026, 10, 10, 9, 0, 0).toISOString()
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/sheet\/mark$/)[0]?.body).toEqual({ id: 'sheet:0:7:abcd1234', state: 'snoozed', until: tomorrow }))
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Snooze “Order banner stands”' })).toBeNull())
-    await user.click(await screen.findByRole('button', { name: 'Undo' }))
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/sheet\/mark$/)[1]?.body).toEqual({ id: 'sheet:0:7:abcd1234', state: null }))
-    await user.click(await screen.findByRole('button', { name: 'Mark “Order banner stands” done for you (the sheet is unchanged)' }))
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/sheet\/mark$/)[2]?.body).toEqual({ id: 'sheet:0:7:abcd1234', state: 'done' }))
-    await waitFor(() => expect(screen.queryByRole('button', { name: /Order banner stands/ })).toBeNull())
-    expect(sent('PUT', /task-folders/)).toHaveLength(0)
-  })
-})
-
-describe('the chats panel’s add line', () => {
-  async function mountPanel() {
-    const user = userEvent.setup()
-    await act(async () => { await loadProjects(); await loadWork() })
-    render(<><TasksPanel onOpenChat={() => {}} /><ToastHost /></>)
-    await screen.findByRole('button', { name: 'Snooze “Call the bank”' })
-    return user
-  }
-  const addLine = () => screen.getByRole('textbox', { name: 'Add a task…' })
-  const folderButton = () => screen.getByRole('button', { name: /^Folder: / })
-
-  it('files a new task in any folder, even one with no tasks (and so no group) yet, and keeps it for the next', async () => {
-    const user = await mountPanel()
-    expect(folderButton()).toHaveAccessibleName('Folder: Personal. Change')
-    // Home reno has no open task, so it has no group and no + to add from.
-    expect(screen.queryByRole('button', { name: 'Add a task to Home reno' })).toBeNull()
-    await user.click(folderButton())
-    await user.click(await screen.findByRole('option', { name: /Home reno/ }))
-    expect(folderButton()).toHaveAccessibleName('Folder: Home reno. Change')
-    expect(addLine()).toHaveFocus()
-    await user.type(addLine(), 'Measure the hall tomorrow{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toEqual({ title: 'Measure the hall', dueDate: '2026-11-10', folderId: 'home' }))
-    expect(await screen.findByRole('button', { name: 'Add a task to Home reno' })).toBeVisible()
-    expect(addLine()).toHaveValue('')
-    expect(addLine()).toHaveFocus()
-    // The next task goes there too, and so does the next visit.
-    await user.type(addLine(), 'Buy paint{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[1]?.body).toEqual({ title: 'Buy paint', folderId: 'home' }))
-    cleanup()
-    await mountPanel()
-    expect(folderButton()).toHaveAccessibleName('Folder: Home reno. Change')
-  })
-
-  it('a #folder typed in the title wins for that task, until the button is used again', async () => {
-    const user = await mountPanel()
-    await user.type(addLine(), 'Send the invoice #acme')
-    expect(folderButton()).toHaveAccessibleName('Folder: Acme, from the title. Change')
-    // The button says it, so no chip repeats it.
-    expect(screen.queryByLabelText('Recognised in the title')).toBeNull()
-    await user.click(folderButton())
-    await user.click(await screen.findByRole('option', { name: /Home reno/ }))
-    expect(folderButton()).toHaveAccessibleName('Folder: Home reno. Change')
-    await user.keyboard('{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toEqual({ title: 'Send the invoice #acme', folderId: 'home' }))
-    // After that task, a #folder decides again.
-    await user.type(addLine(), 'Chase the deposit #acme p1{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[1]?.body).toEqual({ title: 'Chase the deposit', priority: 4, folderId: 'acme' }))
-    expect(folderButton()).toHaveAccessibleName('Folder: Home reno. Change')
-  })
-
-  it('a #folder typed after the button was used still wins, and a filter the new task matches says nothing', async () => {
-    const user = await mountPanel()
-    await user.click(folderButton())
-    await user.click(await screen.findByRole('option', { name: /Home reno/ }))
-    await user.type(screen.getByRole('textbox', { name: 'Filter tasks and chats' }), 'invoice')
-    await user.type(addLine(), 'Send the invoice #acme')
-    expect(folderButton()).toHaveAccessibleName('Folder: Acme, from the title. Change')
-    await user.keyboard('{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toEqual({ title: 'Send the invoice', folderId: 'acme' }))
-    expect(await screen.findByText('Send the invoice')).toBeVisible()
-    expect(screen.queryByText(/The filter hides it/)).toBeNull()
-    await user.type(addLine(), 'Water the plants{Enter}')
-    expect(await screen.findByText(/Added “Water the plants” to Home reno\. The filter hides it\./)).toBeVisible()
-  })
-
-  it('the button keeps every #folder already typed as text, and a #folder deleted and typed again wins', async () => {
-    const user = await mountPanel()
-    await user.type(addLine(), 'Call #acme about #home')
-    await user.click(folderButton())
-    await user.click(await screen.findByRole('option', { name: /Personal/ }))
-    expect(folderButton()).toHaveAccessibleName('Folder: Personal. Change')
-    await user.keyboard('{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toEqual({ title: 'Call #acme about #home' }))
-    await user.type(addLine(), 'Call #acme')
-    expect(folderButton()).toHaveAccessibleName('Folder: Acme, from the title. Change')
-    await user.clear(addLine())
-    await user.type(addLine(), 'Call #acme')
-    expect(folderButton()).toHaveAccessibleName('Folder: Acme, from the title. Change')
-    await user.keyboard('{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[1]?.body).toEqual({ title: 'Call', folderId: 'acme' }))
-  })
-
-  it('a word kept as text stays in the title, and a folder since deleted reads as Personal', async () => {
-    localStorage.setItem('totem.work.addFolder', JSON.stringify('gone'))
-    const user = await mountPanel()
-    expect(folderButton()).toHaveAccessibleName('Folder: Personal. Change')
-    await user.type(addLine(), 'Water the plants tomorrow')
-    await user.click(screen.getByRole('button', { name: 'Keep “tomorrow” as text' }))
-    await user.keyboard('{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toEqual({ title: 'Water the plants tomorrow' }))
-  })
-
-  it('a group’s + starts on its folder, can file elsewhere, and stays open while the picker is used', async () => {
-    const user = await mountPanel()
-    await user.click(screen.getByRole('button', { name: 'Add a task to Acme' }))
-    const line = () => screen.getByRole('textbox', { name: 'New task…' })
-    expect(line()).toHaveFocus()
-    const buttons = screen.getAllByRole('button', { name: /^Folder: / })
-    expect(buttons[1]).toHaveAccessibleName('Folder: Acme. Change')
-    await user.click(buttons[1])
-    await user.click(await screen.findByRole('option', { name: /Home reno/ }))
-    expect(line()).toHaveFocus()
-    await user.type(line(), 'Order tiles{Enter}')
-    await waitFor(() => expect(sent('POST', /\/api\/todos\/board$/)[0]?.body).toEqual({ title: 'Order tiles', folderId: 'home' }))
-    // The top line's own folder is untouched.
-    expect(screen.getAllByRole('button', { name: /^Folder: / })[0]).toHaveAccessibleName('Folder: Personal. Change')
-  })
-})

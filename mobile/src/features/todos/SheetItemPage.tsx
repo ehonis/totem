@@ -33,6 +33,7 @@ import { PickWhenSheet } from './ui'
 import { showMenu } from '../../ui/menu'
 import { ProjectIcon } from '../chat/ThreadIcon'
 import { success, tap, warn } from '../../ui/haptics'
+import TaskChats from '../work/TaskChats'
 
 /** A task route's id that names a sheet row rather than a task. */
 export const isSheetId = (id: string | undefined) => typeof id === 'string' && id.startsWith('sheet:')
@@ -145,6 +146,7 @@ export default function SheetItemPage({ item, source, fetchedAt }: { item: Sheet
         <T size={12.5} muted lineHeight={18}>
           {`Row ${item.row}. Change it in the sheet; Totem only reads it${fetchedAt ? `, last read ${new Date(fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ''}. Done and snooze here are yours alone: the sheet is unchanged.`}
         </T>
+        <TaskChats taskRef={item.id} />
       </ScrollView>
       <PickWhenSheet
         visible={pick}

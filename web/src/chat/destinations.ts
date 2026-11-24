@@ -100,25 +100,6 @@ export function stripToken(value: string, start: number, end: number) {
   return { value: before + after, caret: before.length }
 }
 
-/** Where a new chat's words are kept: ChatView's draft key for a chat not started yet. */
-export function draftKeyFor(place: { taskId: string | null; projectId: string | null; kind?: string }) {
-  return place.taskId ? `new:task:${place.taskId}` : place.projectId ? `new:project:${place.projectId}` : `new:${place.kind || 'regular'}`
-}
-
-/**
- * The drafts once a new chat's words move from one place to another: added under
- * what was already waiting there, never over it.
- */
-export function moveDraft(drafts: Record<string, string>, from: string, to: string, text: string): Record<string, string> {
-  const next = { ...drafts }
-  const kept = from === to ? '' : next[to] || ''
-  delete next[from]
-  const joined = [kept, text].filter((s) => s.trim()).join('\n')
-  if (joined) next[to] = joined
-  else delete next[to]
-  return next
-}
-
 /**
  * Where the chat is once a destination is picked. A place keeps the task it is
  * being started for; a task takes its own folder, else stays where it is.

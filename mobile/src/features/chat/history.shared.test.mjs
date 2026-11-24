@@ -1,7 +1,9 @@
 // Chat files shared with the web, mirrored byte for byte into mobile/src/lib/chat/:
 // a chat's history (summaries, windows, "Load earlier"; web/src/chat/history.ts,
 // tested by history.test.ts) and what a chat waits on the owner for
-// (web/src/chat/attention.ts, tested by attention.test.ts). This checks the copies
+// (web/src/chat/attention.ts, tested by attention.test.ts), and the Snoozed and Settled
+// rules (web/src/chat/settle.ts, tested by settle.test.ts), and the chats panel's shelves
+// and scope (web/src/chat/sidebar.ts, tested by sidebar.test.ts). This checks the copies
 // have not drifted. Run with `node --test mobile/src/features/chat/*.test.mjs`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -18,4 +20,12 @@ test('the chat history file is the web’s, byte for byte', () => {
 
 test('what a chat waits on the owner for is the web’s, byte for byte', () => {
   assert.equal(read('mobile/src/lib/chat/attention.ts'), read('web/src/chat/attention.ts'), 'mobile/src/lib/chat/attention.ts has drifted from web/src/chat/attention.ts')
+})
+
+test('the Snoozed and Settled rules are the web’s, byte for byte', () => {
+  assert.equal(read('mobile/src/lib/chat/settle.ts'), read('web/src/chat/settle.ts'), 'mobile/src/lib/chat/settle.ts has drifted from web/src/chat/settle.ts')
+})
+
+test('the chats panel’s shelves and scope are the web’s, byte for byte', () => {
+  assert.equal(read('mobile/src/lib/chat/sidebar.ts'), read('web/src/chat/sidebar.ts'), 'mobile/src/lib/chat/sidebar.ts has drifted from web/src/chat/sidebar.ts')
 })

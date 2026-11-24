@@ -34,6 +34,7 @@ export { default as IconBrandStrava } from '@tabler/icons-react/dist/esm/icons/I
 export { default as IconBrandGithub } from '@tabler/icons-react/dist/esm/icons/IconBrandGithub.mjs'
 export { default as IconTool } from '@tabler/icons-react/dist/esm/icons/IconTool.mjs'
 export { default as IconFileText } from '@tabler/icons-react/dist/esm/icons/IconFileText.mjs'
+export { default as IconFileOff } from '@tabler/icons-react/dist/esm/icons/IconFileOff.mjs'
 export { default as IconFileTypePdf } from '@tabler/icons-react/dist/esm/icons/IconFileTypePdf.mjs'
 export { default as IconFileSpreadsheet } from '@tabler/icons-react/dist/esm/icons/IconFileSpreadsheet.mjs'
 export { default as IconFileWord } from '@tabler/icons-react/dist/esm/icons/IconFileWord.mjs'

@@ -20,6 +20,8 @@ import { QUEUE_LIMIT } from './queue.mjs'
 import { APPROVAL_DECISIONS, APPROVAL_STATUSES } from './approvals.mjs'
 import { inboxMarker, normalizeInboxPart } from './inbox-outcome.mjs'
 import { normalizeCompactionPart, normalizeContextUsage } from './context.mjs'
+import { plainRefs } from './refs.mjs'
+import { MAX_TOOL_IMAGES } from './turn.mjs'
 
 export const validThreadId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
 
@@ -159,6 +161,9 @@ export function normalizePart(p, i = 0) {
   if (p.output) out.output = str(p.output, 8000)
   if (num(p.startedAt)) out.startedAt = num(p.startedAt)
   if (num(p.endedAt)) out.endedAt = num(p.endedAt)
+  // Pictures the call returned: the agent's looking, shown only when the card is opened.
+  const images = (Array.isArray(p.images) ? p.images : []).filter((im) => validThreadId(im?.uploadId)).slice(0, MAX_TOOL_IMAGES).map((im) => ({ uploadId: im.uploadId }))
+  if (images.length) out.images = images
   // The agent this call started, and what it did (chat/subagents.mjs).
   const agent = normalizeAgent(p.agent)
   if (agent) out.agent = agent
@@ -388,6 +393,25 @@ function applyMetadata(thread, body, now) {
   else delete thread.expiresAt
 }
 
+/**
+ * He wrote in the chat, by any way in: a message, a follow-up queued behind the
+ * running reply, a steer into it, a voice turn, an answer to the agent's
+ * questions, a reason for declining a tool call. A settled chat comes back to
+ * the list, a snoozed one wakes with its timer gone, and either goes to the top
+ * (`unsettledAt`). Taking it off the shelf by hand (settledOverride 'active')
+ * lasts only until now, so auto-settle can have it again later, and what the
+ * agent marked done (`doneAt`, chat/done.mjs) is not done any more.
+ * web/src/chat/settle.ts `ownerMessageChange` is the client's copy. Mutates `thread`.
+ */
+export function wakeOnOwnerMessage(thread, now = Date.now()) {
+  if (thread.settledOverride === 'settled' || num(thread.snoozedUntil) > now) thread.unsettledAt = now
+  delete thread.settledOverride
+  delete thread.settledAt
+  delete thread.snoozedUntil
+  delete thread.snoozedAt
+  delete thread.doneAt
+}
+
 // ---- Summaries and pages -------------------------------------------------
 //
 // A client lists chats from summaries and reads one chat a window at a time, the
@@ -403,12 +427,27 @@ export const SUMMARY_TEXT = 400
 const pendingParts = (m) => (m.parts || []).filter((p) => SUMMARY_PART_TYPES.has(p.type) && p.status === 'pending')
 
 function summaryMessage(m) {
-  const out = { id: m.id, role: m.role, content: m.content.length > SUMMARY_TEXT ? `${m.content.slice(0, SUMMARY_TEXT)}…` : m.content, createdAt: m.createdAt }
+  // A preview names an attached file by its name, never its totem-ref link (chat/refs.mjs).
+  const text = plainRefs(m.content)
+  const out = { id: m.id, role: m.role, content: text.length > SUMMARY_TEXT ? `${text.slice(0, SUMMARY_TEXT)}…` : text, createdAt: m.createdAt }
   for (const k of ['status', 'error', 'provider', 'model', 'run', 'mode', 'voice', 'inbox', 'command']) if (m[k] !== undefined) out[k] = m[k]
   if (m.attachments) out.attachments = m.attachments
   const parts = pendingParts(m)
   if (parts.length) out.parts = parts
   return out
+}
+
+/**
+ * When the owner last wrote in the chat: his latest message, not a `/compact` the
+ * bridge ran. Summaries and windows carry it (`lastOwnerAt`), since either can be cut
+ * past that message; a finished task is measured against it (web/src/chat/settle.ts ownerAt).
+ */
+export function lastOwnerAt(messages = []) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === 'user' && m.command !== 'compact') return Number(m.createdAt) || 0
+  }
+  return 0
 }
 
 /**
@@ -435,9 +474,9 @@ export function threadSummary(thread) {
   // proposal open): it comes along as a stub, its parts and no text.
   const waiting = messages.slice(0, from).filter((m) => pendingParts(m).length)
     .map((m) => ({ id: m.id, role: m.role, content: '', createdAt: m.createdAt, parts: pendingParts(m) }))
-  const out = { ...rest, summary: true, messageCount: messages.length, messages: [...waiting, ...messages.slice(from).map(summaryMessage)] }
+  const out = { ...rest, summary: true, messageCount: messages.length, lastOwnerAt: lastOwnerAt(messages), messages: [...waiting, ...messages.slice(from).map(summaryMessage)] }
   const first = messages.find((m) => m.role === 'user')
-  if (first && from > messages.indexOf(first)) out.firstUserText = first.content.replace(/\s+/g, ' ').trim().slice(0, 160)
+  if (first && from > messages.indexOf(first)) out.firstUserText = plainRefs(first.content).replace(/\s+/g, ' ').trim().slice(0, 160)
   return out
 }
 
@@ -552,10 +591,18 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
     return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
   }
 
-  /** Every chat as a summary (threadSummary), newest first, re-read only where its file changed. */
+  /**
+   * Every chat as a summary (threadSummary), newest first, re-read only where its
+   * file changed. A folder that cannot be read fails the list rather than answer
+   * none, and a chat whose file does not read is listed as `unreadable`, never left
+   * out: clients drop the drafts of chats an answered list leaves out.
+   */
   async function summaries() {
     let names = []
-    try { names = await readdir(dir) } catch { return [] }
+    try { names = await readdir(dir) } catch (e) {
+      if (e?.code === 'ENOENT') return []
+      throw e
+    }
     const out = []
     const seen = new Set()
     for (const name of names) {
@@ -569,7 +616,11 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
       let summary = hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size ? hit.summary : null
       if (!summary) {
         const t = await rawRead(id)
-        if (!t || t.id !== id) { summaryCache.delete(id); continue }
+        if (!t || t.id !== id) {
+          summaryCache.delete(id)
+          out.push({ id, unreadable: true, title: 'Unreadable chat', kind: 'regular', summary: true, messageCount: 0, messages: [], createdAt: st.mtimeMs, updatedAt: st.mtimeMs })
+          continue
+        }
         summary = threadSummary(normalizeThread(t, id))
         summaryCache.set(id, { mtimeMs: st.mtimeMs, size: st.size, summary })
       }
@@ -588,7 +639,7 @@ export function createThreadStore({ dir, log = () => {}, onDelete = async () => 
     const t = await get(id)
     if (!t) return null
     const { messages, hasMore, before } = threadWindow(t.messages, opts)
-    return { ...t, messageCount: t.messages.length, messages, history: { hasMore, before } }
+    return { ...t, messageCount: t.messages.length, lastOwnerAt: lastOwnerAt(t.messages), messages, history: { hasMore, before } }
   }
 
   async function get(id) {

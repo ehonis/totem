@@ -12,14 +12,9 @@ import './work.css'
 
 // The strip over the composer that says which task a chat is for, drawn like the
 // queue's drawer: the task (a click unfolds and flashes the card pinned at the
-// chat's top right, TaskCard.tsx, or opens it as a sheet on a phone, and shows it
-// in the chats panel's Tasks face), its folder and due day, Mark done,
-// and the link to change or drop it. The click used to only turn the panel to
-// Tasks, which did nothing visible when it was already there. On a new chat started
+// chat's top right, TaskCard.tsx, or opens it as a sheet on a phone), its folder
+// and due day, Mark done, and the link to change or drop it. On a new chat started
 // from a task it says so, with × to start a plain chat instead.
-
-/** Ask the chats panel to turn to its Tasks face (ProjectNav listens). */
-export const showTasksPanel = () => window.dispatchEvent(new CustomEvent('totem:panel-mode', { detail: 'tasks' }))
 
 interface Props {
   /** The open chat, once it has messages. */
@@ -28,7 +23,6 @@ interface Props {
   draftTaskId: string | null
   /** The chat's project, where a task made from the picker is filed. */
   projectId: string | null
-  onShowPanel?: () => void
 }
 
 /** Nothing (and no task reads) unless the chat has a task. */
@@ -37,7 +31,7 @@ export default function TaskBar(props: Props) {
   return ref ? <TaskStrip {...props} taskRef={ref} /> : null
 }
 
-function TaskStrip({ thread, projectId, onShowPanel, taskRef: ref }: Props & { taskRef: string }) {
+function TaskStrip({ thread, projectId, taskRef: ref }: Props & { taskRef: string }) {
   // Subscribing keeps the store fresh while the strip is up.
   const task = useWork(() => findTask(ref))
   const loaded = useWork((s) => s.loaded)
@@ -49,7 +43,7 @@ function TaskStrip({ thread, projectId, onShowPanel, taskRef: ref }: Props & { t
     <div className="wk-taskbar" role="group" aria-label="Linked task">
       <TI icon={task?.kind === 'sheet' ? IconTable : IconChecklist} size={14} className="wk-taskbar-icon" />
       <span className="wk-taskbar-label">{thread ? 'Task' : 'New chat for'}</span>
-      <button type="button" className={`wk-taskbar-title ${task ? '' : 'gone'}`} onClick={task ? () => { openTaskCard(task.ref); showTasksPanel(); onShowPanel?.() } : undefined} title={task ? `${task.title}: edit it` : undefined} aria-haspopup={task ? 'dialog' : undefined}>
+      <button type="button" className={`wk-taskbar-title ${task ? '' : 'gone'}`} onClick={task ? () => openTaskCard(task.ref) : undefined} title={task ? `${task.title}: edit it` : undefined} aria-haspopup={task ? 'dialog' : undefined}>
         {title}{task?.done ? ' (done)' : ''}
       </button>
       {task && <FolderChip folderId={task.folderId} short className="wk-taskbar-folder" />}

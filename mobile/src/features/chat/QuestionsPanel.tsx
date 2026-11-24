@@ -7,7 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { api } from '../../lib/api'
 import { pushError } from '../../lib/toast'
-import { patchMessagePart } from '../../lib/chat/store'
+import { patchMessagePart, wakeOnOwnerMessage } from '../../lib/chat/store'
 import { allAnswers, answerPreview, draftAnswer, pick, type Draft } from '../../lib/chat/questions'
 import type { ChatMessage, QuestionsPart } from '../../lib/chat/types'
 import { T } from '../../ui/Text'
@@ -68,6 +68,7 @@ export function useQuestionFlow({ threadId, pending, sendText, displace }: {
         body: JSON.stringify({ threadId, messageId: pending.message.id, partId: pending.part.id, action, answers }),
       })
       patchMessagePart(threadId, pending.message.id, pending.part.id, { status: r.status, ...(answers ? { answers } : {}), answeredAt: Date.now() })
+      if (answers) wakeOnOwnerMessage(threadId)
       if (action === 'answer') success(); else tap()
       if (!r.live && r.message) sendText(r.message)
     } catch (e: any) {

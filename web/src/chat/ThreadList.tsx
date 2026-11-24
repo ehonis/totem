@@ -1,18 +1,22 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react'
-import { useChat, getState, linkTask, groupThreads, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread, markRead, markUnread, setProjectContext, settleThread, unsettleThread, snoozeThread, wakeThread } from './store'
+import React, { useCallback, useRef, useState } from 'react'
+import { useChat, getState, linkTask, threadTitle, renameThread, setPinned, keepThread, removeThread, regenerateTitle, moveThread, markRead, markUnread, setProjectContext, settleThread, unsettleThread, snoozeThread, wakeThread } from './store'
 import { attentionOf, attentionBadge, attentionTitle } from './attention'
 import type { ChatThread } from './types'
 import { TI, useDismiss } from './ui'
-import { IconDots, IconPinned, IconPencil, IconTrash, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconMail, IconMailOpened, IconClock, IconAlarmOff, IconArrowBackUp, IconChevronUp, IconChevronDown, IconPlus, IconLink } from './icons'
-import { dragThreadProps } from './dnd'
+import { IconDots, IconPinned, IconPencil, IconTrash, IconCheck, IconSparkles, IconFolder, IconFolderOff, IconMail, IconMailOpened, IconClock, IconAlarmOff, IconArrowBackUp, IconChevronUp, IconChevronDown, IconPlus, IconLink, IconX, IconHome, IconCircleCheck } from './icons'
 import { useRowOnScreen } from './onScreen'
 import { pushToast } from '../toast'
 import ThreadIcon from './ThreadIcon'
 import SnoozeMenu from './SnoozeMenu'
+import { discardDraft, useHasDraft } from './draftsWeb'
 import { FolderPicker, TaskPicker } from '../work/pickers'
-import { shelve, nextWake, wokeAt, countdown, ago, settledAt, wakeDescription, offersSettle, keptOpenId, type Shelf } from './settle'
+import { nextWake, wokeAt, countdown, ago, settledAt, activeAt, wakeDescription, offersSettle, taskDoneSince, type Shelf } from './settle'
+import type { Project } from './types'
+import ProjectIcon from './ProjectIcon'
+import TaskBadge from '../work/TaskBadge'
+import Spark from './Spark'
 
-function ThreadMenu({ t, shelf, live, onRename, onSnooze, onMove, onLinkTask, onClose }: { t: ChatThread; shelf: Shelf; live: boolean; onRename: () => void; onSnooze: () => void; onMove: () => void; onLinkTask: () => void; onClose: () => void }) {
+function ThreadMenu({ t, shelf, live, unsent, onRename, onSnooze, onMove, onLinkTask, onClose }: { t: ChatThread; shelf: Shelf; live: boolean; unsent: boolean; onRename: () => void; onSnooze: () => void; onMove: () => void; onLinkTask: () => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const inProject = useChat((s) => !!(t.projectId && s.projects.some((p) => p.id === t.projectId)))
   useDismiss(true, ref, onClose)
@@ -43,6 +47,9 @@ function ThreadMenu({ t, shelf, live, onRename, onSnooze, onMove, onLinkTask, on
       {t.kind === 'temporary' && (
         <button type="button" role="menuitem" onClick={() => { onClose(); keepThread(t.id) }}><TI icon={IconCheck} size={16} /><span>Keep this chat</span></button>
       )}
+      {unsent && (
+        <button type="button" role="menuitem" onClick={() => { onClose(); discardDraft(t.id) }}><TI icon={IconX} size={16} /><span>Discard draft</span></button>
+      )}
       <div className="vc-menu-sep" />
       <button
         type="button"
@@ -66,7 +73,16 @@ function ThreadMenu({ t, shelf, live, onRename, onSnooze, onMove, onLinkTask, on
  * shows the time left and Wake now; a settled one is dimmed, shows how long ago
  * it settled, and offers Un-settle.
  */
-export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Date.now() }: { t: ChatThread; active: boolean; live: boolean; onOpen: (id: string) => void; shelf?: Shelf; now?: number }) {
+export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Date.now(), card = false, place }: {
+  t: ChatThread; active: boolean; live: boolean; onOpen: (id: string) => void; shelf?: Shelf; now?: number
+  /**
+   * T3 Code's card (the chats panel's live list): where the chat lives and what it is doing
+   * on the first line, its title on the second, its linked task under them.
+   */
+  card?: boolean
+  /** The chat's project or folder, for a card's first line; null is Home. */
+  place?: { project: Project | null; label: string }
+}) {
   const [menu, setMenu] = useState(false)
   const [snoozing, setSnoozing] = useState(false)
   // Move to… and Link to task… open T3 Code's picker (work/pickers.tsx) off the row's "…".
@@ -79,6 +95,8 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const rowRef = useRowOnScreen(t.id)
+  // Words or files left unsent in it; the chat on screen shows its own in the composer.
+  const unsent = useHasDraft(t.id) && !active
   // Stable, so a re-render never detaches the row the picker is placed against.
   const setRow = useCallback((node: HTMLDivElement | null) => { rowRef(node); anchorRef.current = node }, [rowRef])
   const close = useCallback(() => setMenu(false), [])
@@ -107,28 +125,84 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
   const meta = shelf === 'snoozed'
     ? <span className="vc-thread-meta snoozed" title={`Wakes ${wakeDescription(t.snoozedUntil!, now)}`}>{countdown(t.snoozedUntil!, now)}</span>
     : shelf === 'settled'
-      ? <span className="vc-thread-meta" title={t.settledOverride === 'settled' ? 'Settled' : t.doneAt ? 'Marked done, settled once read' : `Settled after ${autoDays} ${autoDays === 1 ? 'day' : 'days'} without activity`}>{ago(settledAt(t, now, autoDays), now)}</span>
+      ? <span className="vc-thread-meta" title={t.settledOverride === 'settled' ? 'Settled' : t.doneAt ? 'Marked done, settled once read' : taskDoneSince(t) ? 'Its task was done, settled once read' : `Settled after ${autoDays} ${autoDays === 1 ? 'day' : 'days'} without activity`}>{ago(settledAt(t, now, autoDays), now)}</span>
       : null
   // What the chat waits on him for outranks everything else on the row, as in T3 (attention.ts).
   const needs = attentionOf(t, handoff)
+  const unread = !!t.needsReply && !live
+  const pen = unsent && <span className="vc-thread-draft" title="Unsent draft" role="img" aria-label="Unsent draft"><TI icon={IconPencil} size={13} /></span>
+  // A card says what the chat is doing in words, T3's way: the one thing it waits on him
+  // for, Working, Woke, Done (finished and unread), else how long since it last moved.
+  const status = !card ? null
+    : needs ? <span className={`sb-status sb-needs ${needs.kind}`} title={attentionTitle(needs)}>{attentionBadge(needs)}</span>
+      : live ? <span className="sb-status sb-working" title="A reply is running"><Spark size={11} />Working</span>
+        : woke ? <span className="sb-status sb-woke" title={`Woke ${wakeDescription(wokeAt(t, now), now)}`}><TI icon={IconAlarmOff} size={12} />Woke</span>
+          : unread && !offersSettle(t, shelf, live) ? <span className="sb-status sb-done" title="Finished: waiting for you to read it"><TI icon={IconCircleCheck} size={12} />Done</span>
+            : <span className="sb-status sb-time" title={new Date(activeAt(t, now)).toLocaleString()}>{ago(activeAt(t, now), now)}</span>
+  const settleChip = offersSettle(t, shelf, live) && (
+    <button type="button" className="vc-thread-done" onClick={stop(() => settleThread(t.id))} aria-label={`Settle ${title}`} title="Done: settles by itself once you've read it">
+      <TI icon={IconCheck} size={12} />Settle
+    </button>
+  )
   return (
-    <div ref={setRow} className={`vc-thread shelf-${shelf} ${active ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''} ${(t.needsReply && !live) || woke ? 'waiting' : ''}`} {...dragThreadProps(t.id)}>
-      <button type="button" className="vc-thread-main" onClick={() => onOpen(t.id)} title={title}>
-        <ThreadIcon t={t} size={16} busy={retitling} />
-        <span className={`vc-thread-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{title}</span>
-        {needs ? <span className="vc-asking" title={attentionTitle(needs)}>{attentionBadge(needs)}</span>
-          : live ? <span className="vc-live-dot" aria-label="Answering" />
-          : woke ? <span className="vc-woke" title={`Woke ${wakeDescription(wokeAt(t, now), now)}`}>Woke</span>
-          : t.needsReply && !offersSettle(t, shelf, live) && <span className="vc-reply-dot" aria-label="Waiting on you" title="Waiting on you" />}
-        {meta}
-      </button>
+    <div ref={setRow} className={`vc-thread shelf-${shelf} ${card ? 'sb-card' : ''} ${active ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''} ${unread || woke ? 'waiting' : ''} ${card && !active && !unread && !woke && !needs ? 'receded' : ''}`}>
+      {card ? (
+        <button type="button" className="vc-thread-main sb-card-main" onClick={() => onOpen(t.id)} title={place?.label ? `${title}\n${place.label}` : title}>
+          <span className="sb-line sb-place">
+            {place?.project ? <ProjectIcon p={place.project} size={12} /> : <TI icon={IconHome} size={12} className="vc-proj-icon" />}
+            <span className="sb-place-name">{place?.label || 'Home'}</span>
+            {t.pinned && <TI icon={IconPinned} size={11} className="sb-pin" />}
+            {status}
+          </span>
+          <span className="sb-line sb-title-line">
+            <ThreadIcon t={t} size={15} busy={retitling} />
+            <span className={`vc-thread-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{title}</span>
+            {pen}
+          </span>
+        </button>
+      ) : (
+        <button type="button" className="vc-thread-main" onClick={() => onOpen(t.id)} title={place ? `${title}\n${place.label || 'Home'}` : title}>
+          <ThreadIcon t={t} size={16} busy={retitling} />
+          {place ? (
+            // On a shelf every project's chats are mixed: where this one lives, dim, under its title.
+            <span className="sb-shelf-text">
+              <span className={`vc-thread-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{title}</span>
+              <span className="sb-shelf-place">{place.label || 'Home'}</span>
+            </span>
+          ) : <span className={`vc-thread-title ${retitling ? 'vc-shimmer vc-retitling' : ''}`}>{title}</span>}
+          {pen}
+          {needs ? <span className="vc-asking" title={attentionTitle(needs)}>{attentionBadge(needs)}</span>
+            : live ? <span className="vc-live-dot" aria-label="Answering" />
+            : woke ? <span className="vc-woke" title={`Woke ${wakeDescription(wokeAt(t, now), now)}`}>Woke</span>
+            : t.needsReply && !offersSettle(t, shelf, live) && <span className="vc-reply-dot" aria-label="Waiting on you" title="Waiting on you" />}
+          {meta}
+        </button>
+      )}
+      {/* The chat's task, as T3 Code shows a thread's pull request: under the title, one click to its card. */}
+      {card && (t.taskId || settleChip) && (
+        <div className="sb-meta">
+          {t.taskId ? <TaskBadge taskRef={t.taskId} /> : <span className="sb-meta-gap" />}
+          {settleChip}
+        </div>
+      )}
       {/* The agent called the request finished (mark_chat_done): Settle in plain sight. */}
-      {offersSettle(t, shelf, live) && (
+      {!card && offersSettle(t, shelf, live) && (
         <button type="button" className="vc-thread-done" onClick={stop(() => settleThread(t.id))} aria-label={`Settle ${title}`} title="Done: settles by itself once you've read it">
           <TI icon={IconCheck} size={12} />Settle
         </button>
       )}
       <div className="vc-thread-actions">
+        {unsent && (
+          <button type="button" className="vc-thread-act" aria-label={`Discard draft in ${title}`} title="Discard draft" onClick={(e) => {
+            e.stopPropagation()
+            // From the keyboard, focus stays on the row once its button has gone.
+            const main = e.detail === 0 ? e.currentTarget.closest('.vc-thread')?.querySelector<HTMLElement>('.vc-thread-main') : null
+            discardDraft(t.id)
+            if (main) requestAnimationFrame(() => main.focus())
+          }}>
+            <TI icon={IconX} size={15} />
+          </button>
+        )}
         {shelf === 'active' && (
           <>
             <button type="button" className="vc-thread-act" onClick={stop(() => { setMenu(false); setSnoozing((v) => !v) })} aria-label={`Snooze ${title}`} title="Snooze">
@@ -153,7 +227,7 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
       <button type="button" className="vc-thread-more" onClick={(e) => { e.stopPropagation(); setSnoozing(false); setMenu((m) => !m) }} aria-label={`Options for ${title}`}>
         <TI icon={IconDots} size={16} />
       </button>
-      {menu && <ThreadMenu t={t} shelf={shelf} live={live} onRename={() => { setDraft(title); setEditing(true) }} onSnooze={() => { setMenu(false); setSnoozing(true) }} onMove={() => setPicking('folder')} onLinkTask={() => setPicking('task')} onClose={close} />}
+      {menu && <ThreadMenu t={t} shelf={shelf} live={live} unsent={unsent} onRename={() => { setDraft(title); setEditing(true) }} onSnooze={() => { setMenu(false); setSnoozing(true) }} onMove={() => setPicking('folder')} onLinkTask={() => setPicking('task')} onClose={close} />}
       {picking === 'folder' && <FolderPicker
         open anchor={anchorRef as React.RefObject<HTMLElement>} onClose={closePicker}
         value={t.projectId || null} noneLabel="Home (no project)" label={`Move “${title}”`}
@@ -196,122 +270,59 @@ const SETTLED_FIRST = 10
 const SETTLED_PAGE = 25
 const readOpenShelves = () => { try { return new Set<string>(JSON.parse(localStorage.getItem(SHELVES_KEY) || '[]')) } catch { return new Set<string>() } }
 
-/** Snoozed or Settled: a folding heading over its chats, folded until opened (remembered per list). */
-function ShelfSection({ kind, scope, threads, activeId, runs, onOpen, now, first }: {
-  kind: 'snoozed' | 'settled'
+export type ShelfKind = 'working' | 'snoozed' | 'settled'
+const SHELF_LABEL: Record<ShelfKind, string> = { working: 'Working', snoozed: 'Snoozed', settled: 'Settled' }
+
+/**
+ * Working, Snoozed or Settled: a folding heading over its chats, remembered per scope
+ * ('all', 'home' or a project id). Working starts open, so what is running is in sight;
+ * Snoozed and Settled start folded. Settled shows ten at a time.
+ */
+export function ShelfSection({ kind, scope, threads, activeId, first, children }: {
+  kind: ShelfKind
   scope: string
   threads: ChatThread[]
   activeId: string | null
-  runs: Record<string, unknown>
-  onOpen: (id: string) => void
-  now: number
   /** The first shelf in its list, which pushes the shelves to the bottom. */
   first: boolean
+  children: (rows: ChatThread[]) => React.ReactNode
 }) {
   const key = `${scope}:${kind}`
-  const [open, setOpen] = useState(() => readOpenShelves().has(key))
+  const closedKey = `${scope}:${kind}:closed`
+  const [open, setOpen] = useState(() => (kind === 'working' ? !readOpenShelves().has(closedKey) : readOpenShelves().has(key)))
   const [shown, setShown] = useState(SETTLED_FIRST)
-  React.useEffect(() => { setShown(SETTLED_FIRST) }, [scope])
+  React.useEffect(() => {
+    setShown(SETTLED_FIRST)
+    setOpen(kind === 'working' ? !readOpenShelves().has(closedKey) : readOpenShelves().has(key))
+  }, [scope]) // eslint-disable-line react-hooks/exhaustive-deps
   const toggle = () => {
     const next = readOpenShelves()
-    if (open) next.delete(key)
-    else next.add(key)
-    localStorage.setItem(SHELVES_KEY, JSON.stringify([...next]))
+    const stored = kind === 'working' ? closedKey : key
+    const storeIt = kind === 'working' ? open : !open
+    if (storeIt) next.add(stored)
+    else next.delete(stored)
+    try { localStorage.setItem(SHELVES_KEY, JSON.stringify([...next])) } catch { /* private window */ }
     setOpen(!open)
   }
-  const label = kind === 'snoozed' ? 'Snoozed' : 'Settled'
+  const label = SHELF_LABEL[kind]
   // Folded, the open chat still shows, so it never vanishes from under him.
   const rows = open ? (kind === 'settled' ? threads.slice(0, shown) : threads) : threads.filter((t) => t.id === activeId)
   const hidden = open && kind === 'settled' ? threads.length - rows.length : 0
   return (
     <div className={`vc-shelf vc-shelf-${kind} ${first ? 'first' : ''}`}>
       <button type="button" className="vc-shelf-head" onClick={toggle} aria-expanded={open}>
-        <span>{open ? label : `${label} (${threads.length})`}</span>
+        {kind === 'working' && threads.length > 0 && <Spark size={11} />}
+        <span>{label}</span>
+        <span className="vc-shelf-count">{threads.length}</span>
         <span className="vc-shelf-rule" aria-hidden />
         <TI icon={open ? IconChevronUp : IconChevronDown} size={13} />
       </button>
-      {rows.map((t) => <ThreadItem key={t.id} t={t} shelf={kind} now={now} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpen} />)}
+      {children(rows)}
       {hidden > 0 && (
         <button type="button" className="vc-shelf-more" onClick={() => setShown((n) => n + SETTLED_PAGE)}>
           <TI icon={IconPlus} size={14} /><span>Show {Math.min(hidden, SETTLED_PAGE)} more</span>
         </button>
       )}
-    </div>
-  )
-}
-
-/**
- * One list's chats on their three shelves: the active ones (drawn by the
- * caller), then Snoozed and Settled. Every list has its own (Home, a project,
- * each folder), so a settled chat stays where it lives.
- */
-export function ShelvedChats({ threads, scope, activeId, onOpen, children }: {
-  threads: ChatThread[]
-  /** Which list this is, for remembering which shelves are open: 'home' or a project id. */
-  scope: string
-  activeId: string | null
-  onOpen: (id: string) => void
-  children: (active: ChatThread[], now: number) => React.ReactNode
-}) {
-  const runs = useChat((s) => s.runs)
-  const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
-  const openedSettled = useChat((s) => s.openedSettled)
-  const now = useNow(threads)
-  const keep = keptOpenId(activeId, openedSettled)
-  const { active, snoozed, settled } = useMemo(() => shelve(threads, now, autoDays, (id) => !!runs[id], keep), [threads, now, autoDays, runs, keep])
-  return (
-    <>
-      {children(active, now)}
-      {snoozed.length > 0 && <ShelfSection kind="snoozed" scope={scope} threads={snoozed} activeId={activeId} runs={runs} onOpen={onOpen} now={now} first />}
-      {settled.length > 0 && <ShelfSection kind="settled" scope={scope} threads={settled} activeId={activeId} runs={runs} onOpen={onOpen} now={now} first={!snoozed.length} />}
-    </>
-  )
-}
-
-export default function ThreadList({ activeId, onOpen, limit, heading = 'Recents', projectId = null, before }: {
-  activeId: string | null
-  onOpen: (id: string) => void
-  limit?: number
-  heading?: string
-  /** Show this project's chats; null shows Home (chats in no project that still exists). */
-  projectId?: string | null
-  /** Rendered at the top of the scrolling list (Home's project list). */
-  before?: React.ReactNode
-}) {
-  const allThreads = useChat((s) => s.threads)
-  const projects = useChat((s) => s.projects)
-  const threads = useMemo(() => {
-    const known = new Set(projects.map((p) => p.id))
-    // A totem's chat lives on its totem, not in Recents.
-    return allThreads.filter((t) => !t.totemId && (projectId ? t.projectId === projectId : !(t.projectId && known.has(t.projectId))))
-  }, [allThreads, projects, projectId])
-  const runs = useChat((s) => s.runs)
-  const loaded = useChat((s) => s.loaded)
-  // An empty chat (opened, never sent) is not history. Finding an older chat is
-  // the Search tab's job; the list itself has no search box.
-  const shown = useMemo(() => threads.filter((t) => t.messages.length > 0 || t.id === activeId || runs[t.id]), [threads, activeId, runs])
-  const renderGroups = (groups: { label: string; threads: ChatThread[] }[], now: number) => groups.map((g) => (
-    <div key={g.label} className="vc-thread-group">
-      <div className="vc-thread-group-label">{g.label}</div>
-      {g.threads.map((t) => <ThreadItem key={t.id} t={t} now={now} shelf="active" active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpen} />)}
-    </div>
-  ))
-
-  const head = <div className="vc-threads-head"><span>{heading}</span></div>
-
-  // With something above the chats (Home's projects), the heading scrolls with
-  // the list so it sits between the two rather than above both.
-  return (
-    <div className="vc-threads">
-      {!before && head}
-      <div className="vc-threads-list">
-        {before}
-        {before && head}
-        {loaded && !threads.length && <div className="vc-threads-empty">{projectId ? 'Chats in this project will show up here.' : 'Your chats will show up here.'}</div>}
-        <ShelvedChats threads={shown} scope={projectId || 'home'} activeId={activeId} onOpen={onOpen}>
-          {(active, now) => renderGroups(groupThreads(limit ? active.slice(0, limit) : active), now)}
-        </ShelvedChats>
-      </div>
     </div>
   )
 }

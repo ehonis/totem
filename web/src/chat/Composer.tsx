@@ -1,10 +1,15 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore } from 'react'
+import React, { Suspense, forwardRef, lazy, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Hi } from '../icons'
 import { getChatCommands, subscribeChatCommands } from '../studio'
 import { pushError } from '../toast'
+import { useSettings } from '../settings'
+import { cutSelection, listEnter, listIndentLines, messageText } from './editor/markdown'
 import { deleteUpload, transcribe, uploadFile } from './api'
 import { AttachmentChip, useMentionSet } from './Message'
-import { insertMention, mentionAtCaret, splitMentions } from './mentions'
+import { insertMention, mentionAtCaret } from './mentions'
+import { attachmentRef, editableRefs, formatSize, refIds, splitRefs } from './refs'
+import type { ChipInfo } from './RefChip'
+import type { PromptEditorHandle } from './editor/PromptEditor'
 import { rankDestinations, stripToken, type Destination } from './destinations'
 import ProjectIcon from './ProjectIcon'
 import { useChat } from './store'
@@ -27,14 +32,24 @@ import type { ChatCommand } from '../studio'
 const PASTE_CHIP_CHARS = 1800
 const PASTE_CHIP_LINES = 30
 
+// TipTap is the composer's largest dependency: its own chunk, fetched as soon as this file loads.
+const editorChunk = import('./editor/PromptEditor')
+const PromptEditor = lazy(() => editorChunk)
+
+/** A tray item. `hidden`: its chip was deleted from the text, kept while undo can bring it back. */
+type Draft = DraftAttachment & { progress?: number; hidden?: boolean }
+
 export interface ComposerHandle {
   addFiles: (files: File[] | FileList) => void
   /** An upload that already exists (Search's "Add to chat"). */
   addAttachment: (a: Attachment) => void
   /** The box's finished uploads, taken out of it (not deleted): a queued edit stashes the draft. */
   takeAttachments: () => Attachment[]
-  /** Put uploads in the box in place of what is there (a queued message being edited, a stashed draft). */
-  setAttachments: (list: Attachment[]) => void
+  /**
+   * Put uploads in the box in place of what is there (a queued message being edited, a draft opened).
+   * Those `own` says are the draft's alone are deleted when removed, as a fresh upload is.
+   */
+  setAttachments: (list: Attachment[], own?: (a: Attachment) => boolean) => void
   focus: () => void
 }
 
@@ -44,6 +59,11 @@ export interface FollowUpPayload { text: string; attachments: Attachment[] }
 export interface ComposerProps {
   value: string
   onChange: (v: string) => void
+  /**
+   * The box's finished uploads changed, or how many are still uploading or failed
+   * (not on mounting): they belong to the open draft (chat/drafts.ts).
+   */
+  onAttachmentsChange?: (attachments: Attachment[], unfinished: number) => void
   onSend: (payload: { text: string; attachments: Attachment[] }) => void
   onStop: () => void
   /**
@@ -157,47 +177,133 @@ function rankCommands(catalog: ChatCommand[], prefix: string, term: string, alon
   return [...own, ...agent].slice(0, 40)
 }
 
+/**
+ * The plain box's selection (message offsets), whether it has focus, whether an IME
+ * word is in progress there, and a caret to put it at.
+ */
+type PlainState = { caret: number; end: number; focused: boolean; want: number | null }
+
+/**
+ * The box until the editor is up (its chunk on a cold load or a slow link): a plain
+ * textarea on the same value, so nothing typed is lost. Attached files show as
+ * `[name]` (refs.ts `editableRefs`). It keeps `state` current on every focus,
+ * select, input and blur, for the editor to carry on from when it takes over, and
+ * says when an IME word is in progress, so the switch waits for it.
+ */
+const PlainBox = forwardRef<HTMLTextAreaElement, {
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+  autoFocus: boolean
+  state: React.MutableRefObject<PlainState>
+  onCaret: (pos: number) => void
+  onComposing: (on: boolean) => void
+  onKeyDown: (e: KeyboardEvent) => boolean
+  onPaste: (e: ClipboardEvent) => boolean
+}>(function PlainBox({ value, onChange, placeholder, autoFocus, state, onCaret, onComposing, onKeyDown, onPaste }, ref) {
+  const box = useRef<HTMLTextAreaElement>(null)
+  useImperativeHandle(ref, () => box.current!, [])
+  const shown = useMemo(() => editableRefs(value), [value])
+  const record = (el: HTMLTextAreaElement, from = shown) => {
+    const caret = from.toValue(el.selectionStart)
+    state.current = { ...state.current, caret, end: from.toValue(el.selectionEnd), focused: document.activeElement === el }
+    onCaret(caret)
+  }
+  // A caret the composer asked for (a skill picked from the menu, dictation).
+  useLayoutEffect(() => {
+    const el = box.current
+    const want = state.current.want
+    if (!el || want == null) return
+    state.current = { ...state.current, want: null }
+    const at = shown.toShown(want)
+    el.focus()
+    el.setSelectionRange(at, at)
+  }, [shown, state])
+  return (
+    <textarea ref={box} className="vc-ed vc-ed-plain" rows={1} aria-label="Message" value={shown.text} placeholder={placeholder} autoFocus={autoFocus}
+      onChange={(e) => {
+        const next = shown.restore(e.target.value, e.target.selectionStart)
+        record(e.target, editableRefs(next))
+        onChange(next)
+      }}
+      onSelect={(e) => record(e.currentTarget)}
+      onFocus={(e) => record(e.currentTarget)}
+      // Taking the box off the page blurs it too; that one is the handover, not him leaving.
+      onBlur={(e) => { if (e.currentTarget.isConnected) state.current = { ...state.current, focused: false } }}
+      onCompositionStart={() => onComposing(true)}
+      onCompositionEnd={() => onComposing(false)}
+      onKeyDown={(e) => {
+        // Return that commits an IME word never sends.
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return
+        if (onKeyDown(e.nativeEvent)) e.preventDefault()
+      }}
+      onPaste={(e) => { if (onPaste(e.nativeEvent)) e.preventDefault() }} />
+  )
+})
+
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, rightSlot, leftSlot, compactSend, answering, above, destinations } = props
-  const ta = useRef<HTMLTextAreaElement>(null)
+  const { value, onChange, onAttachmentsChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, rightSlot, leftSlot, compactSend, answering, above, destinations } = props
+  const ed = useRef<PromptEditorHandle>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const photoInput = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const marksRef = useRef<HTMLDivElement>(null)
   const cmdMenuRef = useRef<HTMLDivElement>(null)
   // Where the caret is, so "/" opens the skills menu mid-sentence, not only at the start.
   const [caret, setCaret] = useState(0)
   // The token whose menu Escape closed (its start), so it stays closed while you type on.
   const [dismissed, setDismissed] = useState<number | null>(null)
-  const [drafts, setDrafts] = useState<(DraftAttachment & { progress?: number })[]>([])
+  const [drafts, setDrafts] = useState<Draft[]>([])
+  // The tray item whose × asked first, because the text refers to it.
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [menu, setMenu] = useState(false)
   const [sel, setSel] = useState(0)
   const [dictation, setDictation] = useState<null | { state: 'recording' | 'transcribing'; startedAt: number; level: number }>(null)
   const dictRef = useRef<{ stop: () => Promise<Blob>; cancel: () => void; stream: MediaStream } | null>(null)
   const [, tick] = useState(0)
+  const { formatMarkdown } = useSettings()
 
   useDismiss(menu, menuRef, useCallback(() => setMenu(false), []))
-  useEffect(() => { if (autoFocus && !coarse()) ta.current?.focus() }, [autoFocus])
-  // Snap back to one row once cleared (after sending).
-  useEffect(() => { if (!value && ta.current) ta.current.style.height = 'auto' }, [value])
+  // The plain box stays on screen, with the editor mounted hidden behind it, until the
+  // editor is up and no IME word is in progress there; then the editor carries on
+  // from its selection and focus, after the commit that shows it.
+  const plainBox = useRef<HTMLTextAreaElement>(null)
+  const plain = useRef<PlainState>({ caret: value.length, end: value.length, focused: false, want: null })
+  const [editorUp, setEditorUp] = useState(false)
+  const [plainComposing, setPlainComposing] = useState(false)
+  const onReady = useCallback(() => setEditorUp(true), [])
+  const swapped = editorUp && !plainComposing
+  const live = useRef(false)
+  live.current = swapped
+  useLayoutEffect(() => {
+    if (!swapped || !plain.current.focused) return
+    plain.current = { ...plain.current, focused: false }
+    ed.current?.setText(valueRef.current, plain.current.caret, plain.current.end)
+  }, [swapped])
   useEffect(() => {
     if (dictation?.state !== 'recording') return
     const t = setInterval(() => tick((n) => n + 1), 500)
     return () => clearInterval(t)
   }, [dictation?.state])
 
-  const grow = () => {
-    const el = ta.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, compact ? 160 : Math.round(window.innerHeight * 0.4))}px`
-  }
+  const valueRef = useRef(value)
+  valueRef.current = value
+  const draftsRef = useRef(drafts)
+  draftsRef.current = drafts
+  // Answers to the agent's questions go by their own path, which reads no chips: files stay in the tray.
+  const chipsOff = useRef(false)
+  chipsOff.current = !!answering
 
+  /**
+   * Upload one file into the tray. With `chip`, a chip for it goes where the caret
+   * was (T3 Code's rule: a file always, an image only once there is text to sit in).
+   */
   const upload = useCallback((file: Blob, name: string, kind?: 'text', textPreview?: string) => {
     if (file.size > maxUploadBytes) { pushError(`${name} is larger than ${Math.round(maxUploadBytes / 1e6)} MB`); return }
     const key = `${Date.now()}-${Math.random().toString(16).slice(2)}`
     const isImage = /^image\//.test(file.type)
-    const draft: DraftAttachment & { progress?: number } = {
+    const chip = !chipsOff.current && (!isImage || !!valueRef.current.trim())
+    const capture = chip && live.current ? ed.current?.capture() : undefined
+    const draft: Draft = {
       key, name, mime: file.type || 'application/octet-stream', size: file.size,
       kind: kind === 'text' ? 'text' : isImage ? 'image' : 'file',
       previewUrl: isImage ? URL.createObjectURL(file) : undefined,
@@ -205,8 +311,17 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     }
     setDrafts((d) => [...d, draft])
     uploadFile(file, name, { kind, onProgress: (p) => setDrafts((d) => d.map((x) => (x.key === key ? { ...x, progress: p } : x))) })
-      .then((uploaded) => setDrafts((d) => d.map((x) => (x.key === key ? { ...x, status: 'ready', uploaded } : x))))
-      .catch((e) => {
+      .then((uploaded) => {
+        // Removed from the tray (×, or taken out for a queued edit) while it uploaded: it goes.
+        if (!draftsRef.current.some((x) => x.key === key)) {
+          capture?.dispose()
+          deleteUpload(uploaded.id)
+          return
+        }
+        setDrafts((d) => d.map((x) => (x.key === key ? { ...x, status: 'ready', uploaded } : x)))
+        capture?.insert([attachmentRef(uploaded)])
+      }, (e) => {
+        capture?.dispose()
         setDrafts((d) => d.map((x) => (x.key === key ? { ...x, status: 'error', error: e.message } : x)))
         pushError(e.message)
       })
@@ -216,59 +331,117 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     for (const f of Array.from(files)) upload(f, f.name || (f.type.startsWith('image/') ? 'image.png' : 'file'))
   }, [upload])
 
-  const addAttachment = useCallback((a: Attachment) => {
+  const addAttachment = useCallback((a: Attachment, own = false) => {
     setDrafts((d) => d.some((x) => x.uploaded?.id === a.id) ? d : [...d, {
-      key: `ctx-${a.id}`, name: a.name, mime: a.mime, size: a.size, kind: a.kind,
+      key: `${own ? 'own' : 'ctx'}-${a.id}`, name: a.name, mime: a.mime, size: a.size, kind: a.kind,
       previewUrl: a.kind === 'image' ? a.url : undefined, textPreview: a.preview, status: 'ready', uploaded: a,
     }])
   }, [])
 
-  const draftsRef = useRef(drafts)
-  draftsRef.current = drafts
+  /**
+   * Let tray items go: object URLs freed, and their uploads deleted when `drop`, or
+   * when their chip was deleted and no undo can bring it back now.
+   */
+  const release = useCallback((list: Draft[], drop = false) => {
+    for (const d of list) {
+      if (d.previewUrl) URL.revokeObjectURL(d.previewUrl)
+      // One that was already an upload (Search's, a queued message's) may still be in use there.
+      if ((drop || d.hidden) && d.uploaded && !d.key.startsWith('ctx-')) deleteUpload(d.uploaded.id)
+    }
+  }, [])
+  useEffect(() => () => release(draftsRef.current), [release])
   const takeAttachments = useCallback(() => {
-    const taken = draftsRef.current.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
-    draftsRef.current.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl))
+    const taken = draftsRef.current.filter((d) => d.status === 'ready' && d.uploaded && !d.hidden).map((d) => d.uploaded!)
+    release(draftsRef.current)
     setDrafts([])
     return taken
-  }, [])
-  const setAttachments = useCallback((list: Attachment[]) => {
-    draftsRef.current.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl))
+  }, [release])
+  const setAttachments = useCallback((list: Attachment[], own?: (a: Attachment) => boolean) => {
+    release(draftsRef.current)
     setDrafts([])
-    list.forEach(addAttachment)
-  }, [addAttachment])
+    list.forEach((a) => addAttachment(a, !!own?.(a)))
+  }, [addAttachment, release])
 
-  useImperativeHandle(ref, () => ({ addFiles, addAttachment, takeAttachments, setAttachments, focus: () => ta.current?.focus() }), [addFiles, addAttachment, takeAttachments, setAttachments])
+  const focusBox = useCallback(() => { if (live.current) ed.current?.focus(); else plainBox.current?.focus() }, [])
+  useImperativeHandle(ref, () => ({
+    addFiles, addAttachment: (a: Attachment) => addAttachment(a), takeAttachments, setAttachments,
+    focus: focusBox,
+  }), [addFiles, addAttachment, takeAttachments, setAttachments, focusBox])
 
   function removeDraft(key: string) {
     setDrafts((d) => {
       const gone = d.find((x) => x.key === key)
-      if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl)
-      // One that was already an upload (Search's, a queued message's) may still be in use there.
-      if (gone?.uploaded && !gone.key.startsWith('ctx-')) deleteUpload(gone.uploaded.id)
+      if (gone) release([gone], true)
       return d.filter((x) => x.key !== key)
     })
   }
 
-  function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const files = Array.from(e.clipboardData.files || [])
-    if (files.length) {
-      e.preventDefault()
-      addFiles(files)
-      return
+  /** × on a tray item: one the text names asks first, then takes every chip for it out too. */
+  function askRemove(d: Draft) {
+    if (d.uploaded && refIds(value).includes(d.uploaded.id)) { setConfirmRemove(d.key); return }
+    removeDraft(d.key)
+  }
+  function confirmRemoval() {
+    const d = drafts.find((x) => x.key === confirmRemove)
+    setConfirmRemove(null)
+    if (!d) return
+    const id = d.uploaded?.id
+    if (id && live.current && ed.current) ed.current.removeRefs(id)
+    else if (id) onChange(splitRefs(value).filter((p) => p.ref?.id !== id).map((p) => p.text).join(''))
+    removeDraft(d.key)
+  }
+
+  // Deleting a file's chip takes the file out of the tray, and undo brings it back. An image stays.
+  const onRefsEdited = useCallback(({ removed, added }: { removed: string[]; added: string[] }) => {
+    setDrafts((list) => list.map((d) => {
+      const id = d.uploaded?.id
+      if (!id || d.kind === 'image') return d
+      if (removed.includes(id)) return { ...d, hidden: true }
+      if (added.includes(id)) return { ...d, hidden: false }
+      return d
+    }))
+  }, [])
+
+  // The chips' look; the ones for the file × is asking about are marked, as its tile is.
+  const lookup = useMemo(() => {
+    const byId = new Map<string, ChipInfo>()
+    for (const d of drafts) {
+      if (d.uploaded) byId.set(d.uploaded.id, { kind: d.kind, name: d.name, size: d.size, mime: d.mime, thumb: d.previewUrl || d.uploaded.url, asking: d.key === confirmRemove })
     }
-    const text = e.clipboardData.getData('text/plain')
-    if (text && (text.length > PASTE_CHIP_CHARS || text.split('\n').length > PASTE_CHIP_LINES)) {
-      e.preventDefault()
+    return (id: string) => byId.get(id)
+  }, [drafts, confirmRemove])
+
+  function onPaste(e: ClipboardEvent) {
+    const data = e.clipboardData
+    const files = Array.from(data?.files || [])
+    if (files.length) {
+      addFiles(files)
+      return true
+    }
+    const text = data?.getData('text/plain') || ''
+    if (text.length > PASTE_CHIP_CHARS || text.split('\n').length > PASTE_CHIP_LINES) {
       pasteCount += 1
       const firstLine = text.trim().split('\n')[0].slice(0, 80)
       upload(new Blob([text], { type: 'text/plain' }), `Pasted text ${pasteCount}.txt`, 'text', firstLine)
+      return true
     }
+    return false
   }
 
-  const uploading = drafts.some((d) => d.status === 'uploading')
-  const failed = drafts.some((d) => d.status === 'error')
-  const ready = drafts.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
-  const hasContent = value.trim().length > 0 || drafts.length > 0
+  const tray = drafts.filter((d) => !d.hidden)
+  const uploading = tray.some((d) => d.status === 'uploading')
+  const failed = tray.some((d) => d.status === 'error')
+  const ready = tray.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
+  // A file whose chip was deleted is out of the draft too (it comes back only with undo).
+  const unfinished = tray.length - ready.length
+  const trayState = `${ready.map((a) => a.id).join(',')}|${unfinished}`
+  const reported = useRef(trayState)
+  useEffect(() => {
+    if (reported.current === trayState) return
+    reported.current = trayState
+    onAttachmentsChange?.(ready, unfinished)
+  }, [trayState]) // eslint-disable-line react-hooks/exhaustive-deps
+  const hasContent = value.trim().length > 0 || tray.length > 0
   // Only finished files can move with a chat to its new place, so a pick waits for the rest.
   const placeHeld = uploading ? 'Waiting for uploads' : failed ? 'Retry or remove failed uploads first' : ''
   const sendable = !uploading && !failed && (value.trim().length > 0 || ready.length > 0)
@@ -285,21 +458,21 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   const placeholder = answering ? answering.placeholder
     : followUps ? (actionFor(false) === 'steer' ? 'Steer this reply: add context or change course' : 'Queue a message for when this reply finishes')
     : idlePlaceholder
-  const valueRef = useRef(value)
-  valueRef.current = value
   const handing = useRef(false)
 
   /** Empty the box into a follow-up (or a queued edit); put it all back if that fails. */
   async function hand(fn: (p: FollowUpPayload) => Promise<boolean> | boolean) {
     if (!sendable || handing.current) return
     handing.current = true
-    const text = value.trim()
+    const text = messageText(value)
     const attachments = ready
-    const kept = drafts
+    // With the text out of the box no undo can bring a deleted chip back: those files go now.
+    release(drafts.filter((d) => d.hidden))
+    const kept = tray
     onChange('')
     setDrafts([])
     try {
-      if (await fn({ text, attachments })) { kept.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl)); return }
+      if (await fn({ text, attachments })) { release(kept); return }
       // Not sent: give it back, unless he has started on something else.
       if (!valueRef.current.trim()) onChange(text)
       setDrafts((d) => (d.length ? d : kept))
@@ -314,14 +487,14 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   }
 
   function clearTray() {
-    drafts.forEach((d) => d.previewUrl && URL.revokeObjectURL(d.previewUrl))
+    release(drafts)
     setDrafts([])
   }
 
   function send() {
     if (queueEdit) { void hand(queueEdit.onSave); return }
     if (!canSend) return
-    onSend({ text: value.trim(), attachments: ready })
+    onSend({ text: messageText(value), attachments: ready })
     clearTray()
   }
 
@@ -358,9 +531,12 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   }, [sel])
 
   function placeCaret(next: string, pos: number) {
-    onChange(next)
+    if (live.current && ed.current) ed.current.setText(next, pos)
+    else {
+      plain.current = { ...plain.current, want: pos }
+      onChange(next)
+    }
     setCaret(pos)
-    requestAnimationFrame(() => { grow(); ta.current?.focus(); ta.current?.setSelectionRange(pos, pos) })
   }
 
   function chooseCommand(c: ChatCommand) {
@@ -385,22 +561,37 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     placeCaret(next, next.length)
   }
 
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+  /** Return and Tab in a list while the plain box stands in for the editor, through the same string edits. */
+  function plainListKey(e: KeyboardEvent) {
+    if (e.metaKey || e.ctrlKey || e.altKey || (e.key !== 'Enter' && e.key !== 'Tab')) return false
+    const { caret: from, end: to } = plain.current
+    const result = e.key === 'Tab'
+      ? listIndentLines(value, from, to, e.shiftKey)
+      : (() => { const cut = cutSelection(value, from, to); return listEnter(cut.value, cut.caret, e.shiftKey) })()
+    if (!result) return false
+    placeCaret(result.value, result.caret)
+    return true
+  }
+
+  /** The editor's keys first; true when the composer used the key. */
+  function onKeyDown(e: KeyboardEvent) {
     if (items.length) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setSel((s) => (s + 1) % items.length); return }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setSel((s) => (s - 1 + items.length) % items.length); return }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); chooseItem(items[Math.min(sel, items.length - 1)]); return }
-      if (e.key === 'Escape') { e.preventDefault(); setDismissed(query!.start); return }
+      if (e.key === 'ArrowDown') { setSel((s) => (s + 1) % items.length); return true }
+      if (e.key === 'ArrowUp') { setSel((s) => (s - 1 + items.length) % items.length); return true }
+      if (e.key === 'Enter' || e.key === 'Tab') { chooseItem(items[Math.min(sel, items.length - 1)]); return true }
+      if (e.key === 'Escape') { setDismissed(query!.start); return true }
     }
+    // In a list or a code block, Return and Tab edit it; ⌘/Ctrl+Return still sends.
+    if (live.current && ed.current ? ed.current.formatKey(e) : plainListKey(e)) return true
     // On a phone, Return is a newline and the button sends — the way every
     // messaging app on it behaves.
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && !coarse()) {
-      e.preventDefault()
-      if (answering) answerNow()
-      else if (queueEdit) send()
-      else if (followUps) followUpNow(e.metaKey || e.ctrlKey)
-      else if (!busy) send()
-    }
+    const mod = e.metaKey || e.ctrlKey
+    if (e.key !== 'Enter' || e.shiftKey || (coarse() && !mod)) return false
+    if (answering) answerNow()
+    else if (queueEdit) send()
+    else if (followUps) followUpNow(mod)
+    else if (!busy) send()
+    return true
   }
 
   // --- dictation -------------------------------------------------------------
@@ -426,14 +617,11 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
       closeMic(rec.stream)
       const text = await transcribe(blob)
       if (text) {
-        const el = ta.current
-        const start = el?.selectionStart ?? value.length
-        const end = el?.selectionEnd ?? value.length
-        const before = value.slice(0, start)
+        const current = valueRef.current
+        const { from, to } = (live.current && ed.current?.selection()) || { from: plain.current.caret, to: plain.current.end }
+        const before = current.slice(0, from)
         const joiner = before && !/\s$/.test(before) ? ' ' : ''
-        const next = before + joiner + text + value.slice(end)
-        onChange(next)
-        requestAnimationFrame(() => { grow(); el?.focus() })
+        placeCaret(before + joiner + text + current.slice(to), from + joiner.length + text.length)
       }
     } catch (e: any) {
       pushError(e.message)
@@ -452,7 +640,8 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
 
   const secs = dictation ? Math.floor((Date.now() - dictation.startedAt) / 1000) : 0
   const compacting = !!compactSend && !compactSend.keep
-  const showVoice = !!onVoice && !busy && !value.trim() && !drafts.length && !dictation && !onResume
+  const showVoice = !!onVoice && !busy && !value.trim() && !tray.length && !dictation && !onResume
+  const removing = drafts.find((d) => d.key === confirmRemove)
 
   return (
     <div className={`vc-composer ${compact ? 'compact' : ''}`}>
@@ -491,47 +680,66 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
         </div>
       )}
       <div className="vc-box">
-        {drafts.length > 0 && (
+        {tray.length > 0 && (
           <div className="vc-tray">
-            {drafts.map((d) => (
+            {tray.map((d) => (
               <AttachmentChip
                 key={d.key}
                 a={{ name: d.name, kind: d.kind, mime: d.mime, size: d.size, url: d.previewUrl, preview: d.textPreview }}
                 status={d.status}
                 progress={d.progress}
-                onRemove={() => removeDraft(d.key)}
+                onRemove={() => askRemove(d)}
+                asking={d.key === confirmRemove}
               />
             ))}
           </div>
         )}
-        {dictation ? (
+        {removing && (
+          <div className="vc-tray-confirm" role="alertdialog" aria-label={`Remove ${removing.name}?`}
+            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setConfirmRemove(null); focusBox() } }}>
+            <span><strong>{removing.name}</strong> ({formatSize(removing.size)}) is referenced in your message; removing it removes every reference.</span>
+            <span className="vc-tray-confirm-actions">
+              <button type="button" className="vc-btn sm ghost" onClick={() => { setConfirmRemove(null); focusBox() }}>Keep</button>
+              <button type="button" className="vc-btn sm danger" onClick={confirmRemoval} autoFocus>Remove</button>
+            </span>
+          </div>
+        )}
+        {dictation && (
           <div className="vc-dictation">
             <span className="vc-rec-dot" style={{ transform: `scale(${1 + Math.min(dictation.level * 6, 0.8)})` }} />
             <span className="vc-dictation-label">
               {dictation.state === 'recording' ? `Listening · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : 'Transcribing…'}
             </span>
           </div>
-        ) : (
-          <div className="vc-input">
-            {/* The cited skills, highlighted behind the textarea's own text. */}
-            <div className="vc-input-marks" ref={marksRef} aria-hidden>
-              {splitMentions(value, known).map((p, i) => (p.mention ? <mark key={i}>{p.text}</mark> : <React.Fragment key={i}>{p.text}</React.Fragment>))}
-              {'\n'}
-            </div>
-            <textarea
-              ref={ta}
-              rows={1}
+        )}
+        {/* Hidden, not unmounted, while dictating: the words land at its caret, and undo keeps its history. */}
+        <div className="vc-input" hidden={!!dictation}>
+          {!swapped && (
+            <PlainBox ref={plainBox} value={value} onChange={onChange} placeholder={placeholder} autoFocus={!!autoFocus && !coarse()} state={plain}
+              onCaret={setCaret} onComposing={setPlainComposing} onKeyDown={onKeyDown} onPaste={onPaste} />
+          )}
+          <div hidden={!swapped}>
+          <Suspense fallback={null}>
+            <PromptEditor
+              ref={ed}
               value={value}
+              onChange={onChange}
+              lookup={lookup}
+              known={known}
               placeholder={placeholder}
-              onChange={(e) => { onChange(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); grow() }}
-              onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-              onScroll={(e) => { if (marksRef.current) marksRef.current.scrollTop = e.currentTarget.scrollTop }}
+              label="Message"
+              enterKeyHint={coarse() ? 'enter' : 'send'}
+              autoFocus={autoFocus && !coarse()}
+              onCaret={setCaret}
+              onRefsEdited={onRefsEdited}
+              onReady={onReady}
               onKeyDown={onKeyDown}
               onPaste={onPaste}
-              enterKeyHint={coarse() ? 'enter' : 'send'}
+              markdown={formatMarkdown}
             />
+          </Suspense>
           </div>
-        )}
+        </div>
         <div className={`vc-box-bar ${compactSend && !busy ? 'has-compact' : ''}`}>
           <div className="vc-box-left">
             {!dictation && (

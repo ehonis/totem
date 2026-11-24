@@ -147,7 +147,8 @@ Every event has a `seq`. Viewers replay with `since`.
 | `queue` | `queue`, `queueHeld` | The thread's queue changed while this reply runs. |
 | `delta` | `text` | Reply text. |
 | `tool` | `tool: {id, phase: 'start'\|'end', kind, title, detail, server?, tool?, app?, logo?, input?, status?, output?}` | A card opens on `start` and settles on `end`. `app`/`logo` are a connector's own name and https logo (see Steps and connectors). |
-| `image` | `uploadId`, `url` | A screenshot from a tool result. |
+| `image` | `uploadId`, `url` | A picture the CLI made (Codex's image tool): an `image` part in the reply. |
+| `tool_image` | `toolId`, `uploadId`, `url` | A picture a tool returned: it goes on that call's card as `images`, not in the reply (see Pictures the agent looks at). |
 | `steer` | `steer: {id, text, via, createdAt, attachments?}` | The owner wrote mid-reply. Becomes a `steer` part where it landed. |
 | `questions` | `questions: {id, questions?, status, answers?, askedAt?, answeredAt?}` | The agent asked the owner questions (a `questions` part, added where asked), or they were answered or dismissed (the same part, updated by id). |
 | `approval` | `approval: {id, tool, title, detail, app?, logo?, reason?, path?, input?, toolUseId?, subagent?, once?, status, decision?, feedback?, askedAt?, decidedAt?}` | Claude asked to run a tool call (an `approval` part, added where asked), or the owner decided, or it expired (the same part, updated by id). |
@@ -298,6 +299,166 @@ what is left. On top of that, as T3 does:
   (`CLAUDE_AUTO_COMPACT_RESERVE_TOKENS`); with none set, the account's own `settings.json` or
   environment is read the way T3 reads it, and compaction switched off there means no tick.
 
+## Attachments
+
+A file added in the composer (the + menu, paste, a drop anywhere on the chat) is uploaded
+(`POST /api/chat/uploads`) into the **tray** above the text, and is also named **inline**, T3
+Code style: a chip in the sentence, coloured by kind, with a 1em thumbnail or icon, the name
+cut in the middle at 36 characters and the size (`833 KB`, `1.2 MB`).
+
+**The string stays the message.** The composer's box is a minimal TipTap editor
+(`web/src/chat/editor/`: Document, Paragraph, Text, UndoRedo and the chip node; the list
+`createComposerExtensions()` is where later features add theirs), loaded on its own chunk, over
+the same `value` string the textarea had. Until the chunk arrives the box is a plain textarea on
+that value (files shown as `[name]`), with the editor mounted hidden behind it. The box records
+its selection and focus as he types; once the editor is up and no IME word is in progress there,
+the editor takes its place and carries on from that selection, so nothing typed on a slow load is
+lost. The editor focuses itself only from the page or the composer, never from another field he
+is in. `scripts/composer-load.test.mjs` checks all of this in Chromium with the chunk held back
+(mouse, touch, a selection, an IME word, another field).
+Text pasted from another ProseMirror app (Linear, Confluence) is plain text too: only a slice with
+this editor's chips in it is taken as its own copy. Each line is a paragraph (or, with formatting
+on, a list item or a code line: Lists and code in the message box), and a chip is a Markdown link
+to its upload, kept in the text as written:
+
+| Kind | Token | Colour |
+|---|---|---|
+| image | `![image.png](totem-ref://upload/<id>)` | `--chip-image` blue |
+| file | `[notes.pdf](totem-ref://upload/<id>)` | `--chip-file` blue |
+| pasted text | `[Pasted text 1.txt](totem-ref://upload/<id>)` | `--chip-text` green |
+| a cited skill (`/name`) | the text itself, a decoration | `--chip-skill` magenta |
+
+The label loses brackets and line breaks (parentheses stay) and is capped at 200 UTF-16 units; a
+label read back from the text is written as it was. `web/src/chat/refs.ts`
+parses and writes them (copied byte for byte to `mobile/src/lib/chat/refs.ts`); the bridge's
+`chat/refs.mjs` uses the same pattern. The colours are T3's hues lightened to read at 4.5:1 or
+more on every Background palette (`refs.test.ts` checks, and that the app uses the same ones).
+
+**Where a chip goes.** Paste, drop and the picker share one path (`upload` in `Composer.tsx`):
+the caret is captured before the upload and the chip (plus a space, and one in front if the
+caret touches a word) goes there when it finishes; if that spot was edited away meanwhile, it
+goes at the caret. Uploads finishing out of order still land in the order they were added. A
+file always gets a chip; an image only when the box already has text, otherwise it is only in
+the tray. A paste over 1,800 characters or 30 lines becomes a pasted-text chip. An attachment
+handed in (Search's "Add to chat", a queued message or draft put back) goes to the tray only,
+and answering the agent's questions adds no chips (that path reads no tokens). If the text is
+replaced from outside while a file uploads (another chat's draft, a queued message being edited),
+its chip is left out and the file stays in the tray; one removed from the tray mid-upload is
+deleted when it lands. Text pasted from anywhere but the box itself goes in as its plain text, so
+a mail's or an editor's lines and blank lines stay; a copy from the box keeps its chips.
+
+**Tray and text stay together.** Backspace or Delete removes a chip as one unit; putting a chip in
+or taking one out is its own undo step, apart from the typing beside it. Deleting an image's chip leaves the image in the tray; deleting a file's or pasted text's
+takes it out of the tray, undo brings both back, and the upload is deleted only once nothing can
+bring it back (the message is sent or handed off, or the box is replaced or closed). × on a tray
+item the text names marks that item and asks first ("notes.pdf is referenced in your message;
+removing it removes every reference.") and then removes the item and every chip for it.
+
+**What the agent reads.** Where a turn's prompt is built (`chatPrompt`, `steerText` for steers;
+queued messages start as ordinary turns), `projectRefs` rewrites each token to
+`[Image: image.png; ref=upload_<id>]` or `[File: …; ref=upload_<id>]` and appends one block:
+
+```
+<totem_context version="1">
+<context kind="image" id="upload_<id>">
+name: image.png
+mime: image/png
+size: 833 KB
+path: /…/uploads/<id>/image.png
+</context>
+</totem_context>
+```
+
+A pasted text's context also carries its text, out of the one 60,000-character inline budget a
+turn has for text (`TEXT_INLINE_LIMIT`, shared with `attachmentBlock`). Only ids among **this
+message's own** `attachments` resolve; any other id (an old upload, another chat's, a made-up one)
+reads `[Unavailable attachment: <label>]` and gives no path. Names inside a block are escaped, and
+a prompt that carries a block is sealed as a whole (`contextSeal`): the real blocks are held behind
+a random placeholder while every `<context`/`<totem_context` tag (any case) anywhere else in the
+prompt is escaped (the words, a file pasted in or sent without a chip, an earlier message, a steer
+and the restarted request around it), then the blocks go back. So only Totem's blocks open one,
+while `<Context.Provider>` stays as written, and a prompt with no block is not touched at all. A
+steer that restarts the reply (Codex, Cursor, OpenCode) is projected once: its note follows the
+message's own request (`after` in `chatPrompt`) and its blocks are held by the same seal. Attachments no token names are listed as they always were
+(`attachmentBlock`). A replayed transcript, including a handoff to another account, uses the
+same inline form with no paths (`inlineRefs`).
+
+**Everywhere else.** The web transcript draws tokens as chips from the message's attachments
+(user bubbles, steers, the queue list, the edit box, which is the same editor); an id the message
+does not carry draws as "not attached", with why in its tooltip. The iPhone transcript draws each
+as its coloured name and size (or "not attached"); its composer is unchanged, and its edit boxes
+(a sent message, a queued one) show each file as `[name]` and put its reference back on save
+(`editableRefs`). Chat list summaries, `firstUserText`, titles (generated
+and fallback, on both clients), search, `threads__list`/`threads__read`, a totem asked in the chat,
+project pages and Copy show plain names (`plainRefs`) or the inline form, never `totem-ref://`
+text. Reverting this leaves messages sent meanwhile holding the raw tokens, which an older bridge
+passes to the agent unresolved.
+
+## Lists and code in the message box
+
+The composer formats Markdown as it is typed, T3 Code style (#298): `1. ` makes a real
+numbered list, `- [ ] ` a task with a checkbox, a fence a code block. **What is sent is
+exactly the Markdown typed**: every item keeps the indent and marker it was written with
+(`3)`, `07.`) and the one space or tab after the marker (any more are the item's text, so the box
+shows them), and the string round-trips through the editor unchanged (`web/src/chat/editor/doc.ts`; `doc.test.ts` checks a corpus).
+
+**Turning text into a list.** At the start of a top-level line, `1. ` or `1) ` (any number up
+to nine digits) makes a numbered list starting there; `* ` and `+ ` make a bullet at once; `- `
+stays text until the next character shows it is not `- [`, so `- [ ] ` and `- [x] ` make a task.
+`[ ] ` at the start of a bullet item turns it into a task. Backspace straight after any of these
+puts the typed text back, and it stays text. A marker that arrives another way (pasted, dropped,
+dictated, edited in at the line's start) is read on the next change, after IME composition ends
+(the reformat pass in `editor/blocks.ts`). Pasted plain text is read as Markdown where it lands;
+text copied from the box itself keeps its nodes. Copy, cut, and paste
+or Return over a selection all read the selection as its Markdown (`selectionRange`): a selection
+inside one line or one code block is just its text, while one that starts at a line's text and runs
+past its end (or starts outside it, as select-all does) takes the line's marker or opening fence, and
+one that reaches past a code block takes its closing fence. So pasting a cut back gives the same
+lines, and pasting over select-all replaces everything; a chip copies out as its file's name.
+
+**How lines group.** A deeper-indented item nests under the item above; a line indented to an
+item's text continues that item (Shift+Return makes one); an empty line, or a line at the left
+edge, ends the list. Lists of different markers (`-` and `*`, `.` and `)`) are separate lists.
+A fence (```` ``` ```` or `~~~`, with an optional language) followed by at least one more line
+opens a code block, closed by a matching fence (up to three spaces in) or the end of the message.
+A closing fence typed as the block's last line closes it even before Return; a fence in the
+middle of the code gets a longer one written around it.
+
+| Where | Key | What it does |
+|---|---|---|
+| A list item | Return | Takes out any selection, then splits the item at the caret; the new one is numbered next and the items after it are renumbered. A task continues unchecked. |
+| An empty item | Return | Lifts it one level (numbered after its parent); at the top it leaves the list. |
+| A list item | Shift+Return | A new line in the same item. |
+| A list item, or several selected | Tab | Nests each under the item above, with its own nested lines: numbered from 1, or after an existing nested list. The items after it are renumbered. The first item of a list stays put. An item whose parent is selected and moves goes with it (one whose parent cannot move moves on its own), and a selection that ends at a line's start, or just after its marker, leaves that line out. |
+| A list item, or several selected | Shift+Tab | Lifts each to follow its parent, numbered after it; the items that followed it become its children, numbered from 1. |
+| The start of an item | Backspace | Lifts a nested item; takes a top-level one out of its list. At the start of a continuation line, or the line below a list, it joins the line above. |
+| The end of a line in or above a list | Delete | Joins the next line, without its marker. |
+| A line that is only ```` ```lang ```` | Return | Opens a code block. |
+| A code block | Return | A new line with the indent of the one above. On a closing fence typed in the block, it ends the block there; on the third blank line in a row, it leaves the block. |
+| A code block | Tab / Shift+Tab | Indents or outdents by two spaces: at the caret, or every selected line. |
+| The start of a code block | Backspace | Takes the fences away and leaves the lines. |
+| Anywhere | ⌘/Ctrl+Return | Sends. While a reply runs it does the other follow-up action, as before; in a list, where Return is taken, that makes it the only key that hands a message over, and the button does the chosen one. |
+
+Outside a list and a code block, Return does what it always did (send, or the chosen follow-up
+while a reply runs, or a new line on a phone). An empty item Return left at the end of a list is
+not sent (`messageText`). On a list line Tab never moves focus; elsewhere
+it does, and the `/` and `$` menus take Return and Tab first. Every list key is an edit of the
+string (`editor/markdown.ts`, after T3's `composer-list-continuation.ts`) that the editor then
+redraws from, so the two cannot drift.
+
+**Drawing.** Each item draws the marker it was typed with (`::marker { content: attr(data-marker) }`,
+its `value` attribute as the fallback where that is unsupported), in a gutter sized to the
+widest marker. Bullets nest disc, circle, square. A task is a checkbox row; clicking the box
+writes `[x]` or `[ ]`. A code block is a monospace panel with its language in the corner.
+
+**Settings → Chat › Format Markdown as you type** (on by default, per device, `formatMarkdown` in
+`web/src/settings.ts`) turns the drawing off: the box is plain text again, but Return, Tab and
+Shift+Tab still continue and nest lists through the same string functions. The message edit box
+and the iPhone app's composer stay plain text. The textarea that stands in before the editor's chunk loads is
+plain text too, but Return and Tab in a list already continue and nest it there; what was typed
+is drawn as lists once the editor mounts, with the caret in
+the same item (`scripts/composer-load.test.mjs` types one in Chromium).
+
 ## Steering
 
 Copied from T3 Code: a message sent while a reply is running either steers it
@@ -351,7 +512,7 @@ goes back at the front and the queue holds.
 The queue is a drawer on the composer's top edge (`QueuedMessages.tsx`):
 "Queued" and a count, collapsible, then one row per message, first in line
 first: image thumbnails, the text on one line, Edit (the message goes into the
-composer, the draft there is put aside and comes back after; send shows a check,
+composer, the chat's draft waits in the store and comes back after; send shows a check,
 the row Cancel), Steer (send it into the running reply instead; off with nothing
 running) and remove. Rows drag by their grip to reorder, or move with the arrow
 keys on it; the app has no reordering. If an edited message starts meanwhile,
@@ -359,6 +520,140 @@ the edit is kept as the draft when the box had none, otherwise dropped, with a
 toast either way. Viewers of the running reply hear changes as `queue` events,
 and a client that sees a reply end with messages queued looks for the next run
 (`watchQueue`).
+
+## Drafts
+
+T3 Code's saved drafts (`web/src/chat/drafts.ts`; what the web and the iPhone app do
+with it the same way in `web/src/chat/draftsShared.ts`; the web's side in
+`web/src/chat/draftsWeb.ts`, the chat view's in `web/src/chat/useChatDrafts.ts`). Every chat keeps one unsent message, keyed by its id; a chat
+not started yet keeps as many as he leaves behind, each `new:<uuid>`, with the place it
+would start in (Home, a project or folder, or for a task) and, at Home, whether it is a
+temporary chat. A draft is its words and its finished uploads together: switching chats or
+drafts swaps the text and the tray at once (the composer reports its tray through
+`onAttachmentsChange`, and ChatView puts a draft's files back with the composer's
+`setAttachments`, marking the files only that draft holds so removing one deletes it). A
+file still uploading, or failed, when he leaves stays behind, and a toast says so.
+
+- **Storage.** localStorage `totem.chat.drafts.v2` (`{ drafts, current }`, `current` being
+  the draft each place's composer shows), written 300 ms after a change and at once on
+  `pagehide`/`beforeunload`. The old text-only `totem.chat.drafts` is folded in and removed,
+  each entry under its old key so it never lands in another draft: on a load only keys with no
+  draft yet (the old map may hold words since sent), and when a tab still on the old page
+  writes it again only what that write changed, against the last map seen from it (the
+  event's `oldValue`, or, once this page has removed the key, the map that tab wrote last,
+  kept in `sessionStorage` so a reload still has it): changed words are taken, and words it
+  dropped leave a draft still holding them, but only when the write is plainly a send or a
+  move (nothing else changed, or the only other change is a new key holding exactly the
+  dropped words); a write that changes anything else is taken as a second old tab's and
+  clears nothing (a second old tab sending a draft only it had still reads as a send).
+  Reverting this change therefore starts with no saved drafts. A draft with neither words nor files is dropped. A save that throws (a full
+  store, a private window) leaves the drafts working in memory, with one toast saying so.
+- **Other tabs.** Two tabs in one browser share the drafts (the desktop app's webview has its
+  own storage, so it does not). Another tab's save arrives as a `storage` event and is merged
+  three ways (`mergeDrafts`), against the event's `oldValue`, what that save replaced: a draft
+  both have keeps the newer words and the newer files, each by its own time (`updatedAt`,
+  `filesAt`, which only move forward even if the clock steps back); one only there is taken unless this tab removed it (the base
+  had it and the other tab did not change it since); one only here goes only if the other tab
+  removed it (the base had it and this tab did not change it since). A merge whose result is
+  exactly the other tab's save writes nothing back, so an idle tab never echoes an older copy
+  over newer typing, a discard, or a refused send put back. A tie goes the same way in every
+  tab (the newer-made copy, then by value), and a merge that leaves a draft empty drops it. A
+  tab never saves blind: each save first merges whatever storage holds if it is not what the
+  tab last knew (a save whose event is still on its way, or saves missed while it sat in the
+  back/forward cache; `read` on `createDraftStore`), and a page restored from that cache
+  also takes them in at once on `pageshow`. Each tab keeps its own
+  composers (`current`).
+- **New chat.** "New chat" (the panel's button, the rail, the header, ⌘/Ctrl+Shift+O) and
+  arriving at a place from a chat or another place show that place's draft while it is
+  empty, else a fresh `new:<uuid>`; the one with words in it stays a row. A row opened
+  shows its own draft instead (`openDraft`, `takeOpenedDraft`). `$` and "Start in" move the
+  draft; one still on its place's own key (`new:home`, `new:project:<id>`) takes a minted key
+  as it moves, or the two places would share it.
+- **Rows.** A block at the top of the chats list (`ChatsPanelDrafts.tsx`, inside
+  `.vc-threads-list`), newest first, then a rule: Home lists every new-chat draft, a
+  project its own and its folders'. A row has the amber pencil, the place (a project or
+  folder with its icon, Home, or a checklist icon for a task's), the first line or "N
+  attachments", and an × to discard on hover or focus (always on a touch screen, with a
+  44 px target), on a light `--amber` surface. Click, Enter or Space opens it. The draft on
+  screen is listed only if it had something in it when opened, so a fresh one gets no row
+  while he types; rows keep their order while he types. A discard from the keyboard moves
+  focus to the next row, else the one before, else the list. A chat with unsent words wears
+  the same pencil ("Unsent draft"), which gives way to its hover actions, where Discard
+  draft is (also in its "…" menu), except the chat on screen.
+- **Discard.** The draft goes at once (if its place's composer was showing it, that composer
+  moves to a fresh draft, so typing on never brings the discarded one back, and Undo moves it
+  back while that fresh draft is still empty), with Undo on the toast (the deck's `onExpire` and
+  `runToastAction` in `web/src/toast.ts`). Undo is refused with "The draft has new content."
+  if something was written there since. Its uploads are deleted only once the toast has gone,
+  and only those no other draft holds; the bridge still keeps one a message or a project uses.
+- **Send.** The draft leaves the composer as the message is sent; `send`'s `onRefused` (only
+  for a refusal before `start`) puts it back into the same draft, ahead of anything written
+  since. One that never reached the bridge stays in the chat as
+  "Not sent" (the outbox), and its Discard puts words and files back into the chat's draft,
+  or, for a new chat that never started, into a new-chat draft where it would have started.
+  Its Retry passes the same restore as `onRefused`; a refused new chat's words land in a row
+  of their own (`new:refused-<id>`), leaving the composer alone.
+  A follow-up (queue or steer) that fails after he moved to another chat goes back into the
+  draft it came from. A new-chat draft's row gives way to the chat's row in the same render.
+- **Gone chats.** Each time the bridge answers with the chat list (`listAnswered`, never a
+  failed fetch), a chat's draft whose chat no longer exists (deleted, a temporary chat past
+  midnight) is dropped. Its uploads are left to their hold, which lapses. So the bridge never
+  answers a list that leaves a chat out by accident: a chats folder it cannot read fails the
+  request, and a chat whose file does not read is listed as `{ id, unreadable: true, title:
+  'Unreadable chat' }` (`summaries` in `chat/store.mjs`).
+- **Uploads past the sweep.** The bridge deletes an upload no message, project or connection
+  uses a day after it was made (`sweepOrphans`, every six hours). A draft's uploads are held:
+  the browser names every id its drafts hold to `POST /api/chat/uploads/hold {ids}` when it
+  starts and a second after that set changes, and again when the page is back in front if
+  the last set never got through (`renew`); the bridge keeps each for 30 days from its last
+  renewal (`createUploadHolds` in `chat/uploads.mjs`, `data/upload-holds.json`,
+  `UPLOAD_HOLDS_FILE`, written atomically) through `keptUploadIds`. Deleting a chat ignores
+  holds and releases those of the files it removes, since nearly every sent file was held
+  while it was a draft. Holds are per id and never replaced wholesale,
+  because drafts live in each browser and another device's holds must stand. The answer
+  names ids the bridge no longer has; such a file never enters the tray, is named over the
+  composer ("… is no longer on the server and won't be sent", with Remove), and a send
+  without it says so in a toast. `DELETE /api/chat/uploads/<id>` (a chip removed) lets go
+  of that id's hold first.
+
+### On the iPhone
+
+The app keeps its drafts the same way, from the same files: `drafts.ts`, `draftsShared.ts`
+and `refs.ts` in `mobile/src/lib/chat/` are the web's byte for byte
+(`mobile/src/features/chat/drafts.shared.test.mjs`), so a change to the logic is made on the
+web and copied. The app's own side is storage, `mobile/src/lib/chat/draftsApp.ts` (tested by
+`draftsApp.test.mjs`), wired up once in `mobile/src/features/chat/appDrafts.ts`; the chat
+screen's draft is `mobile/src/features/chat/useChatDrafts.ts`, the web hook's twin over the
+same shared functions.
+
+- **Storage.** A `totem.chat.drafts.v2@<bridge URL>` record per bridge in the app's
+  localStorage (expo-sqlite's): drafts name a bridge's chats and uploads, so connecting to
+  another bridge shows that bridge's drafts, and none before one is connected. Saved 300 ms
+  after a change and at once when the app leaves the foreground (`AppState` turning
+  `inactive` or `background`), since iOS may end it after. The app's own old text-only
+  `totem.chat.drafts` is folded into the first bridge's record once and removed. A record
+  that does not read is copied to `….bak` before it is first written over. The app is one JS
+  context, so nothing else writes the record: no merge, no `read`. Held uploads that never
+  reached the bridge go again when the app is back in front.
+- **Rows.** At the top of the drawer's chats (`ChatsNavDrafts.tsx`, handed to `ChatsNav`
+  by the drawer like the Tasks face), under "Unsent", as T3 Code's app lists them: an amber
+  pencil and "Draft", the place, then the first line or "N attachments". A tap opens it;
+  swiped left it shows Discard, and a long press offers Open draft and Discard draft; for
+  VoiceOver, which cannot swipe, Discard draft is an action on the row. Home lists every
+  draft, a project its own and its folders'; the draft on screen follows the web's rule. The
+  rows redraw when a row changes, not on every keystroke. A chat with unsent words wears the
+  amber pencil, and its menu (and VoiceOver's actions) has Discard draft; from the Snoozed or
+  Settled sheet that closes the sheet first, so the Undo line is in sight.
+- **Discard.** Undo is the drawer's docked Undo line (`features/work/undoDock.tsx`), not a
+  toast, since the app's toasts are errors only; the draft's uploads go once the line has
+  (`onGone`), as the web's go with its toast. A refused Undo, a file left behind still
+  uploading and a send without a lost file are errors.
+- **Everything else** (New chat, "Start in", send and `onRefused`, a discarded or refused
+  unsent message, gone chats after `listAnswered`, upload holds and missing files) is the
+  web's, through the same functions. A queued message's edit shows its file references as
+  `[name]` in the plain box and puts them back (`lib/chat/queueEdit.ts`) when it is saved or
+  kept as the draft. A temporary chat's draft opened before the chat screen was first drawn
+  opens it temporary.
 
 ## Questions
 
@@ -508,7 +803,7 @@ the reasoning column and footer.
 
 The panel is rendered into `<body>` and placed against the window (`usePopoverPlacement` in
 `web/src/chat/ui.tsx`): it opens upward from the chip unless there is more room below (a new chat
-or a project's home, where the composer sits high), shrinks to the room it has, and never leaves
+or a project's home, where the composer may sit high), shrinks to the room it has, and never leaves
 the window. Inside the chat it could not be placed reliably: the chat's scroller is a size
 container and on a project's home carries a mask, so a fixed box in it was placed against the
 wrong frame (shifted by the scroller's offset) and clipped to it. Any new popover in the chat
@@ -641,6 +936,29 @@ The owner sees what it's doing in the Browser panel, and sees a screenshot in th
 only when the model chooses to share one (`save: true`, then the path as a Markdown
 image). The browser's own images are kept out of the reply on Claude, which would
 otherwise post every snapshot.
+
+### Pictures the agent looks at
+
+Any other picture a tool hands back (Read on an image file, a screenshot, an MCP
+tool's image) is the agent looking, not its answer. It arrives as a `tool_image`
+event (a type older clients ignore, so they never put it in the reply) and goes on
+that call's card (`images` on the `tool` part, at most 20, `MAX_TOOL_IMAGES` in
+`chat/turn.mjs`), so it shows only when the owner opens the steps and then the card;
+a tap opens it full size. A card holding pictures names the file rather than its
+path and carries a photo mark with the count. The reply shows a picture only when
+the agent writes `![what it shows](/absolute/path)` (`<…>` around a path with spaces)
+in its text (`WORK_RULES` in `chat/reach.mjs` says so). At the end of the turn
+`embedLocalImages` (`browser/shots.mjs`) turns that path into an upload when it is in
+the chat's outputs folder or the temp folder (read from disk then), or is an image a
+Claude Read returned this turn (`seenImages`: the reply reuses that card's upload,
+the very bytes the agent saw, and the disk is not read again). Any other path stays
+text, which is why the prompt tells other backends to copy a picture into the outputs
+folder first. A picture shown this way lives only in the text, so the upload sweep
+also keeps the ids a message's text names (`textUploadIds`, `chat/uploads.mjs`);
+deleting a chat leaves those to the sweep. Pictures the CLI made itself (Codex's
+image tool) have no call and still stand in the reply as `image` parts. Replies saved
+before this keep their inline pictures. Rolling back past this change drops the
+cards' `images` on the next write, so those thumbnails go; the replies stay intact.
 
 **Which browser.** `browser/pick.mjs` takes, in order: `BROWSER_EXECUTABLE`, an installed
 Google Chrome (`/Applications/Google Chrome.app`, `/opt/google/chrome/chrome`, …), Playwright's
@@ -1108,6 +1426,52 @@ Totem runs on the Mac mini:
 The probe asks Codex for its desktop tool names and treats "NONE" as unavailable;
 it never guesses from the platform.
 
+## The chats panel
+
+Since 1.1 the chats panel (the desktop's left panel and the phone drawer, `web/src/chat/ChatsNav.tsx`)
+is T3 Code's sidebar: one list of every chat, whatever project or folder it is filed in, so a
+chat started three folders down is never out of sight. The rules are pure, in
+`web/src/chat/sidebar.ts` (`sidebarLists`, tested in `sidebar.test.ts`). Top to bottom:
+
+- **New chat**, then the **scope button** ("All chats"). It narrows the list to Home or one
+  project (with its folders) or folder, the way T3's project filter does, and is kept per
+  device (`totem.chats.scope`). It never moves the page: when scoped to a project, ↗ opens
+  that project's page and × goes back to every chat. A dot on it means a chat the scope hides
+  is waiting on him. "New project “…”" in its search makes one and scopes to it. New chat
+  starts in the scoped project, else at Home (`newChatInScope`).
+- **Unsent drafts** (Drafts, below).
+- **Pinned**, then a rule, then **everything still in play**, latest activity first: finished
+  and unread, asking him something, or just not settled yet. No date headings.
+- **Working**: chats with a reply running, under a heading that starts open (folding is kept
+  per scope). A running chat that stops to ask him something (questions, a tool approval, the
+  browser, a proposal: `attentionOf`) moves up into the list, and a finished one goes back
+  there at the top.
+- **Snoozed** and **Settled**, folded, at the bottom: one of each for the whole panel, not one
+  per project, left out while empty. Settled shows ten, then Show more.
+
+Each chat in the list, Pinned and Working is a **card**: its place (project icon and
+"Project › Folder", or Home) and on the right what it is doing (Awaiting input, Awaiting
+approval, Your turn, Working, Woke, Done for a finished reply he hasn't read, else how long
+since it moved), then its icon and title (bold while it waits on him; read ones recede), then
+its **linked task** (`web/src/work/TaskBadge.tsx`), the way T3 shows a thread's pull request:
+the task's glyph coloured by its state (overdue red, due today amber, done green and struck
+through, a sheet row's table glyph), its title and due day. A click on the task opens its
+card (pinned on the chat when that chat is open, a dialog otherwise) without opening the chat.
+The agent's Settle chip (Settled and snoozed) sits on the same line. Hovering a card shows
+Snooze, Settle and "…" over its status. Snoozed and Settled chats stay one-line rows, each
+with its place dim after the title, cut before the title is (the app's shelf sheet puts it
+under the title). On a touch screen the task badge reaches 44 px without growing the card.
+Chats no longer drag onto folders; "Move to…" in a chat's menu moves one.
+
+The scope button's ↗ opens the scoped project's page (and closes the phone drawer), and
+Home's scope lists only Home's unsent drafts. Both New chat buttons (the panel's and the
+page's) start the chat in the scoped project, else at Home (`newChatInScope`).
+
+Totems' own chats are not listed: they live on the Totems page, which has its own rail item
+(with a badge for reports waiting) since the panel lost its Chats · Totems · Tasks switch.
+Group chats are ordinary chats and are listed. The iPhone app's drawer is the same list
+(On the iPhone, below).
+
 ## Projects
 
 A project groups chats that share four things, the way Claude and ChatGPT projects
@@ -1121,12 +1485,18 @@ do (`chat/projects.mjs`, `web/src/chat/Project*.tsx`):
 | Files | `project.json` → `files` (upload ids) | Uploaded from the card's Files row, attached in any of the project's chats, or made by the agent in one (`source`: `upload`, `chat`, `agent`). |
 
 A project's or folder's page (the chat pane with the place open and no chat) is its
-composer over its folders and chats. What those chats share is its **card**
+composer over its folders and chats. On desktop the composer sits in the middle of the
+pane, as Home's does, rising only as far as the list under it needs. The list shows the
+first five chats (`FIRST_CHATS` in `web/src/chat/ProjectHome.tsx`), the open ones under one
+"Chats" heading and any snoozed or settled under theirs, with the place's chat count and
+Show more, which adds twenty at a time and brings back the date headings; Show fewer folds
+it again. The page is read from the top: opening it, from a chat or another place, scrolls
+it to the top, and the chat's stay-at-the-bottom follow is off while no chat is open. What those chats share is its **card**
 (`web/src/chat/ProjectCard.tsx`), T3 Code's thread card for the place: its icon and name
 (a folder says which project it is in), then one row each for Files, Instructions,
 Memory, Model and Settings (name, icon or picture, delete), each with a one-line summary
 that opens its editor under the row, one at a time. On desktop it is pinned at the pane's
-top right; when a new chat is started from a task, the task's card (Tasks panel → The
+top right; when a new chat is started from a task, the task's card (Linked tasks → The
 task card) is stacked under it in the same column (`.vc-pins` in `ChatView`), each
 folding to its title row on its own (`web/src/chat/pins.ts`; the folder's choice is
 `totem.projectPin.folded`). While either is unfolded the page moves left to clear the
@@ -1189,9 +1559,8 @@ chat's conclusions reach the next.
   one under the agent's folder. Owner-written instructions stay inline. Totem runs and
   asks are the exception (`docs/totems.md` → A run).
 
-- **The panel is scoped.** Home shows the project list and chats in no project. Opening
-  a project (or one of its chats) swaps the panel to that project's chats. The URL
-  carries `?project=<id>` alongside `?thread=`.
+- **The panel lists every project's chats** (The chats panel); a project's page lists only its
+  own. The URL carries `?project=<id>` alongside `?thread=`.
 - **A project chat is never temporary.** `projectId` is fixed when the chat is created
   (`POST /api/chat` with `projectId`); afterwards only `PUT /api/threads/:id {projectId}`
   moves it, and a chat moved in brings its attachments and documents into the files.
@@ -1234,15 +1603,14 @@ never leaks into the project. The owner moves what should be shared up by hand:
 - **Files:** pick files under the folder card's Files row → "Move up" (to the project).
 - **Deleting a folder** moves its chats up to its project.
 
-In the panel, a project's folders sit above its own chats and unfold in place. Dragging
-a chat (desktop only) onto a folder, the project's title, a project on Home, or the
-back arrow (Home) moves it there; on a phone the chat menu's "Move to…" does the same.
+A chat moves between Home, projects and folders with its menu's "Move to…" (T3 Code's
+project selector); each card names where it lives.
 
 ### Waiting on you
 
 A finished or failed run sets `needsReply` on the thread (not a stopped one, and never
-a totem's chat). The panel shows a steady dot and a bold title, and project and folder
-rows show a dot when a chat inside is waiting. Sending in the chat (a reply, a
+a totem's chat). Its card in the panel says Done (or what it is asking) with a bold title, and
+the scope button shows a dot when the chat is outside the scope. Sending in the chat (a reply, a
 regenerate, an edit) clears it, so does "Mark as read" in the chat's menu
 (`PUT /api/threads/:id {needsReply:false}`), and so does opening the chat while the tab is
 visible (a reply that finishes while the chat is open is read on arrival).
@@ -1253,18 +1621,17 @@ bridge drops `keepUnread` whenever `needsReply` is cleared.
 
 ### Settled and snoozed
 
-T3 Code's way of parking threads; the rules are in `web/src/chat/settle.ts`. Every chat
-list (Home, a project, each folder) ends with its own folding **Snoozed** and **Settled**
-shelves, so a parked chat stays where it lives. The shelves start folded (which are open
-is remembered per list in localStorage). Settled shows 10 chats, then "Show N more" in
+T3 Code's way of parking threads; the rules are in `web/src/chat/settle.ts`. The chats
+panel ends with one folding **Snoozed** and one **Settled** shelf for every chat in its
+scope (The chats panel), and a project's page keeps its own. The shelves start folded
+(which are open is remembered per scope in localStorage). Settled shows 10 chats, then "Show N more" in
 pages of 25. The open chat always shows, even on a folded shelf. The chat lists have no
 search box of their own: the Search tab finds any chat, parked or not.
 
-The iPhone app draws no shelves in its drawer, which has one scroll: each list's
-Snoozed and Settled are a button with a count (a dot when the open chat is on it), Home's
-or the open project's in the drawer's foot beside Settings and a folder's under its
-chats, and a button opens a three-quarter sheet of those chats with a switch between
-the two (`mobile/src/features/chat/ShelfSheet.tsx`). The app shows no toasts but errors,
+The iPhone app draws no Snoozed or Settled shelf in its drawer, which has one scroll: they
+are a button each with a count (a dot when the open chat is on it) in the drawer's foot
+beside Settings, for whatever the list is scoped to, and a button opens a three-quarter
+sheet of those chats with a switch between the two (`mobile/src/features/chat/ShelfSheet.tsx`). The app shows no toasts but errors,
 so its settle has no Undo toast; Un-settle in the sheet puts a chat back.
 
 - **Settle** (✓ on hover, the chat menu, or the leader shortcut `c s`) shelves a chat
@@ -1288,18 +1655,61 @@ so its settle has no Undo toast; Un-settle in the sheet puts a chat back.
   drops the mark (the run's final save), and so do his words: a steer mid-reply or his next
   message (`startChatTurn` and both stores' `startRun`). Clients cannot set it, not even on
   a new thread's PUT.
+- **Done, from the task**: a chat whose linked task (Linked tasks) was finished settles
+  the same way, as T3 Code settles a thread when its pull request merges. The bridge adds
+  `taskDoneAt` to every chat it reads out (the list, a window, a PUT's answer, the
+  `threads__*` tools; `chat/task-done.mjs`): a local task's `completedAt` while its status is
+  done (not deleted), or the time the owner marked a sheet row done in Totem (a snoozed row
+  doesn't count). A chat whose stored row ref has moved is matched among the sheet's current
+  rows on its tab and title hash, as `resolveRef` does, only when exactly one row matches; the
+  feed is read for that only when a mark of that kind exists, and for at most 1.5 s, so Drive
+  never holds up a chat read. It is worked out on every read and never stored, so a task
+  finished by any way in (the Tasks page, a task card, the app, an agent's `tasks__*` tool
+  writing the database from the gateway's process) counts, and reopening the task brings
+  the chat back by itself.
+  `settle.ts` (`taskDoneSince`) counts it only when the task was finished at or after the
+  owner last wrote in the chat (`ownerAt`: his latest message, never a `/compact` the bridge
+  ran, the chat's start, or coming off the shelf), so a chat he came back to after the task
+  was done, or one started for a task already finished, stays in play. A summary or window
+  can be cut short of his latest message, so both carry `lastOwnerAt`, worked out from the
+  whole chat (`lastOwnerAt` in `chat/store.mjs`). From there it is `doneAt`'s rule: the
+  Settle chip while unread, settled once read and he has moved off it, and not when pinned,
+  running, snoozed, un-settled by hand or with auto-settle set to never. Re-linking a chat
+  to another task drops the old task's time at once (`linkTask`, both stores). A summary's
+  `taskDoneAt` is taken as given, present or not, even for a chat already open
+  (`mergeSummary` in `history.ts`), and the web reads the list again as soon as a task
+  changes on it (`onTasksChanged` in `chat/store.ts`); the app does the same after its own
+  task changes. One gap: when the sheet itself later closes a row the owner marked done, the
+  row leaves the feed and its mark is dropped, so the chat counts as not done again until it
+  settles on age.
+- **Waiting on him stays in play.** A chat that waits on the owner (a question, an
+  approval, the browser, a proposal: `attention.ts`) is never put on the Settled shelf by
+  age, its agent's "done" or a finished task; only his own Settle shelves it. One rule
+  (`settledAt`'s `waiting`) that every caller passes: the panel (`sidebarLists`), a project's
+  page, the open chat's "This chat is settled" line and the iPhone title menu, and both
+  stores' `openedSettled`. "Moved off it"
+  means the chat page is not showing it: with another page on screen (the Tasks page, say)
+  the chat last opened settles like any other (`chatShowing` on the web's `ChatsNav`, the
+  app's drawer from its route, which it hands the shelf sheet as `showing`).
 - **Snooze** (the clock on hover, or the menu) offers In 1 hour, In 3 hours, This evening
   (18:00, while that is over an hour away), Tomorrow (9:00), Next week (Monday 9:00,
   left out on Sundays) and Custom… (a date and time, or a duration). Snoozed rows show
   the time left. Waking is also worked out on read: a chat whose time has passed is back
   in its list with a **Woke** mark until it is opened. A reply that finishes while the
   chat is snoozed wakes it early (the bridge sets `snoozedUntil` to that moment).
-- Sending a message in a settled or snoozed chat brings it back, on the bridge and in
-  the browser. Pinning does too.
+- Writing in a settled or snoozed chat brings it back to the top of its list, drops the
+  snooze's timer and the agent's "done", however the words arrive: a new message, a
+  follow-up queued behind the running reply, a steer into it, a voice turn, an answer to
+  the agent's questions, or a reason typed while declining a tool call. The bridge does
+  it (`wakeOnOwnerMessage` in `chat/store.mjs`, saved before the request is answered) and
+  the web and the app show it at once (`ownerMessageChange` in `settle.ts`, through the
+  stores' `wakeOnOwnerMessage`); `chat/settle-bridge.test.mjs` checks each way in but the
+  questions and approvals against a real bridge. Pinning brings it back too.
 
 The thread fields are `settledOverride` (`'settled'` | `'active'`), `settledAt`,
 `unsettledAt` (coming off the shelf counts as activity), `snoozedUntil` and `snoozedAt`,
-plus `doneAt`, which only the bridge writes.
+plus `doneAt`, which only the bridge writes, and `taskDoneAt`, which the bridge works out
+on each read and never stores (a client sending it back changes nothing).
 The browser sends every field a change touches (`null` clears one), and `PUT
 /api/threads/:id` stores them as given, with no side effects, so Undo can put back
 exactly what was there.
@@ -1384,34 +1794,22 @@ open in front of the owner. A stopped run does not. Every timed toast has a bar 
 top edge counting down its time on screen, and hovering it holds both the bar and the
 timer (`pauseToast`/`resumeToast` in `web/src/toast.ts`).
 
-## Tasks panel
+## Linked tasks
 
-The chats panel has a third face beside Chats and Totems: **Tasks**. It lists the owner's
-open tasks (the local task board: not done, not snoozed, archived or deleted) and, when the
-shared task sheet is set up, its action items, each with the chats that work on it right
-under it. Action items get worked on in chats; this is where the two meet, and one click
-moves between a task and any of its chats (`web/src/work/`).
+A chat can name the task it works on, and the chats panel shows it on the chat's card
+(The chats panel), the way T3 Code shows a thread's pull request. Action items get worked
+on in chats; this is where the two meet (`web/src/work/`). Until 1.1 the panel had a Tasks
+face listing every open task with its chats; the Tasks page is now where tasks are listed,
+added and sorted.
 
 - **Folders.** A task is filed under a chat project or folder, or nowhere ("Personal"): the
-  same folders the Tasks page shows (`docs/tasks.md` → Folders). The panel groups by them
-  (projects in the panel's order, each folder under its project, then Personal), or shows
-  one list. A local task carries its folder (`folderId`, set with `PATCH /api/todos/:id`);
-  a sheet row's filing lives on the chat side, `data/task-folders.json`
-  (`chat/task-folders.mjs`, `TASK_FOLDERS_FILE`; `PUT /api/chat/task-folders/<row id>` with
-  `{ projectId }`, where `null` stores `none`, Personal on purpose), and every row arrives
-  from `GET /api/todos/sheet` already filed: its own filing, else the sheet's default
-  folder (`docs/task-sheet.md`). Deleting a folder moves its tasks up to its project,
-  deleting a project makes them Personal, as with its chats.
-- **Adding.** The "Add a task…" line at the top ends in a folder button: any project or
-  folder (a new one can be typed into the picker), or Personal, whether or not it has open
-  tasks and so a group of its own. The line remembers the last one chosen on this device
-  (`totem.work.addFolder`; a folder deleted since reads as Personal). A group's + opens the
-  same line starting on that group's folder, without changing the remembered one.
-  `tomorrow` and `p1` in the title show as chips under the line, with × to keep the word
-  as text (the Tasks page's parser, `web/src/todos/parse.ts`). A typed `#folder` shows on
-  the button instead, tinted, and wins for that task; choosing on the button after typing
-  it keeps the word as text (`web/src/work/AddTask.tsx`). A new task's folder group
-  unfolds, and a toast says so only when the filter hides the task.
+  same folders the Tasks page shows (`docs/tasks.md` → Folders). A local task carries its
+  folder (`folderId`, set with `PATCH /api/todos/:id`); a sheet row's filing lives on the chat
+  side, `data/task-folders.json` (`chat/task-folders.mjs`, `TASK_FOLDERS_FILE`;
+  `PUT /api/chat/task-folders/<row id>` with `{ projectId }`, where `null` stores `none`,
+  Personal on purpose), and every row arrives from `GET /api/todos/sheet` already filed: its
+  own filing, else the sheet's default folder (`docs/task-sheet.md`). Deleting a folder moves
+  its tasks up to its project, deleting a project makes them Personal, as with its chats.
 - **The task card** (`web/src/work/TaskCard.tsx`, `card.ts`), T3 Code's thread card for a
   task: the check circle and title, then one row per setting with a dropdown (Folder, Due,
   Priority, Repeat, Snooze), the description, the chats working on it with New chat, Open
@@ -1429,31 +1827,26 @@ moves between a task and any of its chats (`web/src/work/`).
     of `.vc`, no JS), keeping at least 520px. Opening that task anywhere (the strip, its row in the chats panel)
     unfolds and flashes it rather than opening a dialog (`pinTask` in `card.ts`), but only
     while the chat is the page on screen. Not on a phone.
-  - **A dialog.** Any other task, opened from the chats panel's Tasks face (or the chat's
-    own task on a phone), opens in a modal over a backdrop (`TaskCardHost`, mounted once
+  - **A dialog.** Any other task, opened from a chat card's task in the chats panel, or
+    the chat's own task on a phone, opens in a modal over a backdrop (`TaskCardHost`, mounted once
     in `App.tsx`). Esc, × or the backdrop close it; focus goes back where it was. On a
     phone it is a sheet from the bottom.
 
-  The count beside a task unfolds its chats. On hover (always on a phone) a local task's
-  row has Snooze (zzz: the Tasks page's snooze menu, with Undo on the toast), New chat
-  and "…", which has Edit task…, New chat, Move to folder… and Mark done.
-- **Live with the Tasks page.** The panel and the page keep their own copies of the list,
+- **Live with the Tasks page.** The task store and the page keep their own copies of the list,
   so each tells the other when it changes something (`web/src/todos/bus.ts`:
   `announcing` wraps every call that writes; `onTasksChanged` reads again, once per burst,
   unless the change was its own). A chat reply's end counts as a change too, since the
   agent may have made, filed or finished a task.
 - **Links.** A chat names at most one task, `thread.taskId` (a local task id, or a sheet
   row's `sheet:<gid>:<row>:<hash>`); many chats may name one task. Link from a chat's "…"
-  (Link to task…), by dragging a chat onto a task, or by starting a chat from the task (its
-  +, or a row with no chats yet): that opens a new chat in the task's folder (else the
+  (Link to task…), from the composer's `$` menu, or by starting a chat from the task (New
+  chat on its card): that opens a new chat in the task's folder (else the
   project of its latest chat) and the first send carries `taskId` (`startTaskDraft`,
   `draftTaskId` in `web/src/chat/store.ts`; `startChatTurn` stores it on a new chat only).
 - **The strip over the composer** (`web/src/work/TaskBar.tsx`) names a linked chat's task
   with its folder and due day, Done (local tasks), and the link button to change or unlink
   it; on a new chat from a task it says so, with × for a plain chat instead. The task's
-  title unfolds and flashes the pinned card (the sheet on a phone) and turns every open chats panel to Tasks, scrolled to the task.
-  (It used to only turn the panel, which did nothing visible when the panel was already on
-  Tasks, as it is for a chat started there.)
+  title unfolds and flashes the pinned card (the sheet on a phone).
 - **Tasks an agent makes.** `totem_create_task` from a chat run (the gateway names the run,
   `x-totem-run`; it asks `GET /api/chat/run-context`) files the task in the chat's project
   or folder unless the agent names one, and links the chat to it if the chat names no
@@ -1470,13 +1863,6 @@ moves between a task and any of its chats (`web/src/work/`).
   folder names its project on the right), arrow keys and Enter, and, once what was typed
   matches no row, "New folder “…” in <project>" / "New project “…”" or "New task “…”".
   It is portalled to `<body>` like every popover that can open inside the panel.
-- **Sorting.** Due date (undated last), priority, recent activity (the latest linked chat,
-  else the task's own last change) or name; show all, only tasks with chats, or only those
-  without; the sheet's items can be hidden. Kept per browser (`totem.work.view`), as are
-  folded groups and opened tasks.
-- **Scrolling.** The filter and the "Add a task…" line stay at the top; the tasks scroll
-  under them inside `.vc-threads-list`, the scroller the Chats and Totems faces use too. In
-  the phone drawer the whole drawer scrolls as one list instead.
 
 ### Placing a new chat with `$`
 
@@ -1496,19 +1882,48 @@ and Enter sends. Picking one takes the `$…` out of the words and:
   filing, else the project of its latest chat), else where the chat already was. The first
   send links it, as "New chat for this task" does, and the task strip says so.
 
-The words move to the new place's draft, under any draft already waiting there (the
-"Start in" chips do the same, `moveDraft`), and the tray's files go with them; while a
+The draft moves to the new place, words and files, and opens there (the "Start in"
+chips do the same, `moveDraft` in `web/src/chat/drafts.ts`); one already waiting there stays
+a row of its own (Drafts, below). While a
 file is still uploading or has failed, the places say so and a pick waits. The menu is only
 offered before the first send (an open chat moves with Move to…), never in a temporary chat,
 and reads tasks only while it is open. The composer's + menu has "Put it in a folder or
 task", which types the `$`. ⌘/Ctrl+Shift+O (Settings → Keyboard › Hotkeys) starts a blank
 chat at Home from any page, ready for this (`docs/shortcuts.md` → Hotkeys).
 
-Nothing loads tasks until the Tasks face or a task strip is on screen; while one is, the
+Nothing loads tasks until a chat card with a task, a task strip or the `$` menu is on screen; while one is, the
 store (`web/src/work/state.ts`) reads the board, the sheet feed (its own two-minute cache)
 and the filings every minute and on focus. Changes are drawn at once and put back if the
-bridge refuses. The iPhone app does not show the face yet; it keeps `taskId` on threads
-untouched.
+bridge refuses.
+
+### On the iPhone
+
+Since 1.1 the app's drawer is the web's chats panel (`mobile/src/features/chat/ChatsNav.tsx`, over
+`mobile/src/lib/chat/sidebar.ts`, a byte-for-byte copy of the web's checked by
+`features/chat/history.shared.test.mjs`): one list of every chat, each a card with its place, its
+status and its linked task (`features/work/TaskBadge.tsx`, coloured as the web's), whose tap opens the
+task's page. The scope is a native menu (All chats, Home, each project with its folders indented),
+kept under the web's key (`totem.chats.scope`, `features/chat/chatsScope.ts`), with ↗ to a scoped
+project's page, × to clear it and the dot for a chat waiting outside it; New chat starts in the scoped
+project. Working is a section of cards at the end of the list; Snoozed and Settled are the foot's
+buttons (Settled and snoozed, above). Totems is a drawer row of its own under Overview, with a dot
+for a report waiting, and the drawer's Tasks face is gone, as on the web. It is built for a thumb:
+
+- **No second list.** The tasks are the app's own task store (`features/todos/store.ts`), so the
+  Tasks page, a task's page and the drawer never disagree; the drawer reads them each time it
+  opens, only when a card names a task, never on a timer. Every call that finishes or reopens a
+  task (`lib/api.ts`, `toldTasks`) makes the chat store read the list again, so its chats settle
+  or come back at once.
+- **A task opens its page**, the sheet the Tasks page opens (`todo/[id]`, a sheet row's too), in place
+  of the web's card. That page has a **Chats** section (`features/work/TaskChats.tsx`): the chats on
+  the task, each one tap away, and New chat for it.
+- **A chat's task.** The strip over the composer (`features/work/TaskStrip.tsx`) names the task (a
+  tap opens its page), its due day, Done, and the link to change or unlink it; on a new chat for a
+  task it says so, with × for a plain chat. A chat's "…" has Link to task… (Change task… once linked),
+  which opens a searchable sheet of open tasks with Unlink and "New task …"
+  (`features/work/LinkTaskSheet.tsx`, route `chat/task`). Starting a chat for a task is
+  `startTaskDraft` in `mobile/src/lib/chat/store.ts`, as on the web; the first send carries `taskId`.
+- Not on the phone: the `$` menu in the composer and a pinned card.
 
 ## Other chats
 

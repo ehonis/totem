@@ -65,7 +65,10 @@ export function mergeSummary(existing: ChatThread | undefined, summary: ChatThre
   const stale = summary.updatedAt !== existing.updatedAt
     || (summary.messageCount ?? -1) !== (existing.messageCount ?? -2)
     || (lastRemote?.id ?? null) !== (lastLocal?.id ?? null)
-  return { thread: { ...existing, ...meta, messages: existing.messages, history: existing.history }, stale }
+  // What the bridge works out on each read (when the chat's task was finished) is the summary's,
+  // there or not: a task reopened since takes it away without the chat itself changing.
+  const { taskDoneAt: _read, ...kept } = existing
+  return { thread: { ...kept, ...meta, messages: existing.messages, history: existing.history }, stale }
 }
 
 /** How much of a message's text a summary keeps: the bridge's SUMMARY_TEXT. */

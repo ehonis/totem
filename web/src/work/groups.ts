@@ -1,8 +1,7 @@
-// The chats panel's Tasks face, as data: the owner's open tasks and the shared
-// sheet's action items, each with the chats linked to it, sorted and grouped by
-// the chat project or folder it is filed under (the task's `folderId`; a sheet
-// row's comes filed by the bridge). Pure, so the panel and its tests read the
-// same rules.
+// The owner's tasks and the shared sheet's action items on one scale (WorkTask), as
+// the task badges on chat cards, a chat's task bar, the task card and the pickers read
+// them, with the chats linked to each. Pure, and copied byte for byte to the app
+// (mobile/src/lib/work/groups.ts).
 import type { ChatThread, Project } from '../chat/types'
 import type { SheetHiddenItem, SheetItem, SheetMark, Todo } from '../todos/types'
 
@@ -33,34 +32,6 @@ export interface WorkTask {
   sheet?: SheetItem
   /** A sheet row the owner marked done or snoozed in Totem (the sheet is untouched). */
   mark?: SheetMark
-}
-
-export type WorkSort = 'due' | 'priority' | 'activity' | 'title'
-export type WorkGroupBy = 'folder' | 'none'
-export type WorkShow = 'all' | 'linked' | 'unlinked'
-
-export interface WorkRow {
-  task: WorkTask
-  /** Chats linked to it, the latest first. */
-  chats: ChatThread[]
-  /** The latest of its chats' activity, or its own last change. */
-  lastActivity: number
-}
-
-export interface WorkGroup {
-  /** The project or folder id, or '' for tasks filed nowhere (Personal). */
-  key: string
-  project: Project | null
-  /** A folder's project, so the header can say where it is. */
-  parent: Project | null
-  rows: WorkRow[]
-}
-
-export interface WorkOptions {
-  sort: WorkSort
-  groupBy: WorkGroupBy
-  show: WorkShow
-  query: string
 }
 
 const SHEET_PRIORITY: Record<number, WorkTask['priority']> = { 1: 4, 2: 3, 3: 2 }
@@ -123,14 +94,11 @@ export function chatsByTask(threads: readonly ChatThread[], tasks: readonly Work
   return out
 }
 
-const dueKey = (d: string | null) => (d ? d.slice(0, 16) : '￿')
-const byTitle = (a: WorkRow, b: WorkRow) => a.task.title.localeCompare(b.task.title, undefined, { sensitivity: 'base' })
+const dueKey = (d: string | null) => (d ? d.slice(0, 16) : '\uffff')
 
-export function compareRows(sort: WorkSort): (a: WorkRow, b: WorkRow) => number {
-  if (sort === 'title') return byTitle
-  if (sort === 'activity') return (a, b) => b.lastActivity - a.lastActivity || byTitle(a, b)
-  if (sort === 'priority') return (a, b) => b.task.priority - a.task.priority || dueKey(a.task.dueDate).localeCompare(dueKey(b.task.dueDate)) || byTitle(a, b)
-  return (a, b) => dueKey(a.task.dueDate).localeCompare(dueKey(b.task.dueDate)) || b.task.priority - a.task.priority || byTitle(a, b)
+/** Due day first (undated last), then the most urgent, then by title: the order a task picker lists them in. */
+export function byDue(a: WorkTask, b: WorkTask): number {
+  return dueKey(a.dueDate).localeCompare(dueKey(b.dueDate)) || b.priority - a.priority || a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
 }
 
 /** Projects in the panel's order, each followed by its folders. */
@@ -143,51 +111,6 @@ export function folderOrder(projects: readonly Project[]): Project[] {
 export function folderOf(task: Pick<WorkTask, 'folderId'>, projects: readonly Project[]): Project | null {
   const id = task.folderId
   return (id && projects.find((p) => p.id === id)) || null
-}
-
-/** Whether the panel's filter keeps a task: its title, status or one of its chats' titles. */
-export function matches(task: WorkTask, chats: ChatThread[], query: string): boolean {
-  const q = query.trim().toLowerCase()
-  if (!q) return true
-  if (task.title.toLowerCase().includes(q) || task.status.toLowerCase().includes(q)) return true
-  return chats.some((c) => (c.title || '').toLowerCase().includes(q))
-}
-
-/**
- * The panel's groups: by folder (projects in panel order, each folder after its
- * project, then Personal), or one group of everything. Groups with nothing in
- * them are left out.
- */
-export function buildWork(
-  tasks: readonly WorkTask[],
-  threads: readonly ChatThread[],
-  projects: readonly Project[],
-  opts: WorkOptions,
-): WorkGroup[] {
-  const linked = chatsByTask(threads, tasks)
-  const rows: Array<WorkRow & { folder: Project | null }> = []
-  for (const task of tasks) {
-    if (task.done || task.hidden) continue
-    const chats = linked.get(task.ref) || []
-    if (opts.show === 'linked' && !chats.length) continue
-    if (opts.show === 'unlinked' && chats.length) continue
-    if (!matches(task, chats, opts.query)) continue
-    rows.push({ task, chats, lastActivity: Math.max(task.updatedAt, chats[0]?.updatedAt || 0), folder: folderOf(task, projects) })
-  }
-  const cmp = compareRows(opts.sort)
-  const strip = ({ folder: _f, ...row }: WorkRow & { folder: Project | null }): WorkRow => row
-  if (opts.groupBy === 'none') {
-    return rows.length ? [{ key: '', project: null, parent: null, rows: rows.sort(cmp).map(strip) }] : []
-  }
-  const groups: WorkGroup[] = []
-  for (const p of folderOrder(projects)) {
-    const inside = rows.filter((r) => r.folder?.id === p.id)
-    if (!inside.length) continue
-    groups.push({ key: p.id, project: p, parent: p.parentId ? projects.find((x) => x.id === p.parentId) || null : null, rows: inside.sort(cmp).map(strip) })
-  }
-  const loose = rows.filter((r) => !r.folder)
-  if (loose.length) groups.push({ key: '', project: null, parent: null, rows: loose.sort(cmp).map(strip) })
-  return groups
 }
 
 /** Day key for "today" in the browser's zone. */
