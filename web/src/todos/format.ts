@@ -54,79 +54,38 @@ export function dateLabel(value: string) {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(year, month - 1, day))
 }
 
-export function timeLabel(value: Date) {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(value)
-}
-
 function dayTimeLabel(value: Date) {
   return new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(value)
 }
 
-function dueDayLabel(value: Date) {
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(value)
-}
-
-// Nine in the morning on the due date: the last moment a snooze can end and still leave the day to work with.
-function dueMorning(dueDate: string) {
-  const [year, month, day] = dueDate.split('-').map(Number)
-  return new Date(year, month - 1, day, 9, 0, 0, 0)
-}
-
-// A week of lead time when there is a week to spare, otherwise the largest shorter run-up that still lands in the future.
-function leadDays(daysUntilDue: number) {
-  if (daysUntilDue >= 8) return 7
-  if (daysUntilDue >= 4) return 2
-  if (daysUntilDue >= 2) return 1
-  return 0
-}
-
 export interface SnoozeTime { label: string; detail: string; value: Date }
 
-function dueTimes(now: Date, dueDate: string | null): SnoozeTime[] {
-  if (!dueDate) return []
-  const due = dueMorning(dueDate)
-  if (due <= now) return []
-  const today = new Date(now)
-  today.setHours(9, 0, 0, 0)
-  // Rounded, so a 23- or 25-hour day between them still counts as one day.
-  const daysUntilDue = Math.round((due.getTime() - today.getTime()) / 86_400_000)
-  const lead = leadDays(daysUntilDue)
-  const options: SnoozeTime[] = []
-  if (lead) {
-    const runUp = new Date(due)
-    runUp.setDate(runUp.getDate() - lead)
-    const label = lead === 7 ? 'A week before it’s due' : lead === 2 ? 'Two days before it’s due' : 'The day before it’s due'
-    options.push({ label, detail: dueDayLabel(runUp), value: runUp })
-  }
-  options.push({ label: 'The day it’s due', detail: dueDayLabel(due), value: due })
-  return options
+// Nine in the morning `days` calendar days from now: stepped by day key, never by 24 hours,
+// so the night the clocks change still lands on the right morning.
+function morningIn(now: Date, days: number) {
+  const at = new Date(now)
+  at.setDate(at.getDate() + days)
+  at.setHours(9, 0, 0, 0)
+  return at
+}
+
+function dayDateTimeLabel(value: Date) {
+  return new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(value)
 }
 
 /**
- * The snooze presets: two short ones counted in minutes (an instant is right there),
- * then this evening, tomorrow and next Monday stepped by calendar day, then a run-up
- * to the due date when the task has one still ahead.
+ * The snooze presets, the three the owner reaches for: tomorrow, three days and a
+ * whole week, each to nine in the morning. Anything else is the menu's own time picker.
  */
-export function snoozeTimes(now: Date, dueDate: string | null = null): SnoozeTime[] {
-  const minutes = new Date(now.getTime() + 20 * 60_000)
-  const hour = new Date(now.getTime() + 60 * 60_000)
-  const evening = new Date(now)
-  evening.setHours(18, 0, 0, 0)
-  if (evening <= now) evening.setDate(evening.getDate() + 1)
-  const tomorrow = new Date(now)
-  tomorrow.setDate(tomorrow.getDate() + 1)
-  tomorrow.setHours(9, 0, 0, 0)
-  const nextMonday = new Date(now)
-  const daysUntilMonday = (8 - nextMonday.getDay()) % 7 || 7
-  nextMonday.setDate(nextMonday.getDate() + daysUntilMonday)
-  nextMonday.setHours(9, 0, 0, 0)
+export function snoozeTimes(now: Date): SnoozeTime[] {
+  const tomorrow = morningIn(now, 1)
+  const three = morningIn(now, 3)
+  const week = morningIn(now, 7)
   return [
-    { label: 'In 20 minutes', detail: timeLabel(minutes), value: minutes },
-    { label: 'In 1 hour', detail: timeLabel(hour), value: hour },
-    { label: 'This evening', detail: timeLabel(evening), value: evening },
     { label: 'Tomorrow', detail: dayTimeLabel(tomorrow), value: tomorrow },
-    { label: 'Next Monday', detail: dayTimeLabel(nextMonday), value: nextMonday },
-    ...dueTimes(now, dueDate),
+    { label: 'For 3 days', detail: dayTimeLabel(three), value: three },
+    // A week on is the same weekday as today, so it names the date.
+    { label: 'For a week', detail: dayDateTimeLabel(week), value: week },
   ]
 }
 

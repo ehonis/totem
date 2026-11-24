@@ -5,8 +5,8 @@ import { addDays, dateKey, dateLabel, dueDateChoices, dueText, dueTone, isDayKey
 // Monday 14 September 2026, 15:06 local: the moment the card's own snooze tests use.
 const NOW = new Date(2026, 8, 14, 15, 6)
 const parts = (value: Date) => [value.getFullYear(), value.getMonth(), value.getDate(), value.getHours(), value.getMinutes()]
-const option = (now: Date, label: string, dueDate: string | null = null) => {
-  const found = snoozeTimes(now, dueDate).find((item) => item.label === label)
+const option = (now: Date, label: string) => {
+  const found = snoozeTimes(now).find((item) => item.label === label)
   if (!found) throw new Error(`no "${label}" snooze`)
   return found
 }
@@ -87,60 +87,28 @@ describe('dueText', () => {
 })
 
 describe('snoozeTimes', () => {
-  it('offers the quick presets, the short ones exactly 20 and 60 minutes on', () => {
-    const now = new Date('2026-09-14T19:06:00.000Z')
-    const options = snoozeTimes(now)
-    expect(options.map((item) => item.label)).toEqual(['In 20 minutes', 'In 1 hour', 'This evening', 'Tomorrow', 'Next Monday'])
-    expect(options[0].value.toISOString()).toBe('2026-09-14T19:26:00.000Z')
-    expect(options[1].value.toISOString()).toBe('2026-09-14T20:06:00.000Z')
+  it('offers tomorrow, three days and a week', () => {
+    expect(snoozeTimes(NOW).map((item) => item.label)).toEqual(['Tomorrow', 'For 3 days', 'For a week'])
   })
 
   it.each([
-    ['This evening', [2026, 8, 14, 18, 0]],
     ['Tomorrow', [2026, 8, 15, 9, 0]],
-    ['Next Monday', [2026, 8, 21, 9, 0]],
-  ] as const)('anchors %s to its local calendar time', (label, expected) => {
+    ['For 3 days', [2026, 8, 17, 9, 0]],
+    ['For a week', [2026, 8, 21, 9, 0]],
+  ] as const)('anchors %s to nine in the morning, local time', (label, expected) => {
     expect(parts(option(NOW, label).value)).toEqual(expected)
   })
 
-  it('moves This evening to tomorrow once six has passed', () => {
-    expect(parts(option(new Date(2026, 8, 14, 18, 30), 'This evening').value)).toEqual([2026, 8, 15, 18, 0])
-  })
-
-  it.each([
-    ['2026-10-05', 'A week before it’s due', [2026, 8, 28]],
-    ['2026-09-19', 'Two days before it’s due', [2026, 8, 17]],
-    ['2026-09-17', 'The day before it’s due', [2026, 8, 16]],
-  ] as const)('offers a run-up sized to the time left before %s', (dueDate, label, [year, month, day]) => {
-    expect(parts(option(NOW, label, dueDate).value)).toEqual([year, month, day, 9, 0])
-  })
-
-  it('snoozes to the morning of the due date', () => {
-    expect(option(NOW, 'The day it’s due', '2026-09-19').value.toISOString()).toBe(new Date(2026, 8, 19, 9, 0).toISOString())
-  })
-
-  it.each([
-    ['tomorrow', '2026-09-15', ['The day it’s due']],
-    ['today', '2026-09-14', []],
-    ['in the past', '2026-09-10', []],
-  ] as const)('drops the run-up when the task is due %s', (_when, dueDate, extra) => {
-    expect(snoozeTimes(NOW, dueDate).slice(5).map((item) => item.label)).toEqual(extra)
-  })
-
-  it('offers no due-date snooze without a due date', () => {
-    expect(snoozeTimes(NOW, null)).toHaveLength(5)
-  })
-
-  it('steps Tomorrow and Next Monday by calendar day on the nights the clocks change', () => {
+  it('steps by calendar day on the nights the clocks change', () => {
     inNewYork()
     // Saturday 7 March, 23:30: the night before the 23-hour day.
     const spring = new Date(2026, 2, 7, 23, 30)
     expect(parts(option(spring, 'Tomorrow').value)).toEqual([2026, 2, 8, 9, 0])
-    expect(parts(option(spring, 'Next Monday').value)).toEqual([2026, 2, 9, 9, 0])
+    expect(parts(option(spring, 'For 3 days').value)).toEqual([2026, 2, 10, 9, 0])
     // Sunday 1 November, 00:30: the start of the 25-hour day.
     const fall = new Date(2026, 10, 1, 0, 30)
     expect(parts(option(fall, 'Tomorrow').value)).toEqual([2026, 10, 2, 9, 0])
-    expect(parts(option(fall, 'The day before it’s due', '2026-11-03').value)).toEqual([2026, 10, 2, 9, 0])
+    expect(parts(option(fall, 'For a week').value)).toEqual([2026, 10, 8, 9, 0])
   })
 })
 

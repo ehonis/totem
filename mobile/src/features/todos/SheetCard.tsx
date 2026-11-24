@@ -45,7 +45,7 @@ export function sheetActions(item: SheetItem | SheetHiddenItem, source: string, 
     ...(canMark && mark?.state !== 'done' ? [{
       id: 'snooze', title: 'Snooze…', subtitle: 'For you only', image: 'moon.zzz',
       subactions: [
-        ...snoozeTimes(now, item.dueDate).map((option): MenuAction => ({ id: `snooze:${option.value.toISOString()}`, title: option.label, subtitle: option.detail })),
+        ...snoozeTimes(now).map((option): MenuAction => ({ id: `snooze:${option.value.toISOString()}`, title: option.label, subtitle: option.detail })),
         { id: 'snooze:pick', title: 'Pick a date and time', image: 'calendar' },
       ],
     } satisfies MenuAction] : []),
@@ -231,9 +231,9 @@ export default function SheetCard({ item, source, now, dueSection, dim, folder, 
             </Press>
           ) : null}
           <MenuView
-            title="Snooze until (for you only)"
+            title="Snooze (for you only)"
             actions={[
-              ...snoozeTimes(now, item.dueDate).map((option): MenuAction => ({ id: `snooze:${option.value.toISOString()}`, title: option.label, subtitle: option.detail })),
+              ...snoozeTimes(now).map((option): MenuAction => ({ id: `snooze:${option.value.toISOString()}`, title: option.label, subtitle: option.detail })),
               { id: 'snooze-more', title: '', displayInline: true, subactions: [{ id: 'snooze:pick', title: 'Pick a date and time', image: 'calendar' }] },
             ]}
             themeVariant="dark"

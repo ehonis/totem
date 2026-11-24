@@ -341,9 +341,9 @@ function TaskPage({ original, allTodos, issueStates, initialFocus }: {
   }))
   const snoozedUntil = todo.snoozedUntil && new Date(todo.snoozedUntil) > now ? todo.snoozedUntil : null
   // Rows are named, not timed: the time is worked out when one is picked, so a page left
-  // open for an hour does not snooze "in 20 minutes" into the past.
+  // open overnight does not snooze "tomorrow" to a day already here.
   const snoozeActions: MenuAction[] = [
-    ...snoozeTimes(now, todo.dueDate).map((option): MenuAction => ({ id: `snooze:at:${option.label}`, title: option.label, subtitle: option.detail })),
+    ...snoozeTimes(now).map((option): MenuAction => ({ id: `snooze:at:${option.label}`, title: option.label, subtitle: option.detail })),
     {
       id: 'snooze-more', title: '', displayInline: true, subactions: [
         { id: 'snooze:pick', title: 'Pick a date and time', image: 'calendar' },
@@ -387,7 +387,7 @@ function TaskPage({ original, allTodos, issueStates, initialFocus }: {
     if (id === 'snooze:pick') return void setTimeout(() => setPick('snooze'), 400)
     if (id === 'snooze:none') return void snooze(null)
     if (id.startsWith('snooze:at:')) {
-      const option = snoozeTimes(new Date(), todoRef.current.dueDate).find((item) => item.label === id.slice(10))
+      const option = snoozeTimes(new Date()).find((item) => item.label === id.slice(10))
       if (option) void snooze(option.value.toISOString())
       return
     }
@@ -490,7 +490,7 @@ function TaskPage({ original, allTodos, issueStates, initialFocus }: {
             valueColor={todo.recurrence ? colors.text : undefined} actions={repeatActions} onAction={onRow} menuTitle="Repeat" />
           {!done || snoozedUntil ? (
             <PropertyRow icon={ClockIcon} label="Snooze" value={snoozedUntil ? `Until ${whenLabel(snoozedUntil)}` : 'Not snoozed'}
-              valueColor={snoozedUntil ? tone.amber.color : undefined} actions={snoozeActions} onAction={onRow} menuTitle="Snooze until" />
+              valueColor={snoozedUntil ? tone.amber.color : undefined} actions={snoozeActions} onAction={onRow} menuTitle="Snooze" />
           ) : null}
           <PropertyRow icon={FolderIcon} label="Folder" value={folderLabel(filedIn?.id, projects)}
             adornment={filedIn ? <ProjectIcon p={filedIn} size={15} /> : <Hi icon={UserIcon} size={14} color={colors.muted} />}

@@ -9,7 +9,11 @@ import ChatsPanelDrafts from './ChatsPanelDrafts'
 import ComboPicker, { type ComboItem } from '../work/ComboPicker'
 import { folderOrder } from '../work/groups'
 import { attentionOf } from './attention'
-import { keptOpenId } from './settle'
+import { activeAt, keptOpenId } from './settle'
+import { useTaskData, TaskGroupRows, TaskSections, TasksEmpty, SnoozedShelf, NavSeg, type PickTask } from '../tasksnav/parts'
+import { dueNow, playByTask } from '../tasksnav/lists'
+import { setChatsOrder, useChatsOrder } from '../tasksnav/order'
+import { pickTask } from '../tasksnav/pick'
 import { sidebarLists, placeLabel, scopeLabel, validScope, inScope, type SidebarScope } from './sidebar'
 import type { ChatThread, Project } from './types'
 
@@ -19,6 +23,11 @@ import type { ChatThread, Project } from './types'
 // the shelves at the bottom: Working (open), Snoozed and Settled (folded). Each
 // live chat is a card naming where it lives and what it is doing, with its
 // linked task under the title, as T3 shows a thread's pull request.
+//
+// Recent / By task at the top orders what is in play: latest first, or (the default)
+// chats on one task gathered under it, latest group first, with the owner's next
+// tasks under the chats (tasksnav/). A task's row starts a chat for it; its zzz
+// snoozes it.
 //
 // The scope button narrows the list to one project (with its folders) or Home,
 // the way T3's project filter does; it never moves him anywhere, and the open
@@ -130,38 +139,87 @@ export function ChatsNav({ onOpenChat, chatShowing = true }: { onOpenChat: () =>
     const project = t.projectId ? projects.find((p) => p.id === t.projectId) || null : null
     return <ThreadItem key={t.id} t={t} shelf={shelf} now={now} active={t.id === activeId} live={!!runs[t.id]} onOpen={open} place={{ project, label: placeLabel(t, projects) }} />
   }
+  // By task: the tasks in the panel's scope, and the chats in play gathered under theirs.
+  const order = useChatsOrder()
+  const byTask = order === 'task'
+  const d = useTaskData(scoped, now)
+  const pick = useCallback<PickTask>((ref) => { pickTask(ref); onOpenChat() }, [onOpenChat])
+  const due = dueNow(d.sections)
   const { pinned, inbox, working, snoozed, settled } = lists
+  // Everything in play (Working too), latest first, gathered under the task each chat works on.
+  const play = useMemo(() => (byTask ? playByTask([...inbox, ...working].sort((a, b) => activeAt(b, now) - activeAt(a, now)), d.tasks) : []), [byTask, inbox, working, now, d.tasks])
+  const grouped = useMemo(() => new Set(play.flatMap((i) => (i.kind === 'task' ? [i.group.task.ref] : []))), [play])
   const nothing = !pinned.length && !inbox.length && !working.length
   const draftsProject = scoped !== 'all' && scoped !== 'home' ? scoped : null
-  return (
-    <div className="vc-threads sb-panel">
-      <ScopeBar value={scoped} projects={projects} outside={outside} onOpenPage={onOpenChat} />
+  const tasksBadge = due > 0 ? <span className="tn-badge" title={`${due} task${due === 1 ? '' : 's'} due today or overdue`}>{due}</span> : null
+  // By task folds Working into the list, so its shelf is left out there.
+  const workingShelf = !byTask && working.length > 0
+  const shelves = (
+    <>
+      {workingShelf && (
+        <ShelfSection kind="working" scope={scoped} threads={working} activeId={activeId} first>
+          {(rows) => rows.map(card)}
+        </ShelfSection>
+      )}
+      {snoozed.length > 0 && (
+        <ShelfSection kind="snoozed" scope={scoped} threads={snoozed} activeId={activeId} first={!workingShelf}>
+          {(rows) => rows.map(slim('snoozed'))}
+        </ShelfSection>
+      )}
+      {settled.length > 0 && (
+        <ShelfSection kind="settled" scope={scoped} threads={settled} activeId={activeId} first={!workingShelf && !snoozed.length}>
+          {(rows) => rows.map(slim('settled'))}
+        </ShelfSection>
+      )}
+    </>
+  )
+  const empty = loaded && nothing && (
+    <div className="vc-threads-empty">
+      {snoozed.length || settled.length ? 'All settled. Nothing is waiting on you.' : scoped === 'all' ? 'Your chats will show up here.' : 'Chats here will show up in this list.'}
+    </div>
+  )
+  let list: React.ReactNode
+  if (byTask) {
+    // The panel's list with chats on the same task gathered under it, then the next tasks.
+    list = (
+      <div className="vc-threads-list sb-list tn-list">
+        <ChatsPanelDrafts projectId={draftsProject} homeOnly={scoped === 'home'} onOpen={onOpenChat} />
+        {pinned.length > 0 && <div className="sb-pinned" aria-label="Pinned">{pinned.map(card)}</div>}
+        {pinned.length > 0 && play.length > 0 && <div className="sb-divider" role="separator" />}
+        {play.map((i) => (i.kind === 'task'
+          ? <TaskGroupRows key={i.group.task.ref} group={i.group} d={d} pick={pick} activeId={activeId} onOpen={open} />
+          : card(i.chat)))}
+        {empty}
+        <div className="tn-next">
+          <TaskSections d={d} pick={pick} skip={grouped} />
+          <TasksEmpty d={d} />
+          <SnoozedShelf d={d} />
+        </div>
+        {shelves}
+      </div>
+    )
+  } else {
+    list = (
       <div className="vc-threads-list sb-list">
         <ChatsPanelDrafts projectId={draftsProject} homeOnly={scoped === 'home'} onOpen={onOpenChat} />
         {pinned.length > 0 && <div className="sb-pinned" aria-label="Pinned">{pinned.map(card)}</div>}
         {pinned.length > 0 && inbox.length > 0 && <div className="sb-divider" role="separator" />}
         {inbox.map(card)}
-        {loaded && nothing && (
-          <div className="vc-threads-empty">
-            {snoozed.length || settled.length ? 'All settled. Nothing is waiting on you.' : scoped === 'all' ? 'Your chats will show up here.' : 'Chats here will show up in this list.'}
-          </div>
-        )}
-        {working.length > 0 && (
-          <ShelfSection kind="working" scope={scoped} threads={working} activeId={activeId} first>
-            {(rows) => rows.map(card)}
-          </ShelfSection>
-        )}
-        {snoozed.length > 0 && (
-          <ShelfSection kind="snoozed" scope={scoped} threads={snoozed} activeId={activeId} first={!working.length}>
-            {(rows) => rows.map(slim('snoozed'))}
-          </ShelfSection>
-        )}
-        {settled.length > 0 && (
-          <ShelfSection kind="settled" scope={scoped} threads={settled} activeId={activeId} first={!working.length && !snoozed.length}>
-            {(rows) => rows.map(slim('settled'))}
-          </ShelfSection>
-        )}
+        {empty}
+        {shelves}
       </div>
+    )
+  }
+  return (
+    <div className="vc-threads sb-panel">
+      <div className="tn-top">
+        <NavSeg label="Order chats" value={order} onChange={setChatsOrder} options={[
+          { id: 'recent', label: 'Recent', title: 'Every chat, latest first' },
+          { id: 'task', label: <>By task{tasksBadge}</>, title: 'Chats gathered under their task, your next tasks below' },
+        ]} />
+      </div>
+      <ScopeBar value={scoped} projects={projects} outside={outside} onOpenPage={onOpenChat} />
+      {list}
     </div>
   )
 }

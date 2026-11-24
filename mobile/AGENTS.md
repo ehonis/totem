@@ -127,6 +127,10 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   linked task is done settles once read, as T3 settles a merged PR (`settle.ts` `taskDoneSince`, from the bridge's
   `taskDoneAt`); every task status call in `lib/api.ts` goes through `toldTasks`, which makes the chat store read the
   list again (`onTaskStatus` in `initChat`), so a new call that finishes or reopens a task goes through it too.
+  Recent / By task at the top (`features/chat/chatsOrder.ts`, By task by default) is the web's order:
+  `lib/tasksnav/lists.ts` is the web's `tasksnav/lists.ts` byte for byte (`features/work/shared.test.mjs`), and
+  `features/chat/TaskRows.tsx` draws a task's group and the next tasks (ring = Done, tap = new chat for it, swipe
+  right = Done, swipe left = Snooze and Open, long-press = all four; `snoozeTask` in `features/work/state.ts`).
 - **Tasks and chats** (`src/features/work/`): the task store the Tasks page uses (`features/work/state.ts` derives the
   WorkTasks, it keeps no copy; `lib/work/groups.ts` is the web's `work/groups.ts` byte for byte,
   `features/work/shared.test.mjs`). A task opens its page (`todo/[id]`), whose Chats section is the web card's;

@@ -54,6 +54,7 @@ import { useOwnerName } from '../useOwnerName'
 import { findLanding, landKey, useLandOn } from '../landing'
 import { AT_BOTTOM_PX, createFollow } from '../chat/follow'
 import ResizeHandle, { SIDE_PANEL_VAR } from './ResizeHandle'
+import { installTaskPicker } from '../tasksnav/pick'
 
 function greeting(name: string) {
   const h = new Date().getHours()
@@ -280,12 +281,19 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const onEditFiles = useCallback((files: Attachment[]) => setQueueEdit((e) => (e ? { ...e, files } : e)), [])
   // What the composer shows: an open chat's own draft, or the new-chat draft its place shows now.
   const {
-    draftKey, input, setInput, askFresh, startIn, pickDestination, takeForSend, fromDraft, onDiscarded,
+    draftKey, input, setInput, askFresh, startIn, startForTask, pickDestination, takeForSend, fromDraft, onDiscarded,
     onAttachmentsChange, showEditFiles, missingFiles, removeMissing, keepEdit,
   } = useChatDrafts({
     activeId, active, scopeProject, draftTaskId, draftKind, setDraftKind, composer, visible, editing, onEditFiles,
     slot: !visible ? '' : empty && project ? 'project' : empty && !narrow ? 'empty' : 'dock',
   })
+  // A task picked in the chats panel while this page shows: what is typed goes with it (tasksnav/pick.ts).
+  const startForTaskRef = useRef(startForTask)
+  startForTaskRef.current = startForTask
+  useEffect(() => {
+    if (!visible) return
+    return installTaskPicker((ref) => { startForTaskRef.current(ref); requestAnimationFrame(() => composer.current?.focus()) })
+  }, [visible])
   // A new chat starts on what was picked for it here, else its folder's or
   // project's model (threadChoice). A pick never follows him to another place,
   // and an open chat keeps its own model.

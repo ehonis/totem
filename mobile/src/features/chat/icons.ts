@@ -14,3 +14,7 @@ export { default as IconDownload } from '@tabler/icons-react-native/dist/esm/ico
 export { default as IconFileOff } from '@tabler/icons-react-native/dist/esm/icons/IconFileOff.mjs'
 export { default as IconFileZip } from '@tabler/icons-react-native/dist/esm/icons/IconFileZip.mjs'
 export { default as IconArrowUpRight } from '@tabler/icons-react-native/dist/esm/icons/IconArrowUpRight.mjs'
+// The drawer's task rows (By task): a sheet row's glyph, Personal and snooze.
+export { default as IconTable } from '@tabler/icons-react-native/dist/esm/icons/IconTable.mjs'
+export { default as IconUser } from '@tabler/icons-react-native/dist/esm/icons/IconUser.mjs'
+export { default as IconZzz } from '@tabler/icons-react-native/dist/esm/icons/IconZzz.mjs'

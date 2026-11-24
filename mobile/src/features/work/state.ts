@@ -13,7 +13,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { ApiError, createBoardTodo, getTodo, isAccountChanged } from '../../lib/api'
 import { getState as chatState } from '../../lib/chat/store'
 import { pushError } from '../../lib/toast'
-import { rollsOnCompletion } from '../../lib/todos/board.ts'
+import { rollsOnCompletion, wakeLabel } from '../../lib/todos/board.ts'
 import type { Todo } from '../../lib/todos/types'
 import { fromSheet, fromTodo, isOpenTodo, resolveRef, type WorkTask } from '../../lib/work/groups'
 import { boardActions } from '../todos/boardActions'
@@ -117,6 +117,28 @@ export async function completeTask(ref: string): Promise<UndoState | null> {
   // A repeating task rolled its next one on the bridge: reopening this one would leave two.
   if (rollsOnCompletion(todo)) return undo(undoText('done', todo, { followUp: { kind: 'next', dueDate: null } }).text)
   return undo(undoText('done', todo).text, () => { void actions().putBack(todo) })
+}
+
+/** Snooze until a time (a sheet row for the owner only), or with null wake it now; the Undo puts the old time back. */
+export async function snoozeTask(ref: string, until: Date | null): Promise<UndoState | null> {
+  const task = current(ref)
+  if (!task || task.done) return null
+  if (task.kind === 'sheet') {
+    const was = task.mark?.state === 'snoozed' ? task.mark.until ?? null : null
+    try { await markSheet(task.ref, until ? 'snoozed' : null, until) }
+    catch (cause) { if (!isAccountChanged(cause)) pushError(message(cause, 'The row could not be snoozed.')); return null }
+    if (!until) return null
+    return undo(`Snoozed until ${wakeLabel(until, new Date())}: ${quote(task.title)}.`, () => {
+      void markSheet(task.ref, was ? 'snoozed' : null, was ? new Date(was) : null).catch((cause) => pushError(message(cause, 'The row could not be put back.')))
+    })
+  }
+  const todo = task.todo!
+  const was = todo.snoozedUntil
+  if (!(await (until ? actions().snooze(todo, until.toISOString()) : actions().wake(todo)))) return null
+  if (!until) return null
+  return undo(`Snoozed until ${wakeLabel(until, new Date())}: ${quote(todo.title)}.`, () => {
+    void (was && Date.parse(was) > Date.now() ? actions().snooze(todo, was) : actions().wake(todo))
+  })
 }
 
 /** A new local task, filed under `folderId` when given. Returns it, or null when the bridge said no. */

@@ -21,8 +21,8 @@ export function SnoozeMenu({ todo, anchor, onClose, now, onSnooze, onWake }: Com
   const valid = at && !Number.isNaN(at.getTime()) && at > now
   const snoozed = Boolean(todo.snoozedUntil && new Date(todo.snoozedUntil) > now)
   const items: MenuEntry[] = [
-    { heading: snoozed ? `Snoozed until ${wakeLabel(new Date(todo.snoozedUntil!), now)}` : 'Snooze until' },
-    ...snoozeTimes(now, todo.dueDate).map((option) => ({
+    { heading: snoozed ? `Snoozed until ${wakeLabel(new Date(todo.snoozedUntil!), now)}` : 'Snooze' },
+    ...snoozeTimes(now).map((option) => ({
       key: option.label, label: option.label, detail: option.detail, onSelect: () => onSnooze(option.value),
     })),
     ...(snoozed ? ['separator' as const, { key: 'wake', label: 'Wake now', icon: SunIcon, onSelect: onWake }] : []),

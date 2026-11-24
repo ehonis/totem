@@ -12,7 +12,7 @@ import { AuthError, getSheetFeed, getTodo, getTodoBoard } from '../api'
 import { pushError, pushToast } from '../toast'
 import { getState as chatState } from '../chat/store'
 import { announcing, onTasksChanged } from '../todos/bus'
-import { wakeLabel } from '../todos/board'
+import { rollsOnCompletion, wakeLabel } from '../todos/board'
 import type { SheetFeed, Todo, TodoPatch } from '../todos/types'
 import { fromSheet, fromTodo, isOpenTodo, resolveRef, type WorkTask } from './groups'
 
@@ -224,8 +224,10 @@ export async function completeTask(ref: string) {
   try {
     const { todo } = await moveBoardTodo(ref, 'done')
     replaceTask({ ...local(todo), done: true })
-    pushToast(`Done: ${quote(before.title)}`, 'info', { action: { label: 'Undo', onClick: () => { void reopenTask(ref) } } })
-    // A repeating task rolled its next occurrence on the bridge.
+    // A repeating task rolled its next occurrence on the bridge, which only rolls once:
+    // reopening this one would leave two open copies, so it gets no Undo (board.ts afterDone).
+    if (before.todo && rollsOnCompletion(before.todo)) pushToast(`Done: ${quote(before.title)}. The next one is on your list.`, 'info')
+    else pushToast(`Done: ${quote(before.title)}`, 'info', { action: { label: 'Undo', onClick: () => { void reopenTask(ref) } } })
     void loadWork()
   } catch (e) {
     replaceTask(before)

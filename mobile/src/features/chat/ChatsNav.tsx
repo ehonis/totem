@@ -12,6 +12,11 @@
 // swiped left it shows Snooze, Settle and "…" (the full menu), and long-press opens
 // that menu too. A chat with unsent words wears an amber pencil.
 //
+// Recent / By task at the very top orders what is in play (chatsOrder.ts, By task
+// by default): By task folds Working into the list, gathers chats on one open task
+// under its row, and lists the next tasks under the chats (TaskRows.tsx; the rules
+// are lib/tasksnav/lists.ts, the web's file byte for byte).
+//
 // The scope button at the top narrows the list to Home or one project and its folders,
 // the way T3's project filter does (chatsScope.ts); ↗ opens that project's page, and a
 // dot says when a chat the scope hides is waiting on him. Totems' own chats are not
@@ -52,6 +57,9 @@ import { drawerPan } from '../../shell/drawerGesture'
 import TaskBadge from '../work/TaskBadge'
 import { loadBoard, loadSheet } from '../todos/store'
 import { setSidebarScope, useSidebarScope } from './chatsScope'
+import { setChatsOrder, useChatsOrder } from './chatsOrder'
+import { useDrawerTasks, TaskGroupRows, NextTasks, OrderSwitch } from './TaskRows'
+import { dueNow, playByTask } from '../../lib/tasksnav/lists'
 
 const muted80 = 'rgba(138, 145, 163, 0.8)'
 // The web card's status colours (chat.css .sb-working, .sb-done, .sb-needs).
@@ -421,14 +429,23 @@ export default function ChatsNav({ onOpenChat, drafts, chatShowing = true }: {
   useEffect(() => { setDock({ scope, snoozed: snoozed.length, settled: settled.length, showing: chatShowing }) }, [scope, snoozed.length, settled.length, chatShowing])
   useEffect(() => () => setDock(null), [])
 
-  // The cards' tasks are read each time the drawer opens: it stays mounted, so a timer here would poll while it is closed.
+  // The tasks are read each time the drawer opens (By task lists them, and Recent's cards and
+  // switch name them): it stays mounted, so a timer here would poll while it is closed.
   const status = useDrawerStatus()
-  const namesTask = useMemo(() => [...pinned, ...inbox, ...working].some((t) => !!t.taskId), [pinned, inbox, working])
   useEffect(() => {
-    if (status !== 'open' || !namesTask) return
+    if (status !== 'open') return
     void loadBoard()
     void loadSheet()
-  }, [status, namesTask])
+  }, [status])
+
+  // By task: everything in play (Working too), latest first, gathered under the task each chat works on.
+  const order = useChatsOrder()
+  const byTask = order === 'task'
+  const d = useDrawerTasks(scope, now)
+  const due = dueNow(d.sections)
+  const play = useMemo(() => (byTask ? playByTask([...inbox, ...working].sort((a, b) => activeAt(b, now) - activeAt(a, now)), d.tasks) : []), [byTask, inbox, working, now, d.tasks])
+  const grouped = useMemo(() => new Set(play.flatMap((i) => (i.kind === 'task' ? [i.group.task.ref] : []))), [play])
+  const slim = (t: ChatThread) => <ThreadItem key={t.id} t={t} now={now} active={t.id === activeId} live={!!runs[t.id]} onOpen={onOpenChat} />
 
   const card = (t: ChatThread) => {
     const project = t.projectId ? projects.find((p) => p.id === t.projectId) || null : null
@@ -441,17 +458,21 @@ export default function ChatsNav({ onOpenChat, drafts, chatShowing = true }: {
   const draftsProject = scope !== 'all' && scope !== 'home' ? scope : null
   return (
     <View style={{ paddingTop: 6 }}>
+      <OrderSwitch value={order} onChange={setChatsOrder} due={due} />
       <ScopeBar value={scope} projects={projects} outside={outside} onOpenPage={() => onOpenChat(null)} />
       {drafts?.(draftsProject, scope === 'home')}
       {pinned.length ? <View accessibilityLabel="Pinned">{pinned.map(card)}</View> : null}
-      {pinned.length && inbox.length ? <View style={st.divider} /> : null}
-      {inbox.map(card)}
+      {pinned.length && (byTask ? play.length : inbox.length) ? <View style={st.divider} /> : null}
+      {byTask
+        ? play.map((i) => (i.kind === 'task' ? <TaskGroupRows key={i.group.task.ref} group={i.group} d={d} chat={slim} /> : card(i.chat)))
+        : inbox.map(card)}
       {loaded && nothing ? (
         <T size={13.5} color={colors.muted} style={st.emptyNote}>
           {snoozed.length || settled.length ? 'All settled. Nothing is waiting on you.' : scope === 'all' ? 'Your chats will show up here.' : 'Chats here will show up in this list.'}
         </T>
       ) : null}
-      {working.length ? (
+      {byTask ? <NextTasks d={d} skip={grouped} /> : null}
+      {working.length && !byTask ? (
         <View style={{ marginTop: 10 }}>
           <View style={st.shelfHead}>
             <Spark size={11} />
