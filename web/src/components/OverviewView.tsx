@@ -16,13 +16,14 @@ import type { NavTarget } from '../router'
 import { pushError } from '../toast'
 import {
   IconArrowUp, IconChevronRight, IconRefresh, IconCalendarEvent, IconChecklist, IconFlame, IconTarget,
-  IconListCheck, IconBulb, IconMicrophone2, IconBrandGithub, IconBrain, IconHistory, IconWand, IconSettings, IconInbox,
+  IconListCheck, IconBulb, IconMicrophone2, IconBrain, IconHistory, IconWand,
   IconAlertTriangle, IconMapPin, IconPlus, IconMinus, IconMessageCircle, IconCheck, IconBolt,
   IconPlane, IconBeach, IconLuggage,
 } from './overview/icons'
 import { clock, dueDiff, dueLabel, periodTotal, startOfDay, until } from './overview/time'
 import './overview/overview.css'
 import { useOwnerName } from '../useOwnerName'
+import { NAV_ICONS } from '../navIcons'
 import ChatAbout from '../chat/about/ChatAbout'
 import { goalsContext, habitMetricContext, habitsContext, scheduleContext, systemContext, tasksContext, type ChatContext } from '../chat/about/context'
 
@@ -33,7 +34,8 @@ const JOBS_SECTION: NavTarget = { tab: 'totems' }
 
 type Tabler = React.ComponentType<any>
 
-// Everything Totem has, one tap away. Code, Brain, Logs and Studio are no longer
+// Everything Totem has, one tap away. A page that is also on the rail wears the
+// rail's glyph (navIcons.tsx). Code, Brain, Logs and Studio are no longer
 // in the side nav, so this row is the way in to them.
 const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'todos', label: 'Tasks', icon: IconChecklist, to: { tab: 'productivity', app: 'todos' } },
@@ -43,11 +45,11 @@ const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'lists', label: 'Lists', icon: IconListCheck, to: { tab: 'productivity', app: 'lists' } },
   { id: 'recs', label: 'Recs', icon: IconBulb, to: { tab: 'productivity', app: 'recs' } },
   { id: 'journal', label: 'Journal', icon: IconMicrophone2, to: { tab: 'productivity', app: 'journal' } },
-  { id: 'dev', label: 'Dev', icon: IconBrandGithub, to: 'dev' },
+  { id: 'dev', label: 'Dev', icon: NAV_ICONS.dev, to: 'dev' },
   { id: 'brain', label: 'Brain', icon: IconBrain, to: 'brain' },
   { id: 'logs', label: 'Activity', icon: IconHistory, to: { tab: 'settings', sub: 'logs' } },
   { id: 'studio', label: 'Skills', icon: IconWand, to: { tab: 'settings', sub: 'skills' } },
-  { id: 'settings', label: 'Settings', icon: IconSettings, to: 'settings' },
+  { id: 'settings', label: 'Settings', icon: NAV_ICONS.settings, to: 'settings' },
 ]
 
 // Stored priority is 1..4 with 4 meaning P1.
@@ -450,7 +452,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
 
   const attention: { key: string; icon: Tabler; text: React.ReactNode; tone: 'warn' | 'info'; to: NavTarget }[] = []
   if (inboxOpen) attention.push({
-    key: 'inbox', icon: IconInbox, tone: 'info', to: 'inbox',
+    key: 'inbox', icon: NAV_ICONS.inbox, tone: 'info', to: 'inbox',
     text: <><b>{inboxOpen} {inboxOpen === 1 ? 'proposal' : 'proposals'}</b> waiting in your inbox</>,
   })
   for (const j of failing.slice(0, 2)) attention.push({

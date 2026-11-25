@@ -28,11 +28,12 @@ import { alpha, colors, textAlpha } from '../theme'
 import { T } from '../ui/Text'
 import { Badge, IconBtn, Press } from '../ui/kit'
 import { FAB_TINT, GLASS, GlassButton, GlassGroup } from '../ui/glass'
-import { Hi, Squares2X2Icon, Cog6ToothIcon, ChevronRightIcon } from '../lib/icons'
+import { Hi, ChevronRightIcon } from '../lib/icons'
+import { NAV_ICONS } from '../lib/navIcons'
 import IconChevronDown from '@tabler/icons-react-native/dist/esm/icons/IconChevronDown.mjs'
 import IconChevronUp from '@tabler/icons-react-native/dist/esm/icons/IconChevronUp.mjs'
 import { useSettings } from '../lib/settings'
-import { IconEdit, IconLayoutSidebarLeftCollapse, IconSearch } from '../lib/chat/icons'
+import { IconEdit, IconLayoutSidebarLeftCollapse } from '../lib/chat/icons'
 import { useInboxCount } from '../lib/useInboxCount'
 import { useUnreadNotifications } from '../features/notifications/useUnread'
 import ChatsNav, { DockedShelfButtons } from '../features/chat/ChatsNav'
@@ -98,7 +99,7 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
       <View style={st.head}>
         <T brand size={17} style={{ flex: 1, letterSpacing: 2, textTransform: 'uppercase', paddingLeft: 10 }}>Totem</T>
         <IconBtn
-          icon={IconSearch}
+          icon={NAV_ICONS.search}
           size={20}
           box={44}
           label="Search"
@@ -112,7 +113,7 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: footH + 12 }} scrollIndicatorInsets={{ bottom: footH }} keyboardShouldPersistTaps="handled">
         <View style={st.nav}>
           <Press style={[st.item, onOverview && st.itemOn]} onPress={() => go(TAB_ROUTES.overview)} accessibilityRole="button" accessibilityLabel={`Overview${inboxOpen ? `, ${inboxOpen} in the inbox` : ''}${totemReports ? ", a totem's report is waiting" : ''}`}>
-            <Hi icon={Squares2X2Icon} size={20} color={onOverview ? colors.text : textAlpha(86)} />
+            <Hi icon={NAV_ICONS.overview} size={20} color={onOverview ? colors.text : textAlpha(86)} />
             <T size={15.5} color={onOverview ? colors.text : textAlpha(86)} style={{ flex: 1 }}>Overview</T>
             <Badge count={inboxOpen} />
             {/* A totem's report waits: its Totems tile on the Overview has the same dot. */}
@@ -208,7 +209,7 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
               accessibilityLabel={unread > 0 ? `Settings, ${unread} unread ${unread === 1 ? 'notification' : 'notifications'}` : 'Settings'}
               onPress={() => go(TAB_ROUTES.settings)}
             >
-              <Hi icon={Cog6ToothIcon} size={22} color={onSettings ? colors.text : textAlpha(82)} />
+              <Hi icon={NAV_ICONS.settings} size={22} color={onSettings ? colors.text : textAlpha(82)} />
               {unread > 0 ? <View style={st.badge} /> : null}
             </GlassButton>
           </GlassGroup>

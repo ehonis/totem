@@ -189,7 +189,9 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   calls with the same payloads, and nothing that deletes, completes or snoozes loses its undo or its way
   back (recycle bin, snoozed, archive).
 - **Never hand-draw an icon.** Heroicons via `src/lib/icons.tsx` (the web's names), Tabler via deep
-  per-icon imports (`@tabler/icons-react-native/dist/esm/icons/IconX.mjs`, default export). Brand art is
+  per-icon imports (`@tabler/icons-react-native/dist/esm/icons/IconX.mjs`, default export). A page's own glyph
+  (the drawer's Overview, Search and Settings, the Overview's app row) comes from `src/lib/navIcons.tsx`,
+  the web rail's Lucide table (`web/src/navIcons.tsx`); change both together. Brand art is
   rendered to PNG from the web's SVGs by `scripts/build-logo-assets.mjs` (the app icon, splash and
   `assets/images/`); never edit those PNGs by hand.
 - **Keep the bridge contract aligned with `bridge.mjs`.** The app has no API of its own.

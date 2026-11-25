@@ -45,25 +45,7 @@ import TaskCardHost from './work/TaskCard'
 import { installTaskNav } from './work/card'
 import HabitCheckin from './components/HabitCheckin'
 import RunningChats from './chat/RunningChats'
-import {
-  Hi,
-  Squares2X2Icon,
-  ChatBubbleLeftRightIcon,
-  ChatBubbleOvalLeftIcon,
-  ComputerDesktopIcon,
-  CalendarDaysIcon,
-  CircleStackIcon,
-  ShieldCheckIcon,
-  Cog6ToothIcon,
-  InboxArrowDownIcon,
-  CodeBracketIcon,
-  MagnifyingGlassIcon,
-  ChevronDownIcon,
-  EllipsisHorizontalIcon,
-  WrenchScrewdriverIcon,
-  ServerStackIcon,
-  KeyIcon,
-} from './icons'
+import { NAV_ICONS } from './navIcons'
 
 interface TabDef {
   id: string
@@ -73,15 +55,15 @@ interface TabDef {
 
 // Primary sidebar tabs — the ones the owner reaches for most often.
 const PRIMARY_TABS: TabDef[] = [
-  { id: 'overview', label: 'Overview', icon: Squares2X2Icon },
-  { id: 'search', label: 'Search', icon: MagnifyingGlassIcon },
-  { id: 'chat', label: 'Chat', icon: ChatBubbleLeftRightIcon },
-  { id: 'productivity', label: 'Productivity', icon: CalendarDaysIcon },
-  { id: 'inbox', label: 'Inbox', icon: InboxArrowDownIcon },
+  { id: 'overview', label: 'Overview', icon: NAV_ICONS.overview },
+  { id: 'search', label: 'Search', icon: NAV_ICONS.search },
+  { id: 'chat', label: 'Chat', icon: NAV_ICONS.chat },
+  { id: 'productivity', label: 'Productivity', icon: NAV_ICONS.productivity },
+  { id: 'inbox', label: 'Inbox', icon: NAV_ICONS.inbox },
   // CI, reviews and runners across the repos in data/dev.json, plus outside alerts.
-  { id: 'dev', label: 'Dev', icon: WrenchScrewdriverIcon },
+  { id: 'dev', label: 'Dev', icon: NAV_ICONS.dev },
   // The owner's machines: health, uptime, resources, power and its cost.
-  { id: 'fleet', label: 'Fleet', icon: ServerStackIcon },
+  { id: 'fleet', label: 'Fleet', icon: NAV_ICONS.fleet },
 ]
 
 // No longer on the nav: Brain opens from the Overview's app row, Code is the last
@@ -93,16 +75,16 @@ const MORE_TABS: TabDef[] = []
 
 // Messages from the Mac Totem runs on. Last on the rail, and only when the bridge
 // says Apple data is on (APPLE_ENABLED on a Mac); the route works either way and
-// explains itself. Chat's double bubble is taken, so this is the single oval.
-const MESSAGES_TAB_DEF: TabDef = { id: 'messages', label: 'Messages', icon: ChatBubbleOvalLeftIcon }
+// explains itself. Chat's two bubbles are taken, so this is the single round one.
+const MESSAGES_TAB_DEF: TabDef = { id: 'messages', label: 'Messages', icon: NAV_ICONS.messages }
 
 // The desktop of the machine Totem runs on (SCREEN_ENABLED). On the desktop rail
 // only, never in the phone drawer; /screen on a phone explains itself.
-const SCREEN_TAB_DEF: TabDef = { id: 'screen', label: 'Screen', icon: ComputerDesktopIcon }
+const SCREEN_TAB_DEF: TabDef = { id: 'screen', label: 'Screen', icon: NAV_ICONS.screen }
 
 // The logins CLIProxy pools (cliproxy/), on the rail only once the proxy is set up
 // (CLIPROXY_URL and a key); /cliproxy explains itself either way.
-const CLIPROXY_TAB_DEF: TabDef = { id: 'cliproxy', label: 'CLIProxy', icon: KeyIcon }
+const CLIPROXY_TAB_DEF: TabDef = { id: 'cliproxy', label: 'CLIProxy', icon: NAV_ICONS.cliproxy }
 
 // On the rail and in the drawer right after Chat, with a badge for reports waiting.
 const TOTEMS_TAB_DEF: TabDef = { id: 'totems', label: 'Totems', icon: TotemsIcon }
@@ -114,7 +96,7 @@ const SETTINGS_TAB = 'settings'
 // Pages drawn over a moving colour glow (glow.css). The chat, editors and the
 // Totems scene keep a plain background.
 const GLOW_TABS = new Set(['overview', 'productivity', 'inbox', 'search', 'messages', 'fleet', SETTINGS_TAB])
-const SETTINGS_TAB_DEF: TabDef = { id: SETTINGS_TAB, label: 'Settings', icon: Cog6ToothIcon }
+const SETTINGS_TAB_DEF: TabDef = { id: SETTINGS_TAB, label: 'Settings', icon: NAV_ICONS.settings }
 
 // The bottom bar fits five items with a readable label under each; past that the
 // row silently scrolled and the last tabs sat off the right edge where nothing
