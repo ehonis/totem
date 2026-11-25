@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { matchScore, placeAfter, rankDestinations, slug, stripToken } from './destinations'
+import { matchScore, nameFromTerm, placeAfter, rankDestinations, slug, stripToken } from './destinations'
 import type { Project } from './types'
 import type { WorkTask } from '../work/groups'
 
@@ -46,7 +46,7 @@ describe('rankDestinations', () => {
     // A bare `$` keeps to four places, so the tasks are in view under them.
     expect(keys(rankDestinations(ctx, ''))).toEqual([
       'p:lp', 'p:harbor', 'p:mn', 'p:wp',
-      'new-task',
+      'new-task', 'ghost',
       't:t2', 't:t1', 't:sheet:1:2:abcd',
     ])
     expect(keys(rankDestinations(ctx, 'r'))).toContain('p:gb')
@@ -75,7 +75,7 @@ describe('rankDestinations', () => {
   })
 
   it('leaves out done and snoozed tasks', () => {
-    expect(keys(rankDestinations(ctx, 'thing'))).toEqual([])
+    expect(keys(rankDestinations(ctx, 'thing')).filter((k) => k.startsWith('t:'))).toEqual([])
   })
 })
 
@@ -114,5 +114,104 @@ describe('placeAfter', () => {
     const t2 = { kind: 'task' as const, key: 't:t2', name: 'x', task: tasks[1] }
     expect(placeAfter(t2, { taskId: null, projectId: 'wp' }, home)).toEqual({ taskId: 't2', projectId: 'wp' })
     expect(placeAfter(t2, { taskId: null, projectId: 'wp' }, () => 'harbor')).toEqual({ taskId: 't2', projectId: 'harbor' })
+  })
+})
+
+describe('$ghost', () => {
+  const ctx = { projects, tasks, projectId: null, taskId: null }
+
+  it('leads with Ghost chat for $gh…, $temp… and $inco…, and not for shorter or other words', () => {
+    for (const term of ['gh', 'ghost', 'temp', 'temporary', 'inco', 'incognito']) expect(keys(rankDestinations(ctx, term))[0]).toBe('ghost')
+    for (const term of ['g', 'te', 'tem', 'in', 'ghosts', 'harb']) expect(keys(rankDestinations(ctx, term))).not.toContain('ghost')
+  })
+
+  it('moves the chat to Home, out of its project and task', () => {
+    const ghost = rankDestinations(ctx, 'ghost')[0]
+    expect(placeAfter(ghost, { taskId: 't1', projectId: 'harbor' }, () => 'wp')).toEqual({ taskId: null, projectId: null })
+  })
+})
+
+describe('new folder from a name nothing has', () => {
+  const ctx = { projects, tasks, projectId: null, taskId: null }
+  const folders = (list: ReturnType<typeof rankDestinations>) => list.filter((d) => d.kind === 'new-folder')
+
+  it('offers a new project at Home, last, named as typed', () => {
+    const list = rankDestinations(ctx, 'tax-returns', 'tax-returns')
+    expect(keys(list)).toEqual(['new-project'])
+    expect(list[0].name).toBe('Tax returns')
+    expect(rankDestinations(ctx, 'q4-plans', 'Q4-Plans')[0].name).toBe('Q4 Plans')
+    // After any task it matches, so Enter still picks the task.
+    expect(keys(rankDestinations(ctx, 'expense'))).toEqual(['t:t1', 'new-project'])
+  })
+
+  it('in a project or one of its folders, offers a folder in the project first', () => {
+    const inFolder = { ...ctx, projectId: 'harbor' }
+    const list = folders(rankDestinations(inFolder, 'receipts'))
+    expect(list.map((d) => d.key)).toEqual(['new-folder:lp', 'new-project'])
+    expect(list[0].kind === 'new-folder' && list[0].parent?.id).toBe('lp')
+  })
+
+  it('never for a name a place already has, a short term, a price or a word `$` keeps', () => {
+    expect(folders(rankDestinations(ctx, 'harb'))).toEqual([])
+    expect(folders(rankDestinations({ ...ctx, projectId: 'harbor' }, 'harbor'))).toEqual([])
+    expect(folders(rankDestinations(ctx, 'zz'))).toEqual([])
+    expect(folders(rankDestinations(ctx, '400'))).toEqual([])
+    for (const term of ['task', 'ghost', 'temporary', 'hom', 'folder', 'project']) expect(folders(rankDestinations(ctx, term))).toEqual([])
+  })
+
+  it('moves nothing when picked: the folder is made first', () => {
+    const now = { taskId: 't1', projectId: null }
+    expect(placeAfter(rankDestinations(ctx, 'tax-returns')[0], now, () => null)).toEqual(now)
+  })
+
+  it('names keep his capitals', () => {
+    expect(nameFromTerm('tax-returns')).toBe('Tax returns')
+    expect(nameFromTerm('NYC-trip')).toBe('NYC trip')
+  })
+})
+
+describe('$opus, $pin and $snooze', () => {
+  const provider = (id: string, name: string, driver: string, supportsModelPicker = true) => ({ id, name, driver, supportsModelPicker })
+  const models = [
+    { provider: provider('claude', 'Claude', 'claude'), models: [
+      { id: 'claude-opus-5-5', name: 'Claude Opus 5.5' }, { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', favorite: true },
+      { id: 'claude-opus-4', name: 'Claude Opus 4', hidden: true },
+    ] },
+    { provider: provider('codex', 'Codex', 'codex'), models: [{ id: 'gpt-5.5-codex', name: 'GPT-5.5 Codex' }] },
+    { provider: provider('cursor', 'Cursor', 'cursor', false), models: [] },
+  ]
+  const ctx = { projects, tasks, projectId: null, taskId: null, models, startOptions: true, now: new Date(2026, 10, 25, 10, 0) }
+
+  it('finds models by a word of their name or id, never a hidden one, and an account by its name', () => {
+    expect(keys(rankDestinations(ctx, 'opus'))).toEqual(['m:claude:claude-opus-5-5'])
+    expect(keys(rankDestinations(ctx, 'sonnet'))).toEqual(['m:claude:claude-sonnet-5-5'])
+    // The account itself first (its default), then its models; favourites before the rest.
+    expect(keys(rankDestinations(ctx, 'claude'))).toEqual(['m:claude:', 'm:claude:claude-sonnet-5-5', 'm:claude:claude-opus-5-5'])
+    expect(keys(rankDestinations(ctx, 'codex'))).toEqual(['m:codex:', 'm:codex:gpt-5.5-codex'])
+    // An account with no model list is offered as itself.
+    expect(keys(rankDestinations(ctx, 'cursor'))).toEqual(['m:cursor:'])
+    // A model's name is taken: no New project "Opus".
+    expect(rankDestinations(ctx, 'opus').some((d) => d.kind === 'new-folder')).toBe(false)
+    expect(keys(rankDestinations(ctx, 'o')).some((k) => k.startsWith('m:'))).toBe(false)
+  })
+
+  it('offers Pin it for $pi, unless it is pinned already or the chat view cannot', () => {
+    expect(keys(rankDestinations(ctx, 'pi'))[0]).toBe('pin')
+    expect(keys(rankDestinations({ ...ctx, pinned: true }, 'pin'))).not.toContain('pin')
+    expect(keys(rankDestinations({ ...ctx, startOptions: false }, 'pin'))).not.toContain('pin')
+  })
+
+  it('lists the snooze times for $snooze, $later and $remind, and narrows with $snooze-tom', () => {
+    for (const term of ['sn', 'snooze', 'later', 'rem']) expect(keys(rankDestinations(ctx, term))).toContain('snooze:tomorrow')
+    expect(keys(rankDestinations(ctx, 'snooze-tom'))).toEqual(['snooze:tomorrow'])
+    const tomorrow = rankDestinations(ctx, 'snooze-tom')[0]
+    expect(tomorrow.kind === 'snooze' && new Date(tomorrow.until).getDate()).toBe(26)
+    expect(keys(rankDestinations({ ...ctx, startOptions: false }, 'snooze'))).toEqual([])
+    expect(keys(rankDestinations(ctx, 'la'))).not.toContain('snooze:tomorrow')
+  })
+
+  it('none of them move the chat', () => {
+    const now = { taskId: 't1', projectId: 'harbor' }
+    for (const term of ['opus', 'pin', 'snooze-tom']) expect(placeAfter(rankDestinations(ctx, term)[0], now, () => 'wp')).toEqual(now)
   })
 })

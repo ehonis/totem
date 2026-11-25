@@ -14,7 +14,7 @@
 // (one project and its folders, or Home) narrows the list when he asks for it.
 // Totems' own chats are not listed; they live with their totems.
 import type { ChatThread, Project } from './types'
-import { activeAt, isSnoozed, settledAt } from './settle'
+import { activeAt, ghostGone, isSnoozed, settledAt } from './settle'
 
 /** What the list shows: every chat, the ones in no project, or one project and its folders. */
 export type SidebarScope = 'all' | 'home' | string
@@ -66,6 +66,7 @@ export function sidebarLists(threads: ChatThread[], o: SidebarOptions): SidebarL
     // Waiting on him stays in play, whatever would settle it on its own (age, a finished
     // task, the agent's "done"); only his own Settle shelves it (settle.ts settledAt).
     const at = settledAt(t, now, autoDays, live(t.id), t.id === openId, needsYou(t))
+    if (ghostGone(t, at)) continue
     if (at) { settledOrder.set(t.id, at); out.settled.push(t); continue }
     if (t.pinned) out.pinned.push(t)
     else if (live(t.id) && !needsYou(t)) out.working.push(t)

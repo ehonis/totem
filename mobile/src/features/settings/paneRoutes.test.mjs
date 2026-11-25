@@ -66,6 +66,7 @@ test('every search hit the app keeps is a row its own pane draws', () => {
     skills: ['panes/SkillsPane.tsx'],
     connections: ['panes/ConnectionsPane.tsx'],
     tasks: ['panes/TasksPane.tsx'],
+    archive: ['panes/ArchivePane.tsx'],
     security: ['panes/SecurityPane.tsx'],
     logs: ['panes/ActivityPane.tsx'],
   }

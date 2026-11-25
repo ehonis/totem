@@ -532,8 +532,8 @@ export default function ChatScreen() {
     <ProjectHome projectId={project.id} />
   ) : (
     <View style={st.empty}>
-      <T size={26} weight={500} style={{ letterSpacing: -0.26, marginBottom: 18 }} lineHeight={34}>{temporary ? 'Temporary chat' : greeting(ownerName)}</T>
-      {temporary ? <T size={14} lineHeight={21} color={vc.soft} style={{ marginTop: -8, marginBottom: 16 }}>This chat won’t be kept after midnight.</T> : null}
+      <T size={26} weight={500} style={{ letterSpacing: -0.26, marginBottom: 18 }} lineHeight={34}>{temporary ? 'Ghost chat' : greeting(ownerName)}</T>
+      {temporary ? <T size={14} lineHeight={21} color={vc.soft} style={{ marginTop: -8, marginBottom: 16 }}>Not kept: gone at midnight, or as soon as you settle it.</T> : null}
       {providerState && providerState !== 'ready' && providerState !== 'unknown' ? (
         <T size={14} lineHeight={21} color="#f0cd72" style={{ marginTop: -8, marginBottom: 16 }}>
           {providerById(choice.provider)?.name} is {providerState === 'missing' ? 'not installed on this machine' : providerState === 'logged-out' ? 'signed out' : 'not responding'}. Pick another account below{caps?.providers?.[choice.provider]?.fix ? `, or run ${caps.providers[choice.provider].fix}` : ''}.
@@ -559,7 +559,7 @@ export default function ChatScreen() {
     </View>
   )
 
-  const titleText = active && !empty ? threadTitle(active) : temporary ? 'Temporary chat' : 'New chat'
+  const titleText = active && !empty ? threadTitle(active) : temporary ? 'Ghost chat' : 'New chat'
   const titleMenu = active && !empty ? threadMenu(active, shelfOf(active, Date.now(), autoSettleDays, busy, active.id !== openedSettled, !!attentionOf(active, handoffs[active.id])), busy) : null
   const titleEl = (
     <View style={st.titleRow}>
@@ -642,7 +642,7 @@ export default function ChatScreen() {
             <Press
               style={[st.iconBtn, temporary && st.iconOn]}
               onPress={() => newChat(temporary ? 'regular' : 'temporary')}
-              accessibilityLabel={temporary ? 'Turn off temporary chat' : 'Temporary chat — not kept past midnight'}
+              accessibilityLabel={temporary ? 'Turn off ghost chat' : 'Ghost chat — not kept past midnight'}
               accessibilityState={{ selected: temporary }}
             >
               <TI icon={IconGhost2} size={21} color={temporary ? colors.text : vc.soft} />
@@ -708,7 +708,7 @@ export default function ChatScreen() {
               above={missingEl || queueEl ? <>{missingEl}{queueEl}</> : null}
               onVoice={() => openVoice({ threadId: activeId, kind })}
               busy={busy}
-              placeholder={waitingApproval ? DECLINE_PLACEHOLDER : temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
+              placeholder={waitingApproval ? DECLINE_PLACEHOLDER : temporary ? 'Ghost chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
               allowCommands={!temporary}
               maxUploadBytes={caps?.maxUploadBytes}
               compacting={compactTokens != null && !keepHistory}

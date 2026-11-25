@@ -1,8 +1,8 @@
 // Run with: node --test chat/task-folders-bridge.test.mjs
 //
 // The Tasks panel's filing routes against a real bridge.mjs: a task is filed only
-// under a project that exists, bad ids are refused, and deleting a folder hands
-// its tasks up to its project (deleting a project unfiles them), as its chats move.
+// under a project that exists, bad ids are refused, and archiving a project puts
+// it away whole (its folders, chats and filings) until Settings → Archive restores it.
 // The bridge runs from a shadow checkout on its own port, with no scheduler.
 
 import test, { before, after } from 'node:test'
@@ -84,15 +84,45 @@ test('filing needs a real project and a valid task id; null unfiles', async () =
   assert.equal((await call('POST', '/api/chat/task-folders', {})).status, 405)
 })
 
-test('a deleted folder hands its tasks to its project; a deleted project unfiles them', async () => {
+test('an archived project is put away with its folders and chats, and comes back whole', async () => {
   const project = (await call('POST', '/api/chat/projects', { name: 'Client' })).body.project
   const folder = (await call('POST', '/api/chat/projects', { name: 'Network', parentId: project.id })).body.project
   await call('PUT', '/api/chat/task-folders/a', { projectId: folder.id })
-  await call('PUT', '/api/chat/task-folders/b', { projectId: project.id })
-  assert.equal((await call('DELETE', `/api/chat/projects/${folder.id}`)).status, 200)
-  assert.deepEqual((await call('GET', '/api/chat/task-folders')).body.folders, { a: project.id, b: project.id })
-  assert.equal((await call('DELETE', `/api/chat/projects/${project.id}`)).status, 200)
-  assert.deepEqual((await call('GET', '/api/chat/task-folders')).body.folders, {})
+  await call('PUT', '/api/threads/thread-in-folder', { projectId: folder.id, title: 'Cutover', messages: [{ id: 'm1', role: 'user', content: 'hi', createdAt: Date.now() }] })
+  const names = async () => (await call('GET', '/api/chat/projects')).body.projects.map((p) => p.name)
+  const chats = async () => (await call('GET', '/api/threads?view=summary')).body.threads.map((t) => t.id)
+
+  // Nothing deletes a project any more.
+  assert.equal((await call('DELETE', `/api/chat/projects/${project.id}`)).status, 405)
+  assert.equal((await call('POST', `/api/chat/projects/${project.id}/restore`)).status, 409)
+
+  const archived = await call('POST', `/api/chat/projects/${project.id}/archive`)
+  assert.equal(archived.status, 200)
+  assert.ok(archived.body.project.archivedAt)
+  assert.equal((await call('POST', `/api/chat/projects/${folder.id}/archive`)).status, 409, 'its folder went with it')
+  assert.ok(!(await names()).includes('Client'))
+  assert.ok(!(await names()).includes('Network'))
+  assert.ok(!(await chats()).includes('thread-in-folder'), 'its chats are put away too')
+  assert.equal((await call('GET', '/api/threads/thread-in-folder')).status, 200, 'but still open by id')
+  assert.equal((await call('GET', `/api/chat/projects/${folder.id}`)).status, 404)
+  assert.equal((await call('PATCH', `/api/chat/projects/${project.id}`, { name: 'x' })).status, 404)
+  assert.equal((await call('PUT', '/api/chat/task-folders/c', { projectId: folder.id })).status, 404, 'nothing is filed into it')
+  assert.equal((await call('POST', '/api/chat/projects', { name: 'Sub', parentId: project.id })).status, 404)
+  assert.deepEqual((await call('GET', '/api/chat/task-folders')).body.folders.a, undefined)
+
+  const list = (await call('GET', '/api/chat/projects/archived')).body.projects
+  const entry = list.find((p) => p.id === project.id)
+  assert.equal(entry.chatCount, 1)
+  assert.deepEqual(entry.folders.map((f) => f.name), ['Network'])
+  assert.ok(!list.some((p) => p.id === folder.id), 'a folder is listed under its archived project, not beside it')
+
+  const restored = await call('POST', `/api/chat/projects/${project.id}/restore`)
+  assert.equal(restored.status, 200)
+  assert.equal(restored.body.project.archivedAt, undefined)
+  assert.ok((await names()).includes('Network'))
+  assert.ok((await chats()).includes('thread-in-folder'))
+  assert.equal((await call('GET', '/api/chat/task-folders')).body.folders.a, folder.id, 'its filings come back')
+  assert.ok(!(await call('GET', '/api/chat/projects/archived')).body.projects.some((p) => p.id === project.id))
 })
 
 test('a chat keeps a taskId written to it', async () => {

@@ -1,7 +1,7 @@
 // Chat's bridge calls. Streaming endpoints are read as Server-Sent Events over
 // fetch (EventSource cannot send the bearer header).
 import { authHeaders, AuthError, api } from '../api'
-import type { ApprovalDecision, Attachment, ChatCapabilities, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
+import type { ApprovalDecision, ArchivedProject, Attachment, ChatCapabilities, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
 
 export interface SendArgs {
   threadId: string
@@ -23,6 +23,10 @@ export interface SendArgs {
   editMessageId?: string
   /** Compact the idle chat first; the message waits at the front of its queue (chat/context.mjs). */
   compactFirst?: boolean
+  /** A new chat pinned from the start (`$pin`). */
+  pinned?: boolean
+  /** A new chat snoozed until then from the start (`$snooze`); its reply doesn't wake it. */
+  snoozeUntil?: number
 }
 
 export interface StreamHandle {
@@ -157,7 +161,9 @@ export const getProject = (id: string) => api<{ project: Project }>(`/api/chat/p
 export const createProjectApi = (body: Partial<Project>) => api<{ project: Project }>('/api/chat/projects', json('POST', body))
 export const patchProjectApi = (id: string, body: Record<string, unknown>) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('PATCH', body))
 export const projectFaviconApi = (id: string, site: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/favicon`, json('POST', { site }))
-export const deleteProjectApi = (id: string) => api<{ ok: boolean; movedChats: number; removedFolders?: number }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('DELETE'))
+export const archiveProjectApi = (id: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/archive`, json('POST'))
+export const restoreProjectApi = (id: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/restore`, json('POST'))
+export const listArchivedProjects = () => api<{ projects: ArchivedProject[] }>('/api/chat/projects/archived')
 export const putProjectMemory = (id: string, memory: string) => api<{ memory: string }>(`/api/chat/projects/${encodeURIComponent(id)}/memory`, json('PUT', { memory }))
 export const addProjectFilesApi = (id: string, uploadIds: string[]) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/files`, json('POST', { uploadIds }))
 export const moveProjectMemoryApi = (id: string, entries: string[]) => api<{ moved: number; project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/memory/move`, json('POST', { entries }))

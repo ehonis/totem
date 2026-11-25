@@ -12,6 +12,15 @@ const ids = (list: ChatThread[]) => list.map((t) => t.id)
 const base = { now: NOW, autoDays: 3, live: () => false, projects: PROJECTS }
 
 describe('the chats panel’s shelves', () => {
+  it('lists a settled ghost chat nowhere', () => {
+    const lists = sidebarLists([
+      chat('ghost', { kind: 'temporary', settledOverride: 'settled', settledAt: NOW }),
+      chat('ghost-live', { kind: 'temporary' }),
+    ], base)
+    expect(ids(lists.inbox)).toEqual(['ghost-live'])
+    expect(lists.settled).toEqual([])
+  })
+
   it('lists every chat in every project and folder in one list, latest first', () => {
     const lists = sidebarLists([
       chat('home', { updatedAt: NOW - 3 * HOUR_MS }),

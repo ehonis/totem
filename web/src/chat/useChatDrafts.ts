@@ -3,7 +3,7 @@
 // follow-up and a discarded unsent message.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
-import { getState, openProject, startTaskDraft, useChat } from './store'
+import { createProject, getState, openProject, startTaskDraft, useChat } from './store'
 import { draftKeyAt, placeKey } from './drafts'
 import {
   arrive, keepEdit as keepEditIn, ownedBy, placeFor, placeOfThread, returnFollowUp, returnUnsent, takeForSend as takeOut, trayOf, writeTray,
@@ -13,7 +13,7 @@ import { drafts, useDraftState, useMissingUploads, setShownDraft, takeOpenedDraf
 import { placeAfter, type Destination } from './destinations'
 import { createTask, taskHome } from '../work/state'
 import type { NewTaskFields } from './newTask'
-import { pushToast } from '../toast'
+import { pushError, pushToast } from '../toast'
 import type { ComposerHandle, FollowUpPayload } from './Composer'
 import type { Attachment, ChatThread, Project } from './types'
 
@@ -74,9 +74,10 @@ export function useChatDrafts({ activeId, active, scopeProject, draftTaskId, dra
   useEffect(() => { setShownDraft(visible && !activeId ? draftKey : null) }, [visible, activeId, draftKey])
 
   // --- moving a new chat's draft (`$`, "Start in") -----------------------------
-  function placeDraft(next: { taskId: string | null; projectId: string | null }) {
-    setDraftKind('regular')
-    const key = drafts.move(draftKey, placeFor(next, getState().projects))
+  /** `ghost`: it becomes a ghost chat's draft, which is Home's (`next` is Home then). */
+  function placeDraft(next: { taskId: string | null; projectId: string | null }, ghost = false, from = draftKey) {
+    setDraftKind(ghost ? 'temporary' : 'regular')
+    const key = drafts.move(from, placeFor(next, getState().projects), ghost)
     if (drafts.get().drafts[key]) { openDraft(key); return }
     if (next.taskId) startTaskDraft(next.taskId, next.projectId)
     else openProject(next.projectId)
@@ -91,7 +92,28 @@ export function useChatDrafts({ activeId, active, scopeProject, draftTaskId, dra
   /** `$`: the words, less the `$…`, and the tray's files go to the picked place. */
   const pickDestination = (d: Destination, text: string) => {
     drafts.write(draftKey, { text }, at)
-    placeDraft(placeAfter(d, { taskId: draftTaskId, projectId: scopeProject?.id ?? null }, taskHome))
+    if (d.kind === 'new-folder') { void newFolder(d); return }
+    placeDraft(placeAfter(d, { taskId: draftTaskId, projectId: scopeProject?.id ?? null }, taskHome), d.kind === 'ghost')
+    requestAnimationFrame(() => composer.current?.focus())
+  }
+
+  /**
+   * `$tax-returns` where nothing has that name: make the folder (or project), then
+   * move the draft there, keeping a task it was being started for. If he moved on
+   * while it was being made, the folder is made and he stays where he is.
+   */
+  async function newFolder(d: Extract<Destination, { kind: 'new-folder' }>) {
+    const key = draftKey
+    const taskId = draftTaskId
+    let project: Project
+    try {
+      project = await createProject({ name: d.name, ...(d.parent ? { parentId: d.parent.id } : {}) }, { open: false })
+    } catch (e: any) {
+      pushError(`Couldn't make “${d.name}”: ${e?.message || e}`)
+      return
+    }
+    if (keyRef.current !== key) { pushToast(`Made “${project.name}”.`, 'info'); return }
+    placeDraft({ taskId, projectId: project.id }, false, key)
     requestAnimationFrame(() => composer.current?.focus())
   }
 

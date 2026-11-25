@@ -140,7 +140,7 @@ describe('the panel’s rows', () => {
   it('new-chat drafts only, newest first, each with its place', () => {
     const rows = draftRows(four().get(), { projects, projectId: null, shown: null, listedOnArrival: false })
     expect(rows.map((r) => [r.key, r.preview, r.place, r.icon])).toEqual([
-      ['new:d', 'gone at midnight', 'Temporary chat', 'temporary'],
+      ['new:d', 'gone at midnight', 'Ghost chat', 'temporary'],
       ['new:c', 'for a task', 'Garden', 'task'],
       ['new:b', '2 attachments', 'Beds', 'project'],
       ['new:a', 'first line', 'Home', 'home'],

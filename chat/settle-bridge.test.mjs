@@ -94,11 +94,12 @@ const until = async (fn, ms = 15_000) => {
   }
 }
 
+const until_ = (...a) => until(...a)
 const drain = async (reader) => { while (!(await reader.read()).done); }
 
-/** Resolves once the bridge has started the reply; it holds until `release`. */
-async function startHeldReply(id, prompt) {
-  const r = await fetch(`${B.base}/api/chat`, { method: 'POST', headers: bearer, body: JSON.stringify({ provider: 'claude', threadId: id, text: prompt }) })
+/** Resolves once the bridge has started the reply; it holds until `release`. `extra` goes in the body. */
+async function startHeldReply(id, prompt, extra = {}) {
+  const r = await fetch(`${B.base}/api/chat`, { method: 'POST', headers: bearer, body: JSON.stringify({ provider: 'claude', threadId: id, text: prompt, ...extra }) })
   assert.ok(r.ok, `POST /api/chat ${r.status}`)
   const reader = r.body.getReader()
   let seen = ''
@@ -238,4 +239,32 @@ test('a voice turn wakes a snoozed chat; a turn with nothing he said does not', 
   const t = await thread(id)
   assert.deepEqual(shelved(t), {})
   assert.ok(t.unsettledAt >= at)
+})
+
+test('$snooze: a new chat snoozed as it starts stays snoozed once its reply lands', async () => {
+  const id = 'settle-held'
+  const until = Date.now() + 86_400_000
+  const reply = await startHeldReply(id, 'hold-held', { snoozeUntil: until, pinned: true })
+  let t = await thread(id)
+  assert.equal(t.snoozedUntil, until)
+  assert.equal(t.snoozeHeld, true)
+  assert.equal(t.pinned, true, '$pin: pinned from the start')
+  await reply.release()
+  t = await until_(async () => { const x = await thread(id); return x.needsReply ? x : null })
+  assert.equal(t.snoozedUntil, until, 'its own reply does not wake it')
+
+  // Snoozed again by hand, it is an ordinary snooze: the next reply wakes it.
+  await call('PUT', `/api/threads/${id}`, { snoozedUntil: until + 1000, snoozedAt: Date.now() })
+  assert.equal((await thread(id)).snoozeHeld, undefined)
+})
+
+test('$snooze and $pin only start a new chat: an existing one keeps its own state', async () => {
+  const id = 'settle-held-existing'
+  const first = await startHeldReply(id, 'hold-existing')
+  await first.release()
+  const second = await startHeldReply(id, 'hold-existing-2', { snoozeUntil: Date.now() + 86_400_000, pinned: true })
+  const t = await thread(id)
+  assert.equal(t.snoozedUntil, undefined)
+  assert.equal(t.pinned, undefined)
+  await second.release()
 })

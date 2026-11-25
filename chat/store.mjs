@@ -387,7 +387,14 @@ function applyMetadata(thread, body, now) {
     if (num(body.doneAt)) thread.doneAt = num(body.doneAt)
     else delete thread.doneAt
   }
-  if (!thread.snoozedUntil) delete thread.snoozedAt
+  // A snooze he set as he started the chat (`$snooze`): its own reply doesn't wake it
+  // early. Written only by the bridge (not in METADATA_KEYS); a snooze a client sets
+  // or clears afterwards is an ordinary one again.
+  if ('snoozeHeld' in body) {
+    if (body.snoozeHeld === true) thread.snoozeHeld = true
+    else delete thread.snoozeHeld
+  } else if ('snoozedUntil' in body) delete thread.snoozeHeld
+  if (!thread.snoozedUntil) { delete thread.snoozedAt; delete thread.snoozeHeld }
   else if (!thread.snoozedAt) thread.snoozedAt = now
   if (thread.kind === 'temporary') thread.expiresAt = num(body.expiresAt) || thread.expiresAt || now
   else delete thread.expiresAt
@@ -409,6 +416,7 @@ export function wakeOnOwnerMessage(thread, now = Date.now()) {
   delete thread.settledAt
   delete thread.snoozedUntil
   delete thread.snoozedAt
+  delete thread.snoozeHeld
   delete thread.doneAt
 }
 

@@ -44,7 +44,9 @@ import { useChatPresence } from '../chat/presence'
 import { useViewing } from '../chat/onScreen'
 import { contextVersion, subscribeContext, takeContext } from '../chat/pendingContext'
 import { TI } from '../chat/ui'
-import { IconArrowDown, IconPaperclip } from '../chat/icons'
+import { IconArrowDown, IconPaperclip, IconPinned, IconX, IconZzz } from '../chat/icons'
+import { settingsForPick } from '../chat/models'
+import type { Destination } from '../chat/destinations'
 import HandoffBar from '../chat/HandoffBar'
 import type { Attachment, ChatMessage, ModelSettings, QueuedMessage } from '../chat/types'
 import '../chat/chat.css'
@@ -72,6 +74,9 @@ const STARTERS: { text: string; fill?: boolean }[] = [
 ]
 
 // One empty list for a chat with nothing to draw, so effects keyed on it stay put.
+/** `$pin` and `$snooze` picked for a new chat's draft (`key`), sent with its first message. */
+interface StartOptions { key: string; pinned?: boolean; snooze?: { until: number; when: string } }
+
 const NO_MESSAGES: ChatMessage[] = []
 
 /** The Totems tab, on one totem's settings when given its id. */
@@ -124,6 +129,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const [draftPick, setDraftPick] = useState<DraftPick | null>(null)
   // A new project chat can start without the project's instructions, memory and files.
   const [draftContextOff, setDraftContextOff] = useState(false)
+  // `$pin` and `$snooze` for the new chat on screen: sent with its first message.
+  const [startOpts, setStartOpts] = useState<StartOptions | null>(null)
   // The project the panel is showing. A new chat here starts in it, on its default model.
   const scopeId = useChat((s) => s.projectId)
   const scopeProject = useChat((s) => s.projects.find((p) => p.id === s.projectId))
@@ -500,10 +507,23 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
 
   function onSend({ text, attachments }: { text: string; attachments: Attachment[] }) {
     const onRefused = takeForSend()
-    const id = send({ threadId: activeId, text, attachments, kind: !active && draftTaskId ? 'regular' : kind, provider: draft.provider, modelSettings: draft.modelSettings, projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, taskId: active ? undefined : draftTaskId || undefined, compactFirst: compactTokens != null && !keepHistory, onRefused })
+    const opts = shownOpts
+    const id = send({
+      threadId: activeId, text, attachments, kind: !active && draftTaskId ? 'regular' : kind, provider: draft.provider, modelSettings: draft.modelSettings,
+      projectId: active ? undefined : project?.id, projectContextOff: !active && !!project && draftContextOff, taskId: active ? undefined : draftTaskId || undefined,
+      compactFirst: compactTokens != null && !keepHistory, pinned: opts?.pinned, snoozeUntil: opts?.snooze?.until, onRefused,
+    })
     setKeepHistory(false)
     if (id !== activeId) {
       setDraftPick(null)
+      setStartOpts(null)
+      // `$snooze`: it is answered out of sight, and he stays on a new chat.
+      if (opts?.snooze) {
+        const said = text.replace(/\s+/g, ' ').trim()
+        pushToast(`Sent${said ? ` “${said.length > 40 ? `${said.slice(0, 40)}…` : said}”` : ''}. Back ${opts.snooze.when}.`, 'info', { action: { label: 'Open now', onClick: () => { wakeThread(id); setActive(id) } } })
+        requestAnimationFrame(() => composer.current?.focus())
+        return
+      }
       setActive(id)
     }
     requestAnimationFrame(glideToBottom)
@@ -613,7 +633,31 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     displace: (text) => setInput(input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text),
   })
 
-  const destinations = { projectId: scopeProject?.id ?? null, taskId: draftTaskId, onPick: pickDestination, onNewTask: newTask, draftKey }
+  // Options picked with `$` belong to the draft they were picked in.
+  const shownOpts = !active && startOpts?.key === draftKey ? startOpts : null
+  const onStartOption = (d: Extract<Destination, { kind: 'pin' | 'snooze' }>) => setStartOpts((o) => ({
+    ...(o?.key === draftKey ? o : {}), key: draftKey,
+    ...(d.kind === 'pin' ? { pinned: true } : { snooze: { until: d.until, when: wakeDescription(d.until, Date.now()) } }),
+  }))
+  const onModel = (d: Extract<Destination, { kind: 'model' }>) => {
+    const s = getState()
+    changeModel({ provider: d.provider.id, modelSettings: settingsForPick(d.provider, d.modelId, s.defaultProvider, s.defaultModel) })
+  }
+  const destinations = { projectId: scopeProject?.id ?? null, taskId: draftTaskId, onPick: pickDestination, onNewTask: newTask, onModel, onStartOption, pinned: !!shownOpts?.pinned, draftKey }
+  const optsEl = shownOpts && (shownOpts.pinned || shownOpts.snooze) ? (
+    <div className="vc-newtask vc-start-opts" aria-label="How this chat starts">
+      {shownOpts.pinned && (
+        <span className="vc-newtask-chip"><TI icon={IconPinned} size={12} />Pinned
+          <button type="button" aria-label="Don’t pin it" onMouseDown={(e) => e.preventDefault()} onClick={() => setStartOpts({ ...shownOpts, pinned: false })}><TI icon={IconX} size={11} /></button>
+        </span>
+      )}
+      {shownOpts.snooze && (
+        <span className="vc-newtask-chip"><TI icon={IconZzz} size={12} />Back {shownOpts.snooze.when}
+          <button type="button" aria-label="Don’t snooze it" onMouseDown={(e) => e.preventDefault()} onClick={() => setStartOpts({ ...shownOpts, snooze: undefined })}><TI icon={IconX} size={11} /></button>
+        </span>
+      )}
+    </div>
+  ) : null
 
   const missingEl = missingFiles.length > 0 && !editing ? (
     <div className="vc-draft-missing" role="status">
@@ -647,11 +691,11 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       followUp={followUp}
       queueEdit={editing ? { onSave: saveQueueEdit } : undefined}
       onResume={!busy && active?.queueHeld && queue.length && activeId ? () => { void updateQueue(activeId, { action: 'resume' }) } : undefined}
-      above={<div className="vc-above">{missingEl}<TaskBar thread={active && !empty ? active : null} draftTaskId={active ? null : draftTaskId} projectId={project?.id || null} />{queueEl}</div>}
+      above={<div className="vc-above">{missingEl}{optsEl}<TaskBar thread={active && !empty ? active : null} draftTaskId={active ? null : draftTaskId} projectId={project?.id || null} />{queueEl}</div>}
       onVoice={() => setVoice(true)}
       busy={busy}
       autoFocus={visible}
-      placeholder={waitingApproval ? DECLINE_PLACEHOLDER : !active && draftTaskId ? 'What should we do about it?' : temporary ? 'Temporary chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
+      placeholder={waitingApproval ? DECLINE_PLACEHOLDER : !active && draftTaskId ? 'What should we do about it?' : temporary ? 'Ghost chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
       allowCommands={!temporary}
       destinations={active ? undefined : destinations}
       maxUploadBytes={caps?.maxUploadBytes}
@@ -721,7 +765,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
         totemsCrumb={!!(active?.totemId || active?.members?.length)}
         onTotems={goTotems}
         thread={active && !empty ? active : undefined}
-        title={!project || (active && !empty) ? (active && !empty ? threadTitle(active) : temporary ? 'Temporary chat' : 'New chat') : undefined}
+        title={!project || (active && !empty) ? (active && !empty ? threadTitle(active) : temporary ? 'Ghost chat' : 'New chat') : undefined}
         retitling={retitling}
         onRetitle={active && !empty ? () => regenerateTitle(active.id) : undefined}
         totem={active?.totemId ? { id: active.totemId, job: totemDir.get(active.totemId) } : undefined}
@@ -760,8 +804,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
           <ProjectHome projectId={project.id} composer={composerEl} maxUploadBytes={caps?.maxUploadBytes} cardInline={narrow} />
         ) : empty ? (
           <div className="vc-empty">
-            <h1 className="vc-greet">{temporary ? 'Temporary chat' : greeting(ownerName)}</h1>
-            {temporary && <p className="vc-empty-note">This chat won’t be kept after midnight.</p>}
+            <h1 className="vc-greet">{temporary ? 'Ghost chat' : greeting(ownerName)}</h1>
+            {temporary && <p className="vc-empty-note">Not kept: gone at midnight, or as soon as you settle it.</p>}
             {providerState && providerState !== 'ready' && providerState !== 'unknown' && (
               <p className="vc-empty-warn">{providerById(choice.provider)?.name} is {providerState === 'missing' ? 'not installed on this machine' : providerState === 'logged-out' ? 'signed out' : 'not responding'}. Pick another account above{caps?.providers?.[choice.provider]?.fix ? `, or run ${caps.providers[choice.provider].fix}` : ''}.</p>
             )}

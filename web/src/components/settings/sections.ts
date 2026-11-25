@@ -4,7 +4,7 @@
 export const SETTINGS_GROUPS = [
   { heading: null, items: ['general', 'appearance', 'chat', 'voice', 'notifications', 'shortcuts'] },
   { heading: 'AI', items: ['providers', 'usage', 'skills'] },
-  { heading: 'Data', items: ['connections', 'tasks'] },
+  { heading: 'Data', items: ['connections', 'tasks', 'archive'] },
   { heading: 'Account', items: ['security', 'logs'] },
 ] as const
 
@@ -24,6 +24,7 @@ export const SETTINGS_LABELS: Record<SettingsSection, string> = {
   skills: 'Skills',
   connections: 'Connections',
   tasks: 'Tasks',
+  archive: 'Archive',
   security: 'Security',
   logs: 'Activity',
 }

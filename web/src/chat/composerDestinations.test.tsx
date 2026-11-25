@@ -18,7 +18,13 @@ const work = {
   folders: {}, sheetName: '', loaded: true, error: '',
 }
 
-vi.mock('./store', async (orig) => ({ ...(await orig<typeof import('./store')>()), useChat: (sel: (s: { projects: Project[] }) => unknown) => sel({ projects }) }))
+const providers = [{ id: 'claude', name: 'Claude', driver: 'claude', supportsModelPicker: true }]
+const models = { claude: [{ id: 'claude-opus-5-5', name: 'Claude Opus 5.5' }] }
+vi.mock('./store', async (orig) => ({
+  ...(await orig<typeof import('./store')>()),
+  useChat: (sel: (s: { projects: Project[]; providers: typeof providers; models: typeof models }) => unknown) => sel({ projects, providers, models }),
+  ensureModels: () => {},
+}))
 // An upload that never finishes, for the test that a pick waits for it.
 vi.mock('./api', async (orig) => ({ ...(await orig<typeof import('./api')>()), uploadFile: () => new Promise(() => {}) }))
 vi.mock('../work/state', async (orig) => ({ ...(await orig<typeof import('../work/state')>()), getWork: () => work, subscribeWork: () => () => {} }))
@@ -27,14 +33,15 @@ const { default: Composer } = await import('./Composer')
 
 afterEach(cleanup)
 
-function Harness({ onPick, destinations = true, onNewTask, projectId = null, onSend = () => {} }: {
+function Harness({ onPick, destinations = true, onNewTask, projectId = null, onSend = () => {}, onModel, onStartOption, valueSpy }: {
   onPick: (d: Destination, text: string) => void; destinations?: boolean
   onNewTask?: (fields: NewTaskFields) => Promise<boolean>; projectId?: string | null; onSend?: () => void
+  onModel?: (d: any) => void; onStartOption?: (d: any) => void; valueSpy?: (v: string) => void
 }) {
   const [value, setValue] = useState('')
   return (
-    <Composer value={value} onChange={setValue} onSend={onSend} onStop={() => {}} busy={false}
-      destinations={destinations ? { projectId, taskId: null, onPick: (d, text) => onPick(d, text), onNewTask } : undefined} />
+    <Composer value={value} onChange={(v) => { valueSpy?.(v); setValue(v) }} onSend={onSend} onStop={() => {}} busy={false}
+      destinations={destinations ? { projectId, taskId: null, onPick: (d, text) => onPick(d, text), onNewTask, onModel, onStartOption } : undefined} />
   )
 }
 
@@ -90,6 +97,60 @@ describe('composer $ destinations', () => {
     expect(screen.queryAllByRole('option').filter((o) => /Task|Folder|Project/.test(o.textContent || ''))).toHaveLength(0)
     fireEvent.keyDown(box, { key: 'Enter' })
     expect(onPick).not.toHaveBeenCalled()
+  })
+
+  it('$ghost makes it a ghost chat, keeping the words', async () => {
+    const onPick = vi.fn()
+    render(<Harness onPick={onPick} />)
+    const box = await type('just between us $gho')
+    expect(screen.getAllByRole('option')[0].textContent).toContain('Ghost chat')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onPick.mock.calls[0][0]).toMatchObject({ kind: 'ghost' })
+    expect(onPick.mock.calls[0][1]).toBe('just between us')
+  })
+
+  it('offers a new folder in the project, and a new project, for a name nothing has, with his capitals', async () => {
+    const onPick = vi.fn()
+    render(<Harness onPick={onPick} projectId="harbor" />)
+    await type('$NYC-trip')
+    const options = screen.getAllByRole('option').map((o) => o.textContent)
+    expect(options[0]).toContain('New folder “NYC trip”')
+    expect(options[0]).toContain('New folder in Work - Acme')
+    expect(options[1]).toContain('New project “NYC trip”')
+    fireEvent.mouseDown(screen.getAllByRole('option')[1])
+    expect(onPick.mock.calls[0][0]).toMatchObject({ kind: 'new-folder', name: 'NYC trip' })
+    expect(onPick.mock.calls[0][0].parent).toBeUndefined()
+  })
+
+  it('$opus picks the model and leaves the words in the box', async () => {
+    const onPick = vi.fn()
+    const onModel = vi.fn()
+    const box = await (async () => { render(<Harness onPick={onPick} onModel={onModel} />); return type('plan the week $opus') })()
+    expect(screen.getAllByRole('option')[0].textContent).toContain('Claude Opus 5.5')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onModel.mock.calls[0][0]).toMatchObject({ kind: 'model', modelId: 'claude-opus-5-5' })
+    expect(onPick).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.queryAllByRole('option')).toHaveLength(0))
+  })
+
+  it('offers no models where the chat view cannot take one', async () => {
+    render(<Harness onPick={vi.fn()} />)
+    await type('$opus')
+    expect(screen.queryAllByRole('option').map((o) => o.textContent).join()).not.toContain('Opus 5.5')
+  })
+
+  it('$pin and $snooze-tom hand the option over', async () => {
+    const onStartOption = vi.fn()
+    render(<Harness onPick={vi.fn()} onStartOption={onStartOption} />)
+    const box = await type('$pin')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onStartOption.mock.calls[0][0]).toMatchObject({ kind: 'pin' })
+    cleanup()
+    render(<Harness onPick={vi.fn()} onStartOption={onStartOption} />)
+    const again = await type('ask about the lease $snooze-tom')
+    expect(screen.getAllByRole('option')[0].textContent).toContain('Snooze · Tomorrow')
+    fireEvent.keyDown(again, { key: 'Enter' })
+    expect(onStartOption.mock.calls[1][0]).toMatchObject({ kind: 'snooze' })
   })
 
   it('offers nothing of the kind in a chat already started', async () => {

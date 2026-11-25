@@ -277,7 +277,7 @@ export default function ModelPickerSheet() {
 
       {lockedTo ? (
         <T size={12.5} lineHeight={18} color={vc.faint} style={st.lock}>
-          {`A temporary chat stays on ${providerById(lockedTo)?.name || lockedTo}. Start a regular chat to use another account.`}
+          {`A ghost chat stays on ${providerById(lockedTo)?.name || lockedTo}. Start a regular chat to use another account.`}
         </T>
       ) : req.started && provider !== req.provider ? (
         <T size={12.5} lineHeight={18} color={vc.faint} style={st.lock}>

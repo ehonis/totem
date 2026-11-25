@@ -654,6 +654,8 @@ button.vc-ref:focus-visible { outline: 2px solid currentColor; outline-offset: 1
   background: none; color: var(--vc-faint); cursor: pointer;
 }
 .vc-newtask button:hover { background: color-mix(in srgb, var(--text) 14%, transparent); color: var(--text); }
+/* `$pin` / `$snooze` picked for a new chat: named above the box until it is sent. */
+.vc-start-opts { padding: 2px 4px 6px; }
 .vc-newtask-help { margin-left: auto; color: var(--vc-faint); }
 @media (pointer: coarse) { .vc-newtask-help { display: none; } }
 .vc-plus-wrap { position: relative; }

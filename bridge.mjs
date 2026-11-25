@@ -85,7 +85,7 @@ import { redactTokens } from './chat/redact.mjs'
 import { createFileAccess, chatFileRedirect, mimeFor as fileMime } from './chat/files.mjs'
 import { fetchFavicon } from './chat/favicon.mjs'
 import { createConnectionIconStore, validConnectionId } from './connections/icons.mjs'
-import { createProjectStore, moveMemoryEntries, validProjectId } from './chat/projects.mjs'
+import { archivedIn, createProjectStore, moveMemoryEntries, validProjectId } from './chat/projects.mjs'
 import { createTaskFolderStore } from './chat/task-folders.mjs'
 import { createSheetMarkStore } from './todos/sheet-marks.mjs'
 import { fileSheetItems as fileSheetFolders, folderAdoption, folderPath, resolveFolder, SHEET_UNFILED } from './todos/folders.mjs'
@@ -4728,7 +4728,7 @@ async function handleAskText(text, channel, options = {}) {
         requestId,
         summarize: false,
       }).catch((e) => log('shortcut answer push failed', e?.message || e))
-      return `I need more info to finish that. I started a temporary web chat for the follow-up:\n${url}`
+      return `I need more info to finish that. I started a ghost chat for the follow-up (gone at midnight):\n${url}`
     } catch (e) {
       log('shortcut clarification thread write failed', e)
       return `I need more info to finish that:\n${question}`
@@ -9107,11 +9107,22 @@ const taskDone = createTaskDone({
     return feed?.configured ? (feed.items || []).map((r) => r.id) : null
   },
 })
-const listThreads = async () => (await taskDone.decorate(await threadStore.list())).map(signThread)
+// Chats in an archived project or folder are put away with it (chat/projects.mjs),
+// so the lists leave them out until it is restored; each one still opens by its id.
+async function archivedProjectIds() {
+  const all = await projectStore.listAll().catch(() => [])
+  return new Set(all.filter((p) => archivedIn(all, p)).map((p) => p.id))
+}
+const inUse = (hidden) => (t) => !t.projectId || !hidden.has(t.projectId)
+const listThreads = async () => {
+  const hidden = await archivedProjectIds()
+  return (await taskDone.decorate((await threadStore.list()).filter(inUse(hidden)))).map(signThread)
+}
 // The list carries a browser handoff still waiting on the owner (browser/handoff.mjs).
 const listThreadSummaries = async () => {
   const open = new Set(browserManager.sessionKeys())
-  return (await taskDone.decorate(await threadStore.summaries())).map((t) => withHandoff(signThread(t), browserHandoffs, open))
+  const hidden = await archivedProjectIds()
+  return (await taskDone.decorate((await threadStore.summaries()).filter(inUse(hidden)))).map((t) => withHandoff(signThread(t), browserHandoffs, open))
 }
 const readThread = async (id) => signThread(await taskDone.one(await threadStore.get(id)))
 const readThreadPage = async (id, opts) => signThread(await taskDone.one(await threadStore.page(id, opts)))
@@ -9918,13 +9929,17 @@ async function startChatTurn(body, { idle = null } = {}) {
   const existing = await threadStore.get(threadId)
   // A new chat may start inside a project; an existing one stays where it is.
   const projectId = existing ? (existing.projectId || null)
-    : (validProjectId(body.projectId) && await projectStore.get(body.projectId) ? body.projectId : null)
+    : (validProjectId(body.projectId) && await projectStore.active(body.projectId) ? body.projectId : null)
   const kind = projectId ? 'regular' : existing?.kind || (body.kind === 'temporary' ? 'temporary' : 'regular')
   // A project chat can leave the project's context out, from its first turn or any later one.
   const contextOff = !!projectId && (existing ? !!existing.projectContextOff : body.projectContextOff === true)
   const shareWithProject = projectId && !contextOff
   // A new chat started from a task (Chats panel → Tasks) is linked to it from its first turn.
   const newTaskId = !existing && validTaskRef(body.taskId) ? body.taskId : null
+  // `$pin` and `$snooze` in a new chat's composer: pinned from the start, or out of the
+  // way until a time (at most a year) even once its first reply lands (`snoozeHeld`).
+  const newPinned = !existing && body.pinned === true
+  const snoozeUntil = !existing && Number.isFinite(body.snoozeUntil) && body.snoozeUntil > Date.now() && body.snoozeUntil < Date.now() + 366 * 86_400_000 ? Math.round(body.snoozeUntil) : 0
   // Older clients still send `mode` ('task' | 'computer') and `browser`: read
   // only as hints (chatReach), never an error.
   const voice = body.voice === true
@@ -10013,8 +10028,9 @@ async function startChatTurn(body, { idle = null } = {}) {
     delete t.needsReply
     delete t.keepUnread
     wakeOnOwnerMessage(t, now)
+    if (snoozeUntil) Object.assign(t, { snoozedUntil: snoozeUntil, snoozedAt: now, snoozeHeld: true })
     t.updatedAt = now
-  }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(newTaskId ? { taskId: newTaskId } : {}), ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
+  }, { create: { id: threadId, kind, provider, modelSettings: body.modelSettings, createdAt: now, updatedAt: now, ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(newTaskId ? { taskId: newTaskId } : {}), ...(newPinned ? { pinned: true } : {}), ...(kind === 'temporary' ? { expiresAt: endOfTodayMs() } : {}) } })
 
   const files = await loadChatFiles(userMessage.attachments)
   // What he attaches in a project chat is shared with the whole project.
@@ -10546,6 +10562,7 @@ async function startChatTurn(body, { idle = null } = {}) {
           assistant.parts = (assistant.parts || []).filter((p) => p.type !== 'text' || p.text)
           for (const p of found) assistant.parts.push({ type: 'totem-proposal', id: randomUUID().slice(0, 12), status: 'pending', totemName: known.get(p.totemId)?.name, ...p })
         }
+        let heldSnooze = false
         await save((t) => {
           if (sessionId && status !== 'error') {
             // Through this reply only: an inbox outcome recorded while it ran (chat/inbox-outcome.mjs)
@@ -10564,8 +10581,12 @@ async function startChatTurn(body, { idle = null } = {}) {
           if (status !== 'stopped' && !t.totemId) t.needsReply = true
           // Marked done (chat/done.mjs) only counts for a reply that finished.
           if (status !== 'done') delete t.doneAt
-          // A reply that lands while the chat is snoozed wakes it early.
-          if (status !== 'stopped' && Number(t.snoozedUntil) > Date.now()) t.snoozedUntil = Date.now()
+          // A reply that lands while the chat is snoozed wakes it early, unless he
+          // snoozed it as he started it (`$snooze`): then it waits for its time.
+          if (status !== 'stopped' && Number(t.snoozedUntil) > Date.now()) {
+            if (t.snoozeHeld) heldSnooze = true
+            else t.snoozedUntil = Date.now()
+          }
         })
         // Only now: until this save, an inbox card decided meanwhile must reach this
         // reply's own copy (inboxCard), or the save would write it back as pending.
@@ -10582,7 +10603,8 @@ async function startChatTurn(body, { idle = null } = {}) {
         recordUse('web', { text, startedAt: t0, ok: status !== 'error', provider })
         // Nobody looking at this chat (phone locked, app in the background, another
         // chat open): tell the phone it's done. Skipped only while someone is on it.
-        if (status !== 'stopped' && !someoneViewing(threadId)) {
+        // Snoozed by him from the start: nothing to push now; the chat comes back at its time.
+        if (status !== 'stopped' && !heldSnooze && !someoneViewing(threadId)) {
           const latest = await threadStore.get(threadId).catch(() => null)
           notifier.deliver({
             title: status === 'error' ? `Totem couldn't finish: ${latest?.title || 'your chat'}` : (latest?.title || 'Totem answered'),
@@ -11414,7 +11436,7 @@ async function handleTaskFoldersApi(req, res, path) {
   try { task = decodeURIComponent(path.slice('/api/chat/task-folders/'.length)) } catch { return send(res, 400, { error: 'bad task id' }) }
   const body = await readJsonBody(req)
   const projectId = body.projectId == null || body.projectId === '' ? null : body.projectId
-  if (projectId && !(validProjectId(projectId) && await projectStore.get(projectId))) return send(res, 404, { error: 'project not found' })
+  if (projectId && !(validProjectId(projectId) && await projectStore.active(projectId))) return send(res, 404, { error: 'project not found' })
   // A local task carries its folder. A dashboard still open from before this
   // change (it reloads itself within minutes) files tasks here: put it on the task.
   if (!task.startsWith('sheet:') && todoService.get(task)) {
@@ -11439,7 +11461,7 @@ async function handleChatProjectsApi(req, res, path) {
       if (!String(body.name || '').trim()) return send(res, 400, { error: 'a project needs a name' })
       // A folder goes one level deep: its parent must be a top-level project.
       if (body.parentId != null) {
-        const parent = validProjectId(body.parentId) ? await projectStore.get(body.parentId) : null
+        const parent = validProjectId(body.parentId) ? await projectStore.active(body.parentId) : null
         if (!parent) return send(res, 404, { error: 'parent project not found' })
         if (parent.parentId) return send(res, 400, { error: 'a folder cannot hold folders' })
       }
@@ -11449,9 +11471,37 @@ async function handleChatProjectsApi(req, res, path) {
       return send(res, 201, { project: { ...projectSummary(project, []), files: [], memory: '' } })
     }
   }
-  const m = /^\/api\/chat\/projects\/([A-Za-z0-9_-]{1,64})(\/files\/move|\/files(?:\/([A-Za-z0-9_-]{8,64}))?|\/memory(?:\/move)?|\/favicon)?$/.exec(path)
+  // Settings → Archive: what is put away, each archived project with its folders
+  // and each archived folder whose project is still in use.
+  if (path === '/api/chat/projects/archived') {
+    if (req.method !== 'GET') return send(res, 405, { error: 'method not allowed' })
+    const all = await projectStore.listAll()
+    const threads = await threadStore.list()
+    const entry = (p) => {
+      const folders = p.parentId ? [] : all.filter((f) => f.parentId === p.id)
+      const ids = new Set([p.id, ...folders.map((f) => f.id)])
+      return {
+        ...projectSummary(p, threads),
+        chatCount: threads.filter((t) => ids.has(t.projectId)).length,
+        ...(p.parentId ? { parentName: all.find((x) => x.id === p.parentId)?.name || null } : {}),
+        folders: folders.map((f) => ({ id: f.id, name: f.name, icon: f.icon, archivedAt: f.archivedAt, chatCount: threads.filter((t) => t.projectId === f.id).length })),
+      }
+    }
+    const items = all.filter((p) => p.archivedAt && !(p.parentId && all.find((x) => x.id === p.parentId)?.archivedAt))
+    return send(res, 200, { projects: items.sort((a, b) => b.archivedAt - a.archivedAt).map(entry) })
+  }
+  const m = /^\/api\/chat\/projects\/([A-Za-z0-9_-]{1,64})(\/files\/move|\/files(?:\/([A-Za-z0-9_-]{8,64}))?|\/memory(?:\/move)?|\/favicon|\/archive|\/restore)?$/.exec(path)
   if (!m) return false
   const [, id, sub, fileId] = m
+  // Put away whole (chat/projects.mjs): its files, memory and chats stay as they are.
+  if ((sub === '/archive' || sub === '/restore') && req.method === 'POST') {
+    try {
+      const project = sub === '/archive' ? await projectStore.archive(id) : await projectStore.restore(id)
+      return send(res, 200, { project: projectSummary(project, await threadStore.list()) })
+    } catch (e) { return send(res, e.status || 500, { error: e.message }) }
+  }
+  // An archived one is read and changed only by restoring it.
+  if (!(await projectStore.active(id))) return send(res, 404, { error: 'project not found' })
   const full = async () => {
     const project = await projectStore.get(id)
     if (!project) return null
@@ -11472,30 +11522,6 @@ async function handleChatProjectsApi(req, res, path) {
       await projectStore.patch(id, rest)
       if ('image' in body) await setProjectImage(id, image || null)
       return send(res, 200, { project: await full() })
-    }
-    if (req.method === 'DELETE') {
-      // Its chats move rather than vanishing with it: a folder's up to its
-      // project, a project's (and its folders') to Home. Its files go, except
-      // ones a chat message still shows.
-      const project = await projectStore.remove(id)
-      if (!project) return send(res, 404, { error: 'project not found' })
-      const folders = project.parentId ? [] : (await projectStore.list()).filter((p) => p.parentId === id)
-      for (const f of folders) await projectStore.remove(f.id)
-      const gone = new Set([id, ...folders.map((f) => f.id)])
-      let moved = 0
-      for (const t of await threadStore.list()) {
-        if (!gone.has(t.projectId)) continue
-        await threadStore.update(t.id, (x) => { if (project.parentId) x.projectId = project.parentId; else delete x.projectId })
-        moved++
-      }
-      // Tasks filed there move the same way.
-      for (const g of gone) {
-        await taskFolders.reassign(g, project.parentId || null)
-        // The project is already gone; a task left naming it reads as Personal, so a failure here is only logged.
-        try { todoService.refileFolder(g, project.parentId || null, { actor: 'http', reason: 'chat project removed' }) } catch (e) { log(`task folders: could not move tasks out of a removed project (${e.message})`) }
-      }
-      await dropUnusedUploads([project, ...folders].flatMap((p) => [...p.files.map((f) => f.id), ...(p.image ? [p.image] : [])]))
-      return send(res, 200, { ok: true, movedChats: moved, removedFolders: folders.length })
     }
   }
   // A folder's entries or files, moved up into its parent project.
@@ -16720,7 +16746,7 @@ const server = http.createServer(async (req, res) => {
           const thread = await writeThread(id, body)
           if (body.needsReply === false) dismissChatPush(id)
           // A chat moved into a project brings its files with it.
-          if (thread.projectId && !thread.projectContextOff && before && before.projectId !== thread.projectId && await projectStore.get(thread.projectId)) {
+          if (thread.projectId && !thread.projectContextOff && before && before.projectId !== thread.projectId && await projectStore.active(thread.projectId)) {
             const files = []
             for (const m of thread.messages) {
               for (const a of m.attachments || []) files.push({ ...a, source: 'chat', threadId: id })

@@ -136,7 +136,7 @@ export default function ChatHeader(p: ChatHeaderProps) {
   rows.push(...p.panels)
   if (usage) rows.push({ id: 'usage', icon: IconChartBar, label: 'AI usage', detail: usage.text, tone: usage.tone as HeaderItem['tone'], title: usage.label, into: 'usage', open: p.onManageUsage || openUsageSettings })
   if (p.onKeep) rows.push({ id: 'keep', icon: IconPinned, label: 'Keep this chat', title: 'Keep this chat after midnight', into: 'menu', open: p.onKeep })
-  if (p.temporary) rows.push({ id: 'temporary', icon: IconGhost2, label: 'Temporary chat', detail: p.temporary.on ? 'On' : 'Off', tone: p.temporary.on ? 'on' : '', title: p.temporary.on ? 'Turn off temporary chat' : 'Temporary chat — not kept past midnight', into: 'menu', open: p.temporary.onToggle })
+  if (p.temporary) rows.push({ id: 'temporary', icon: IconGhost2, label: 'Ghost chat', detail: p.temporary.on ? 'On' : 'Off', tone: p.temporary.on ? 'on' : '', title: p.temporary.on ? 'Turn off ghost chat' : 'Ghost chat — not kept past midnight', into: 'menu', open: p.temporary.onToggle })
 
   return (
     <header className="vc-top" ref={ref}>
@@ -235,7 +235,7 @@ export default function ChatHeader(p: ChatHeaderProps) {
             className={`vc-icon-btn ${p.temporary.on ? 'on' : ''}`}
             onClick={p.temporary.onToggle}
             aria-pressed={p.temporary.on}
-            title={p.temporary.on ? 'Turn off temporary chat' : 'Temporary chat — not kept past midnight'}
+            title={p.temporary.on ? 'Turn off ghost chat' : 'Ghost chat — not kept past midnight'}
             data-fold-into="menu"
           >
             <TI icon={IconGhost2} size={19} />
