@@ -6,7 +6,7 @@
  * list renders things it wants out of the way — and it must say what happened in
  * words, because the strikethrough that used to say it is gone on purpose.
  *
- * The colours and the glow live in styles.css and are not asserted here; the class
+ * The colours and the glow live in goals.css and are not asserted here; the class
  * and the chip are the contract that stylesheet hangs off.
  */
 import React from 'react'

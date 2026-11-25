@@ -34,6 +34,7 @@ import type { MenuItem } from '../journal/EntryMenu'
 import JournalSettingsModal from '../journal/JournalSettings'
 import type { JournalEngine, JournalEntry, JournalSettings } from '../journal/types'
 import { useLandOn } from '../landing'
+import '../journal/journal.css'
 
 interface Props { onAuthError: () => void }
 
@@ -149,19 +150,10 @@ export default function JournalView({ onAuthError }: Props) {
   const waiting = entries.filter((e) => cardState(e, now) === 'waiting').length
 
   return (
-    <div className="view journal">
-      <div className="view-head">
-        <h1>Journal {entries.length ? <span className="muted">· {entries.length}</span> : null}</h1>
-        <div className="view-head-actions">
-          {engine && <EnginePill engine={engine} />}
-          <button className="btn compact" onClick={() => void load()} title="Refresh" aria-label="Refresh"><Hi icon={ArrowPathIcon} size={15} /></button>
-          <button
-            className={`btn compact${showSettings ? ' on' : ''}`}
-            onClick={() => setShowSettings((v) => !v)}
-            title="Journal settings" aria-label="Journal settings" aria-expanded={showSettings}
-          ><Hi icon={Cog6ToothIcon} size={15} /></button>
-        </div>
-      </div>
+    <div className="view jn-view">
+      <div className="pk-page jn">
+      {/* The tab names the page, so it opens on the red button, as the app does. */}
+      <h1 className="sr-only">Journal</h1>
 
       {showSettings && settings && (
         <JournalSettingsModal
@@ -192,24 +184,41 @@ export default function JournalView({ onAuthError }: Props) {
         delayMinutes={settings?.ingestDelayMinutes ?? 10}
       />
 
+      {/* One quiet line under the recorder: the engine, the count, refresh and settings (the app's). */}
+      <div className="jn-status">
+        {engine && <EnginePill engine={engine} />}
+        {entries.length > 0 && <span className="jn-count">{entries.length} {entries.length === 1 ? 'entry' : 'entries'}</span>}
+        <span className="jn-status-gap" />
+        <button type="button" className="pk-icon-btn pk-ghost" onClick={() => void load()} title="Refresh" aria-label="Refresh"><Hi icon={ArrowPathIcon} size={18} /></button>
+        <button
+          type="button"
+          className={`pk-icon-btn pk-ghost${showSettings ? ' on' : ''}`}
+          onClick={() => setShowSettings((v) => !v)}
+          title="Journal settings" aria-label="Journal settings" aria-expanded={showSettings}
+        ><Hi icon={Cog6ToothIcon} size={18} /></button>
+      </div>
+
       {waiting > 0 && (
-        <p className="journal-lede muted">
-          <Hi icon={ClockIcon} size={13} />
+        <p className="journal-lede">
+          <Hi icon={ClockIcon} size={14} />
           <span>{waiting === 1 ? 'One entry is' : `${waiting} entries are`} waiting to be digested. Tap <b>Don’t ingest</b> on a card to keep it out of the brain.</span>
         </p>
       )}
 
       {loading ? (
-        <p className="empty">Loading…</p>
+        <p className="pk-empty">Loading entries…</p>
       ) : entries.length === 0 ? (
-        <div className="empty journal-empty">
-          <Hi icon={MicrophoneIcon} size={26} />
-          <p>No entries yet. Hit the red button and talk about your day — yesterday counts.</p>
+        <div className="pk-empty jn-empty">
+          <Hi icon={MicrophoneIcon} size={28} />
+          <p>No entries yet. Hit the red button and talk about your day. Yesterday counts.</p>
         </div>
       ) : (
         groups.map((g) => (
-          <section key={g.date} className="journal-day">
-            <h4 className="journal-day-label">{g.label} <span className="muted">· {g.date}</span></h4>
+          <section key={g.date} className="journal-day" aria-labelledby={`jn-day-${g.date}`}>
+            <h2 className="jn-day-label" id={`jn-day-${g.date}`}>
+              {g.label}
+              {(g.label === 'Today' || g.label === 'Yesterday') && <span className="jn-day-sub">{relativeDaySub(g.date)}</span>}
+            </h2>
             <div className="journal-list">
               {g.entries.map((e) => (
                 <EntryCard
@@ -234,18 +243,25 @@ export default function JournalView({ onAuthError }: Props) {
           </section>
         ))
       )}
+      </div>
     </div>
   )
+}
+
+/** Under "Today" or "Yesterday": which day that is. Other days already name it (the app's). */
+function relativeDaySub(isoDate: string) {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })
 }
 
 // ---- header chrome -------------------------------------------------------------
 
 function EnginePill({ engine }: { engine: JournalEngine }) {
   if (engine.ready) {
-    return <span className="pill pill-ok" title={`whisper.cpp ${engine.model}, ${engine.threads} threads, on this box`}>whisper {engine.model}</span>
+    return <span className="jn-pill ok" title={`whisper.cpp ${engine.model}, ${engine.threads} threads, on this box`}>whisper {engine.model}</span>
   }
   return (
-    <span className="pill pill-error" title={`${engine.missing.join(', ')} — ${engine.fix || ''}`}>
+    <span className="jn-pill err" title={`${engine.missing.join(', ')} — ${engine.fix || ''}`}>
       <Hi icon={ExclamationTriangleIcon} size={12} /> transcription not installed
     </span>
   )
@@ -331,8 +347,8 @@ function RecorderPanel({ recorder, saving, engineReady, onSave, typing, onToggle
             {live && (
               <div className="rec-controls">
                 {state === 'recording'
-                  ? <button className="btn compact" onClick={recorder.pause}><Hi icon={PauseIcon} size={14} /> Pause</button>
-                  : <button className="btn compact" onClick={recorder.resume}><Hi icon={PlayIcon} size={14} /> Resume</button>}
+                  ? <button type="button" className="pk-btn rec-wide" onClick={recorder.pause}><Hi icon={PauseIcon} size={16} /> Pause</button>
+                  : <button type="button" className="pk-btn rec-wide" onClick={recorder.resume}><Hi icon={PlayIcon} size={16} /> Resume</button>}
               </div>
             )}
           </div>
@@ -351,8 +367,8 @@ function RecorderPanel({ recorder, saving, engineReady, onSave, typing, onToggle
           </div>
           {previewUrl && <audio className="rec-preview" controls preload="metadata" src={previewUrl} />}
           <div className="rec-review-actions">
-            <button className="btn danger compact" onClick={recorder.reset} disabled={saving}><Hi icon={TrashIcon} size={14} /> Discard</button>
-            <button className="btn primary" onClick={onSave} disabled={saving}>
+            <button type="button" className="pk-btn pk-danger" onClick={recorder.reset} disabled={saving}><Hi icon={TrashIcon} size={16} /> Discard</button>
+            <button type="button" className="pk-btn pk-primary rec-save" onClick={onSave} disabled={saving}>
               {saving ? <><Hi icon={ArrowPathIcon} size={14} className="spin" /> Saving…</> : <><Hi icon={CheckCircleIcon} size={16} /> Save</>}
             </button>
           </div>
@@ -371,15 +387,15 @@ function RecorderPanel({ recorder, saving, engineReady, onSave, typing, onToggle
                 disabled={saving}
               />
               <div className="rec-type-actions">
-                <button type="button" className="btn compact" onClick={onToggleTyping} disabled={saving}>Cancel</button>
-                <button type="submit" className="btn compact primary" disabled={saving || !text.trim()}>
+                <button type="button" className="pk-btn" onClick={onToggleTyping} disabled={saving}>Cancel</button>
+                <button type="submit" className="pk-btn pk-primary" disabled={saving || !text.trim()}>
                   {saving ? 'Saving…' : 'Save entry'}
                 </button>
               </div>
             </form>
           ) : (
-            <button type="button" className="link-btn inline rec-type-toggle" onClick={onToggleTyping}>
-              <Hi icon={PencilIcon} size={12} /> Type an entry instead
+            <button type="button" className="rec-type-toggle" onClick={onToggleTyping}>
+              <Hi icon={PencilIcon} size={14} /> Type an entry instead
             </button>
           )}
         </div>
@@ -505,8 +521,8 @@ function EntryCard({ entry, now, busy, onSkip, onIngest, onRetry, onRename, onEd
           {renaming ? (
             <form className="journal-rename" onSubmit={(e) => { e.preventDefault(); onRename(titleDraft); setRenaming(false) }}>
               <input autoFocus value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)} placeholder="Title" maxLength={120} />
-              <button type="submit" className="btn compact primary">Save</button>
-              <button type="button" className="btn compact" onClick={() => { setRenaming(false); setTitleDraft(entry.title || '') }}>Cancel</button>
+              <button type="submit" className="pk-btn pk-compact pk-primary">Save</button>
+              <button type="button" className="pk-btn pk-compact" onClick={() => { setRenaming(false); setTitleDraft(entry.title || '') }}>Cancel</button>
             </form>
           ) : (
             <h3 className="journal-title">
@@ -551,7 +567,7 @@ function EntryCard({ entry, now, busy, onSkip, onIngest, onRetry, onRename, onEd
               in the menu — a permanent Delete next to a permanent Again was the
               action wanted least often sitting where it is easiest to hit. */}
           {(state === 'waiting' || state === 'due') && (
-            <button className="btn compact danger journal-skip" disabled={busy || state === 'due'} onClick={onSkip} title="Keep this entry out of the brain">
+            <button type="button" className="pk-btn pk-danger journal-skip" disabled={busy || state === 'due'} onClick={onSkip} title="Keep this entry out of the brain">
               <Hi icon={NoSymbolIcon} size={14} /> Don’t ingest
             </button>
           )}
@@ -566,8 +582,8 @@ function EntryCard({ entry, now, busy, onSkip, onIngest, onRetry, onRename, onEd
             <form onSubmit={(e) => { e.preventDefault(); onEditTranscript(textDraft); setEditing(false) }}>
               <textarea value={textDraft} onChange={(e) => setTextDraft(e.target.value)} rows={Math.min(18, Math.max(6, Math.ceil(textDraft.length / 90)))} />
               <div className="journal-transcript-actions">
-                <button type="button" className="btn compact" onClick={() => { setEditing(false); setTextDraft(entry.transcript?.text || '') }}>Cancel</button>
-                <button type="submit" className="btn compact primary" disabled={!textDraft.trim()}>Save transcript</button>
+                <button type="button" className="pk-btn pk-compact" onClick={() => { setEditing(false); setTextDraft(entry.transcript?.text || '') }}>Cancel</button>
+                <button type="submit" className="pk-btn pk-compact pk-primary" disabled={!textDraft.trim()}>Save transcript</button>
               </div>
             </form>
           ) : (
@@ -625,7 +641,7 @@ function AudioPlayback({ entry }: { entry: JournalEntry }) {
   return (
     <div className="journal-audio">
       <button
-        type="button" className="btn compact" disabled={loading}
+        type="button" className="pk-btn pk-compact" disabled={loading}
         onClick={() => {
           setLoading(true); setError('')
           journalAudioUrl(entry.id)

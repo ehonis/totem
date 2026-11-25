@@ -33,7 +33,9 @@ import {
 import { NAV_ICONS } from '../../lib/navIcons'
 import { clock, dueDiff, dueLabel, periodTotal, startOfDay, until } from '../../lib/components/overview/time'
 import { ov, TI, Section, Quiet, Failed, Loading, Bar, Subhead, More } from './parts'
-import { HabitRow } from './HabitRow'
+import { GroupRow, HabitRow } from './HabitRow'
+import { foldGroups, groupProgress, groupToggle, groupWords, habitTree, rowDone as habitRowDone } from '../../lib/habits/groups'
+import { UndoLine, type UndoState } from '../todos/detail/bits'
 import { HabitMetricSection } from './MetricTile'
 import { openHabitDay, type DaySave } from './HabitDaySheet'
 import { goalsContext, habitMetricContext, habitsContext, scheduleContext, systemContext, tasksContext } from '../../lib/chat/about/context'
@@ -254,15 +256,18 @@ export default function OverviewScreen() {
     }
   }, [])
 
-  const habitWrite = useCallback(async (habitId: string, fields: any) => {
-    if (habitBusy.has(habitId)) return
+  /** Log one habit-day; says whether it went through. */
+  const habitWrite = useCallback(async (habitId: string, fields: any): Promise<boolean> => {
+    if (habitBusy.has(habitId)) return false
     setHabitBusy((s) => new Set(s).add(habitId))
     try {
       const payload = await logHabit({ id: habitId, ...fields })
       setData((d: any) => ({ ...d, habits: payload }))
+      return true
     } catch (e: any) {
       if (e instanceof AuthError) onAuthError()
       else pushError(e?.message || 'Could not log that habit')
+      return false
     } finally {
       setHabitBusy((s) => { const n = new Set(s); n.delete(habitId); return n })
     }
@@ -278,6 +283,23 @@ export default function OverviewScreen() {
   const logValue = useCallback((h: any, value: number | null) => {
     if (habitDay && !h.linkedApp) habitWrite(h.id, { date: habitDay, value, complete: value !== null })
   }, [habitDay, habitWrite])
+  // A group's check marks its hand-logged sub-habits done, or clears them once all
+  // are; the line under the group puts the day back exactly.
+  const [groupUndo, setGroupUndo] = useState<(UndoState & { groupId: string }) | null>(null)
+  const dropGroupUndo = useCallback(() => setGroupUndo(null), [])
+  const logGroup = useCallback(async (group: any) => {
+    if (!habitDay || !data.habits || habitBusy.has(group.id)) return
+    const t = groupToggle(data.habits.habits || [], group.id, data.habits.entries || {}, habitDay)
+    if (!t.changes) { tap(); return }
+    if (t.complete) success(); else tap()
+    if (!(await habitWrite(group.id, { date: habitDay, complete: t.complete }))) return
+    setGroupUndo({
+      id: Date.now(),
+      groupId: group.id,
+      text: groupWords(group.name, t, 0, 0).result,
+      action: { label: 'Undo', run: () => { void habitWrite(group.id, t.undo) } },
+    })
+  }, [habitDay, data.habits, habitBusy, habitWrite])
   const openNote = useCallback((habit: any) => {
     if (!habitDay || habit.linkedApp) return
     openHabitDay({
@@ -337,10 +359,17 @@ export default function OverviewScreen() {
   const taskShown = (focus.length ? focus : upNext).slice(0, 6)
 
   // ---- habits ----------------------------------------------------------
-  const entries = data.habits?.entries || {}
-  const habits: any[] = (data.habits?.habits || []).filter((h: any) => !h.archived && !isSyncedSleep(h))
-  const habitsLeft = habits.filter((h) => periodTotal(h, entries, habitDay) < h.target && !(entries[habitDay]?.[h.id]?.count > 0))
-  const habitsDoneToday = habits.length - habitsLeft.length
+  const rawEntries = data.habits?.entries || {}
+  const rawHabits: any[] = data.habits?.habits || []
+  // Groups read as daily habits counting their sub-habits (lib/habits/groups.ts).
+  const folded = foldGroups(rawHabits, rawEntries, data.habits?.today)
+  const entries = folded.entries
+  const habits: any[] = folded.habits.filter((h: any) => !h.archived && !isSyncedSleep(h))
+  // One row per top-level habit, a group's sub-habits under it; the counts are of rows.
+  const habitRows = habitTree(folded.habits).filter((r) => !isSyncedSleep(r.habit))
+  // Done as the Habits page counts it (lib/habits/groups.ts rowDone), so the counts agree.
+  const habitsLeft = habitRows.filter((r) => !habitRowDone(rawHabits, r, rawEntries, habitDay))
+  const habitsDoneToday = habitRows.length - habitsLeft.length
   const pinned = habits.filter((h) => h.metric?.pinned)
 
   // ---- goals -----------------------------------------------------------
@@ -388,7 +417,7 @@ export default function OverviewScreen() {
   if (awayNow) summary.push(`away: ${awayNow.label}`)
   if (data.cal) summary.push(remaining.length ? `${remaining.length} ${remaining.length === 1 ? 'event' : 'events'} left today` : 'No more events today')
   if (data.todos) summary.push(focus.length ? `${focus.length} ${focus.length === 1 ? 'task' : 'tasks'} due` : 'nothing due')
-  if (data.habits && habits.length) summary.push(habitsLeft.length ? `${habitsLeft.length} ${habitsLeft.length === 1 ? 'habit' : 'habits'} to go` : 'habits done')
+  if (data.habits && habitRows.length) summary.push(habitsLeft.length ? `${habitsLeft.length} ${habitsLeft.length === 1 ? 'habit' : 'habits'} to go` : 'habits done')
 
   const B = ({ children }: { children: React.ReactNode }) => <T size={14} weight={600} color={colors.text}>{children}</T>
   const attention: { key: string; icon: Tabler; text: React.ReactNode; tone: 'warn' | 'info'; to: NavTarget }[] = []
@@ -632,7 +661,7 @@ export default function OverviewScreen() {
 
         <Section
           title="Habits"
-          meta={data.habits && habits.length ? `${habitsDoneToday} of ${habits.length} done` : null}
+          meta={data.habits && habitRows.length ? `${habitsDoneToday} of ${habitRows.length} done` : null}
           onOpen={openHabits}
           about={() => habits.length ? habitsContext(habits, entries, habitDay, (h) => periodTotal(h, entries, habitDay)) : null}
         >
@@ -641,21 +670,37 @@ export default function OverviewScreen() {
             : !habits.length ? <Quiet>No habits yet. Add one in Habits, or ask Totem.</Quiet>
             : (
               <View>
-                {habits.slice(0, 8).map((h, i) => (
-                  <HabitRow
-                    key={h.id}
-                    first={i === 0}
-                    habit={h}
-                    entry={entries[habitDay]?.[h.id]}
-                    count={entries[habitDay]?.[h.id]?.count || 0}
-                    periodCount={periodTotal(h, entries, habitDay)}
-                    busy={habitBusy.has(h.id)}
-                    onLog={logDelta}
-                    onValue={logValue}
-                    onNote={openNote}
-                  />
-                ))}
-                {habits.length > 8 && <More label={`${habits.length - 8} more`} onPress={openHabits} />}
+                {habitRows.slice(0, 8).map(({ habit: h, children }, i) => {
+                  const row = (x: any, first: boolean, nested = false) => (
+                    <HabitRow
+                      key={x.id}
+                      first={first}
+                      nested={nested}
+                      habit={x}
+                      entry={entries[habitDay]?.[x.id]}
+                      count={entries[habitDay]?.[x.id]?.count || 0}
+                      periodCount={periodTotal(x, entries, habitDay)}
+                      busy={habitBusy.has(x.id)}
+                      onLog={logDelta}
+                      onValue={logValue}
+                      onNote={openNote}
+                    />
+                  )
+                  if (!children.length) return row(h, i === 0)
+                  const { done, total } = groupProgress(rawHabits, h.id, rawEntries, habitDay)
+                  // Nothing for the check to write (all filled by apps, or nothing to clear): it rests.
+                  const gt = groupToggle(rawHabits, h.id, rawEntries, habitDay)
+                  return (
+                    <React.Fragment key={h.id}>
+                      <GroupRow habit={h} first={i === 0} done={done} total={total} action={groupWords(h.name, gt, done, total).action} busy={habitBusy.has(h.id) || !gt.changes} onLog={() => { void logGroup(h) }} />
+                      {children.map((c, j) => row(c, j === 0, true))}
+                      {groupUndo?.groupId === h.id && (
+                        <View style={{ marginTop: 6 }}><UndoLine undo={groupUndo} onDone={dropGroupUndo} /></View>
+                      )}
+                    </React.Fragment>
+                  )
+                })}
+                {habitRows.length > 8 && <More label={`${habitRows.length - 8} more`} onPress={openHabits} />}
               </View>
             )}
         </Section>

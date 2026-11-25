@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { getAway, getCalendarRange, updateCalendarEvent, AuthError } from '../api'
 import { awayDaysIn, awayOn, dayKey, type AwaySpan } from '../away'
-import { Hi, XMarkIcon, WarnIcon } from '../icons'
+import { ArrowPathIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, Hi, XMarkIcon, WarnIcon } from '../icons'
 import { useErrorToast } from '../toast'
+import Menu from '../todos/Menu'
+import { agendaDays, compactTitle, rangeTitle, VIEW_IDS, type AgendaEvent, type CalViewId } from '../calendar/agenda'
+import '../calendar/calendar.css'
 
 // Loosely-shaped bridge JSON.
 type CalEvent = any
@@ -36,7 +39,7 @@ const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.g
 const isToday = (d: Date) => sameDay(d, new Date())
 const minsOfDay = (d: Date) => d.getHours() * 60 + d.getMinutes()
 
-const VIEWS = [
+const VIEWS: { id: CalViewId; label: string }[] = [
   { id: 'day', label: 'Day' },
   { id: 'workweek', label: 'Work Week' },
   { id: 'week', label: 'Week' },
@@ -81,23 +84,6 @@ function fetchRange(view: string, anchor: Date): [Date, Date] {
   // year
   const s = new Date(anchor.getFullYear(), 0, 1)
   return [s, new Date(anchor.getFullYear() + 1, 0, 1)]
-}
-
-// Title shown in the toolbar for the current view + anchor.
-function rangeTitle(view: string, anchor: Date) {
-  if (view === 'day') return anchor.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
-  if (view === 'year') return String(anchor.getFullYear())
-  if (view === 'month') return anchor.toLocaleDateString([], { month: 'long', year: 'numeric' })
-  // week / workweek / agenda
-  const s = view === 'agenda' ? startOfDay(anchor)
-    : view === 'workweek' ? addDays(startOfWeek(anchor), WEEK_START === 0 ? 1 : 0)
-    : startOfWeek(anchor)
-  const e = view === 'workweek' ? addDays(s, 4) : addDays(s, view === 'agenda' ? 13 : 6)
-  const sameMonth = s.getMonth() === e.getMonth()
-  const sameYear = s.getFullYear() === e.getFullYear()
-  const sFmt = s.toLocaleDateString([], { month: 'short', day: 'numeric', year: sameYear ? undefined : 'numeric' })
-  const eFmt = e.toLocaleDateString([], { month: sameMonth ? undefined : 'short', day: 'numeric', year: 'numeric' })
-  return `${sFmt} – ${eFmt}`
 }
 
 // Greedy column packing for overlapping timed events within one day.
@@ -213,7 +199,7 @@ function TimeGrid({ days, away, events, onPickDay, onSelectEvent }: TimeGridProp
                 {packed.map(({ ev, s, e, col, cols }) => (
                   <button
                     key={ev.id}
-                    className={`tg-event acct-${(ev.accountIndex ?? 0) % 4}`}
+                    className={`tg-event acct-${(ev.accountIndex ?? 0) % 4}${e - s < 45 ? ' short' : ''}`}
                     onClick={() => onSelectEvent(ev)}
                     style={{
                       top: (s / 60) * HOUR_PX,
@@ -350,56 +336,95 @@ function YearGrid({ anchor, events, onPickDay, onPickMonth }: YearGridProps) {
 }
 
 // ---------- agenda (list) ----------
-function dayHeading(d: Date) {
-  const today = new Date()
-  if (sameDay(d, today)) return 'Today'
-  if (sameDay(d, addDays(today, 1))) return 'Tomorrow'
-  return d.toLocaleDateString([], { weekday: 'long' })
+// The app's agenda (mobile/src/features/calendar/Agenda.tsx): a heading per day (Today,
+// Tomorrow, then weekdays) over one card of rows, the time on the left and a bar in the
+// event's account colour. Today and tomorrow always show, empty ones as a dashed
+// "Nothing scheduled"; today's finished events dim and a red line marks now.
+
+/** The time, moved on at each minute, so "Now" and the dimming keep up. */
+function useMinute() {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    let t: number
+    const tick = () => { setNow(new Date()); t = window.setTimeout(tick, 60_000 - (Date.now() % 60_000)) }
+    t = window.setTimeout(tick, 60_000 - (Date.now() % 60_000))
+    const back = () => { if (!document.hidden) setNow(new Date()) }
+    document.addEventListener('visibilitychange', back)
+    return () => { window.clearTimeout(t); document.removeEventListener('visibilitychange', back) }
+  }, [])
+  return now
 }
 
 interface AgendaProps {
-  anchor: Date
   range: [Date, Date]
   away: AwaySpan[]
   events: CalEvent[]
   onSelectEvent: (ev: CalEvent) => void
+  onMore: () => void
 }
 
-function Agenda({ anchor, range, away, events, onSelectEvent }: AgendaProps) {
-  const days: Record<string, CalEvent[]> = {}
-  for (const ev of events) (days[parseDate(ev.start).toDateString()] ||= []).push(ev)
-  // A trip day with nothing on it still gets its heading: being away is the news.
-  for (const d of awayDaysIn(away, range[0], range[1])) days[d.toDateString()] ||= []
-  const keys = Object.keys(days).sort((a, b) => +new Date(a) - +new Date(b))
-  if (!keys.length) return <div className="empty">No events in this range.</div>
+function Agenda({ range, away, events, onSelectEvent, onMore }: AgendaProps) {
+  const now = useMinute()
+  const days = useMemo(() => agendaDays(events, away, range, now), [events, away, range, now])
   return (
     <div className="cal-agenda">
-      {keys.map((k) => {
-        const awaySpan = awayOn(away, dayKey(new Date(k)))
-        return (
-    <div className="cal-day" key={k}>
-      <div className="cal-day-h">
-        {dayHeading(new Date(k))}
-        <span className="date">{new Date(k).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
-        {awaySpan && <span className="away-tag">Away · {awaySpan.label}</span>}
-      </div>
-      {days[k].length > 0 && <div className="card">
-        {days[k].map((ev) => (
-          <button className="event" key={ev.id} onClick={() => onSelectEvent(ev)}>
-            <span className={`bar acct-${(ev.accountIndex ?? 0) % 4}`} />
-            <span className="time">{eventTimeLabel(ev)}</span>
-            <div>
-              <div>{ev.title}</div>
-              {ev.location && <div className="loc">{ev.location}</div>}
+      {!days.length ? (
+        <p className="pk-empty">Nothing scheduled in these two weeks.</p>
+      ) : days.map((day) => (
+        <section className="ag-day" key={day.key} aria-labelledby={`ag-${day.key}`}>
+          <h2 className="ag-day-h" id={`ag-${day.key}`}>
+            <span className={day.today ? 'ag-today' : undefined}>{day.heading}</span>
+            <span className="ag-date">{day.date.toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
+            {day.away && <span className="ag-away">Away · {day.away.label}</span>}
+          </h2>
+          {day.events.length ? (
+            <div className="ag-card">
+              {day.events.map((item, i) => (
+                <React.Fragment key={item.ev.id}>
+                  {day.nowAt === i && <NowLine now={now} />}
+                  <AgendaRow item={item} onClick={() => onSelectEvent(item.ev)} />
+                </React.Fragment>
+              ))}
+              {day.nowAt === day.events.length && <NowLine now={now} />}
             </div>
-          </button>
-        ))}
-      </div>}
-    </div>
-        )
-      })}
+          ) : !day.away ? (
+            <p className="ag-free">Nothing scheduled</p>
+          ) : null}
+        </section>
+      ))}
+      <button type="button" className="pk-btn ag-more" onClick={onMore}><Hi icon={ChevronRightIcon} size={16} />Next two weeks</button>
     </div>
   )
+}
+
+function AgendaRow({ item, onClick }: { item: AgendaEvent; onClick: () => void }) {
+  const { ev, past, ongoing } = item
+  const start = ev.allDay ? null : parseDate(ev.start)
+  const end = ev.allDay || !ev.end ? null : parseDate(ev.end)
+  const time = start ? fmtTime(start) : 'All day'
+  return (
+    <button
+      type="button"
+      className={`ag-row${past ? ' past' : ''}`}
+      onClick={onClick}
+      aria-label={`${ev.title}, ${start ? `${time}${end ? ` to ${fmtTime(end)}` : ''}` : 'all day'}${ev.location ? `, ${ev.location}` : ''}${ongoing && !ev.allDay ? ', happening now' : ''}`}
+    >
+      <span className="ag-time">
+        <span>{time}</span>
+        {end && <span className="ag-end">{fmtTime(end)}</span>}
+      </span>
+      <span className={`ag-bar acct-${(ev.accountIndex ?? 0) % 4}`} />
+      <span className="ag-text">
+        <span className="ag-title">{ev.title}</span>
+        {ev.location && <span className="ag-loc">{ev.location}</span>}
+      </span>
+      {ongoing && !ev.allDay && <span className="ag-now-tag">Now</span>}
+    </button>
+  )
+}
+
+function NowLine({ now }: { now: Date }) {
+  return <div className="ag-now" role="img" aria-label={`Now, ${fmtTime(now)}`}><i /></div>
 }
 
 interface EventModalProps {
@@ -514,9 +539,27 @@ interface CalendarViewProps {
   onAuthError: () => void
 }
 
+// The view last picked on this device; with none, a phone opens on the agenda (as the
+// app does) and a wider screen on the week grid. Storage may be missing (a private
+// window), and then the default is simply used every time.
+const VIEW_KEY = 'totem.calendar.view'
+const PHONE = '(max-width: 720px)'
+function startView(): CalViewId {
+  try {
+    const raw = localStorage.getItem(VIEW_KEY)
+    if (raw && (VIEW_IDS as string[]).includes(raw)) return raw as CalViewId
+  } catch { /* not kept */ }
+  return typeof window !== 'undefined' && window.matchMedia?.(PHONE).matches ? 'agenda' : 'week'
+}
+
 // ---------- main ----------
 export default function CalendarView({ onAuthError }: CalendarViewProps) {
-  const [view, setView] = useState('week')
+  const [view, setViewState] = useState<CalViewId>(startView)
+  const setView = (next: CalViewId) => {
+    setViewState(next)
+    try { localStorage.setItem(VIEW_KEY, next) } catch { /* not kept; nothing depends on it */ }
+  }
+  const [viewMenu, setViewMenu] = useState<HTMLElement | null>(null)
   const [anchor, setAnchor] = useState(() => new Date())
   const [events, setEvents] = useState<CalEvent[]>([])
   const [errors, setErrors] = useState<string[]>([])
@@ -570,37 +613,52 @@ export default function CalendarView({ onAuthError }: CalendarViewProps) {
     return []
   }, [view, anchor])
 
-  return (
-    <div className="view cal-view">
-      <div className="view-head cal-toolbar">
-        <div className="cal-nav">
-          <button className="btn" onClick={() => setAnchor(new Date())}>Today</button>
-          <button className="btn compact" onClick={() => step(-1)} aria-label="Previous">‹</button>
-          <button className="btn compact" onClick={() => step(1)} aria-label="Next">›</button>
-          <h1 className="cal-title">{rangeTitle(view, anchor)}</h1>
-          {loading && <span className="muted cal-loading">·</span>}
-        </div>
-        <div className="cal-viewswitch">
-          {VIEWS.map((v) => (
-            <button
-              key={v.id}
-              className={`seg ${view === v.id ? 'active' : ''}`}
-              onClick={() => setView(v.id)}
-            >
-              {v.label}
-            </button>
-          ))}
-        </div>
-      </div>
+  const agendaRange = useMemo<[Date, Date]>(() => [rStart, rEnd], [rStart, rEnd])
+  const viewLabel = VIEWS.find((v) => v.id === view)?.label ?? 'Week'
+  const fullTitle = rangeTitle(view, anchor)
 
-      {errors.map((e) => <div key={e} className="muted inline-warn" style={{ marginBottom: 6 }}><WarnIcon /> {e}</div>)}
+  return (
+    <div className={`view cal-view cal-v-${view}`}>
+      <header className="cal-head">
+        <h1 className="cal-title" aria-label={fullTitle}>
+          <span className="cal-title-full">{fullTitle}</span>
+          <span className="cal-title-short" aria-hidden="true">{compactTitle(view, anchor)}</span>
+        </h1>
+        {loading && <Hi icon={ArrowPathIcon} size={16} className="spin cal-loading" aria-label="Loading" />}
+        <div className="cal-controls">
+          <button type="button" className="pk-icon-btn pk-ghost" onClick={() => step(-1)} aria-label="Previous" title="Previous"><Hi icon={ChevronLeftIcon} size={18} /></button>
+          <button type="button" className="pk-icon-btn pk-ghost" onClick={() => step(1)} aria-label="Next" title="Next"><Hi icon={ChevronRightIcon} size={18} /></button>
+          <button type="button" className="pk-btn cal-today" onClick={() => setAnchor(new Date())}>Today</button>
+          <button
+            type="button"
+            className="pk-btn cal-view-btn"
+            aria-haspopup="menu"
+            aria-expanded={Boolean(viewMenu)}
+            aria-label={`View: ${viewLabel}`}
+            onClick={(e) => setViewMenu(viewMenu ? null : e.currentTarget)}
+          >
+            {viewLabel}<Hi icon={ChevronDownIcon} size={14} />
+          </button>
+        </div>
+      </header>
+      {viewMenu && (
+        <Menu
+          anchor={viewMenu}
+          label="View"
+          width={180}
+          onClose={() => setViewMenu(null)}
+          items={VIEWS.map((v) => ({ key: v.id, label: v.label, checked: v.id === view, onSelect: () => setView(v.id) }))}
+        />
+      )}
+
+      {errors.map((e) => <div key={e} className="cal-warn"><WarnIcon /> <span>{e}</span></div>)}
 
       {(view === 'day' || view === 'week' || view === 'workweek') && (
         <TimeGrid days={gridDays} away={away} events={events} onPickDay={pickDay} onSelectEvent={setSelectedEvent} />
       )}
       {view === 'month' && <MonthGrid anchor={anchor} away={away} events={events} onPickDay={pickDay} onSelectEvent={setSelectedEvent} />}
       {view === 'year' && <YearGrid anchor={anchor} events={events} onPickDay={pickDay} onPickMonth={pickMonth} />}
-      {view === 'agenda' && <Agenda anchor={anchor} range={[rStart, rEnd]} away={away} events={events} onSelectEvent={setSelectedEvent} />}
+      {view === 'agenda' && <Agenda range={agendaRange} away={away} events={events} onSelectEvent={setSelectedEvent} onMore={() => step(1)} />}
       {selectedEvent && (
         <EventModal
           event={selectedEvent}

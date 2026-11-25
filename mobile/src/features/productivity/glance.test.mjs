@@ -102,6 +102,30 @@ test('habits: Overview’s rule for done, without archived or WHOOP-synced ones'
   assert.equal(habitsGlance(null, NOW), null)
   // Yesterday's answer, read from disk the next morning, is not today's tally.
   assert.equal(habitsGlance({ ...payload, today: '2026-11-03' }, NOW), null)
+  // A daily habit with a target counts once it reaches it, as on the Habits page.
+  const water = { today: '2026-11-04', habits: [{ id: 'w', cadence: 'daily', target: 6 }], entries: { '2026-11-04': { w: { count: 3 } } } }
+  assert.deepEqual(habitsGlance(water, NOW), { done: 0, total: 1 })
+})
+
+test('habits: a group is one row, done only once all its sub-habits are', () => {
+  const habits = [
+    { id: 'g', cadence: 'daily', target: 1 },
+    { id: 'g1', cadence: 'daily', target: 1, parentId: 'g' },
+    { id: 'g2', cadence: 'weekly', target: 3, parentId: 'g' },
+    { id: 'g3', cadence: 'daily', target: 1, parentId: 'g', archived: true }, // not counted in the group
+    { id: 'r', cadence: 'daily', target: 1 },
+  ]
+  const day = (entries) => habitsGlance({ today: '2026-11-04', habits, entries }, NOW)
+  // One sub-habit of two: the group is not done, though something in it was logged.
+  assert.deepEqual(day({ '2026-11-04': { g1: { count: 1 }, r: { count: 1 } } }), { done: 1, total: 2 })
+  // A weekly sub-habit logged today counts, as on the Habits page.
+  assert.deepEqual(day({ '2026-11-04': { g1: { count: 1 }, g2: { count: 1 } } }), { done: 1, total: 2 })
+  assert.deepEqual(day({ '2026-11-04': { g1: { count: 1 }, g2: { count: 1 }, r: { count: 1 } } }), { done: 2, total: 2 })
+  // A group's own old entry does not make it done.
+  assert.deepEqual(day({ '2026-11-04': { g: { count: 1 } } }), { done: 0, total: 2 })
+  // A sub-habit whose group is archived is a row of its own.
+  const orphan = habits.map((h) => (h.id === 'g' ? { ...h, archived: true } : h))
+  assert.deepEqual(habitsGlance({ today: '2026-11-04', habits: orphan, entries: { '2026-11-04': { g1: { count: 1 } } } }, NOW), { done: 1, total: 3 })
 })
 
 test('goals: done of those still in play, only for the week it is', () => {

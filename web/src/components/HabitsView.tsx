@@ -9,8 +9,11 @@ import { useCommand } from '../useShortcuts'
 import {
   Hi, PlusIcon, MinusIcon, ArrowPathIcon, XMarkIcon, TrashIcon,
   PencilSquareIcon, CheckIcon, ChatBubbleLeftEllipsisIcon, FireIcon, ArchiveBoxIcon, Bars3Icon, ArrowTopRightOnSquareIcon,
-  ChevronLeftIcon, ChevronRightIcon,
+  ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, ChatBubbleLeftRightIcon, MoonIcon, SunIcon, CheckBadgeSolidIcon,
 } from '../icons'
+import { foldGroups, flattenTree, groupProgress, groupToggle, groupWords, habitTree, handLogged, rowDone } from '../habits/groups'
+import { startChatAbout } from '../chat/about/start'
+import '../habits/habits.css'
 import { useErrorToast, pushToast } from '../toast'
 import { OPEN_HABIT_CHECKIN } from './HabitCheckin'
 import ChatAbout from '../chat/about/ChatAbout'
@@ -36,6 +39,8 @@ interface Habit {
   linkedApp?: LinkedApp | null
   /** That app's address, from the bridge's env. */
   appUrl?: string | null
+  /** The group it sits under (web/src/habits/groups.ts); one level deep. */
+  parentId?: string | null
   createdAt: string
   archived: boolean
 }
@@ -63,7 +68,7 @@ export function LinkedAppButton({ habit, compact }: { habit: Pick<Habit, 'linked
 // Bushido reads WHOOP itself; it holds the grant.
 export const isSyncedSleep = (h: { metric?: { source?: string } | null }) => h.metric?.source === 'whoop-sleep'
 
-interface Entry { count: number; note?: string; value?: number | null; parts?: Record<string, number> }
+interface Entry { count: number; skipped?: boolean; note?: string; value?: number | null; parts?: Record<string, number> }
 type Entries = Record<string, Record<string, Entry>> // date -> habitId -> entry
 
 interface HabitsPayload {
@@ -167,6 +172,14 @@ interface HabitFormModalProps {
   onClose: () => void
   onSubmit: (fields: any) => Promise<void>
   onDelete?: () => Promise<void>
+  /** Habits this one may sit under: active, top-level, filled by hand. */
+  parents?: Habit[]
+  /** The group a new habit starts in. */
+  defaultParent?: string | null
+  /** It is a group already, so it cannot go under another habit. */
+  hasChildren?: boolean
+  /** Close this and start a new habit inside it. */
+  onAddSub?: () => void
 }
 
 // The metric half of the habit form, kept as loose strings so a half-typed
@@ -241,7 +254,7 @@ function metricFromDraft(draft: MetricDraft, existing: MetricPart[] = []): Metri
   }
 }
 
-function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDelete }: HabitFormModalProps) {
+function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDelete, parents = [], defaultParent = null, hasChildren = false, onAddSub }: HabitFormModalProps) {
   const [form, setForm] = useState({
     name: initial?.name || '',
     description: initial?.description || '',
@@ -251,6 +264,7 @@ function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDel
     archived: initial?.archived || false,
     when: (initial?.when || 'any') as HabitWhen,
     linkedApp: (initial?.linkedApp || '') as LinkedApp | '',
+    parentId: (initial ? initial.parentId : defaultParent) || '',
   })
   const [metric, setMetric] = useState<MetricDraft>(() => metricDraftFrom(initial?.metric))
   const setMetricField = (k: keyof MetricDraft, v: any) => setMetric((m) => ({ ...m, [k]: v }))
@@ -282,6 +296,11 @@ function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDel
         when: form.when,
         linkedApp: form.linkedApp || null,
       }
+      // Only when it changed: a sub-habit of an archived group arrives with no parent
+      // (the bridge lets it out until the group returns), and saving that back would
+      // detach it for good.
+      const parentNow = form.parentId || null
+      if (parentNow !== ((initial && initial.parentId) || null)) fields.parentId = parentNow
       if (form.color) fields.color = form.color
       await onSubmit(fields)
     } catch (err: any) { setError(err.message); setBusy(null) }
@@ -299,7 +318,7 @@ function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDel
       <div className="event-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
-            <div className="modal-kicker">{initial ? 'Edit habit' : 'New habit'}</div>
+            <div className="modal-kicker">{initial ? (hasChildren ? 'Edit group' : 'Edit habit') : 'New habit'}</div>
             <h2>{initial ? initial.name : 'Track something daily'}</h2>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close"><Hi icon={XMarkIcon} size={20} /></button>
@@ -313,52 +332,76 @@ function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDel
             <span>Description (optional)</span>
             <input value={form.description} onChange={(e) => set('description', e.target.value)} placeholder="What counts as done?" />
           </label>
-          <div className="field-row">
+          {hasChildren ? (
+            <div className="habit-group-note">
+              <span>
+                {initial?.name} is a group: it is done for a day when all its sub-habits are, and its check marks the ones you tick by hand (an app fills in its own).
+              </span>
+              {onAddSub && <button type="button" className="pk-btn pk-compact" onClick={onAddSub}><Hi icon={PlusIcon} size={14} /> Add a sub-habit</button>}
+            </div>
+          ) : parents.length > 0 || form.parentId ? (
             <label className="field">
-              <span>How often</span>
-              <select value={form.cadence} onChange={(e) => set('cadence', e.target.value as Cadence)}>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
+              <span>Part of</span>
+              <select value={form.parentId} onChange={(e) => set('parentId', e.target.value)}>
+                <option value="">Nothing, a habit of its own</option>
+                {parents.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
               </select>
+              <span className="habit-field-hint">
+                {form.parentId
+                  ? 'A sub-habit: it shows inside that habit, which becomes a group if it is not one yet: done for the day once all of its sub-habits are, its own check and history set aside.'
+                  : 'Put it under another habit to group them, e.g. sleep hygiene under a nightly routine.'}
+              </span>
             </label>
-            <label className="field">
-              <span>Times per {CADENCE_NOUN[form.cadence]}</span>
-              <input type="number" min={1} max={50} value={form.target} onChange={(e) => set('target', e.target.value)} />
-            </label>
-          </div>
-          <div className="field-row">
-            <label className="field">
-              <span>When</span>
-              <select value={form.when} onChange={(e) => set('when', e.target.value as HabitWhen)}>
-                <option value="any">Any time</option>
-                <option value="morning">Morning</option>
-                <option value="night">Night, logged next morning</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Filled by</span>
-              <select value={form.linkedApp} onChange={(e) => set('linkedApp', e.target.value)}>
-                <option value="">Me</option>
-                <option value="krakatoa">Krakatoa</option>
-                <option value="bushido">Bushido</option>
-              </select>
-            </label>
-          </div>
-          <span className="habit-field-hint">
-            {form.linkedApp
-              ? `${APP_NAME[form.linkedApp as LinkedApp]} fills this in on its own; here it links to the app instead of a check mark.`
-              : form.when === 'night'
-                ? 'The morning check-in asks about it the next day and logs it to the night before.'
-                : form.when === 'morning'
-                  ? 'The morning check-in asks about it for that day.'
-                  : 'The morning check-in asks about it if yesterday went unanswered.'}
-          </span>
-          <span className="habit-field-hint">
-            {form.cadence === 'daily'
-              ? '1 = simple yes/no. Higher (e.g. 8 glasses of water) shades the day darker the closer you get.'
-              : `e.g. gym 3× a week, or deep-clean once a month. You still check it off on the day you do it; the check-in shows ${periodLabel(form.cadence)}’s progress.`}
-          </span>
+          ) : null}
+          {/* A group's day is its sub-habits': how often, when, who fills it and a number are theirs. */}
+          {!hasChildren && (<>
+            <div className="field-row">
+              <label className="field">
+                <span>How often</span>
+                <select value={form.cadence} onChange={(e) => set('cadence', e.target.value as Cadence)}>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Times per {CADENCE_NOUN[form.cadence]}</span>
+                <input type="number" min={1} max={50} value={form.target} onChange={(e) => set('target', e.target.value)} />
+              </label>
+            </div>
+            <div className="field-row">
+              <label className="field">
+                <span>When</span>
+                <select value={form.when} onChange={(e) => set('when', e.target.value as HabitWhen)}>
+                  <option value="any">Any time</option>
+                  <option value="morning">Morning</option>
+                  <option value="night">Night, logged next morning</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Filled by</span>
+                <select value={form.linkedApp} onChange={(e) => set('linkedApp', e.target.value)}>
+                  <option value="">Me</option>
+                  <option value="krakatoa">Krakatoa</option>
+                  <option value="bushido">Bushido</option>
+                </select>
+              </label>
+            </div>
+            <span className="habit-field-hint">
+              {form.linkedApp
+                ? `${APP_NAME[form.linkedApp as LinkedApp]} fills this in on its own; here it links to the app instead of a check mark.`
+                : form.when === 'night'
+                  ? 'The morning check-in asks about it the next day and logs it to the night before.'
+                  : form.when === 'morning'
+                    ? 'The morning check-in asks about it for that day.'
+                    : 'The morning check-in asks about it if yesterday went unanswered.'}
+            </span>
+            <span className="habit-field-hint">
+              {form.cadence === 'daily'
+                ? '1 = simple yes/no. Higher (e.g. 8 glasses of water) shades the day darker the closer you get.'
+                : `e.g. gym 3× a week, or deep-clean once a month. You still check it off on the day you do it; the check-in shows ${periodLabel(form.cadence)}’s progress.`}
+            </span>
+          </>)}
           <div className="field">
             <span>Color</span>
             <div className="habit-swatches">
@@ -383,90 +426,92 @@ function HabitFormModal({ initial, palette, usedColors, onClose, onSubmit, onDel
               ))}
             </div>
           </div>
-          {/* Optional metric: the number this habit is really about. */}
-          <div className="habit-metric-form">
-            <label className="checkbox-field">
-              <input type="checkbox" checked={metric.on} onChange={(e) => setMetricField('on', e.target.checked)} />
-              Track a number with this habit
-            </label>
-            {metric.on && (
-              <>
-                <div className="field-row">
+          {!hasChildren && (<>
+            {/* Optional metric: the number this habit is really about. */}
+            <div className="habit-metric-form">
+              <label className="checkbox-field">
+                <input type="checkbox" checked={metric.on} onChange={(e) => setMetricField('on', e.target.checked)} />
+                Track a number with this habit
+              </label>
+              {metric.on && (
+                <>
+                  <div className="field-row">
+                    <label className="field">
+                      <span>What's measured</span>
+                      <input value={metric.label} onChange={(e) => setMetricField('label', e.target.value)} placeholder="e.g. Sleep score" />
+                    </label>
+                    <label className="field">
+                      <span>Unit (optional)</span>
+                      <input value={metric.unit} onChange={(e) => setMetricField('unit', e.target.value)} placeholder="e.g. min, kg, %" />
+                    </label>
+                  </div>
+                  <div className="field-row">
+                    <label className="field">
+                      <span>Scale min</span>
+                      <input type="number" value={metric.min} onChange={(e) => setMetricField('min', e.target.value)} placeholder="auto" />
+                    </label>
+                    <label className="field">
+                      <span>Scale max</span>
+                      <input type="number" value={metric.max} onChange={(e) => setMetricField('max', e.target.value)} placeholder="auto" />
+                    </label>
+                    <label className="field">
+                      <span>Goal line</span>
+                      <input type="number" value={metric.goal} onChange={(e) => setMetricField('goal', e.target.value)} placeholder="none" />
+                    </label>
+                  </div>
+                  <div className="field-row">
+                    <label className="field">
+                      <span>Better when</span>
+                      <select value={metric.direction} onChange={(e) => setMetricField('direction', e.target.value)}>
+                        <option value="higher">Higher</option>
+                        <option value="lower">Lower</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Graph</span>
+                      <select value={metric.chart} onChange={(e) => setMetricField('chart', e.target.value)}>
+                        <option value="line">Line</option>
+                        <option value="bar">Bars</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Decimals</span>
+                      <select value={metric.decimals} onChange={(e) => setMetricField('decimals', e.target.value)}>
+                        <option value="0">0</option>
+                        <option value="1">0.0</option>
+                        <option value="2">0.00</option>
+                      </select>
+                    </label>
+                  </div>
                   <label className="field">
-                    <span>What's measured</span>
-                    <input value={metric.label} onChange={(e) => setMetricField('label', e.target.value)} placeholder="e.g. Sleep score" />
-                  </label>
-                  <label className="field">
-                    <span>Unit (optional)</span>
-                    <input value={metric.unit} onChange={(e) => setMetricField('unit', e.target.value)} placeholder="e.g. min, kg, %" />
-                  </label>
-                </div>
-                <div className="field-row">
-                  <label className="field">
-                    <span>Scale min</span>
-                    <input type="number" value={metric.min} onChange={(e) => setMetricField('min', e.target.value)} placeholder="auto" />
-                  </label>
-                  <label className="field">
-                    <span>Scale max</span>
-                    <input type="number" value={metric.max} onChange={(e) => setMetricField('max', e.target.value)} placeholder="auto" />
-                  </label>
-                  <label className="field">
-                    <span>Goal line</span>
-                    <input type="number" value={metric.goal} onChange={(e) => setMetricField('goal', e.target.value)} placeholder="none" />
-                  </label>
-                </div>
-                <div className="field-row">
-                  <label className="field">
-                    <span>Better when</span>
-                    <select value={metric.direction} onChange={(e) => setMetricField('direction', e.target.value)}>
-                      <option value="higher">Higher</option>
-                      <option value="lower">Lower</option>
+                    <span>Filled by</span>
+                    <select value={metric.source} onChange={(e) => setMetricField('source', e.target.value)}>
+                      <option value="manual">Me (or Totem, when I tell it)</option>
+                      <option value="whoop-sleep">WHOOP sleep sync</option>
                     </select>
                   </label>
+                  {metric.source === 'whoop-sleep' && (
+                    <span className="habit-field-hint">
+                      A scheduled job pulls last night's sleep performance and stages from WHOOP (through Bushido) each late
+                      morning (Studio → Workflows → WHOOP sleep sync). Nights you've already filled in are left alone.
+                    </span>
+                  )}
                   <label className="field">
-                    <span>Graph</span>
-                    <select value={metric.chart} onChange={(e) => setMetricField('chart', e.target.value)}>
-                      <option value="line">Line</option>
-                      <option value="bar">Bars</option>
-                    </select>
+                    <span>Breakdown (optional)</span>
+                    <input value={metric.parts} onChange={(e) => setMetricField('parts', e.target.value)} placeholder="e.g. Deep, Light, REM, Awake" />
                   </label>
-                  <label className="field">
-                    <span>Decimals</span>
-                    <select value={metric.decimals} onChange={(e) => setMetricField('decimals', e.target.value)}>
-                      <option value="0">0</option>
-                      <option value="1">0.0</option>
-                      <option value="2">0.00</option>
-                    </select>
-                  </label>
-                </div>
-                <label className="field">
-                  <span>Filled by</span>
-                  <select value={metric.source} onChange={(e) => setMetricField('source', e.target.value)}>
-                    <option value="manual">Me (or Totem, when I tell it)</option>
-                    <option value="whoop-sleep">WHOOP sleep sync</option>
-                  </select>
-                </label>
-                {metric.source === 'whoop-sleep' && (
                   <span className="habit-field-hint">
-                    A scheduled job pulls last night's sleep performance and stages from WHOOP (through Bushido) each late
-                    morning (Studio → Workflows → WHOOP sleep sync). Nights you've already filled in are left alone.
+                    Comma-separated components, logged in the metric's unit and stacked as bars under the line —
+                    sleep stages in minutes, say. Leave empty for a single number.
                   </span>
-                )}
-                <label className="field">
-                  <span>Breakdown (optional)</span>
-                  <input value={metric.parts} onChange={(e) => setMetricField('parts', e.target.value)} placeholder="e.g. Deep, Light, REM, Awake" />
-                </label>
-                <span className="habit-field-hint">
-                  Comma-separated components, logged in the metric's unit and stacked as bars under the line —
-                  sleep stages in minutes, say. Leave empty for a single number.
-                </span>
-                <label className="checkbox-field">
-                  <input type="checkbox" checked={metric.pinned} onChange={(e) => setMetricField('pinned', e.target.checked)} />
-                  Pin this graph to the Home board
-                </label>
-              </>
-            )}
-          </div>
+                  <label className="checkbox-field">
+                    <input type="checkbox" checked={metric.pinned} onChange={(e) => setMetricField('pinned', e.target.checked)} />
+                    Pin this graph to the Home board
+                  </label>
+                </>
+              )}
+            </div>
+          </>)}
           {initial && (
             <label className="checkbox-field">
               <input type="checkbox" checked={form.archived} onChange={(e) => set('archived', e.target.checked)} />
@@ -1243,81 +1288,412 @@ export function HabitMetricSection({ habit, entries, today, compact, days: fixed
   )
 }
 
-// ---------- one habit in the nightly check-in list ----------
-interface CheckRowProps {
-  habit: Habit
-  entry: Entry | undefined
-  periodCount: number // completions in this row's day/week/month, per cadence
-  busy: boolean
+// ---------- the page, drawn as the iPhone app draws it ----------
+// mobile/src/features/productivity/HabitsView.tsx and features/habits/{TodayPanel,
+// HabitRow}.tsx: a Today card (the day being answered, a bar that fills per row,
+// Check in and New), then one card per habit: tick the day on the right, open the
+// card for its history. A group (a habit with sub-habits, web/src/habits/groups.ts)
+// is one card holding its sub-habits' rows; its own check marks them all.
+
+/** One day in a card's week strip. */
+interface StripDay { date: string; letter: string; level: number; skipped: boolean }
+
+function recentDays(habit: Habit, entries: Entries, end: string, days = 7): StripDay[] {
+  return Array.from({ length: days }, (_, i) => {
+    const date = addDays(end, i - (days - 1))
+    const e = entries[date]?.[habit.id]
+    const count = e?.count || 0
+    return {
+      date,
+      letter: toDate(date).toLocaleDateString([], { weekday: 'narrow' }),
+      // A weekly or monthly habit has no per-day target, so any completion is a full dot.
+      level: habit.cadence === 'daily' ? levelOf(count, habit.target) : count > 0 ? 4 : 0,
+      skipped: !count && e?.skipped === true,
+    }
+  })
+}
+
+/** Done for the day: a daily habit at its target; a weekly or monthly one logged that day or with its quota met. */
+function doneOn(habit: Habit, entries: Entries, date: string): boolean {
+  const count = entries[date]?.[habit.id]?.count || 0
+  if (habit.cadence === 'daily') return count >= Math.max(1, habit.target)
+  return count > 0 || periodTotal(habit, entries, date) >= Math.max(1, habit.target)
+}
+
+const nextMonthOf = (ym: string): string => {
+  const [y, m] = ym.split('-').map(Number)
+  const d = new Date(y, m, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** The longest streak in the loaded history, never less than the current one. */
+function bestStreakOf(habit: Habit, entries: Entries, today: string): number {
+  const current = streakOf(habit, entries, today)
+  const logged = Object.keys(entries).filter((d) => d <= today && (entries[d]?.[habit.id]?.count || 0) > 0).sort()
+  if (!logged.length) return current
+  let best = 0
+  let run = 0
+  if (habit.cadence === 'daily') {
+    let prev = ''
+    for (const d of logged) {
+      run = prev && addDays(prev, 1) === d ? run + 1 : 1
+      if (run > best) best = run
+      prev = d
+    }
+    return Math.max(best, current)
+  }
+  const met = (start: string) => periodTotal(habit, entries, start) >= habit.target
+  if (habit.cadence === 'weekly') {
+    for (let ws = weekStartOf(logged[0]); ws <= weekStartOf(today); ws = addDays(ws, 7)) {
+      run = met(ws) ? run + 1 : 0
+      if (run > best) best = run
+    }
+    return Math.max(best, current)
+  }
+  for (let ym = logged[0].slice(0, 7); ym <= today.slice(0, 7); ym = nextMonthOf(ym)) {
+    run = met(`${ym}-01`) ? run + 1 : 0
+    if (run > best) best = run
+  }
+  return Math.max(best, current)
+}
+
+/**
+ * A group's streaks and totals count whole days only: a day with every sub-habit
+ * done. (Its strip and grid still shade partial days.)
+ */
+function wholeDays(habit: Habit, entries: Entries): Entries {
+  const out: Entries = {}
+  for (const [date, day] of Object.entries(entries)) {
+    const count = day[habit.id]?.count || 0
+    out[date] = { ...day, [habit.id]: { count: count >= habit.target ? 1 : 0 } }
+  }
+  return out
+}
+
+function WhenMark({ habit }: { habit: Habit }) {
+  if (habit.when !== 'morning' && habit.when !== 'night') return null
+  const night = habit.when === 'night'
+  return (
+    <span className="hb-when" title={night ? 'Done at night, logged the next morning' : 'A morning habit'}>
+      <Hi icon={night ? MoonIcon : SunIcon} size={13} />
+    </span>
+  )
+}
+
+/** The flame and its count, brighter once it is a week or more (three periods for weekly and monthly). */
+function StreakChip({ habit, streak }: { habit: Habit; streak: number }) {
+  if (streak < 2) return null
+  const proud = habit.cadence === 'daily' ? streak >= 7 : streak >= 3
+  const unit = habit.cadence === 'daily' ? '' : habit.cadence === 'weekly' ? ' wk' : ' mo'
+  return (
+    <span className={`hb-streak${proud ? ' proud' : ''}`} title={`${streak}-${CADENCE_NOUN[habit.cadence]} streak`}>
+      <Hi icon={FireIcon} size={12} />{streak}{unit}
+    </span>
+  )
+}
+
+/** The last seven days, ending on the day being answered: a glance, not a control. */
+function WeekStrip({ habit, entries, date }: { habit: Habit; entries: Entries; date: string }) {
+  const days = recentDays(habit, entries, date)
+  return (
+    <span className="hb-strip" aria-hidden="true">
+      {days.map((d, i) => (
+        <span key={d.date} className={`hb-strip-day${i === days.length - 1 ? ' last' : ''}`}>
+          <span
+            className={`hb-strip-dot${d.level ? ' on' : ''}${d.skipped ? ' skipped' : ''}`}
+            style={d.level ? { background: `color-mix(in srgb, ${habit.color} ${LEVEL_MIX[d.level]}%, var(--bg-3))` } : undefined}
+          />
+          <span className="hb-strip-letter">{d.letter}</span>
+        </span>
+      ))}
+    </span>
+  )
+}
+
+/** A group's own check: a pie of its sub-habits done, the mark once all are. */
+export function GroupCheck({ habit, done, total, action, busy, onLog }: {
+  habit: Habit; done: number; total: number
+  /** What a tap does, in words (groups.ts groupWords), so the label never promises more. */
+  action: string
+  busy: boolean; onLog: () => void
+}) {
+  const all = total > 0 && done >= total
+  const label = action
+  return (
+    <button
+      type="button"
+      className={`habit-check pie${all ? ' on full' : ''}`}
+      style={{ '--habit-color': habit.color, '--habit-pie': `${(total ? done / total : 0) * 360}deg` } as React.CSSProperties}
+      onClick={onLog}
+      disabled={busy}
+      aria-label={label}
+      title={action}
+    >
+      {all && <Hi icon={CheckIcon} size={20} />}
+    </button>
+  )
+}
+
+/** What a row can do; the page owns every write. */
+interface RowActions {
   onLog: (habit: Habit, delta: number) => void
+  onLogGroup: (habit: Habit) => void
   onValue: (habit: Habit, value: number | null) => void
   onNote: (habit: Habit) => void
-  dragging?: boolean
-  dropTarget?: boolean
+  onEdit: (habit: Habit) => void
+  onChat: (habit: Habit) => void
+  onPickDay: (habit: Habit, date: string) => void
+  onPickPeriod: (habit: Habit, period: { start: string; end: string; title: string }) => void
+  onSyncSleep: () => Promise<void>
+}
+
+interface DragProps {
+  dragging: boolean
+  dropTarget: boolean
   onDragStart: (id: string) => void
   onDragOver: (id: string) => void
   onDrop: (id: string) => void
   onDragEnd: () => void
 }
 
-function CheckRow({ habit, entry, periodCount, busy, onLog, onValue, onNote, dragging, dropTarget, onDragStart, onDragOver, onDrop, onDragEnd }: CheckRowProps) {
+function HabitHistory({ habit, entries, today, group, actions }: {
+  habit: Habit
+  entries: Entries
+  today: string
+  group: boolean
+  actions: RowActions
+}) {
+  const counted = group ? wholeDays(habit, entries) : entries
+  const shape = group ? { ...habit, target: 1 } : habit
+  const streak = streakOf(shape, counted, today)
+  const best = bestStreakOf(shape, counted, today)
+  let total = 0
+  for (const day of Object.values(counted)) total += day[habit.id]?.count || 0
+  return (
+    <div className="hb-history">
+      <div className="hb-stats">
+        <div className="hb-stat">
+          <span className={`hb-stat-n${streak > 1 ? ' hot' : ''}`}>{streak}</span>
+          <span className="hb-stat-l">{CADENCE_NOUN[habit.cadence]} streak</span>
+        </div>
+        <div className="hb-stat"><span className="hb-stat-n">{best}</span><span className="hb-stat-l">best streak</span></div>
+        <div className="hb-stat">
+          <span className="hb-stat-n">{total}</span>
+          <span className="hb-stat-l">{group ? 'full days, past year' : 'past year'}</span>
+        </div>
+      </div>
+      {habit.cadence !== 'daily' && <div className="hb-quota-line"><QuotaDots habit={habit} count={periodTotal(habit, entries, today)} /></div>}
+      <HabitGrid
+        habit={habit}
+        entries={entries}
+        today={today}
+        onPick={(date) => actions.onPickDay(habit, date)}
+        onPickPeriod={(period) => actions.onPickPeriod(habit, period)}
+      />
+      {group && <p className="hb-hint">Pick a day to answer its sub-habits for that day.</p>}
+      {habit.metric && (
+        <HabitMetricSection
+          habit={habit}
+          entries={entries}
+          today={today}
+          onSync={habit.metric.source === 'whoop-sleep' ? actions.onSyncSleep : undefined}
+        />
+      )}
+      <div className="hb-history-actions">
+        <button type="button" className="pk-btn pk-compact" onClick={() => actions.onEdit(habit)}>
+          <Hi icon={PencilSquareIcon} size={14} /> Edit {group ? 'group' : 'habit'}
+        </button>
+        <button type="button" className="pk-btn pk-compact" onClick={() => actions.onChat(habit)}>
+          <Hi icon={ChatBubbleLeftRightIcon} size={14} /> Chat about it
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One habit: its name, chips and week strip open its history; the controls on the
+ * right answer the day. `nested` is a sub-habit's row inside its group's card.
+ */
+function HabitCard({ habit, entries, date, today, open, busy, nested, group, actions, drag, onToggle }: {
+  habit: Habit
+  /** Entries with groups folded in (foldGroups). */
+  entries: Entries
+  date: string
+  today: string
+  open: boolean
+  busy: (habit: Habit) => boolean
+  nested?: boolean
+  /** For a group: its sub-habits' rows, drawn inside the card. */
+  group?: { children: Habit[]; done: number; total: number; action: string; renderChild: (h: Habit) => React.ReactNode }
+  actions: RowActions
+  drag: DragProps
+  onToggle: (habit: Habit) => void
+}) {
+  const entry = entries[date]?.[habit.id]
   const count = entry?.count || 0
-  const done = periodCount >= habit.target
+  const periodCount = periodTotal(habit, entries, date)
+  const counted = group ? wholeDays(habit, entries) : entries
+  const streak = streakOf(group ? { ...habit, target: 1 } : habit, counted, today)
+  const multi = !group && habit.cadence === 'daily' && habit.target > 1
+  const finished = group ? group.done >= group.total : doneOn(habit, entries, date)
+  const sub = (!group && entry?.note) || habit.description
+  const recent = recentDays(habit, entries, date).filter((d) => d.level >= (group ? 4 : 1)).length
+  const spoken = [
+    habit.name,
+    group ? `a group of ${group.total}, ${group.done} done` : '',
+    habit.when === 'night' ? 'a night habit, logged the next morning' : habit.when === 'morning' ? 'a morning habit' : '',
+    sub,
+    streak > 1 ? `${streak}-${CADENCE_NOUN[habit.cadence]} streak` : '',
+    !group && habit.cadence !== 'daily' ? `${periodCount} of ${habit.target} ${periodLabel(habit.cadence)}` : '',
+    `done ${recent} of the last 7 days`,
+    open ? 'history shown' : 'open for its history',
+  ].filter(Boolean).join(', ')
+
+  let control: React.ReactNode
+  if (group) {
+    // A group whose sub-habits are all filled by apps has nothing for its check to write.
+    control = <GroupCheck habit={habit} done={group.done} total={group.total} action={group.action} busy={busy(habit) || !group.children.some(handLogged)} onLog={() => actions.onLogGroup(habit)} />
+  } else if (multi && !habit.linkedApp) {
+    control = (
+      <div className="habit-stepper hb-stepper">
+        <button type="button" className="habit-step" onClick={() => actions.onLog(habit, -1)} disabled={busy(habit) || count <= 0} aria-label={`Undo one ${habit.name}`}>
+          <Hi icon={MinusIcon} size={16} />
+        </button>
+        <span className="habit-count" style={count > 0 ? { color: habit.color } : undefined}>
+          {count}<small>/{habit.target}</small>
+        </span>
+        <button type="button" className="habit-step" onClick={() => actions.onLog(habit, +1)} disabled={busy(habit)} aria-label={`Log one ${habit.name}`}>
+          <Hi icon={PlusIcon} size={16} />
+        </button>
+      </div>
+    )
+  } else {
+    control = <HabitCheckButton habit={habit} count={count} periodCount={periodCount} busy={busy(habit)} onLog={actions.onLog} />
+  }
+
   return (
     <div
-      className={`habit-row ${done ? 'done' : ''} ${dragging ? 'dragging' : ''} ${dropTarget ? 'drop-target' : ''}`}
-      onDragOver={(e) => { e.preventDefault(); onDragOver(habit.id) }}
-      onDrop={(e) => { e.preventDefault(); onDrop(habit.id) }}
+      className={`hb-card${nested ? ' nested' : ''}${group ? ' group' : ''}${finished ? ' done' : ''}${open ? ' open' : ''}${drag.dragging ? ' dragging' : ''}${drag.dropTarget ? ' drop-target' : ''}`}
+      style={{ '--hc': habit.color } as React.CSSProperties}
+      data-land={habit.id}
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); drag.onDragOver(habit.id) }}
+      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); drag.onDrop(habit.id) }}
     >
-      <button
-        type="button"
-        className="habit-drag-handle"
-        draggable
-        onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(habit.id) }}
-        onDragEnd={onDragEnd}
-        aria-label={`Move ${habit.name}`}
-        title="Drag to reorder"
-      ><Hi icon={Bars3Icon} size={17} /></button>
-      <span className="habit-dot" style={{ background: habit.color }} />
-      <div className="habit-row-main">
-        <div className="habit-row-name">{habit.name}</div>
-        {(entry?.note || habit.description) && (
-          <div className="habit-row-sub">{entry?.note || habit.description}</div>
-        )}
-      </div>
-      {habit.cadence !== 'daily' && <QuotaDots habit={habit} count={periodCount} compact />}
-      {habit.metric && <HabitMetricInput habit={habit} entry={entry} busy={busy} onValue={onValue} />}
-      {!habit.linkedApp && (
+      <div className="hb-row">
         <button
-          className={`icon-btn habit-note-btn ${entry?.note ? 'has-note' : ''}`}
-          title={entry?.note ? `Note: ${entry.note}` : 'Add a note'}
-          onClick={() => onNote(habit)}
-        >
-          <Hi icon={ChatBubbleLeftEllipsisIcon} size={17} />
-        </button>
-      )}
-      {habit.cadence === 'daily' && habit.target > 1 && !habit.linkedApp ? (
-        <div className="habit-stepper">
-          <button className="habit-step" onClick={() => onLog(habit, -1)} disabled={busy || count <= 0} aria-label={`Undo one ${habit.name}`}>
-            <Hi icon={MinusIcon} size={16} />
-          </button>
-          <span className="habit-count" style={count > 0 ? { color: habit.color } : undefined}>
-            {count}<small>/{habit.target}</small>
+          type="button"
+          className="hb-drag"
+          draggable
+          onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = 'move'; drag.onDragStart(habit.id) }}
+          onDragEnd={drag.onDragEnd}
+          aria-label={`Move ${habit.name}`}
+          title="Drag to reorder"
+        ><Hi icon={Bars3Icon} size={16} /></button>
+        <button type="button" className="hb-main" onClick={() => onToggle(habit)} aria-expanded={open} aria-label={spoken}>
+          <span className="hb-head">
+            <span className="hb-title">
+              <span className="hb-dot" />
+              <span className="hb-name">{habit.name}</span>
+              <WhenMark habit={habit} />
+              <StreakChip habit={habit} streak={streak} />
+              {group && <span className="hb-of">{group.done}/{group.total}</span>}
+              {!group && habit.cadence !== 'daily' && <QuotaDots habit={habit} count={periodCount} compact />}
+              <span className={`hb-chev${open ? ' up' : ''}`}><Hi icon={ChevronDownIcon} size={14} /></span>
+            </span>
+            {sub ? <span className="hb-sub">{sub}</span> : null}
           </span>
-          <button className="habit-step" onClick={() => onLog(habit, +1)} disabled={busy} aria-label={`Log one ${habit.name}`}>
-            <Hi icon={PlusIcon} size={16} />
-          </button>
-        </div>
-      ) : (
-        <HabitCheckButton habit={habit} count={count} periodCount={periodCount} busy={busy} onLog={onLog} />
-      )}
+          <WeekStrip habit={habit} entries={entries} date={date} />
+        </button>
+        <span className="hb-controls">
+          {habit.metric && !group && <HabitMetricInput habit={habit} entry={entry} busy={busy(habit)} onValue={actions.onValue} />}
+          {!habit.linkedApp && !group && (
+            <button
+              type="button"
+              className={`hb-note${entry?.note ? ' has-note' : ''}`}
+              title={entry?.note ? `Note: ${entry.note}` : 'Add a note'}
+              aria-label={entry?.note ? `Note on ${habit.name}: ${entry.note}` : `Add a note to ${habit.name}`}
+              onClick={() => actions.onNote(habit)}
+            >
+              <Hi icon={ChatBubbleLeftEllipsisIcon} size={18} />
+            </button>
+          )}
+          {control}
+        </span>
+      </div>
+      {group && <div className="hb-subs" role="group" aria-label={`${habit.name}: sub-habits`}>{group.children.map(group.renderChild)}</div>}
+      {open && <HabitHistory habit={habit} entries={entries} today={today} group={Boolean(group)} actions={actions} />}
+      <ChatAbout of={() => habitContext(habit, entries, today, { streak, periodCount: periodTotal(habit, entries, today) })} host=".hb-card" />
     </div>
+  )
+}
+
+/** The day being answered, a bar that fills per row, and the page's actions. */
+function TodayCard({ date, daysBack, rows, onStep, onToday, onRefresh }: {
+  date: string
+  daysBack: number
+  /** One segment per row, done by groups.ts rowDone, as the Overview and the app count. */
+  rows: { habit: Habit; done: boolean }[]
+  onStep: (delta: 1 | -1) => void
+  onToday: () => void
+  onRefresh: () => void
+}) {
+  const segments = rows.map(({ habit: h, done }) => ({ id: h.id, color: h.color, done }))
+  const done = segments.filter((s) => s.done).length
+  const total = segments.length
+  const all = total > 0 && done === total
+  const title = daysBack === 0 ? 'Today' : daysBack === 1 ? 'Yesterday' : toDate(date).toLocaleDateString([], { weekday: 'long' })
+  return (
+    <section className="pk-card hb-today" aria-label="The day being answered">
+      <div className="hb-today-line">
+        <div className="hb-today-title">
+          <h1 className="pk-title">{title}</h1>
+          <span className="pk-sub">{dayLabel(date)}</span>
+        </div>
+        {daysBack > 0 && <button type="button" className="pk-btn pk-ghost hb-today-back" onClick={onToday}>Today</button>}
+        <button type="button" className="pk-icon-btn" onClick={() => onStep(1)} disabled={daysBack >= MAX_DAYS_BACK} aria-label="Previous day" title="Previous day">
+          <Hi icon={ChevronLeftIcon} size={18} />
+        </button>
+        <button type="button" className="pk-icon-btn" onClick={() => onStep(-1)} disabled={daysBack === 0} aria-label="Next day" title="Next day">
+          <Hi icon={ChevronRightIcon} size={18} />
+        </button>
+      </div>
+      {total > 0 && (
+        <div className="hb-bar" role="progressbar" aria-label={`${done} of ${total} habits done`} aria-valuemin={0} aria-valuemax={total} aria-valuenow={done}>
+          {segments.map((seg) => (
+            <span key={seg.id} className="hb-seg"><span className={seg.done ? 'on' : ''} style={{ background: seg.color }} /></span>
+          ))}
+        </div>
+      )}
+      <div className="hb-today-foot">
+        <span className="hb-count" aria-live="polite">
+          {all
+            ? <><Hi icon={CheckBadgeSolidIcon} size={18} /> <strong className="hb-all">All done</strong></>
+            : total > 0 ? <><strong>{done}</strong> of {total} done</> : null}
+        </span>
+        <button type="button" className="pk-icon-btn pk-ghost" onClick={onRefresh} aria-label="Refresh" title="Refresh">
+          <Hi icon={ArrowPathIcon} size={17} />
+        </button>
+        <button type="button" className="pk-btn" onClick={() => window.dispatchEvent(new Event(OPEN_HABIT_CHECKIN))} title="Morning check-in: yesterday and this morning">
+          <Hi icon={SunIcon} size={16} /> Check in
+        </button>
+        <button type="button" className="pk-btn pk-primary" onClick={() => window.dispatchEvent(new Event(NEW_HABIT))}>
+          <Hi icon={PlusIcon} size={16} /> New
+        </button>
+      </div>
+    </section>
   )
 }
 
 // The check-in steps back as far as the loaded history (a year).
 const MAX_DAYS_BACK = 365
-const shortDay = (iso: string) => toDate(iso).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+const NEW_HABIT = 'totem:habit-new'
+// Which cards are open, per browser; a convenience, so a lost value just closes them.
+const OPEN_KEY = 'totem.habits.open'
+const readOpen = (): string[] => {
+  try { const v = JSON.parse(localStorage.getItem(OPEN_KEY) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [] } catch { return [] }
+}
+const writeOpen = (ids: string[]) => { try { localStorage.setItem(OPEN_KEY, JSON.stringify(ids)) } catch { /* per-browser nicety only */ } }
 
 const openLinkedApp = (h: Habit) => { if (h.appUrl) window.open(h.appUrl, '_blank', 'noopener') }
 
@@ -1325,7 +1701,7 @@ const openLinkedApp = (h: Habit) => { if (h.appUrl) window.open(h.appUrl, '_blan
 interface HabitsViewProps { onAuthError: () => void }
 
 type Modal =
-  | { type: 'add' }
+  | { type: 'add'; parentId?: string | null }
   | { type: 'edit'; habit: Habit }
   | { type: 'day'; habit: Habit; date: string }
   | { type: 'period'; habit: Habit; start: string; end: string; title: string }
@@ -1336,13 +1712,19 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   useErrorToast(error)
-  // How many days back the check-in is looking: 0 is today. The arrows step it.
+  // How many days back the page is answering: 0 is today. The arrows step it.
   const [daysBack, setDaysBack] = useState(0)
   const [modal, setModal] = useState<Modal>(null)
-  // `g h h` — lands on Habits, then opens the new-habit dialog.
+  // `g h h` lands on Habits, then opens the new-habit dialog.
   useCommand(COMMANDS.habitNew, () => setModal({ type: 'add' }))
+  useEffect(() => {
+    const on = () => setModal({ type: 'add' })
+    window.addEventListener(NEW_HABIT, on)
+    return () => window.removeEventListener(NEW_HABIT, on)
+  }, [])
   const [busyKeys, setBusyKeys] = useState<Record<string, boolean>>({})
   const [showArchived, setShowArchived] = useState(false)
+  const [open, setOpen] = useState<string[]>(readOpen)
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
 
@@ -1362,47 +1744,63 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
     return () => window.removeEventListener('totem:habits-changed', on)
   }, [load])
 
-  const active = (data?.habits || []).filter((h) => !h.archived && !isSyncedSleep(h))
-  const archived = (data?.habits || []).filter((h) => h.archived)
-  const sleepHidden = (data?.habits || []).some((h) => !h.archived && isSyncedSleep(h))
+  const raw = data?.habits || []
+  // Every view reads groups as daily habits counting their sub-habits (groups.ts).
+  const folded = useMemo(() => foldGroups(raw, data?.entries || {}, data?.today), [raw, data?.entries, data?.today])
+  const entries = folded.entries
+  const byId = useMemo(() => new Map(folded.habits.map((h) => [h.id, h])), [folded.habits])
+  const tree = useMemo(() => habitTree(raw), [raw])
+  const rows = tree.filter((r) => !isSyncedSleep(r.habit))
+  const archived = raw.filter((h) => h.archived)
+  const sleepHidden = raw.some((h) => !h.archived && isSyncedSleep(h))
   const today = data?.today || ''
-  const checkinDate = addDays(today, -daysBack)
+  const checkinDate = today ? addDays(today, -daysBack) : ''
 
   const guard = <T,>(p: Promise<T>): Promise<T> =>
     p.catch((e) => { if (e instanceof AuthError) { onAuthError(); return Promise.reject(new Error('Session expired')) } throw e })
 
-  // One-tap logging from the check-in list. The bridge write is local-disk fast,
-  // so we just swap in the refreshed payload it returns; a per-habit busy flag
-  // stops double-taps from racing.
-  const logDelta = async (habit: Habit, delta: number) => {
-    const key = `${habit.id}:${checkinDate}`
+  const keyOf = (habit: Habit) => `${habit.id}:${checkinDate}`
+  const busy = (habit: Habit) => Boolean(busyKeys[keyOf(habit)])
+  const withBusy = async (habit: Habit, run: () => Promise<void>) => {
+    const key = keyOf(habit)
     if (busyKeys[key]) return
     setBusyKeys((b) => ({ ...b, [key]: true }))
-    try {
-      setData(await guard(logHabit({ id: habit.id, date: checkinDate, delta })))
-      if (delta < 0) pushToast(`Undid ${habit.name}.`, 'info', { duration: 2500 })
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setBusyKeys((b) => ({ ...b, [key]: false }))
-    }
+    try { await run() } catch (e: any) { setError(e.message) } finally { setBusyKeys((b) => ({ ...b, [key]: false })) }
   }
 
-  // Logging the habit's number from the check-in row. A number is evidence the
-  // habit happened, so it ticks the day off too (`complete`); clearing it back
-  // out leaves the check alone.
-  const logValue = async (habit: Habit, value: number | null) => {
-    const key = `${habit.id}:${checkinDate}`
-    if (busyKeys[key]) return
-    setBusyKeys((b) => ({ ...b, [key]: true }))
-    try {
-      setData(await guard(logHabit({ id: habit.id, date: checkinDate, value, complete: value !== null })))
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setBusyKeys((b) => ({ ...b, [key]: false }))
+  // One-tap logging. The bridge write is local-disk fast, so the refreshed payload
+  // it returns is swapped in; a per-habit busy flag stops double taps racing.
+  const logDelta = (habit: Habit, delta: number, { offerUndo = true } = {}) => withBusy(habit, async () => {
+    const before = data?.entries[checkinDate]?.[habit.id]?.count || 0
+    const date = checkinDate
+    setData(await guard(logHabit({ id: habit.id, date, delta })))
+    // Unticking is the step that loses something, so it is the one with an undo.
+    if (delta < 0 && offerUndo && before + delta <= 0) {
+      pushToast(`Unticked ${habit.name}.`, 'info', {
+        duration: 4000,
+        action: { label: 'Undo', onClick: () => { void guard(logHabit({ id: habit.id, date, delta: -delta })).then(setData, (e) => setError(e.message)) } },
+      })
     }
-  }
+  })
+
+  // A group's check marks every hand-logged sub-habit done, or clears them once
+  // all are; either way the toast can put the day back exactly.
+  const logGroup = (group: Habit) => withBusy(group, async () => {
+    if (!data) return
+    const t = groupToggle(raw, group.id, data.entries, checkinDate)
+    if (!t.changes) { pushToast(`Nothing logged for ${group.name} on this day to clear.`, 'info', { duration: 3000 }); return }
+    setData(await guard(logHabit({ id: group.id, date: checkinDate, complete: t.complete })))
+    pushToast(groupWords(group.name, t, 0, 0).result, 'info', {
+      duration: 4000,
+      action: { label: 'Undo', onClick: () => { void guard(logHabit(t.undo)).then(setData, (e) => setError(e.message)) } },
+    })
+  })
+
+  // A number is evidence the habit happened, so it ticks the day off too
+  // (`complete`); clearing it back out leaves the check alone.
+  const logValue = (habit: Habit, value: number | null) => withBusy(habit, async () => {
+    setData(await guard(logHabit({ id: habit.id, date: checkinDate, value, complete: value !== null })))
+  })
 
   // Pull the last few nights from WHOOP on demand. Nights already filled in are
   // left alone by the bridge, so this is safe to mash.
@@ -1421,158 +1819,169 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
     }
   }
 
-  const totalFor = (habit: Habit) => {
-    let total = 0
-    for (const day of Object.values(data?.entries || {})) total += day[habit.id]?.count || 0
-    return total
+  const toggleOpen = (habit: Habit) => setOpen((ids) => {
+    const next = ids.includes(habit.id) ? ids.filter((id) => id !== habit.id) : [...ids, habit.id]
+    writeOpen(next)
+    return next
+  })
+
+  const isGroupId = (id: string) => tree.some((r) => r.habit.id === id && r.children.length > 0)
+  const actions: RowActions = {
+    onLog: (habit, delta) => { if (!habit.linkedApp) void logDelta(habit, delta) },
+    onLogGroup: (habit) => { void logGroup(habit) },
+    onValue: (habit, value) => { if (!habit.linkedApp) void logValue(habit, value) },
+    onNote: (habit) => setModal({ type: 'day', habit: raw.find((h) => h.id === habit.id) || habit, date: checkinDate }),
+    onEdit: (habit) => setModal({ type: 'edit', habit: raw.find((h) => h.id === habit.id) || habit }),
+    onChat: (habit) => {
+      if (!data) return
+      // A group's streak counts whole days, as its card does.
+      const streak = isGroupId(habit.id) ? streakOf({ ...habit, target: 1 }, wholeDays(habit, entries), today) : streakOf(habit, entries, today)
+      void startChatAbout(habitContext(habit, entries, today, { streak, periodCount: periodTotal(habit, entries, today) }))
+        .catch((e) => (e instanceof AuthError ? onAuthError() : setError(e?.message || 'Could not start that chat')))
+    },
+    // A group's days are its sub-habits': picking one steps the page to that day.
+    onPickDay: (habit, date) => {
+      if (isGroupId(habit.id)) { setDaysBack(Math.max(0, Math.min(MAX_DAYS_BACK, diffDays(today, date)))); return }
+      if (habit.linkedApp) { openLinkedApp(habit); return }
+      setModal({ type: 'day', habit: raw.find((h) => h.id === habit.id) || habit, date })
+    },
+    onPickPeriod: (habit, period) => {
+      if (isGroupId(habit.id)) return
+      if (habit.linkedApp) { openLinkedApp(habit); return }
+      setModal({ type: 'period', habit: raw.find((h) => h.id === habit.id) || habit, ...period })
+    },
+    onSyncSleep: syncSleepNow,
   }
 
+  // Drag to reorder: a row among the rows, or a sub-habit within its group.
   const moveHabit = async (targetId: string) => {
-    if (!draggedId || draggedId === targetId || !data) { setDraggedId(null); setDropTargetId(null); return }
-    const current = data.habits
-    const from = current.findIndex((h) => h.id === draggedId)
-    const to = current.findIndex((h) => h.id === targetId)
-    if (from < 0 || to < 0) return
-    const reordered = [...current]
-    const [moved] = reordered.splice(from, 1)
-    reordered.splice(to, 0, moved)
-    setData({ ...data, habits: reordered })
+    const dragged = draggedId
     setDraggedId(null)
     setDropTargetId(null)
+    if (!dragged || dragged === targetId || !data) return
+    const next = tree.map((r) => ({ habit: r.habit, children: [...r.children] }))
+    const top = (id: string) => next.findIndex((r) => r.habit.id === id)
+    const from = top(dragged)
+    const to = top(targetId)
+    if (from >= 0 && to >= 0) {
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+    } else {
+      const row = next.find((r) => r.children.some((c) => c.id === dragged) && r.children.some((c) => c.id === targetId))
+      if (!row) return
+      const a = row.children.findIndex((c) => c.id === dragged)
+      const b = row.children.findIndex((c) => c.id === targetId)
+      const [moved] = row.children.splice(a, 1)
+      row.children.splice(b, 0, moved)
+    }
+    const ids = flattenTree(next)
+    const order = new Map(ids.map((id, i) => [id, i]))
+    const before = data
+    setData({ ...data, habits: [...data.habits].sort((x, y) => (order.get(x.id) ?? 1e9) - (order.get(y.id) ?? 1e9)) })
     try {
-      setData(await guard(reorderHabits(reordered.filter((h) => !h.archived).map((h) => h.id))))
+      setData(await guard(reorderHabits(ids)))
     } catch (e: any) {
-      setData(data)
+      setData(before)
       setError(e.message)
     }
   }
+  const dragFor = (id: string): DragProps => ({
+    dragging: draggedId === id,
+    dropTarget: Boolean(draggedId && dropTargetId === id && draggedId !== id),
+    onDragStart: setDraggedId,
+    onDragOver: setDropTargetId,
+    onDrop: moveHabit,
+    onDragEnd: () => { setDraggedId(null); setDropTargetId(null) },
+  })
+
+  const card = (h: Habit, nested: boolean, group?: { children: Habit[] }) => {
+    const shown = byId.get(h.id) || h
+    const progress = group ? groupProgress(raw, h.id, data?.entries || {}, checkinDate) : null
+    return (
+      <HabitCard
+        key={h.id}
+        habit={shown}
+        entries={entries}
+        date={checkinDate}
+        today={today}
+        open={open.includes(h.id)}
+        busy={busy}
+        nested={nested}
+        group={group && progress ? {
+          children: group.children,
+          done: progress.done,
+          total: progress.total,
+          action: groupWords(h.name, groupToggle(raw, h.id, data?.entries || {}, checkinDate), progress.done, progress.total).action,
+          renderChild: (c) => card(c, true),
+        } : undefined}
+        actions={actions}
+        drag={dragFor(h.id)}
+        onToggle={toggleOpen}
+      />
+    )
+  }
+
+  // A group's own check is derived, so only a habit ticked by hand can hold sub-habits (the bridge's rule).
+  const parentChoices = raw.filter((h) => !h.archived && !h.parentId && handLogged(h))
 
   return (
-    <div className="view habits-view">
-      <div className="view-head">
-        <h1>Habits {active.length ? <span className="muted">· {active.length}</span> : null}</h1>
-        <div className="todo-head-actions">
-          <button className="btn compact" onClick={() => window.dispatchEvent(new Event(OPEN_HABIT_CHECKIN))} title="Morning check-in: yesterday and this morning">Check in</button>
-          <button className="btn compact" onClick={load} title="Refresh"><Hi icon={ArrowPathIcon} size={15} /></button>
-          <button className="btn primary compact" onClick={() => setModal({ type: 'add' })}>
-            <Hi icon={PlusIcon} size={16} /> New
-          </button>
-        </div>
-      </div>
-
+    <div className="pk-page habits-view hb-view">
       {loading && !data ? (
         <div className="spinner">Loading…</div>
-      ) : !active.length ? (
-        <div className="empty">
-          No habits yet. Add one here, or just tell Totem — “track a reading habit for me”.
-          {sleepHidden && ' Sleep syncs from WHOOP on its own and shows in Bushido.'}
+      ) : !rows.length ? (
+        <div className="pk-card pk-empty">
+          <Hi icon={FireIcon} size={28} />
+          <strong className="hb-empty-title">No habits yet</strong>
+          <span>
+            Add one here, or just tell Totem: “track a reading habit for me”.
+            {sleepHidden && ' Sleep syncs from WHOOP on its own and shows in Bushido.'}
+          </span>
+          <span className="pk-actions">
+            <button type="button" className="pk-btn pk-primary" onClick={() => setModal({ type: 'add' })}><Hi icon={PlusIcon} size={16} /> New habit</button>
+            <button type="button" className="pk-btn" onClick={() => window.dispatchEvent(new Event(OPEN_HABIT_CHECKIN))}><Hi icon={SunIcon} size={16} /> Check in</button>
+          </span>
         </div>
       ) : (
         <>
-          {/* Nightly check-in: go through the day in retrospect and tap off what happened. */}
-          <div className="card habit-checkin">
-            <div className="habit-checkin-head">
-              <div>
-                <div className="habit-checkin-title">Check-in</div>
-                <div className="habit-checkin-sub">{dayLabel(checkinDate)}</div>
-              </div>
-              <div className="habit-daynav">
-                {daysBack > 1 && (
-                  <button className="habit-daynav-today" onClick={() => setDaysBack(0)}>Today</button>
-                )}
-                <button className="habit-daynav-step" onClick={() => setDaysBack((d) => Math.min(d + 1, MAX_DAYS_BACK))} disabled={daysBack >= MAX_DAYS_BACK} aria-label="Previous day" title="Previous day">
-                  <Hi icon={ChevronLeftIcon} size={16} />
-                </button>
-                <span className="habit-daynav-label">{daysBack === 0 ? 'Today' : daysBack === 1 ? 'Yesterday' : shortDay(checkinDate)}</span>
-                <button className="habit-daynav-step" onClick={() => setDaysBack((d) => Math.max(d - 1, 0))} disabled={daysBack === 0} aria-label="Next day" title="Next day">
-                  <Hi icon={ChevronRightIcon} size={16} />
-                </button>
-              </div>
-            </div>
-            {active.map((h) => (
-              <CheckRow
-                key={h.id}
-                habit={h}
-                entry={data?.entries[checkinDate]?.[h.id]}
-                periodCount={data ? periodTotal(h, data.entries, checkinDate) : 0}
-                busy={Boolean(busyKeys[`${h.id}:${checkinDate}`])}
-                onLog={logDelta}
-                onValue={logValue}
-                onNote={(habit) => setModal({ type: 'day', habit, date: checkinDate })}
-                dragging={draggedId === h.id}
-                dropTarget={Boolean(draggedId && dropTargetId === h.id && draggedId !== h.id)}
-                onDragStart={setDraggedId}
-                onDragOver={setDropTargetId}
-                onDrop={moveHabit}
-                onDragEnd={() => { setDraggedId(null); setDropTargetId(null) }}
-              />
-            ))}
+          <TodayCard
+            date={checkinDate}
+            daysBack={daysBack}
+            rows={rows.map((r) => ({ habit: r.habit, done: rowDone(raw, r, data?.entries || {}, checkinDate) }))}
+            onStep={(d) => setDaysBack((n) => Math.min(Math.max(n + d, 0), MAX_DAYS_BACK))}
+            onToday={() => setDaysBack(0)}
+            onRefresh={load}
+          />
+          <div className="hb-list">
+            {rows.map((r) => card(r.habit, false, r.children.length ? { children: r.children } : undefined))}
           </div>
-
-          {/* One contribution grid per habit. */}
-          {active.map((h) => {
-            const streak = data ? streakOf(h, data.entries, today) : 0
-            return (
-              <div key={h.id} className="card habit-card">
-                <div className="habit-card-head">
-                  <span className="habit-dot" style={{ background: h.color }} />
-                  <span className="habit-card-name">{h.name}</span>
-                  <span className="habit-card-stats">
-                    {streak > 1 && (
-                      <span className="habit-streak" title={`Current streak (${CADENCE_NOUN[h.cadence]}s)`}>
-                        <Hi icon={FireIcon} size={13} /> {streak}{h.cadence === 'weekly' ? ' wk' : h.cadence === 'monthly' ? ' mo' : ''}
-                      </span>
-                    )}
-                    {h.cadence !== 'daily' && <QuotaDots habit={h} count={periodTotal(h, data!.entries, today)} />}
-                    <span className="muted">{totalFor(h)} in the last year</span>
-                  </span>
-                  <ChatAbout of={() => data && habitContext(h, data.entries, today, { streak, periodCount: periodTotal(h, data.entries, today) })} host=".habit-card" />
-                  <button className="icon-btn" title="Edit habit" onClick={() => setModal({ type: 'edit', habit: h })}>
-                    <Hi icon={PencilSquareIcon} size={16} />
-                  </button>
-                </div>
-                <HabitGrid
-                  habit={h}
-                  entries={data!.entries}
-                  today={today}
-                  // A linked habit's days are the app's to change; a tap goes there instead.
-                  onPick={(date) => (h.linkedApp ? openLinkedApp(h) : setModal({ type: 'day', habit: h, date }))}
-                  onPickPeriod={({ start, end, title }) => (h.linkedApp ? openLinkedApp(h) : setModal({ type: 'period', habit: h, start, end, title }))}
-                />
-                {h.metric && (
-                  <HabitMetricSection
-                    habit={h}
-                    entries={data!.entries}
-                    today={today}
-                    onSync={h.metric.source === 'whoop-sleep' ? syncSleepNow : undefined}
-                  />
-                )}
-              </div>
-            )
-          })}
         </>
       )}
 
-      {sleepHidden && active.length > 0 && (
-        <p className="muted" style={{ fontSize: 13 }}>Sleep syncs from WHOOP on its own and shows in Bushido.</p>
+      {sleepHidden && rows.length > 0 && (
+        <p className="hb-footnote">Sleep syncs from WHOOP on its own and shows in Bushido.</p>
       )}
 
       {archived.length > 0 && (
-        <div className="habit-archived">
-          <button className="link-btn" style={{ margin: 0 }} onClick={() => setShowArchived((s) => !s)}>
-            {showArchived ? 'Hide' : 'Show'} archived ({archived.length})
+        <div className="hb-archived">
+          <button type="button" className="hb-archived-head" aria-expanded={showArchived} onClick={() => setShowArchived((s) => !s)}>
+            <Hi icon={ArchiveBoxIcon} size={15} />
+            <span>Archived · {archived.length}</span>
+            <span className={`hb-chev${showArchived ? ' up' : ''}`}><Hi icon={ChevronDownIcon} size={14} /></span>
           </button>
           {showArchived && (
-            <div className="card">
+            <div className="pk-card hb-archived-list">
               {archived.map((h) => (
-                <div key={h.id} className="habit-row archived">
-                  <span className="habit-dot" style={{ background: h.color }} />
-                  <div className="habit-row-main"><div className="habit-row-name">{h.name}</div></div>
+                <div key={h.id} className="hb-archived-row">
+                  <button type="button" className="hb-archived-name" onClick={() => setModal({ type: 'edit', habit: h })} aria-label={`${h.name}, edit habit`}>
+                    <span className="hb-dot" style={{ background: h.color }} />
+                    <span>{h.name}</span>
+                  </button>
                   <button
-                    className="btn compact"
+                    type="button"
+                    className="pk-btn pk-compact"
                     onClick={async () => { try { setData(await guard(updateHabit(h.id, { archived: false }))) } catch (e: any) { setError(e.message) } }}
                   >
-                    <Hi icon={ArchiveBoxIcon} size={14} /> Restore
+                    <Hi icon={ArrowPathIcon} size={14} /> Restore
                   </button>
                 </div>
               ))}
@@ -1585,6 +1994,8 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
         <HabitFormModal
           palette={data.palette}
           usedColors={data.habits.map((h) => h.color)}
+          parents={parentChoices}
+          defaultParent={modal.parentId || null}
           onClose={() => setModal(null)}
           onSubmit={async (fields) => { setData(await guard(createHabit(fields))); setModal(null) }}
         />
@@ -1595,6 +2006,9 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
           initial={modal.habit}
           palette={data.palette}
           usedColors={data.habits.map((h) => h.color)}
+          parents={parentChoices.filter((h) => h.id !== modal.habit.id)}
+          hasChildren={raw.some((h) => h.parentId === modal.habit.id && !h.archived)}
+          onAddSub={() => setModal({ type: 'add', parentId: modal.habit.id })}
           onClose={() => setModal(null)}
           onSubmit={async (fields) => { setData(await guard(updateHabit(modal.habit.id, fields))); setModal(null) }}
           onDelete={async () => { setData(await guard(deleteHabit(modal.habit.id))); setModal(null) }}
@@ -1630,4 +2044,9 @@ export default function HabitsView({ onAuthError }: HabitsViewProps) {
       )}
     </div>
   )
+}
+
+/** Whole days from `from` back to `to` (positive when `to` is earlier). */
+function diffDays(from: string, to: string): number {
+  return Math.round((toDate(from).getTime() - toDate(to).getTime()) / 86_400_000)
 }

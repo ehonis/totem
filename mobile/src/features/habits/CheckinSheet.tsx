@@ -114,6 +114,7 @@ function CheckinRow({ item, entry, note, busy, first, onAnswer }: {
     <View style={[s.row, !first && s.rule]}>
       <View style={[s.dot, { backgroundColor: habit.color }]} />
       <View style={{ flex: 1, minWidth: 0 }}>
+        {item.group ? <T size={11.5} muted numberOfLines={1} style={{ marginBottom: 1 }}>{item.group}</T> : null}
         <T size={15} weight={500} numberOfLines={1} color={yes || no ? colors.muted : colors.text}>{habit.name}</T>
         {item.part === 'yesterday' && habit.when === 'night' ? <T size={11.5} muted style={{ marginTop: 1 }}>last night</T> : null}
         {note ? <T size={11.5} muted style={{ marginTop: 1 }}>{note}</T> : null}

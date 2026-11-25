@@ -1,0 +1,108 @@
+/* Productivity → Journal (components/JournalView.tsx) in the iPhone app's look
+   (mobile/src/features/productivity/JournalView.tsx, features/journal/): the red
+   button in its card first, one quiet status line under it, then the entries by day.
+   One centred column at any width. Scoped under `.jn`, so these win over the older
+   journal rules in styles.css. Colours are palette variables only. */
+
+.view.jn-view { padding: 0; }
+.pk-page.jn { max-width: 760px; gap: 12px; padding-top: 18px; }
+
+/* ---------- The recorder card (RecorderPanel) ---------- */
+.jn .journal-rec {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 18px 10px;
+  gap: 8px;
+}
+.jn .journal-rec.live { border-color: color-mix(in srgb, var(--red) 45%, var(--line)); }
+.jn .rec-stage { width: 120px; height: 120px; }
+.jn .rec-ring { background: color-mix(in srgb, var(--red) 20%, transparent); }
+.jn .rec-btn { width: 88px; height: 88px; }
+.jn .rec-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.jn .rec-dot { width: 64px; height: 64px; }
+.jn .rec-readout { width: 100%; gap: 6px; }
+.jn .rec-timer { font-size: 30px; line-height: 34px; }
+.jn .rec-hint { font-size: 13.5px; line-height: 19px; max-width: 340px; color: var(--muted); }
+.jn .rec-controls { margin-top: 4px; }
+.jn .rec-wide { min-width: 120px; min-height: 44px; }
+.jn .rec-review-actions .pk-btn { min-height: 44px; }
+.jn .rec-review-actions .rec-save { flex: 1; max-width: 260px; padding: 0 18px; font-weight: 600; }
+.jn .rec-review-sub { font-size: 12.5px; line-height: 18px; color: var(--muted); }
+.jn .journal-rec-error, .jn .journal-rec-unsupported { align-self: stretch; max-width: none; }
+
+/* "Type an entry instead": a quiet 44px row, no underline (the app's Press). */
+.jn .rec-type { max-width: 560px; }
+.jn .rec-type-toggle {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px;
+  border: 0; border-radius: 9px; background: none; color: var(--muted);
+  font: inherit; font-size: 14px; text-decoration: none; cursor: pointer;
+}
+.jn .rec-type-toggle:hover { color: var(--text); background: var(--bg-3); text-decoration: none; }
+.jn .rec-type-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.jn .rec-type-form textarea { min-height: 96px; font-size: 15px; }
+.jn .rec-type-actions .pk-btn { min-height: 40px; }
+
+/* ---------- Status line under the recorder ---------- */
+.jn-status { display: flex; align-items: center; gap: 10px; min-height: 44px; margin-top: -4px; }
+.jn-status-gap { flex: 1; }
+.jn-count { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.jn-status .pk-icon-btn { width: 44px; height: 44px; }
+.jn-status .pk-icon-btn svg { width: 18px; height: 18px; }
+.jn-status .pk-icon-btn.on { background: var(--bg-3); color: var(--text); }
+.jn-pill {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex-shrink: 1;
+  padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-3);
+  font-size: 12px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.jn-pill svg { flex: none; }
+.jn-pill.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 27%, transparent); }
+.jn-pill.err { color: var(--red); border-color: color-mix(in srgb, var(--red) 27%, transparent); }
+
+/* Entries waiting on the digest. */
+.jn .journal-lede {
+  display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px; border-radius: 10px;
+  background: color-mix(in srgb, var(--amber) 7%, transparent); color: var(--muted);
+  font-size: 13px; line-height: 19px;
+}
+.jn .journal-lede > .hi { color: var(--amber); margin-top: 2px; }
+
+/* ---------- Days and entries ---------- */
+.jn .journal-day { gap: 8px; }
+.jn-day-label {
+  display: flex; align-items: baseline; gap: 8px; margin: 12px 0 0;
+  font-size: 15px; font-weight: 600; color: var(--text);
+}
+.jn-day-sub { font-size: 13px; font-weight: 400; color: var(--muted); }
+.jn .journal-list { gap: 10px; }
+.jn .journal-entry {
+  background: var(--surface); border-radius: 12px; padding: 13px 15px 10px;
+}
+.jn .journal-entry-top { font-size: 11.5px; }
+.jn .journal-title { font-size: 16px; line-height: 22px; }
+.jn .journal-excerpt { font-size: 14px; line-height: 21px; }
+.jn .journal-summary { font-size: 13px; line-height: 19px; }
+.jn .journal-transcript { font-size: 15px; line-height: 24px; }
+.jn .journal-transcript p { margin-bottom: 12px; }
+.jn .inbox-disclose { min-height: 36px; font-size: 13px; }
+.jn .journal-actions .pk-btn { min-height: 36px; padding: 0 12px; font-size: 13px; }
+.jn .journal-skip { font-weight: 600; }
+.jn .journal-menu-toggle { width: 36px; height: 36px; border-radius: 10px; }
+.jn .journal-menu-toggle:hover, .jn .journal-menu-toggle[aria-expanded='true'] { background: var(--bg-3); }
+.jn .journal-menu-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.jn-empty { padding: 30px 16px; }
+.jn-empty p { margin: 0; max-width: 300px; line-height: 20px; }
+
+/* ---------- Phone: the app's sizes and touch targets ---------- */
+@media (max-width: 720px) {
+  .pk-page.jn { padding-top: 12px; }
+  .jn .journal-rec { padding: 14px 18px 8px; }
+  .jn .journal-entry { padding: 13px 15px 8px; }
+  .jn .journal-entry-row { gap: 2px; }
+  .jn .journal-actions { gap: 6px; margin-bottom: -4px; }
+  .jn .journal-actions .pk-btn { min-height: 44px; }
+  .jn .journal-menu-toggle { width: 44px; height: 44px; margin-left: -8px; }
+  .jn .journal-actions .pk-btn + .journal-menu-anchor .journal-menu-toggle { margin-left: 0; }
+  .jn .inbox-disclose { min-height: 44px; }
+}

@@ -3,6 +3,10 @@
 // in place (stats, the year grid, the number chart); long-press is the menu. This
 // replaces the old page's two lists (a check-in card, then a history card per habit
 // further down) with one.
+//
+// A group (a habit with sub-habits, lib/habits/groups.ts) is one card holding its
+// sub-habits' rows, indented along a line in its colour: its own check is a pie of
+// them done and marks them all; each sub-habit's row works as any other.
 import React, { useMemo } from 'react'
 import { StyleSheet, View } from 'react-native'
 import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated'
@@ -13,20 +17,39 @@ import {
   Hi, ChatBubbleLeftEllipsisIcon, ChatBubbleLeftRightIcon, ChevronDownIcon, FireIcon, MoonIcon, PencilSquareIcon, SunIcon,
 } from '../../lib/icons'
 import {
-  CADENCE_NOUN, LEVEL_MIX, bestStreakOf, mixHex, periodLabel, periodTotal, recentDays, streakOf, totalFor,
+  CADENCE_NOUN, LEVEL_MIX, bestStreakOf, mixHex, periodLabel, periodTotal, recentDays, streakOf, totalFor, wholeDays,
   type Entries, type Habit,
 } from './logic'
 import { HabitMetricInput, QuotaDots, Stepper } from './parts'
-import { CheckFace, CHECK, HabitCheck } from './Check'
+import { CheckFace, CHECK, GroupCheck, HabitCheck } from './Check'
 import { useCalm } from './motion'
 import { LinkedAppButton } from './LinkedApp'
 import HabitGrid from './HabitGrid'
 import { HabitMetricSection } from './MetricChart'
 
 
+/** What a group's card draws besides its own line. */
+export interface GroupInfo {
+  /** Sub-habits done on the day being answered, of how many. */
+  done: number
+  total: number
+  /** What its check does, in words (groups.ts groupWords). */
+  action: string
+  /** Its check is waiting on the bridge. */
+  busy: boolean
+  onLog: () => void
+  /** The sub-habits' rows. */
+  children: React.ReactNode
+  /** The undo line after its check was used, drawn under the sub-habits. */
+  undo?: React.ReactNode
+}
+
+/** A sub-habit's row is drawn a little smaller, inside its group's card. */
+const NESTED_CHECK = 42
+
 export interface HabitRowProps {
   habit: Habit
-  /** The entries with in-flight taps folded in. */
+  /** The entries with in-flight taps and groups folded in (foldGroups). */
   entries: Entries
   /** The check-in day the row is answering for. */
   date: string
@@ -43,6 +66,10 @@ export interface HabitRowProps {
   onChat: (habit: Habit) => void
   onPickDay: (habit: Habit, date: string) => void
   onPickPeriod: (habit: Habit, period: { start: string; end: string; title: string }) => void
+  /** A sub-habit's row inside its group's card. */
+  nested?: boolean
+  /** Set for a group. */
+  group?: GroupInfo
 }
 
 function WhenMark({ habit }: { habit: Habit }) {
@@ -106,10 +133,16 @@ function Stat({ value, label, accent }: { value: string; label: string; accent?:
   )
 }
 
-function History({ habit, entries, today, onEdit, onChat, onPickDay, onPickPeriod }: Pick<HabitRowProps,
-  'habit' | 'entries' | 'today' | 'onEdit' | 'onChat' | 'onPickDay' | 'onPickPeriod'>) {
-  const streak = streakOf(habit, entries, today)
-  const best = bestStreakOf(habit, entries, today)
+/** A group's streaks and totals count whole days only (wholeDays); anything else its own. */
+function counted(habit: Habit, entries: Entries, group: boolean): { shape: Habit; entries: Entries } {
+  return group ? { shape: { ...habit, target: 1 }, entries: wholeDays(habit, entries) } : { shape: habit, entries }
+}
+
+function History({ habit, entries, today, group, onEdit, onChat, onPickDay, onPickPeriod }: Pick<HabitRowProps,
+  'habit' | 'entries' | 'today' | 'onEdit' | 'onChat' | 'onPickDay' | 'onPickPeriod'> & { group: boolean }) {
+  const whole = counted(habit, entries, group)
+  const streak = streakOf(whole.shape, whole.entries, today)
+  const best = bestStreakOf(whole.shape, whole.entries, today)
   const unit = CADENCE_NOUN[habit.cadence]
   const calm = useCalm()
   return (
@@ -117,7 +150,7 @@ function History({ habit, entries, today, onEdit, onChat, onPickDay, onPickPerio
       <View style={s.stats}>
         <Stat value={String(streak)} label={`${unit} streak`} accent={streak > 1 ? colors.amber : undefined} />
         <Stat value={String(best)} label="best streak" />
-        <Stat value={String(totalFor(habit, entries))} label="past year" />
+        <Stat value={String(totalFor(whole.shape, whole.entries))} label={group ? 'full days' : 'past year'} />
       </View>
       {habit.cadence !== 'daily' && (
         <View style={{ marginBottom: 10 }}><QuotaDots habit={habit} count={periodTotal(habit, entries, today)} /></View>
@@ -129,9 +162,10 @@ function History({ habit, entries, today, onEdit, onChat, onPickDay, onPickPerio
         onPick={(date) => onPickDay(habit, date)}
         onPickPeriod={(period) => onPickPeriod(habit, period)}
       />
+      {group && <T size={12.5} muted style={{ marginTop: 8 }}>Pick a day to answer its sub-habits for that day.</T>}
       {habit.metric && <HabitMetricSection habit={habit} entries={entries} today={today} />}
       <View style={s.historyActions}>
-        <Btn compact icon={PencilSquareIcon} title="Edit habit" onPress={() => onEdit(habit)} style={s.historyBtn} />
+        <Btn compact icon={PencilSquareIcon} title={group ? 'Edit group' : 'Edit habit'} onPress={() => onEdit(habit)} style={s.historyBtn} />
         <Btn compact icon={ChatBubbleLeftRightIcon} title="Chat about it" onPress={() => onChat(habit)} style={s.historyBtn} />
       </View>
     </Animated.View>
@@ -139,58 +173,66 @@ function History({ habit, entries, today, onEdit, onChat, onPickDay, onPickPerio
 }
 
 export default function HabitRow(props: HabitRowProps) {
-  const { habit, entries, date, today, expanded, busy, onToggle, onLog, onValue, onNote, onMore } = props
+  const { habit, entries, date, today, expanded, busy, nested, group, onToggle, onLog, onValue, onNote, onMore } = props
   const entry = entries[date]?.[habit.id]
   const count = entry?.count || 0
   const periodCount = periodTotal(habit, entries, date)
-  const streak = streakOf(habit, entries, today)
-  const multi = habit.cadence === 'daily' && habit.target > 1
-  const sub = entry?.note || habit.description
-  const finished = habit.cadence === 'daily' ? count >= Math.max(1, habit.target) : periodCount >= Math.max(1, habit.target)
+  const whole = counted(habit, entries, Boolean(group))
+  const streak = streakOf(whole.shape, whole.entries, today)
+  const multi = !group && habit.cadence === 'daily' && habit.target > 1
+  const sub = (!group && entry?.note) || habit.description
+  const finished = group
+    ? group.done >= group.total
+    : habit.cadence === 'daily' ? count >= Math.max(1, habit.target) : periodCount >= Math.max(1, habit.target)
   const calm = useCalm()
   // A number box beside the row's other controls leaves the name no room on a
   // phone, so a habit with one puts its controls on a line of their own.
-  const crowded = Boolean(habit.metric)
-  const recent = recentDays(habit, entries, date).filter((d) => d.level > 0).length
+  const crowded = Boolean(habit.metric) && !group
+  // A group's strip shades partial days; only full ones count as done.
+  const recent = recentDays(habit, entries, date).filter((d) => d.level >= (group ? 4 : 1)).length
   const unit = CADENCE_NOUN[habit.cadence]
   // The row is one VoiceOver element, so it says everything its pieces show.
   const spoken = [
     habit.name,
+    group ? `a group of ${group.total}, ${group.done} done` : '',
     habit.when === 'night' ? 'a night habit, logged the next morning' : habit.when === 'morning' ? 'a morning habit' : '',
     sub,
     streak > 1 ? `${streak}-${unit} streak` : '',
-    habit.cadence !== 'daily' ? `${periodCount} of ${habit.target} ${periodLabel(habit.cadence)}` : '',
+    !group && habit.cadence !== 'daily' ? `${periodCount} of ${habit.target} ${periodLabel(habit.cadence)}` : '',
     `done ${recent} of the last 7 days`,
   ].filter(Boolean).join(', ')
 
+  const checkSize = nested ? NESTED_CHECK : CHECK
   let control: React.ReactNode
-  if (habit.linkedApp) {
+  if (group) {
+    control = <GroupCheck habit={habit} done={group.done} total={group.total} action={group.action} disabled={group.busy} onLog={group.onLog} />
+  } else if (habit.linkedApp) {
     // An app fills this one in: the same face, filling as it does, but not a
     // button; the link beside it goes to the app.
     control = (
       <View style={s.linked}>
         <LinkedAppButton habit={habit} compact />
-        <View accessible accessibilityRole="image" accessibilityLabel={`${habit.name}: ${count > 0 ? 'done' : 'not yet'}, filled in by its app`} style={{ width: CHECK, height: CHECK }}>
-          <CheckFace habit={habit} count={count} periodCount={periodCount} />
+        <View accessible accessibilityRole="image" accessibilityLabel={`${habit.name}: ${count > 0 ? 'done' : 'not yet'}, filled in by its app`} style={{ width: checkSize, height: checkSize }}>
+          <CheckFace habit={habit} count={count} periodCount={periodCount} size={checkSize} />
         </View>
       </View>
     )
   } else if (multi) {
     control = (
       <Stepper
-        size={44} count={count} target={habit.target} color={habit.color}
+        size={nested ? 40 : 44} count={count} target={habit.target} color={habit.color}
         onStep={(d) => onLog(habit, d)}
         labelLess={`Undo one ${habit.name}`} labelMore={`Log one ${habit.name}`}
       />
     )
   } else {
-    control = <HabitCheck habit={habit} count={count} periodCount={periodCount} onLog={onLog} />
+    control = <HabitCheck habit={habit} count={count} periodCount={periodCount} onLog={onLog} size={checkSize} />
   }
 
   const controls = (
     <>
       {habit.metric && <HabitMetricInput habit={habit} entry={entry} busy={busy} onValue={onValue} />}
-      {!habit.linkedApp && (
+      {!habit.linkedApp && !group && (
         <Press
           haptic
           onPress={() => onNote(habit)}
@@ -206,7 +248,10 @@ export default function HabitRow(props: HabitRowProps) {
   )
 
   return (
-    <Animated.View layout={calm ? undefined : LinearTransition.duration(220)} style={[s.card, finished && { borderColor: alpha(habit.color, 0.35) }]}>
+    <Animated.View
+      layout={calm ? undefined : LinearTransition.duration(220)}
+      style={nested ? s.nested : [s.card, finished && { borderColor: alpha(habit.color, 0.35) }, group && { paddingBottom: 6 }]}
+    >
       <View style={s.row}>
         <Press
           onPress={() => onToggle(habit)}
@@ -219,10 +264,13 @@ export default function HabitRow(props: HabitRowProps) {
         >
           <View style={s.titleLine}>
             <View style={[s.dot, { backgroundColor: habit.color }]} />
-            <T size={16} weight={600} numberOfLines={1} style={{ flexShrink: 1 }}>{habit.name}</T>
+            <T size={nested ? 15 : 16} weight={nested ? 500 : 600} numberOfLines={2} style={{ flexShrink: 1 }}>{habit.name}</T>
             <WhenMark habit={habit} />
             <StreakChip habit={habit} streak={streak} />
-            {habit.cadence !== 'daily' && <QuotaDots habit={habit} count={periodCount} compact />}
+            {group && (
+              <T size={12} weight={600} muted style={{ fontVariant: ['tabular-nums'] }}>{group.done}/{group.total}</T>
+            )}
+            {!group && habit.cadence !== 'daily' && <QuotaDots habit={habit} count={periodCount} compact />}
             <View style={{ flex: 1 }} />
             <View style={[s.chev, expanded && { transform: [{ rotate: '180deg' }] }]}>
               <Hi icon={ChevronDownIcon} size={14} color={colors.muted} />
@@ -244,7 +292,16 @@ export default function HabitRow(props: HabitRowProps) {
           {controls}
         </View>
       )}
-      {expanded && <History {...props} />}
+      {group && (
+        <View
+          accessibilityLabel={`${habit.name}: sub-habits`}
+          style={[s.subs, { borderLeftColor: mixHex(habit.color, colors.line, 35) }]}
+        >
+          {group.children}
+        </View>
+      )}
+      {group?.undo ? <View style={{ marginTop: 8 }}>{group.undo}</View> : null}
+      {expanded && <History {...props} group={Boolean(group)} />}
     </Animated.View>
   )
 }
@@ -268,6 +325,8 @@ const s = StyleSheet.create({
   stripDot: { width: 12, height: 12, borderRadius: 3, backgroundColor: colors.bg3, borderWidth: 1, borderColor: alpha('#ffffff', 0.14) },
   stripSkipped: { borderStyle: 'dashed', borderColor: colors.muted },
   chev: { width: 18, alignItems: 'center' },
+  nested: { paddingVertical: 8, paddingLeft: 12 },
+  subs: { marginTop: 10, marginLeft: 4, borderLeftWidth: 2 },
   controlsLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8, marginTop: 8 },
   noteBtn: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
   linked: { flexDirection: 'row', alignItems: 'center', gap: 8 },

@@ -15,7 +15,9 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { AuthError, getGoals } from '../api'
 import { ArrowRightIcon, Hi, TrophyIcon } from '../icons'
+import Ring from '../productivity/Ring'
 import { GOAL_DONE_ICON, goalIconFor } from './goalIcon'
+import { periodSummary } from './summary'
 import type { Goal, GoalPeriodShortcut } from './types'
 
 const COLUMNS: { shortcut: GoalPeriodShortcut; type: string; title: string }[] = [
@@ -39,7 +41,7 @@ function GoalLine({ goal }: { goal: Goal }) {
         {percent === null ? <span className="muted">—</span> : `${percent}%`}
       </span>
       <span className="goals-overview-goal-bar">
-        <span style={{ width: `${percent ?? 0}%` }} />
+        <span style={{ width: `${goal.complete ? 100 : percent ?? 0}%` }} />
       </span>
     </li>
   )
@@ -61,7 +63,7 @@ function OverviewColumn({ column, data, loading, onOpen }: {
       <header className="goals-overview-head">
         <span className="goals-overview-dot" aria-hidden="true" />
         <h3>{column.title}</h3>
-        <button type="button" className="btn compact goals-overview-open" onClick={onOpen}>
+        <button type="button" className="pk-btn pk-compact goals-overview-open" onClick={onOpen} aria-label={`Open ${column.title.toLowerCase()}`}>
           Open <Hi icon={ArrowRightIcon} size={12} />
         </button>
       </header>
@@ -121,7 +123,36 @@ export default function GoalsOverview({ onOpenPeriod, onAuthError, reloadKey = 0
   useEffect(() => { void load() }, [load, reloadKey])
 
   return (
-    <div className="goals-overview">
+    <>
+      {/* A ring per horizon, the app's (#180): how many of each are achieved, and a
+          way into it. The columns below carry the goals themselves. */}
+      <div className="goals-overview-rings">
+        {COLUMNS.map((column) => {
+          const data = columns[column.shortcut]
+          const sum = periodSummary(data?.goals ?? [])
+          const all = sum.counted > 0 && sum.achieved === sum.counted
+          const known = Boolean(data) && !loading
+          return (
+            <button
+              key={column.shortcut} type="button"
+              className={`goals-overview-ring period-${column.type}${all ? ' is-all' : ''}`}
+              onClick={() => onOpenPeriod(column.shortcut)}
+              aria-label={`${column.title}: ${known ? `${sum.achieved} of ${sum.counted} achieved` : 'loading'}. Open`}
+            >
+              <Ring
+                percent={sum.counted ? sum.ratio * 100 : 0}
+                color={all ? 'var(--green)' : 'var(--period)'}
+                track="color-mix(in srgb, var(--period) 18%, transparent)"
+                size={64} stroke={6}
+              >
+                <span className="goals-overview-ring-n">{known ? sum.achieved : '–'}<small>/{known ? sum.counted : '–'}</small></span>
+              </Ring>
+              <span className="goals-overview-ring-label">{column.title}</span>
+            </button>
+          )
+        })}
+      </div>
+      <div className="goals-overview">
       {COLUMNS.map((column) => (
         <OverviewColumn
           key={column.shortcut}
@@ -131,6 +162,7 @@ export default function GoalsOverview({ onOpenPeriod, onAuthError, reloadKey = 0
           onOpen={() => onOpenPeriod(column.shortcut)}
         />
       ))}
-    </div>
+      </div>
+    </>
   )
 }

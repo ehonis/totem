@@ -1,0 +1,544 @@
+/* ---- Goals ---------------------------------------------------------------
+   Productivity → Goals, drawn as the iPhone app draws it (mobile/src/features/
+   productivity/GoalsView.tsx, features/goals/): period chips with coloured dots,
+   a period hero with a ring of goals achieved, and goal cards with the goal's icon
+   inside its progress. Wider screens get the same pieces, with the cards in a grid
+   under the hero. Built on the kit (productivity/kit.css); colours come only from
+   palette variables, except the four period hues below and Bushido's lime.
+
+   Restrained on purpose: a goal card has to be readable at a glance on a phone at
+   the end of a week, so colour is reserved for the things that are decisions — it
+   has expired, it is nearly out of time, it has been moved so often that it is
+   really a "no", or it is achieved. */
+
+/* One hue per horizon, set once and inherited: a card, an overview column, the hero
+   and the tab that opens it all read `--period`, so week is the same blue everywhere
+   and a fifth period type would be one more rule here. The app's PERIOD_COLOR. */
+.period-week { --period: #5b8cff; }
+.period-month { --period: #7c5cff; }
+.period-quarter { --period: #2bb8a6; }
+.period-year { --period: #e3b341; }
+.period-custom { --period: var(--muted); }
+
+.view.goals { padding: 0; }
+
+/* ---- The period tabs: the app's band of pills with coloured dots ---------- */
+
+.goals-tabs-band { border-bottom: 1px solid var(--line); }
+.goals-tabs {
+  max-width: 1120px; margin: 0 auto; box-sizing: border-box;
+  padding: 12px 24px; display: flex; gap: 8px; flex-wrap: wrap;
+}
+.goals-tabs .goals-tab { flex: none; }
+.goals-tab .pk-dot { --dot: var(--period); opacity: .6; }
+.goals-tab.overview svg { color: var(--muted); }
+.goals-tabs .goals-tab[aria-selected='true'] {
+  border-color: color-mix(in srgb, var(--period, var(--accent)) 60%, transparent);
+  background: color-mix(in srgb, var(--period, var(--accent)) 18%, var(--bg-2));
+}
+.goals-tab[aria-selected='true'] .pk-dot { opacity: 1; }
+.goals-tab.overview[aria-selected='true'] svg { color: var(--accent); }
+.goals-tab-short { display: none; }
+
+.goals-page { gap: 14px; padding-top: 16px; }
+
+/* ---- The period hero ------------------------------------------------------ */
+
+.goals-hero {
+  background: var(--bg-2);
+  border: 1px solid color-mix(in srgb, var(--period) 30%, transparent);
+  border-radius: 16px;
+  padding: 18px 20px;
+  display: flex; align-items: center; gap: 14px 24px; flex-wrap: wrap;
+}
+/* Everything in play achieved: the card turns green and the count becomes a trophy. */
+.goals-hero.is-all { --period: var(--green); }
+.goals-hero-top { flex: 1 1 320px; min-width: 0; display: flex; align-items: center; gap: 16px; }
+.goals-hero-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.goals-hero-eyebrow {
+  margin: 0; font-size: 12.5px; font-weight: 600; color: var(--period);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.goals-hero.is-empty .goals-hero-eyebrow { flex: 1 1 200px; font-size: 14px; }
+.goals-hero-title { margin: 0; font-size: 18px; font-weight: 700; line-height: 1.25; color: var(--text); }
+.goals-hero-facts { margin: 0; font-size: 12.5px; color: var(--muted); }
+.goals-hero-count { font-size: 20px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1; }
+.goals-hero-count small { font-size: 13px; font-weight: 400; color: var(--muted); }
+.goals-hero-trophy { color: var(--amber); }
+.goals-hero-foot { flex: none; display: flex; align-items: center; gap: 6px; }
+.goals-hero-gap { display: flex; min-width: 0; }
+.goals-hero-reset {
+  min-height: 40px; padding: 0 6px; border: 0; border-radius: 8px; background: none;
+  color: var(--accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.goals-hero-reset:hover { text-decoration: underline; text-underline-offset: 2px; }
+.goals-hero-add { padding: 0 14px; }
+
+/* The Overview's head: one line of what it is, then refresh and + Goal. */
+.goals-overview-bar { display: flex; align-items: center; gap: 6px; }
+.goals-overview-bar p { flex: 1; min-width: 0; margin: 0; font-size: 13px; color: var(--muted); }
+
+.goals-error {
+  display: flex; align-items: center; gap: 8px; margin: 0;
+  padding: 4px 4px 4px 12px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+  color: var(--red); font-size: 13px;
+}
+.goals-error > span { flex: 1; min-width: 0; }
+.goals-error .pk-icon-btn { color: var(--red); }
+/* Inside the composer and the numbers dialog it is a plain line, not a banner. */
+.goal-composer .goals-error { display: block; }
+
+/* Empty, failed and loading bodies: the app's centred state. */
+.goals-state { padding: 48px 20px; gap: 8px; }
+.goals-state p { margin: 0; }
+.goals-state > svg { width: 30px; height: 30px; opacity: 1; }
+.goals-state .pk-btn { margin-top: 6px; min-height: 44px; }
+.goals-state .pk-btn svg { width: 16px; height: 16px; opacity: 1; }
+.goals-state-icon { color: color-mix(in srgb, var(--period, var(--muted)) 80%, transparent); }
+.goals-state-bad { color: var(--red); }
+.goals-state-title { font-size: 16px; font-weight: 600; color: var(--text); }
+.goals-state-sub { font-size: 13px; color: var(--muted); max-width: 40ch; }
+
+/* A goal card is a small, self-contained thing; giving it the full width of a desktop
+   window makes every card mostly whitespace with a progress bar stranded at the right
+   edge. Columns as soon as two fit, and `start` so a card with six steps doesn't
+   stretch its neighbours to match. */
+.goals-list { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); align-items: start; }
+/* Columns stretch to fill the row; one goal alone keeps a card's width. */
+.goals-list > :only-child { max-width: 560px; }
+.goals-done { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.goals-done-head {
+  display: flex; align-items: center; gap: 6px; margin: 0 2px;
+  font-size: 14px; font-weight: 600;
+  color: color-mix(in srgb, var(--green) 55%, var(--text));
+}
+
+/* ---- A goal card ---------------------------------------------------------- */
+
+.goal-card {
+  position: relative; min-width: 0;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px;
+  /* A left rail carries the period, rather than tinting the whole card. */
+  border-left: 3px solid color-mix(in srgb, var(--period, var(--line)) 45%, transparent);
+  padding: 14px; display: flex; flex-direction: column; gap: 10px;
+}
+.goal-card.expired { border-left-color: var(--amber); }
+
+/*
+ * Finished is an achievement, not a deletion.
+ *
+ * The reflex rendering — fade it to two-thirds, strike the title through — is the
+ * one every list uses for things it wants out of the way, and it turns a week's
+ * work into a column of crossed-out items. So a done card keeps its full contrast
+ * and gains a green ring, a faint wash and a halo instead: it is the brightest
+ * card on the page rather than the dimmest, and the bottom of the page is worth
+ * scrolling to. What happened is said in a chip, in words.
+ */
+.goal-card.done {
+  border-color: color-mix(in srgb, var(--green) 38%, var(--line));
+  border-left-color: var(--green);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--green) 10%, transparent), transparent 110px),
+    var(--bg-2);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--green) 20%, transparent),
+    0 6px 26px -12px color-mix(in srgb, var(--green) 70%, transparent);
+}
+.goal-card.done .goal-card-title h3 { color: var(--text); }
+/* Green, not the period colour: the bar has stopped being a countdown. */
+.goal-card.done .goal-bar-fill { background: linear-gradient(90deg, var(--green), #6ee787); }
+.goal-card.done .goal-percent { color: color-mix(in srgb, var(--green) 65%, var(--text)); }
+
+.goal-card-head { display: flex; align-items: flex-start; gap: 12px; }
+/* The goal's icon inside its progress ring (productivity/Ring.tsx). */
+.goal-icon { flex: none; display: inline-flex; color: var(--period, var(--accent)); }
+.goal-card.done .goal-icon { color: var(--green); }
+.goal-card-title { flex: 1; min-width: 0; padding-top: 4px; }
+.goal-card-title h3 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.goal-card-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.goal-card-chips:empty { display: none; }
+/* The card's own tools: the menu, then the one control worth a permanent place. */
+.goal-card-tools { flex: none; display: flex; align-items: center; margin: -2px -6px 0 0; }
+
+/* The percentage ends the bar it describes, so it reads as that bar's number rather
+   than as a second headline competing with the title. */
+.goal-percent { flex: none; min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 600; color: var(--muted); }
+.goal-bar-row { display: flex; align-items: center; gap: 9px; }
+.goal-bar-row .goal-bar { flex: 1; min-width: 0; }
+.goal-total { margin-top: 2px; }
+
+/* Round checks: the goal's big one on the right, a step's beside its title. */
+.goal-check {
+  flex: none; width: 32px; height: 32px; margin: -5px 0 0 -4px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer;
+}
+.goal-check:disabled { cursor: default; }
+.goal-check .hi { color: var(--green); }
+.goal-check-empty {
+  display: block; width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid var(--muted); box-sizing: border-box; transition: border-color .12s;
+}
+.goal-check:hover:not(:disabled) .goal-check-empty { border-color: var(--text); }
+.goal-check.big { width: 44px; height: 44px; margin: 0; }
+.goal-check.big .hi { color: var(--amber); }
+.goal-check.big .goal-check-empty {
+  width: 30px; height: 30px; border-width: 2.5px;
+  border-color: color-mix(in srgb, var(--period, var(--muted)) 70%, transparent);
+}
+.goal-check.big:hover:not(:disabled) .goal-check-empty { border-color: var(--period, var(--text)); }
+/* Pressed, the empty ring becomes a medal: the trophy gets a gold disc to sit in,
+   so the control you just used is the most finished-looking thing on the card. */
+.goal-check.big.won {
+  width: 40px; height: 40px; margin: 2px;
+  background: color-mix(in srgb, var(--amber) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+  box-shadow: 0 0 16px -6px color-mix(in srgb, var(--amber) 80%, transparent);
+}
+.goal-check.big.won:hover:not(:disabled) { background: color-mix(in srgb, var(--amber) 26%, transparent); }
+
+.goal-check:focus-visible, .goal-menu-toggle:focus-visible, .goal-step-off:focus-visible,
+.goals-hero-reset:focus-visible, .goals-overview-ring:focus-visible, .goal-chip.link a:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+.goal-notes { margin: 0; font-size: 13px; color: var(--muted); }
+
+.goal-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 260px;
+  font-size: 11px; line-height: 16px; padding: 2px 7px; border-radius: 999px;
+  background: var(--bg-3); border: 1px solid var(--line); color: var(--muted);
+}
+.goal-chip.expired { border-color: color-mix(in srgb, var(--amber) 33%, transparent); color: var(--amber); }
+.goal-chip.urgent { border-color: color-mix(in srgb, var(--accent) 33%, transparent); color: var(--accent); }
+/* Three or more moves is not a schedule, it is an answer. */
+.goal-chip.warn { border-color: color-mix(in srgb, var(--red) 33%, transparent); color: var(--red); }
+.goal-chip.source { border-color: color-mix(in srgb, var(--accent-2) 33%, transparent); color: var(--accent-2); }
+.goal-chip.not-doing { border-color: color-mix(in srgb, var(--muted) 45%, transparent); color: var(--muted); }
+/* The one chip that is good news, so it is the one chip that is filled in. */
+.goal-chip.achieved {
+  border-color: color-mix(in srgb, var(--green) 55%, transparent);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green); font-weight: 600;
+}
+.goal-chip.link a { color: inherit; }
+.goal-chip.link a, .goal-chip.link > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-chip.link.done { text-decoration: line-through; opacity: .7; }
+
+/*
+ * Bushido. On, it takes BUSHIDO'S OWN LIME rather than anything from the palette.
+ * This is the one chip that points at another app, and borrowing that app's accent
+ * is what makes it read as "this is over there" instead of as one more Totem state.
+ * It is the only lime in the dashboard, which is the point.
+ */
+.goal-chip.bushido.on { border-color: #b8f23d77; color: #b8f23d; background: #b8f23d14; }
+
+/* A goal you have stopped is still a record of a decision, so it stays readable —
+   it just stops looking like something you are working on. Only a stopped goal is
+   crossed off; an achieved one never is. */
+.goal-card.not-doing { opacity: .72; }
+.goal-card.not-doing:not(.done) h3 { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+.goal-card.not-doing:hover, .goal-card.not-doing:focus-within { opacity: 1; }
+
+/* Edit, not doing, delete — behind one button, as in the app's "…" menu. */
+.goal-menu-anchor { position: relative; display: inline-flex; }
+.goal-menu-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 40px; padding: 0; border: 0; border-radius: 10px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.goal-menu-toggle:hover:not(:disabled), .goal-menu-toggle[aria-expanded="true"] { color: var(--text); background: var(--bg-3); }
+.goal-menu-toggle:disabled { opacity: .45; cursor: default; }
+.goal-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30;
+  display: grid; gap: 1px; min-width: 220px; padding: 5px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg-2);
+  box-shadow: 0 16px 34px #00000070;
+}
+.goal-menu button {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px;
+  padding: 0 10px; border: 0; border-radius: 8px; background: transparent;
+  color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.goal-menu button .hi { color: var(--muted); }
+.goal-menu button:hover, .goal-menu button:focus-visible { background: var(--bg-3); outline: none; }
+.goal-menu button.danger, .goal-menu button.danger .hi { color: var(--red); }
+.goal-menu-separator { height: 1px; margin: 3px 2px; background: var(--line); }
+
+.goal-edit { display: grid; gap: 6px; }
+.goal-edit h3 { margin: 0; }
+.goal-edit input, .goal-edit textarea {
+  width: 100%; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 14px; resize: vertical;
+}
+.goal-edit input { font-weight: 600; }
+.goal-edit input:focus, .goal-edit textarea:focus { outline: none; border-color: var(--accent); }
+.goal-edit-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* One number: label and amount, a bar, then +1 and Log… (or where it comes from). */
+.goal-metric { display: flex; flex-direction: column; gap: 5px; }
+.goal-metric.unreadable { opacity: .75; }
+.goal-metric-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; font-size: 13px; }
+.goal-metric-label { font-weight: 500; }
+.goal-metric-amount { margin-left: auto; text-align: right; font-variant-numeric: tabular-nums; }
+.goal-metric-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; min-height: 28px; }
+.goal-metric-log { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.goal-plus-one { gap: 4px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.goal-metric-log input {
+  width: 72px; height: 32px; box-sizing: border-box;
+  background: var(--bg-3); border: 1px solid var(--line); color: var(--text);
+  border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px;
+}
+.goal-metric-log input::placeholder { color: var(--muted); }
+.goal-metric-log input:focus { outline: none; border-color: var(--accent); }
+
+.goal-bar { height: 8px; border-radius: 999px; background: var(--bg-3); overflow: hidden; }
+.goal-bar-fill { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .5s cubic-bezier(.33, 1, .68, 1); }
+@media (prefers-reduced-motion: reduce) { .goal-bar-fill { transition: none; } }
+/* An unreadable source draws no fill at all — a zero bar would look like a bad week. */
+.goal-metric.unreadable .goal-bar { background: repeating-linear-gradient(135deg, var(--bg-3) 0 5px, var(--bg-2) 5px 10px); }
+
+/* Steps: round checks down a rail, each with rename, numbers and not-doing. */
+.goal-steps {
+  display: flex; flex-direction: column; gap: 10px;
+  border-left: 2px solid var(--line); padding: 2px 0 2px 10px; margin-left: 4px;
+}
+.goal-step { display: flex; gap: 8px; align-items: flex-start; }
+.goal-step .goal-check { margin-top: -4px; }
+.goal-step-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; padding-top: 2px; }
+.goal-step-title { font-size: 14px; line-height: 1.35; overflow-wrap: anywhere; }
+.goal-step-rename {
+  width: 100%; box-sizing: border-box; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 14px;
+}
+/* How far through a step with numbers on it is. Beside the name rather than on a bar of
+   its own: the metric bars underneath already say it per number, and this is the one
+   figure that says it for the step. Tabular so a column of them does not jitter. */
+.goal-step-pct { margin-left: 6px; font-size: 11px; font-variant-numeric: tabular-nums; }
+/* A step you finished reads as finished through its tick and its colour. Striking
+   it out would file the same work under "ignore this". */
+.goal-step.done .goal-step-title { color: color-mix(in srgb, var(--green) 35%, var(--text)); }
+/* A step you decided against is the opposite case, and gets the line the finished one
+   deliberately does not. */
+.goal-step.not-doing:not(.done) .goal-step-title {
+  color: var(--muted); text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.goal-step.not-doing { opacity: .72; }
+.goal-step.not-doing:hover, .goal-step.not-doing:focus-within { opacity: 1; }
+
+/* Quiet until you go near the step on a desktop — a decision, not a control you reach
+   for often. Always in the DOM and always focusable, so the keyboard never loses it,
+   and always shown on touch, as in the app. */
+.goal-step-off {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; margin-top: -4px; padding: 0; border: 0; border-radius: 9px;
+  background: transparent; color: var(--muted); cursor: pointer;
+  opacity: 0; transition: opacity .12s ease, color .12s ease;
+}
+.goal-step:hover .goal-step-off, .goal-step-off:focus-visible,
+.goal-step.not-doing .goal-step-off { opacity: 1; }
+.goal-step-off:hover:not(:disabled) { color: var(--text); background: var(--bg-3); }
+.goal-step-off:disabled { cursor: default; opacity: .4; }
+@media (hover: none) { .goal-step-off { opacity: 1; } }
+
+.goal-step-add { display: flex; flex: 1; gap: 6px; align-items: center; }
+.goal-step-add input {
+  flex: 1; min-width: 0; height: 32px; box-sizing: border-box;
+  background: var(--bg-3); border: 1px solid var(--line); color: var(--text);
+  border-radius: 8px; padding: 0 10px; font: inherit; font-size: 13px;
+}
+.goal-step-add input:focus { outline: none; border-color: var(--accent); }
+
+.goal-links { display: flex; gap: 6px; flex-wrap: wrap; }
+.goal-card-foot { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.goal-confirm { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+
+/* ---- The composer and the numbers dialog ---------------------------------- */
+
+.goal-composer { width: min(520px, 100%); gap: 12px; }
+.goal-composer .field > span { margin-left: 4px; font-size: 11px; font-weight: 400; }
+.goal-composer .field textarea { min-height: 72px; }
+.goal-composer-error { padding: 8px 10px; border: 1px solid #f0506e55; border-radius: 8px; background: #f0506e0d; }
+.goal-composer-metric {
+  min-width: 0; margin: 0; padding: 10px; display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 9px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+}
+.goal-composer-metric legend { padding: 0 5px; color: var(--muted); font-size: 11px; }
+.goal-composer-metric-label, .goal-composer-metric-source, .goal-composer-metric-extra { grid-column: 1 / -1; }
+.goal-composer-remove { width: fit-content; color: var(--muted); }
+.goal-composer-number-row { display: flex; align-items: center; gap: 10px; }
+.goal-composer-number-row p { margin: 0; font-size: 11px; }
+/* A `field` is normally a <label> wrapping its control; the sport picker is a button,
+   which a label must not wrap — clicking the label would then toggle the popup. */
+.goal-composer-field-label { font-size: 12px; color: var(--muted); }
+.goal-composer-hint { margin: 0; font-size: 11px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .goal-composer-backdrop { animation: goal-dialog-fade .16s ease-out; }
+  .goal-composer { animation: goal-dialog-pop .18s cubic-bezier(.22, .61, .36, 1); }
+
+  /* The flourish, fired by the card only when a goal crosses into done — never on
+     load. One ring out of the card's own edge, a half-millimetre of lift, and the
+     trophy landing in its disc; then it settles into the resting glow, which is
+     the part that stays. The resting shadow is repeated in both keyframes so the
+     card doesn't flick as the animation hands back. */
+  .goal-card.celebrate { animation: goal-won .9s cubic-bezier(.22, .61, .36, 1); }
+  .goal-card.celebrate .goal-check.big.won .hi { animation: goal-trophy-pop .55s cubic-bezier(.3, 1.5, .5, 1); }
+  .goal-card.celebrate .goal-chip.achieved { animation: goal-chip-in .4s ease-out both; }
+}
+@keyframes goal-won {
+  0% {
+    transform: scale(1);
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--green) 20%, transparent),
+      0 6px 26px -12px color-mix(in srgb, var(--green) 70%, transparent);
+  }
+  18% { transform: scale(1.012); }
+  100% {
+    transform: scale(1);
+    box-shadow:
+      0 0 0 12px transparent,
+      0 0 0 1px color-mix(in srgb, var(--green) 20%, transparent),
+      0 6px 26px -12px color-mix(in srgb, var(--green) 70%, transparent);
+  }
+}
+@keyframes goal-trophy-pop {
+  0% { transform: scale(.35) rotate(-14deg); opacity: 0; }
+  60% { transform: scale(1.2) rotate(5deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); }
+}
+@keyframes goal-chip-in { from { opacity: 0; transform: translateY(-3px); } }
+@keyframes goal-dialog-fade { from { opacity: 0; } }
+@keyframes goal-dialog-pop { from { opacity: 0; transform: translateY(4px) scale(.985); } }
+
+/* ---- The icon select (the composer's sport picker) ------------------------ */
+
+.icon-select { position: relative; }
+.icon-select-trigger {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  background: var(--bg-3); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  text-align: left;
+}
+.icon-select-trigger:hover:not(:disabled), .icon-select-trigger.open { border-color: var(--accent); }
+.icon-select-trigger:disabled { opacity: .55; cursor: default; }
+.icon-select-trigger .hi { color: var(--accent); }
+.icon-select-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-select-caret { color: var(--muted) !important; }
+
+/* Portalled to <body> and positioned from JS — see IconSelect.tsx. A dialog that
+   scrolls would otherwise clip it, which is how the sport list came out sawn off. */
+.icon-select-list {
+  position: fixed; z-index: 120;
+  max-height: 260px; overflow: auto; padding: 4px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 12px 30px #0009;
+}
+.icon-select-option {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: 7px; cursor: pointer; font-size: 13px;
+}
+.icon-select-option .hi { color: var(--muted); }
+.icon-select-option.active { background: var(--bg-3); }
+.icon-select-option.active .hi, .icon-select-option.selected .hi { color: var(--accent); }
+.icon-select-option.selected { color: var(--accent); }
+.icon-select-hint { margin-left: auto; font-size: 11px; }
+
+/* ---- The Overview ----------------------------------------------------------
+   Every horizon at once: a ring per horizon, then the horizons side by side. The
+   point is comparison, so the columns are equal width and the only thing that
+   varies between them is their colour and how full they are. */
+
+.goals-overview-rings {
+  display: flex; justify-content: space-around; flex-wrap: wrap; gap: 8px;
+  padding: 14px 8px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px;
+}
+.goals-overview-ring {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  min-width: 88px; padding: 6px 12px; border: 0; border-radius: 12px;
+  background: none; color: var(--text); font: inherit; cursor: pointer;
+}
+.goals-overview-ring:hover { background: var(--bg-3); }
+.goals-overview-ring-n { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+.goals-overview-ring-n small { font-size: 11px; font-weight: 400; color: var(--muted); }
+.goals-overview-ring-label { font-size: 12.5px; font-weight: 600; color: var(--period); }
+
+.goals-overview { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); align-items: start; }
+.goals-overview-col {
+  min-width: 0; background: var(--bg-2); border: 1px solid var(--line);
+  border-top: 2px solid var(--period); border-radius: 12px;
+  padding: 12px; display: flex; flex-direction: column; gap: 8px;
+}
+.goals-overview-head { display: flex; align-items: center; gap: 8px; }
+.goals-overview-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.goals-overview-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--period); flex: none; }
+.goals-overview-open { margin-left: auto; color: var(--muted); }
+.goals-overview-sub { margin: 0; font-size: 11px; }
+
+.goals-overview-total { height: 4px; border-radius: 999px; background: var(--bg-3); overflow: hidden; }
+.goals-overview-total > span { display: block; height: 100%; background: var(--period); }
+
+.goals-overview-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.goals-overview-goal {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 8px; align-items: center;
+  font-size: 13px;
+}
+.goals-overview-goal .hi { color: var(--period); }
+.goals-overview-goal-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goals-overview-goal-percent { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
+.goals-overview-goal-bar { grid-column: 2 / -1; height: 4px; border-radius: 999px; background: var(--bg-3); overflow: hidden; }
+.goals-overview-goal-bar > span { display: block; height: 100%; background: var(--period); }
+/* Same rule as the card: done is the line that stands out, not the one that fades. */
+.goals-overview-goal.done .hi,
+.goals-overview-goal.done .goals-overview-goal-percent { color: var(--green); }
+.goals-overview-goal.done .goals-overview-goal-bar > span { background: var(--green); }
+/* Same reading as on the card: stopped, not gone. */
+.goals-overview-goal.not-doing:not(.done) .goals-overview-goal-title {
+  color: var(--muted); text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.goals-overview-empty { margin: 4px 0; display: flex; align-items: center; gap: 7px; font-size: 12px; }
+
+/* ---- Phone width: the app's sizes ------------------------------------------ */
+
+@media (max-width: 720px) {
+  /* Five tabs across, the app's short names, 44pt targets. */
+  .goals-tabs { padding: 8px 12px; gap: 4px; flex-wrap: nowrap; }
+  .goals-tabs .goals-tab { flex: 1 1 auto; min-width: 0; height: 44px; padding: 0 6px; gap: 5px; justify-content: center; font-size: 13.5px; }
+  .goals-tab .pk-dot { width: 8px; height: 8px; }
+  .goals-tab-long { display: none; }
+  .goals-tab-short { display: inline; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Clear the dock and the round buttons in the bottom-right corner, as .view would. */
+  .goals-page { padding-top: 12px; padding-bottom: calc(var(--dock-clear, 14px) + 96px); }
+  .goals-list { gap: 12px; }
+
+  .goals-hero { flex-direction: column; align-items: stretch; padding: 14px; gap: 14px; }
+  .goals-hero-top { flex: none; }
+  .goals-hero.is-empty .goals-hero-eyebrow { flex: none; font-size: 12.5px; }
+  .goals-hero-foot { width: 100%; }
+  .goals-hero-gap { flex: 1; }
+  .goals-hero-btn { width: 44px; height: 44px; }
+  .goals-hero-add, .goals-hero-reset { min-height: 44px; }
+
+  .goal-menu-toggle { width: 40px; height: 44px; }
+  .goal-metric-log .goal-plus-one { min-height: 44px; padding: 0 14px; }
+  /* 16px or Safari zooms the page the moment a field takes focus. */
+  .goal-metric-log input { height: 44px; font-size: 16px; }
+  .goal-step-rename, .goal-step-add input, .goal-edit input, .goal-edit textarea { font-size: 16px; }
+  .goal-step-off { width: 36px; height: 36px; margin-top: -8px; }
+  .goal-steps { gap: 12px; }
+
+  .goal-composer-metric { grid-template-columns: 1fr; }
+  .goal-composer-metric-label, .goal-composer-metric-source, .goal-composer-metric-extra { grid-column: auto; }
+  .goal-composer-number-row { align-items: flex-start; flex-direction: column; }
+  @media (prefers-reduced-motion: no-preference) {
+    .goal-composer { animation: sheet-up .18s ease-out; }
+  }
+}

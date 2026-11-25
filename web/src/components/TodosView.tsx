@@ -216,11 +216,15 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
     overdue: full.sections.find((section) => section.key === 'overdue')?.items.length ?? 0,
     today: full.sections.find((section) => section.key === 'today')?.items.length ?? 0,
   }
-  const liveLine = [
-    counts.overdue ? `${counts.overdue.toLocaleString()} overdue` : null,
-    counts.today ? `${counts.today.toLocaleString()} today` : null,
-    doneToday ? `${doneToday.toLocaleString()} done today` : null,
-  ].filter(Boolean).join(' · ') || (board.loaded ? 'Nothing due today' : '')
+  // The app's status line: what is left today (overdue and due today) and what is done today.
+  const leftToday = counts.overdue + counts.today
+  const liveLine = leftToday || doneToday ? (
+    <>
+      {leftToday > 0 && <span className="tk-live-left"><b>{leftToday.toLocaleString()}</b> left today</span>}
+      {leftToday > 0 && doneToday > 0 && <span className="tk-live-sep" aria-hidden="true">·</span>}
+      {doneToday > 0 && <span className="tk-live-done"><Hi icon={CheckCircleIcon} size={16} /><b>{doneToday.toLocaleString()}</b> done today</span>}
+    </>
+  ) : (board.loaded ? 'Nothing due today' : '')
 
   // The Snoozed fold's "next back" is about the snoozed tasks it holds (this scope and search).
   const wakeAt = nextWake([...snoozed, ...sheetAsleep.map((item) => ({ snoozedUntil: item.mark.until ?? null }))], now)
@@ -636,17 +640,17 @@ export default function TodosView({ onAuthError, now: clock = () => new Date(), 
 
       <div className="tk-scopes" role="radiogroup" aria-label="Show">
         {chips.map((chip) => (
-          <button key={chip.id} type="button" role="radio" aria-checked={scope === chip.id} className={`tk-scope${scope === chip.id ? ' on' : ''}`} onClick={() => setView((current) => ({ ...current, scope: chip.id, sub: null }))}>
-            {chip.icon}{chip.label}{chip.count > 0 && <span>{chip.count.toLocaleString()}</span>}
+          <button key={chip.id} type="button" role="radio" aria-checked={scope === chip.id} className={`pk-chip tk-scope${scope === chip.id ? ' pk-on on' : ''}`} onClick={() => setView((current) => ({ ...current, scope: chip.id, sub: null }))}>
+            {chip.icon}{chip.label}{chip.count > 0 && <span className="pk-n">{chip.count.toLocaleString()}</span>}
           </button>
         ))}
       </div>
       {subChips.length > 0 && (
         <div className="tk-scopes tk-subscopes" role="radiogroup" aria-label={`Folders in ${folderLabel(project, projects)}`}>
-          <button type="button" role="radio" aria-checked={!sub} className={`tk-scope${!sub ? ' on' : ''}`} onClick={() => setView((current) => ({ ...current, sub: null }))}>All in {folderLabel(project, projects)}</button>
+          <button type="button" role="radio" aria-checked={!sub} className={`pk-chip tk-scope${!sub ? ' pk-on on' : ''}`} onClick={() => setView((current) => ({ ...current, sub: null }))}>All in {folderLabel(project, projects)}</button>
           {subChips.map((chip) => (
-            <button key={chip.id} type="button" role="radio" aria-checked={sub === chip.id} className={`tk-scope${sub === chip.id ? ' on' : ''}`} onClick={() => setView((current) => ({ ...current, sub: chip.id }))}>
-              <ProjectIcon p={chip.project} size={13} />{chip.project.name}<span>{chip.count.toLocaleString()}</span>
+            <button key={chip.id} type="button" role="radio" aria-checked={sub === chip.id} className={`pk-chip tk-scope${sub === chip.id ? ' pk-on on' : ''}`} onClick={() => setView((current) => ({ ...current, sub: chip.id }))}>
+              <ProjectIcon p={chip.project} size={13} />{chip.project.name}<span className="pk-n">{chip.count.toLocaleString()}</span>
             </button>
           ))}
         </div>

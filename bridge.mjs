@@ -637,7 +637,8 @@ const HABIT_RULES =
   '"createdAt": "<ISO>", "archived": false, "metric": <optional, see below>, ' +
   '"when": "any"|"morning"|"night" (when he answers it: "night" habits are done late and logged the next ' +
   'morning against the day before), "linkedApp": null|"krakatoa"|"bushido" (that app fills the habit in itself: ' +
-  'never log, tick or undo a linked habit; say it comes from that app) } ], ' +
+  'never log, tick or undo a linked habit; say it comes from that app), "parentId": null|"<id of the group it sits under>", ' +
+  '"idFixed": true (written by the dashboard: keep it, never change an existing habit\'s id, and leave it off a habit you add) } ], ' +
   '"entries": { "YYYY-MM-DD": { "<habitId>": { "count": <int >= 1>, ' +
   '"note": "<optional short note>", "value": <optional number>, "parts": <optional {"<partKey>": number}>, ' +
   '"skipped": <optional true: he answered "no" in the check-in; count stays 0> } } }, ' +
@@ -651,6 +652,12 @@ const HABIT_RULES =
   'When the owner reports that number ("slept 84 last night", "82 sleep score, 1h10 deep"), write it to that day\'s ' +
   'entry as "value" (and "parts" in the metric\'s own unit, e.g. minutes), and set "count": 1 as well — logging ' +
   'the number means the habit happened. Never invent a number he did not give. ' +
+  'SUB-HABITS: a habit may sit under one other habit ("parentId"), one level deep (a "Nightly routine" holding ' +
+  '"Sleep hygiene" and "No screens"). A habit with sub-habits is a group: it has no entries of its own and is done ' +
+  'for a day when every sub-habit is, so never write an entry for a group; log its sub-habits. "Did my whole ' +
+  'nightly routine" means logging each of its sub-habits (or totem_log_habit with the group id and complete: true). ' +
+  'A linked or WHOOP-filled habit can never be a group, and a group cannot sit under another habit. ' +
+  'A new sub-habit goes in the habits array right after its group\'s last sub-habit. ' +
   'Completions are ALWAYS logged under the local calendar date they happened, whatever the cadence; the cadence ' +
   'only changes what counts as on-track (weeks run Monday-Sunday, months are calendar months). ' +
   'When the owner reports doing (or skipping) habits — especially in a nightly day-in-review — read the file, ' +
@@ -1443,7 +1450,7 @@ function sanitizeDataConnectionPatch(id, body = {}) {
 // One JSON file (HABITS_FILE) is the single source of truth for both the
 // dashboard (/api/habits*) and the agent (HABIT_RULES has it edit the file
 // directly), so state never lives in two places. Shape:
-//   { habits:  [{ id, name, description, color, target, createdAt, archived }],
+//   { habits:  [{ id, name, description, color, target, createdAt, archived, parentId }],
 //     entries: { "YYYY-MM-DD": { "<habitId>": { count, note } } } }
 // The order of active objects in `habits` is the user's check-in order.
 // `target` is how many completions make a "full-intensity" day (GitHub-style
@@ -1601,6 +1608,70 @@ function nextHabitColor(habits) {
   return HABIT_COLORS.find((c) => !used.has(c)) || HABIT_COLORS[habits.length % HABIT_COLORS.length]
 }
 
+// Sub-habits: a habit may sit under one other habit (`parentId`), one level deep,
+// like chat folders. A habit with sub-habits is a group: it has no check of its own,
+// its day is done when every sub-habit's is (worked out by the clients from the
+// children's entries, habits/groups in web/src/habitGroups.ts), and logging it marks
+// its hand-logged sub-habits (doLogHabitRecord). An app or WHOOP fills a habit by
+// logging its id, so such a habit can never be a group. The file is hand-edited by
+// agents, so a parent that is missing, itself, nested, or app-filled is dropped here.
+// The habit the WHOOP sleep sync falls back on when none is marked whoop-sleep.
+// Up here because the habit helpers below read it.
+const WHOOP_SLEEP_HABIT_ID = process.env.WHOOP_SLEEP_HABIT_ID || 'wear-garmin-to-sleep'
+function habitFilledElsewhere(h) {
+  return Boolean(h?.linkedApp) || h?.metric?.source === 'whoop-sleep' || h?.id === WHOOP_SLEEP_HABIT_ID
+}
+// A habit's completions over the period holding `day`: its week (Monday to
+// Sunday, as the clients count) or calendar month; the day itself when daily.
+function habitPeriodTotal(entries, habit, day) {
+  const count = (d) => entries[d]?.[habit.id]?.count || 0
+  if (habit.cadence === 'monthly') {
+    const ym = day.slice(0, 7)
+    return Object.keys(entries).filter((d) => d.startsWith(ym)).reduce((t, d) => t + count(d), 0)
+  }
+  if (habit.cadence === 'weekly') {
+    const [y, m, d] = day.split('-').map(Number)
+    const start = new Date(y, m - 1, d - ((new Date(y, m - 1, d).getDay() + 6) % 7))
+    let t = 0
+    for (let i = 0; i < 7; i++) {
+      const at = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)
+      t += count(`${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}-${String(at.getDate()).padStart(2, '0')}`)
+    }
+    return t
+  }
+  return count(day)
+}
+function normalizeHabitParents(habits, storedIds = new Map()) {
+  const byId = new Map(habits.map((h) => [h.id, h]))
+  for (const h of habits) {
+    if (h.parentId) h.parentId = storedIds.get(h.parentId) ?? (byId.has(h.parentId) ? h.parentId : habitSlug(h.parentId))
+    const p = h.parentId ? byId.get(h.parentId) : null
+    if (!p || p === h || habitFilledElsewhere(p)) h.parentId = null
+  }
+  // One level: a parent that has a parent of its own keeps its place, its children
+  // come out to the top. Only ever clears, so an edge kept here stays valid.
+  for (const h of habits) {
+    if (h.parentId && byId.get(h.parentId).parentId) h.parentId = null
+  }
+}
+// The habits sitting under `id` that still count (archived ones are history only).
+function habitChildren(habits, id) {
+  return habits.filter((h) => h.parentId === id && !h.archived)
+}
+// Refuses a parent the rules above would drop, before anything is written.
+function checkHabitParent(habits, habit, rawParent) {
+  if (rawParent === null || rawParent === undefined || rawParent === '') return null
+  if (typeof rawParent !== 'string') throw new Error('parentId must be a habit id or null')
+  const parent = habits.find((h) => h.id === rawParent)
+  if (!parent) throw new Error('unknown parent habit')
+  if (habit && parent.id === habit.id) throw new Error('a habit cannot sit under itself')
+  if (parent.archived) throw new Error(`"${parent.name}" is archived`)
+  if (parent.parentId) throw new Error(`"${parent.name}" is itself a sub-habit; sub-habits go one level deep`)
+  if (habitFilledElsewhere(parent)) throw new Error(`"${parent.name}" is filled in by an app, so it cannot hold sub-habits`)
+  if (habit && habits.some((h) => h.parentId === habit.id)) throw new Error(`"${habit.name}" has sub-habits of its own, so it cannot go under another habit`)
+  return parent.id
+}
+
 // Read + normalize. Tolerates a missing file, and (since the agent hand-edits
 // this JSON) coerces every field to a sane value instead of trusting it.
 async function readHabitsState() {
@@ -1608,12 +1679,22 @@ async function readHabitsState() {
   try { raw = JSON.parse(await readFile(HABITS_FILE, 'utf8')) } catch {}
   const habits = []
   const seen = new Set()
-  for (const h of Array.isArray(raw.habits) ? raw.habits : []) {
-    const name = typeof h?.name === 'string' ? h.name.trim() : ''
-    if (!name) continue
-    let id = typeof h?.id === 'string' && h.id.trim() ? habitSlug(h.id) : habitSlug(name)
+  // Each habit's id as written in the file → the id it reads as, for parentId.
+  const storedIds = new Map()
+  // Ids are read in file order exactly as they always were (slug, then "-2" on a
+  // clash), except an id the bridge itself wrote (`idFixed`, set on every habit it
+  // saves), which is kept as written. Re-slugging cuts at 40 characters, so a
+  // "<slug>-2" would otherwise come back after a reorder as the habit before it,
+  // entries and all. A record without the mark (a file from before it, a habit an
+  // agent added by hand) reads as it always did until the bridge next saves it.
+  const rawHabits = (Array.isArray(raw.habits) ? raw.habits : []).filter((h) => typeof h?.name === 'string' && h.name.trim())
+  for (const h of rawHabits) {
+    const name = h.name.trim()
+    const fixed = h.idFixed === true && typeof h.id === 'string' && /^[a-z0-9-]{1,64}$/.test(h.id)
+    let id = fixed ? h.id : habitSlug(typeof h?.id === 'string' && h.id.trim() ? h.id : name)
     while (seen.has(id)) id = `${id}-2`
     seen.add(id)
+    if (typeof h?.id === 'string' && h.id.trim() && !storedIds.has(h.id.trim())) storedIds.set(h.id.trim(), id)
     const target = Math.min(Math.max(Math.round(Number(h?.target)) || 1, 1), 50)
     habits.push({
       id,
@@ -1625,11 +1706,15 @@ async function readHabitsState() {
       metric: normalizeHabitMetric(h?.metric),
       when: HABIT_WHEN.includes(h?.when) ? h.when : 'any',
       linkedApp: HABIT_APPS.includes(h?.linkedApp) ? h.linkedApp : null,
+      // Resolved against the final ids below (normalizeHabitParents), never slugged here:
+      // a slug cuts at 40 characters, so "…-2" would point at the habit without it.
+      parentId: typeof h?.parentId === 'string' && h.parentId.trim() ? h.parentId.trim() : null,
       createdAt: typeof h?.createdAt === 'string' ? h.createdAt : new Date().toISOString(),
       archived: h?.archived === true,
     })
   }
   for (const h of habits) if (!h.color) h.color = nextHabitColor(habits.filter((x) => x.color))
+  normalizeHabitParents(habits, storedIds)
   const entries = {}
   if (raw.entries && typeof raw.entries === 'object') {
     for (const [date, day] of Object.entries(raw.entries)) {
@@ -1666,7 +1751,8 @@ async function readHabitsState() {
 async function writeHabitsState(state) {
   await mkdir(dirname(HABITS_FILE), { recursive: true })
   await writeJsonAtomic(HABITS_FILE, {
-    habits: state.habits,
+    // Every id written here is one the bridge settled on; readHabitsState keeps it as is.
+    habits: state.habits.map((h) => ({ ...h, idFixed: true })),
     entries: state.entries,
     checkin: state.checkin || { lastShown: null },
     updatedAt: new Date().toISOString(),
@@ -1709,7 +1795,15 @@ async function buildHabitsPayload({ days = 371 } = {}) {
   }
   const apps = habitAppUrls()
   // A linked habit carries its app's address, so any view can link to it.
-  const shown = habits.map((h) => (h.linkedApp ? { ...h, appUrl: apps[h.linkedApp] || null } : h))
+  // A sub-habit of an archived group shows at the top level until the group returns.
+  const archivedIds = new Set(habits.filter((h) => h.archived).map((h) => h.id))
+  const shown = habits.map((h) => {
+    let out = h.parentId && archivedIds.has(h.parentId) ? { ...h, parentId: null } : h
+    // Filled by an app or the WHOOP sync (the fallback id included, which only the
+    // bridge knows): a group's check skips it, and the clients read that from here.
+    if (habitFilledElsewhere(out)) out = { ...out, autoFilled: true }
+    return out.linkedApp ? { ...out, appUrl: apps[out.linkedApp] || null } : out
+  })
   // No clock and no file path in it: the same habits answer the same body, so
   // the app's GET cache gets a 304 (http/etag.mjs).
   return { today, habits: shown, entries: visibleEntries, palette: HABIT_COLORS, apps, checkin }
@@ -1728,6 +1822,7 @@ async function doCreateHabitRecord(body = {}) {
   if (body.cadence !== undefined && !HABIT_CADENCES.includes(body.cadence)) {
     throw new Error('cadence must be daily, weekly, or monthly')
   }
+  const parentId = checkHabitParent(state.habits, null, body.parentId)
   state.habits.push({
     id,
     name: name.slice(0, 80),
@@ -1738,9 +1833,17 @@ async function doCreateHabitRecord(body = {}) {
     metric: normalizeHabitMetric(body.metric),
     when: HABIT_WHEN.includes(body.when) ? body.when : 'any',
     linkedApp: HABIT_APPS.includes(body.linkedApp) ? body.linkedApp : null,
+    parentId,
     createdAt: new Date().toISOString(),
     archived: false,
   })
+  // A new sub-habit goes right after its group's last one, so the group stays together.
+  if (parentId) {
+    const made = state.habits.pop()
+    let at = state.habits.findIndex((h) => h.id === parentId)
+    state.habits.forEach((h, i) => { if (h.parentId === parentId) at = Math.max(at, i) })
+    state.habits.splice(at + 1, 0, made)
+  }
   await writeHabitsState(state)
   recordActivity('habit.create', { label: name })
   return buildHabitsPayload()
@@ -1777,6 +1880,10 @@ async function doUpdateHabitRecord(id, fields = {}) {
     habit.linkedApp = fields.linkedApp
   }
   if (fields.archived !== undefined) habit.archived = fields.archived === true
+  if (fields.parentId !== undefined) habit.parentId = checkHabitParent(state.habits, habit, fields.parentId)
+  if (habitFilledElsewhere(habit) && habitChildren(state.habits, habit.id).length) {
+    throw new Error(`"${habit.name}" has sub-habits, so an app cannot fill it in`)
+  }
   await writeHabitsState(state)
   return buildHabitsPayload()
 }
@@ -1814,6 +1921,8 @@ async function doDeleteHabitRecord(id) {
   const state = await readHabitsState()
   if (!state.habits.some((h) => h.id === id)) throw new Error('unknown habit')
   state.habits = state.habits.filter((h) => h.id !== id)
+  // Its sub-habits keep their history and move to the top level.
+  for (const h of state.habits) if (h.parentId === id) h.parentId = null
   for (const [date, day] of Object.entries(state.entries)) {
     delete day[id]
     if (!Object.keys(day).length) delete state.entries[date]
@@ -1830,14 +1939,74 @@ async function doDeleteHabitRecord(id) {
 // scraper and a nightly check-in write through exactly the same path.
 // `complete: true` ticks the habit off when a number arrives without a count —
 // the number is itself the evidence the habit happened.
-async function doLogHabitRecord({ id, date, count, delta, note, value, parts, stats, window, complete, source, skipped } = {}) {
+//
+// A group (a habit with sub-habits) has no entry of its own. `complete: true` marks
+// each of its hand-logged sub-habits done (its target for a daily one, at least one
+// for a weekly or monthly one), `complete: false` clears them, and `counts`
+// ({ "<sub-habit id>": n }) sets them exactly, which is how a client undoes either.
+// App-filled sub-habits are never touched. One read, one write, one queue slot.
+async function doLogHabitRecord(args = {}) {
   const state = await readHabitsState()
-  const habit = state.habits.find((h) => h.id === id)
+  const habit = state.habits.find((h) => h.id === args.id)
   if (!habit) throw new Error('unknown habit')
+  const day = habitLogDay(args.date)
+  const children = habitChildren(state.habits, habit.id)
+  let logged = false
+  if (children.length) {
+    // An app or WHOOP fills its own sub-habits; a group's check never writes them.
+    const handLogged = children.filter((c) => !habitFilledElsewhere(c))
+    // A group has no number, note or count of its own; a metric posted to one (an app
+    // or the sleep sync pointed at it) is refused rather than dropped on the floor.
+    const own = ['count', 'delta', 'note', 'value', 'parts', 'stats', 'window', 'source', 'skipped'].filter((k) => args[k] !== undefined)
+    if (own.length) throw new Error(`"${habit.name}" is a group, so it takes no ${own.join(', ')}: log one of its sub-habits`)
+    const child = (childId) => {
+      const found = handLogged.find((c) => c.id === childId)
+      if (!found) throw new Error(`"${childId}" is not a hand-logged sub-habit of "${habit.name}"`)
+      return found
+    }
+    if (args.counts !== undefined) {
+      if (!args.counts || typeof args.counts !== 'object' || Array.isArray(args.counts)) throw new Error('counts must be an object of sub-habit ids to counts')
+      // `skips` lists the sub-habits whose day was a check-in "No", so an undo puts that back too.
+      if (args.skips !== undefined && !Array.isArray(args.skips)) throw new Error('skips must be an array of sub-habit ids')
+      const skips = new Set((args.skips || []).map((id) => child(String(id)).id))
+      for (const [childId, n] of Object.entries(args.counts)) {
+        const c = child(childId)
+        const no = skips.has(c.id) && !(Number(n) > 0)
+        logged = applyHabitLog(state, c, day, no ? { count: 0, skipped: true } : { count: n, skipped: false }) || logged
+      }
+    } else if (args.complete === true || args.complete === false) {
+      for (const child of handLogged) {
+        const have = state.entries[day]?.[child.id]?.count || 0
+        // A weekly or monthly sub-habit whose quota is already met stays as it is:
+        // marking the group done must not add to its tally.
+        const met = child.cadence !== 'daily' && habitPeriodTotal(state.entries, child, day) >= child.target
+        const full = child.cadence === 'daily' ? child.target : met ? have : 1
+        const count = args.complete ? Math.max(have, full) : 0
+        if (count !== have || (args.complete && state.entries[day]?.[child.id]?.skipped)) logged = applyHabitLog(state, child, day, { count }) || logged
+      }
+    } else {
+      throw new Error(`"${habit.name}" is a group: log one of its sub-habits, or pass complete true or false`)
+    }
+  } else {
+    logged = applyHabitLog(state, habit, day, args)
+  }
+  await writeHabitsState(state)
+  // Count only real completions (a bumped-up count), never undos or note-only edits.
+  if (logged) recordActivity('habit.log', { label: habit.name })
+  return buildHabitsPayload()
+}
+
+// The day a log is for: today when not given; never a future day.
+function habitLogDay(date) {
   const today = localISODate()
   const day = date === undefined || date === null || date === '' ? today : String(date)
   if (!HABIT_DATE_RE.test(day)) throw new Error('date must be YYYY-MM-DD')
   if (day > today) throw new Error('cannot log a habit for a future date')
+  return day
+}
+
+// One habit-day's change, applied to `state` in memory. True when the count went up.
+function applyHabitLog(state, habit, day, { count, delta, note, value, parts, stats, window, complete, source, skipped } = {}) {
   const existing = state.entries[day]?.[habit.id] || { count: 0 }
   let nextCount = existing.count
   if (count !== undefined) nextCount = Math.round(Number(count))
@@ -1923,10 +2092,7 @@ async function doLogHabitRecord({ id, date, count, delta, note, value, parts, st
     delete state.entries[day][habit.id]
     if (!Object.keys(state.entries[day]).length) delete state.entries[day]
   }
-  await writeHabitsState(state)
-  // Count only real completions (a bumped-up count), never undos or note-only edits.
-  if (nextCount > existing.count) recordActivity('habit.log', { label: habit.name })
-  return buildHabitsPayload()
+  return nextCount > existing.count
 }
 
 // ---------------------------------------------------------------------------
@@ -1965,7 +2131,6 @@ const whoop = createRemoteWhoopClient({
   publicUrl: BUSHIDO_URL,
   runs: sourceRuns,
 })
-const WHOOP_SLEEP_HABIT_ID = process.env.WHOOP_SLEEP_HABIT_ID || 'wear-garmin-to-sleep'
 // WHOOP timestamps a sleep with the moment it started, so the local date of
 // `start` is already "the night of". 'wake' files it under the morning instead.
 const WHOOP_SLEEP_DATE_MODE = process.env.WHOOP_SLEEP_DATE_MODE === 'wake' ? 'wake' : 'night'
@@ -13012,7 +13177,9 @@ const MCP_TOOLS = [
     description:
       'Log a habit for a day. Get habit ids from totem_get_habits. Pass count to set an absolute value or '
       + 'delta to add to what is already there — delta is what you want for "I did one more". Defaults to '
-      + 'today; future dates are rejected.',
+      + 'today; future dates are rejected. A habit with sub-habits (others whose parentId is its id) is a group '
+      + 'with no count of its own: pass complete true to mark all its hand-logged sub-habits done, false to clear '
+      + 'them, or log a sub-habit by its own id.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -13020,7 +13187,9 @@ const MCP_TOOLS = [
         date: { type: 'string', description: 'YYYY-MM-DD. Defaults to today. Cannot be in the future.' },
         count: { type: 'number', description: 'Set the count for that day to this absolute value.' },
         delta: { type: 'number', description: 'Add this to the existing count. Use a negative number to undo.' },
-        complete: { type: 'boolean', description: 'Mark the habit done for the day, whatever its target is.' },
+        complete: { type: 'boolean', description: 'Mark the habit done for the day, whatever its target is. On a group: true marks every hand-logged sub-habit done, false clears them.' },
+        counts: { type: 'object', additionalProperties: { type: 'number' }, description: 'Groups only: set these sub-habits\' counts exactly, { "<sub-habit id>": n }.' },
+        skips: { type: 'array', items: { type: 'string' }, description: 'Groups only, with counts: sub-habits whose day is a check-in "No" (count 0, answered).' },
         note: { type: 'string', description: 'A short note on the day\'s entry.' },
         value: { type: 'number', description: 'Numeric value for habits that track an amount rather than a count.' },
       },

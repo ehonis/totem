@@ -69,3 +69,21 @@ describe('morning check-in', () => {
     expect(shouldOpenCheckin({ ...base, habits: [habit('krakatoa', { linkedApp: 'krakatoa' })] }, at(7))).toBe(false)
   })
 })
+
+describe('morning check-in with sub-habits', () => {
+  it('asks a group’s sub-habits, named with their group, never the group itself', () => {
+    const p = {
+      today: '2026-10-10',
+      checkin: { lastShown: null },
+      habits: [
+        habit('night', { name: 'Nightly routine', when: 'night' }),
+        habit('stretch', { name: 'Stretch', when: 'night', parentId: 'night' }),
+        habit('screens', { name: 'No screens', when: 'night', parentId: 'night' }),
+        habit('read'),
+      ],
+      entries: { '2026-10-09': { screens: { count: 1 } } },
+    }
+    const got = checkinItems(p).items.map((i) => [i.habit.id, i.group ?? null])
+    expect(got).toEqual([['stretch', 'Nightly routine'], ['read', null]])
+  })
+})

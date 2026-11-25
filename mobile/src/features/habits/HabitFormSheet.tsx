@@ -1,35 +1,64 @@
 // New / edit habit (HabitsView.tsx HabitFormModal) as a formSheet. Same fields,
 // hints and copy; selects are native menus, the delete confirm is the platform alert.
+// "Part of" files a habit under a group (lib/habits/groups.ts); a group itself says
+// so instead and offers to add a sub-habit. `/habit/new?parentId=` starts one there.
 import React, { useState } from 'react'
 import { StyleSheet, View } from 'react-native'
-import { useLocalSearchParams } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
 import { Btn, Empty, Press, Segmented } from '../../ui/kit'
 import { confirm } from '../../ui/menu'
 import { success } from '../../ui/haptics'
-import { TrashIcon } from '../../lib/icons'
+import { PlusIcon, TrashIcon } from '../../lib/icons'
 import { createHabit, deleteHabit, updateHabit } from '../../lib/api'
 import { pushToast } from '../../lib/toast'
 import { CheckField, Field, FieldInput, FieldRow, Select, Sheet, closeSheet } from './form'
 import {
   APP_NAME, CADENCE_NOUN, metricDraftFrom, metricFromDraft, periodLabel,
-  type Cadence, type HabitWhen, type LinkedApp, type MetricDraft,
+  type Cadence, type Habit, type HabitWhen, type LinkedApp, type MetricDraft,
 } from './logic'
 import { mutate, useHabits } from './store'
+import { handLogged } from '../../lib/habits/groups'
 
 export default function HabitFormSheet({ editing }: { editing?: boolean }) {
-  const { id } = useLocalSearchParams<{ id?: string }>()
+  const { id, parentId } = useLocalSearchParams<{ id?: string; parentId?: string }>()
   const { data } = useHabits()
-  const found = editing ? data?.habits.find((h) => h.id === id) ?? null : null
+  const all = data?.habits ?? []
+  const found = editing ? all.find((h) => h.id === id) ?? null : null
   // Held from the first render: a delete swaps in a payload without the habit, and
   // the sheet should close on the form rather than flash "gone" on the way out.
   const [initial] = useState(found)
   if (editing && !initial) return <Sheet title="Edit habit"><Empty title="That habit is gone." /></Sheet>
-  return <HabitForm key={initial?.id ?? 'new'} initial={initial} palette={data?.palette ?? []} usedColors={(data?.habits ?? []).map((h) => h.color)} />
+  // Habits this one may sit under: active, top-level, filled by hand, not itself.
+  // A group's own check is derived, so only a habit ticked by hand can hold sub-habits (the bridge's rule).
+  const parents = all.filter((h) => !h.archived && !h.parentId && handLogged(h) && h.id !== initial?.id)
+  const hasChildren = Boolean(initial && all.some((h) => h.parentId === initial.id && !h.archived))
+  // An edit keeps its group; a new habit takes the one it was started from. Either only if it can still hold it.
+  const want = initial ? initial.parentId : parentId
+  return (
+    <HabitForm
+      key={initial?.id ?? 'new'}
+      initial={initial}
+      palette={data?.palette ?? []}
+      usedColors={all.map((h) => h.color)}
+      parents={parents}
+      defaultParent={want && parents.some((h) => h.id === want) ? want : ''}
+      hasChildren={hasChildren}
+    />
+  )
 }
 
-function HabitForm({ initial, palette, usedColors }: { initial: import('./logic').Habit | null; palette: string[]; usedColors: string[] }) {
+function HabitForm({ initial, palette, usedColors, parents, defaultParent, hasChildren }: {
+  initial: Habit | null
+  palette: string[]
+  usedColors: string[]
+  parents: Habit[]
+  /** The group the form starts on ('' for none). */
+  defaultParent: string
+  /** It is a group already, so it cannot go under another habit. */
+  hasChildren: boolean
+}) {
   const [form, setForm] = useState({
     name: initial?.name || '',
     description: initial?.description || '',
@@ -39,11 +68,16 @@ function HabitForm({ initial, palette, usedColors }: { initial: import('./logic'
     archived: initial?.archived || false,
     when: (initial?.when || 'any') as HabitWhen,
     linkedApp: (initial?.linkedApp || '') as LinkedApp | '', // '' = filled in by hand
+    parentId: defaultParent, // '' = a habit of its own
   })
   const [metric, setMetric] = useState<MetricDraft>(() => metricDraftFrom(initial?.metric))
   const setM = <K extends keyof MetricDraft>(k: K, v: MetricDraft[K]) => setMetric((m) => ({ ...m, [k]: v }))
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }))
   const [busy, setBusy] = useState<string | null>(null)
+  // A habit an app or WHOOP fills in cannot sit in a group: its check is never tapped.
+  // An app- or WHOOP-filled habit can sit in a group (its check skips it); it just can't hold one.
+  const canGroup = !hasChildren
+  const parentName = parents.find((h) => h.id === form.parentId)?.name
 
   const submit = async () => {
     if (!form.name.trim()) { pushToast('A name is required.'); return }
@@ -59,6 +93,11 @@ function HabitForm({ initial, palette, usedColors }: { initial: import('./logic'
         linkedApp: form.linkedApp || null,
         metric: metricFromDraft(metric, initial?.metric?.parts),
       }
+      // Only when it changed: a sub-habit of an archived group arrives with no parent
+      // (the bridge lets it out until the group returns), and saving that back would
+      // detach it for good.
+      const parentNow = form.parentId || null
+      if (parentNow !== (initial?.parentId || null)) fields.parentId = parentNow
       if (form.color) fields.color = form.color
       await mutate(() => (initial ? updateHabit(initial.id, fields) : createHabit(fields)))
       success()
@@ -78,7 +117,7 @@ function HabitForm({ initial, palette, usedColors }: { initial: import('./logic'
 
   return (
     <Sheet
-      kicker={initial ? 'Edit habit' : 'New habit'}
+      kicker={initial ? (hasChildren ? 'Edit group' : 'Edit habit') : 'New habit'}
       title={initial ? initial.name : 'Track something daily'}
       footer={
         <>
@@ -97,43 +136,72 @@ function HabitForm({ initial, palette, usedColors }: { initial: import('./logic'
       <Field label="Description (optional)">
         <FieldInput value={form.description} onChangeText={(v) => set('description', v)} placeholder="What counts as done?" returnKeyType="done" />
       </Field>
-      <FieldRow>
-        <Field label="How often">
-          {sel(form.cadence, [{ value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' }, { value: 'monthly', label: 'Monthly' }], (v) => set('cadence', v), 'How often')}
+      {hasChildren ? (
+        <View style={s.groupNote}>
+          <T size={13} muted>
+            {initial?.name} is a group: it is done for a day when all its sub-habits are, and its check marks the ones you tick by hand (an app fills in its own).
+          </T>
+          <Btn
+            compact icon={PlusIcon} title="Add a sub-habit" style={{ alignSelf: 'flex-start', minHeight: 40 }}
+            disabled={Boolean(busy)}
+            onPress={() => router.replace({ pathname: '/habit/new', params: { parentId: initial!.id } })}
+          />
+        </View>
+      ) : canGroup && (parents.length > 0 || form.parentId) ? (
+        <Field
+          label="Part of"
+          hint={form.parentId
+            ? `A sub-habit: it shows inside ${parentName ?? 'that habit'}, which becomes a group if it is not one yet: done for the day once all of its sub-habits are, its own check and history set aside.`
+            : 'Put it under another habit to group them, e.g. sleep hygiene under a nightly routine.'}
+        >
+          {sel(
+            form.parentId,
+            [{ value: '', label: 'Nothing, a habit of its own' }, ...parents.map((h) => ({ value: h.id, label: h.name }))],
+            (v) => set('parentId', v),
+            'Part of',
+          )}
         </Field>
-        <Field label={`Times per ${CADENCE_NOUN[form.cadence]}`}>
-          <FieldInput value={form.target} onChangeText={(v) => set('target', v.replace(/[^0-9]/g, ''))} keyboardType="numbers-and-punctuation" returnKeyType="done" maxLength={2} />
+      ) : null}
+      {/* A group's day is its sub-habits': how often, when, who fills it and a number are theirs. */}
+      {!hasChildren && (<>
+        <FieldRow>
+          <Field label="How often">
+            {sel(form.cadence, [{ value: 'daily', label: 'Daily' }, { value: 'weekly', label: 'Weekly' }, { value: 'monthly', label: 'Monthly' }], (v) => set('cadence', v), 'How often')}
+          </Field>
+          <Field label={`Times per ${CADENCE_NOUN[form.cadence]}`}>
+            <FieldInput value={form.target} onChangeText={(v) => set('target', v.replace(/[^0-9]/g, ''))} keyboardType="numbers-and-punctuation" returnKeyType="done" maxLength={2} />
+          </Field>
+        </FieldRow>
+        {/* The web's two selects; three short choices each read better as segments on a phone. */}
+        <Field label="When">
+          <Segmented
+            value={form.when}
+            onChange={(v) => set('when', v)}
+            options={[{ value: 'any', label: 'Any time' }, { value: 'morning', label: 'Morning' }, { value: 'night', label: 'Night' }]}
+          />
         </Field>
-      </FieldRow>
-      {/* The web's two selects; three short choices each read better as segments on a phone. */}
-      <Field label="When">
-        <Segmented
-          value={form.when}
-          onChange={(v) => set('when', v)}
-          options={[{ value: 'any', label: 'Any time' }, { value: 'morning', label: 'Morning' }, { value: 'night', label: 'Night' }]}
-        />
-      </Field>
-      <Field label="Filled by">
-        <Segmented
-          value={form.linkedApp || 'me'}
-          onChange={(v) => set('linkedApp', v === 'me' ? '' : v)}
-          options={[{ value: 'me', label: 'Me' }, { value: 'krakatoa', label: 'Krakatoa' }, { value: 'bushido', label: 'Bushido' }]}
-        />
-      </Field>
-      <T size={11} muted>
-        {form.linkedApp
-          ? `${APP_NAME[form.linkedApp]} fills this in on its own; here it links to the app instead of a check mark.`
-          : form.when === 'night'
-            ? 'Night: logged the next morning. The morning check-in asks about it the next day and logs it to the night before.'
-            : form.when === 'morning'
-              ? 'The morning check-in asks about it for that day.'
-              : 'The morning check-in asks about it if yesterday went unanswered.'}
-      </T>
-      <T size={11} muted>
-        {form.cadence === 'daily'
-          ? '1 = simple yes/no. Higher (e.g. 8 glasses of water) shades the day darker the closer you get.'
-          : `e.g. gym 3× a week, or deep-clean once a month. You still check it off on the day you do it; the check-in shows ${periodLabel(form.cadence)}’s progress.`}
-      </T>
+        <Field label="Filled by">
+          <Segmented
+            value={form.linkedApp || 'me'}
+            onChange={(v) => set('linkedApp', v === 'me' ? '' : v)}
+            options={[{ value: 'me', label: 'Me' }, { value: 'krakatoa', label: 'Krakatoa' }, { value: 'bushido', label: 'Bushido' }]}
+          />
+        </Field>
+        <T size={11} muted>
+          {form.linkedApp
+            ? `${APP_NAME[form.linkedApp]} fills this in on its own; here it links to the app instead of a check mark.`
+            : form.when === 'night'
+              ? 'Night: logged the next morning. The morning check-in asks about it the next day and logs it to the night before.'
+              : form.when === 'morning'
+                ? 'The morning check-in asks about it for that day.'
+                : 'The morning check-in asks about it if yesterday went unanswered.'}
+        </T>
+        <T size={11} muted>
+          {form.cadence === 'daily'
+            ? '1 = simple yes/no. Higher (e.g. 8 glasses of water) shades the day darker the closer you get.'
+            : `e.g. gym 3× a week, or deep-clean once a month. You still check it off on the day you do it; the check-in shows ${periodLabel(form.cadence)}’s progress.`}
+        </T>
+      </>)}
       <Field label="Color">
         <View style={s.swatches}>
           {!initial && (
@@ -157,48 +225,50 @@ function HabitForm({ initial, palette, usedColors }: { initial: import('./logic'
         </View>
       </Field>
 
-      {/* Optional metric: the number this habit is really about. */}
-      <View style={s.metricForm}>
-        <CheckField value={metric.on} onChange={(v) => setM('on', v)}>Track a number with this habit</CheckField>
-        {metric.on && (
-          <>
-            <FieldRow>
-              <Field label="What's measured">
-                <FieldInput value={metric.label} onChangeText={(v) => setM('label', v)} placeholder="e.g. Sleep score" />
+      {!hasChildren && (<>
+        {/* Optional metric: the number this habit is really about. */}
+        <View style={s.metricForm}>
+          <CheckField value={metric.on} onChange={(v) => setM('on', v)}>Track a number with this habit</CheckField>
+          {metric.on && (
+            <>
+              <FieldRow>
+                <Field label="What's measured">
+                  <FieldInput value={metric.label} onChangeText={(v) => setM('label', v)} placeholder="e.g. Sleep score" />
+                </Field>
+                <Field label="Unit (optional)">
+                  <FieldInput value={metric.unit} onChangeText={(v) => setM('unit', v)} placeholder="e.g. min, kg, %" />
+                </Field>
+              </FieldRow>
+              <FieldRow>
+                <Field label="Scale min"><FieldInput value={metric.min} onChangeText={(v) => setM('min', v)} placeholder="auto" keyboardType="numbers-and-punctuation" returnKeyType="done" /></Field>
+                <Field label="Scale max"><FieldInput value={metric.max} onChangeText={(v) => setM('max', v)} placeholder="auto" keyboardType="numbers-and-punctuation" returnKeyType="done" /></Field>
+                <Field label="Goal line"><FieldInput value={metric.goal} onChangeText={(v) => setM('goal', v)} placeholder="none" keyboardType="numbers-and-punctuation" returnKeyType="done" /></Field>
+              </FieldRow>
+              <FieldRow>
+                <Field label="Better when">{sel(metric.direction, [{ value: 'higher', label: 'Higher' }, { value: 'lower', label: 'Lower' }], (v) => setM('direction', v), 'Better when')}</Field>
+                <Field label="Graph">{sel(metric.chart, [{ value: 'line', label: 'Line' }, { value: 'bar', label: 'Bars' }], (v) => setM('chart', v), 'Graph')}</Field>
+                <Field label="Decimals">{sel(metric.decimals, [{ value: '0', label: '0' }, { value: '1', label: '0.0' }, { value: '2', label: '0.00' }], (v) => setM('decimals', v), 'Decimals')}</Field>
+              </FieldRow>
+              <Field label="Filled by">
+                {sel(metric.source, [{ value: 'manual', label: 'Me (or Totem, when I tell it)' }, { value: 'whoop-sleep', label: 'WHOOP sleep sync' }], (v) => setM('source', v), 'Filled by')}
               </Field>
-              <Field label="Unit (optional)">
-                <FieldInput value={metric.unit} onChangeText={(v) => setM('unit', v)} placeholder="e.g. min, kg, %" />
+              {metric.source === 'whoop-sleep' && (
+                <T size={11} muted>
+                  A scheduled job pulls last night's sleep performance and stages from WHOOP (through Bushido) each late
+                  morning (Studio → Workflows → WHOOP sleep sync). Nights you've already filled in are left alone.
+                </T>
+              )}
+              <Field
+                label="Breakdown (optional)"
+                hint="Comma-separated components, logged in the metric's unit and stacked as bars under the line — sleep stages in minutes, say. Leave empty for a single number."
+              >
+                <FieldInput value={metric.parts} onChangeText={(v) => setM('parts', v)} placeholder="e.g. Deep, Light, REM, Awake" />
               </Field>
-            </FieldRow>
-            <FieldRow>
-              <Field label="Scale min"><FieldInput value={metric.min} onChangeText={(v) => setM('min', v)} placeholder="auto" keyboardType="numbers-and-punctuation" returnKeyType="done" /></Field>
-              <Field label="Scale max"><FieldInput value={metric.max} onChangeText={(v) => setM('max', v)} placeholder="auto" keyboardType="numbers-and-punctuation" returnKeyType="done" /></Field>
-              <Field label="Goal line"><FieldInput value={metric.goal} onChangeText={(v) => setM('goal', v)} placeholder="none" keyboardType="numbers-and-punctuation" returnKeyType="done" /></Field>
-            </FieldRow>
-            <FieldRow>
-              <Field label="Better when">{sel(metric.direction, [{ value: 'higher', label: 'Higher' }, { value: 'lower', label: 'Lower' }], (v) => setM('direction', v), 'Better when')}</Field>
-              <Field label="Graph">{sel(metric.chart, [{ value: 'line', label: 'Line' }, { value: 'bar', label: 'Bars' }], (v) => setM('chart', v), 'Graph')}</Field>
-              <Field label="Decimals">{sel(metric.decimals, [{ value: '0', label: '0' }, { value: '1', label: '0.0' }, { value: '2', label: '0.00' }], (v) => setM('decimals', v), 'Decimals')}</Field>
-            </FieldRow>
-            <Field label="Filled by">
-              {sel(metric.source, [{ value: 'manual', label: 'Me (or Totem, when I tell it)' }, { value: 'whoop-sleep', label: 'WHOOP sleep sync' }], (v) => setM('source', v), 'Filled by')}
-            </Field>
-            {metric.source === 'whoop-sleep' && (
-              <T size={11} muted>
-                A scheduled job pulls last night's sleep performance and stages from WHOOP (through Bushido) each late
-                morning (Studio → Workflows → WHOOP sleep sync). Nights you've already filled in are left alone.
-              </T>
-            )}
-            <Field
-              label="Breakdown (optional)"
-              hint="Comma-separated components, logged in the metric's unit and stacked as bars under the line — sleep stages in minutes, say. Leave empty for a single number."
-            >
-              <FieldInput value={metric.parts} onChangeText={(v) => setM('parts', v)} placeholder="e.g. Deep, Light, REM, Awake" />
-            </Field>
-            <CheckField value={metric.pinned} onChange={(v) => setM('pinned', v)}>Pin this graph to the Home board</CheckField>
-          </>
-        )}
-      </View>
+              <CheckField value={metric.pinned} onChange={(v) => setM('pinned', v)}>Pin this graph to the Home board</CheckField>
+            </>
+          )}
+        </View>
+      </>)}
       {initial && (
         <CheckField value={form.archived} onChange={(v) => set('archived', v)}>Archived (hidden from check-in, history kept)</CheckField>
       )}
@@ -211,5 +281,6 @@ const s = StyleSheet.create({
   swatch: { width: 30, height: 30, borderRadius: 8, borderWidth: 2, borderColor: 'transparent' },
   auto: { width: 'auto', paddingHorizontal: 10, backgroundColor: colors.bg3, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
   selected: { borderColor: colors.text },
+  groupNote: { gap: 10, padding: 12, borderRadius: 10, backgroundColor: colors.bg3 },
   metricForm: { marginTop: 4, padding: 12, borderWidth: 1, borderColor: colors.line, borderRadius: 12, backgroundColor: colors.bg3, gap: 10 },
 })

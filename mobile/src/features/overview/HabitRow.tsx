@@ -1,6 +1,8 @@
 // One habit in the Overview's inline check-in: the same controls as the Habits
 // tab (HabitsView.tsx: HabitCheckButton, QuotaDots, HabitMetricInput) at the
-// sizes overview.css gives them on a phone.
+// sizes overview.css gives them on a phone. A group (lib/habits/groups.ts) is a
+// GroupRow, its progress and one check that marks them all, with its sub-habits'
+// rows under it, indented along a line.
 import React, { useState } from 'react'
 import { StyleSheet, TextInput, View } from 'react-native'
 import Svg, { Circle, Path } from 'react-native-svg'
@@ -31,39 +33,43 @@ function QuotaNum({ habit, count }: { habit: any; count: number }) {
   )
 }
 
-// The one big round toggle. Daily habits fill solid once logged; capped weekly or
-// monthly ones fill as a pie, one slice per completion in the period. The check is
-// about today and shows as soon as the day is logged.
-function HabitCheckButton({ habit, count, periodCount, busy, onLog }: {
-  habit: any; count: number; periodCount: number; busy: boolean; onLog: (h: any, d: number) => void
-}) {
-  const capped = habit.cadence !== 'daily'
-  const target = Math.max(1, habit.target)
-  const ratio = capped ? Math.min(1, periodCount / target) : count > 0 ? 1 : 0
+/** The round check's face: solid once done, or a pie for a quota (`capped`). */
+function CheckCircle({ color, capped, ratio, done, size }: { color: string; capped: boolean; ratio: number; done: boolean; size: number }) {
   const full = ratio >= 1
-  const done = count > 0
-  const size = 34
   const r = (size - 1.5) / 2
   const c = size / 2
-  const progress = capped ? `, ${periodCount} of ${target} ${periodLabel(habit.cadence)}` : ''
-  const border = !capped ? (done ? habit.color : 'rgba(255, 255, 255, 0.16)') : full ? habit.color : mix(habit.color, colors.line, 0.4)
+  const border = !capped ? (done ? color : 'rgba(255, 255, 255, 0.16)') : full ? color : mix(color, colors.line, 0.4)
   // A wedge from 12 o'clock, clockwise.
   const angle = ratio * 2 * Math.PI
   const ex = c + r * Math.sin(angle), ey = c - r * Math.cos(angle)
   const wedge = `M${c},${c}L${c},${c - r}A${r},${r} 0 ${angle > Math.PI ? 1 : 0} 1 ${ex},${ey}Z`
-  const circle = (
+  return (
     <>
       <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
         <Circle
           cx={c} cy={c} r={r}
-          fill={!capped ? (done ? habit.color : 'transparent') : full ? habit.color : colors.bg}
+          fill={!capped ? (done ? color : 'transparent') : full ? color : colors.bg}
           stroke={border} strokeWidth={1.5}
         />
-        {capped && ratio > 0 && !full && <Path d={wedge} fill={habit.color} />}
+        {capped && ratio > 0 && !full && <Path d={wedge} fill={color} />}
       </Svg>
-      {done && <Hi icon={CheckIcon} size={20} color="#fff" />}
+      {done && <Hi icon={CheckIcon} size={Math.round(size * 0.59)} color="#fff" />}
     </>
   )
+}
+
+// The one big round toggle. Daily habits fill solid once logged; capped weekly or
+// monthly ones fill as a pie, one slice per completion in the period. The check is
+// about today and shows as soon as the day is logged.
+function HabitCheckButton({ habit, count, periodCount, busy, onLog, size = 34 }: {
+  habit: any; count: number; periodCount: number; busy: boolean; onLog: (h: any, d: number) => void; size?: number
+}) {
+  const capped = habit.cadence !== 'daily'
+  const target = Math.max(1, habit.target)
+  const ratio = capped ? Math.min(1, periodCount / target) : count > 0 ? 1 : 0
+  const done = count > 0
+  const progress = capped ? `, ${periodCount} of ${target} ${periodLabel(habit.cadence)}` : ''
+  const circle = <CheckCircle color={habit.color} capped={capped} ratio={ratio} done={done} size={size} />
   // An app fills this one in: the same circle, but not a button (the link sits beside it).
   if (habit.linkedApp) {
     return (
@@ -127,18 +133,49 @@ function HabitMetricInput({ habit, entry, busy, onValue }: {
   )
 }
 
-export function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValue, onNote, first }: {
+/** A group: its sub-habits done today and one check that marks them all, or clears them once all are. */
+export function GroupRow({ habit, done, total, action, busy, first, onLog }: {
+  habit: any; done: number; total: number
+  /** What the check does, in words (groups.ts groupWords). */
+  action: string
+  busy: boolean; first?: boolean; onLog: () => void
+}) {
+  const all = total > 0 && done >= total
+  return (
+    <View style={[st.row, !first && st.rule]}>
+      <View style={[st.dot, { backgroundColor: habit.color }]} />
+      <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
+        <T size={14.5} color={all ? ov.soft : colors.text} numberOfLines={1} style={{ flexShrink: 1 }}>{habit.name}</T>
+        <T size={12} weight={600} color={ov.soft} style={{ fontVariant: ['tabular-nums'] }}>{done}/{total}</T>
+      </View>
+      <Press
+        onPress={onLog}
+        disabled={busy}
+        accessibilityRole="button"
+        accessibilityLabel={action}
+        hitSlop={6}
+        style={{ width: 34, height: 34, alignItems: 'center', justifyContent: 'center' }}
+      >
+        <CheckCircle color={habit.color} capped ratio={total ? Math.min(1, done / total) : 0} done={all} size={34} />
+      </Press>
+    </View>
+  )
+}
+
+export function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValue, onNote, first, nested }: {
   habit: any; entry: any; count: number; periodCount: number; busy: boolean; first?: boolean
+  /** A sub-habit, drawn under its group; `first` is the one right under the group's row. */
+  nested?: boolean
   onLog: (habit: any, delta: number) => void
   onValue: (habit: any, value: number | null) => void
   onNote: (habit: any) => void
 }) {
   const done = periodCount >= habit.target
   return (
-    <View style={[st.row, !first && st.rule]}>
+    <View style={[st.row, nested ? [st.nested, first && st.rule] : !first && st.rule]}>
       <View style={[st.dot, { backgroundColor: habit.color }]} />
       <View style={{ flex: 1, minWidth: 0 }}>
-        <T size={14.5} color={done ? ov.soft : colors.text} numberOfLines={1}>{habit.name}</T>
+        <T size={nested ? 14 : 14.5} color={done ? ov.soft : colors.text} numberOfLines={1}>{habit.name}</T>
         {entry?.note ? <T size={12.5} color={ov.faint} numberOfLines={1}>{entry.note}</T> : null}
       </View>
       {habit.cadence !== 'daily' && <QuotaNum habit={habit} count={periodCount} />}
@@ -169,7 +206,7 @@ export function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValu
           </Press>
         </View>
       ) : (
-        <HabitCheckButton habit={habit} count={count} periodCount={periodCount} busy={busy} onLog={onLog} />
+        <HabitCheckButton habit={habit} count={count} periodCount={periodCount} busy={busy} onLog={onLog} size={nested ? 30 : 34} />
       )}
     </View>
   )
@@ -178,6 +215,7 @@ export function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValu
 const st = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 52, paddingVertical: 6 },
   rule: { borderTopWidth: 1, borderTopColor: ov.rowLine },
+  nested: { marginLeft: 3, paddingLeft: 16, borderLeftWidth: 2, borderLeftColor: ov.line, minHeight: 46 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   iconBtn: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 2 },

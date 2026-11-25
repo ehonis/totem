@@ -38,6 +38,7 @@ function Row({ item, entry, note, busy, onAnswer }: {
     <div className={`habit-ci-row${yes || no ? ' answered' : ''}`}>
       <span className="habit-dot" style={{ background: h.color }} />
       <div className="habit-ci-name">
+        {item.group && <small className="habit-ci-group">{item.group}</small>}
         {h.name}
         {item.part === 'yesterday' && h.when === 'night' && <small>last night</small>}
         {note && <small>{note}</small>}

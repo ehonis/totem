@@ -2,7 +2,20 @@
 // `node --test mobile/src/features/habits/logic.test.mjs`; node strips the types.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bestStreakOf, dayProgress, doneOn, recentDays, streakOf, withPending } from './logic.ts'
+import { registerHooks } from 'node:module'
+
+// logic.ts imports the shared groups file the way Metro resolves it, without an
+// extension; let node find the .ts file the same way.
+registerHooks({
+  resolve(specifier, context, next) {
+    try { return next(specifier, context) } catch (err) {
+      if (specifier.startsWith('.') && !/\.[cm]?[jt]s$/.test(specifier)) return next(`${specifier}.ts`, context)
+      throw err
+    }
+  },
+})
+const { bestStreakOf, dayProgress, diffDays, doneOn, recentDays, rowsProgress, streakOf, wholeDays, withPending } = await import('./logic.ts')
+const { foldGroups, habitTree } = await import('../../lib/habits/groups.ts')
 
 const habit = (over = {}) => ({
   id: 'h1', name: 'Read', description: '', color: '#5b8cff', cadence: 'daily', target: 1,
@@ -112,4 +125,54 @@ test('withPending: a tick clears a skipped "No", and never goes below zero', () 
 test('withPending: an id with a colon in it still splits on the date', () => {
   const next = withPending({}, { 'a:b:2026-10-05': 1 })
   assert.equal(next['2026-10-05']['a:b'].count, 1)
+})
+
+// ---- sub-habits ----
+const routine = () => [
+  habit({ id: 'g', name: 'Nightly routine', color: '#8b5cf6' }),
+  habit({ id: 'a', name: 'Stretch', parentId: 'g' }),
+  habit({ id: 'b', name: 'No screens', parentId: 'g' }),
+  habit({ id: 'r', name: 'Read', color: '#22c55e' }),
+]
+
+test('rowsProgress: a group is one segment, done only once every sub-habit is', () => {
+  const habits = routine()
+  const rows = habitTree(habits)
+  const day = '2026-10-05'
+  const half = { [day]: { a: { count: 1 }, r: { count: 1 } } }
+  assert.deepEqual(rowsProgress(habits, rows, half, day), {
+    done: 1, total: 2,
+    segments: [{ id: 'g', color: '#8b5cf6', done: false }, { id: 'r', color: '#22c55e', done: true }],
+  })
+  const all = { [day]: { a: { count: 1 }, b: { count: 1 } } }
+  assert.deepEqual(rowsProgress(habits, rows, all, day).segments.map((s) => s.done), [true, false])
+})
+
+test('wholeDays: a folded group counts only the days every sub-habit was done', () => {
+  const habits = routine()
+  const entries = {
+    '2026-10-03': { a: { count: 1 }, b: { count: 1 } },
+    '2026-10-04': { a: { count: 1 }, b: { count: 1 } },
+    '2026-10-05': { a: { count: 1 } },
+  }
+  const folded = foldGroups(habits, entries)
+  const group = folded.habits.find((h) => h.id === 'g')
+  assert.equal(group.target, 2)
+  // Read as an ordinary daily habit, a partial day keeps the streak alive …
+  assert.equal(streakOf(group, folded.entries, '2026-10-05'), 3)
+  // … counted in whole days it does not: today is still open, and two full days stand.
+  const whole = wholeDays(group, folded.entries)
+  const one = { ...group, target: 1 }
+  assert.equal(whole['2026-10-05'].g.count, 0)
+  assert.equal(streakOf(one, whole, '2026-10-05'), 2)
+  assert.equal(bestStreakOf(one, whole, '2026-10-05'), 2)
+  // Other habits' entries are left as they were.
+  assert.deepEqual(whole['2026-10-03'].a, { count: 1 })
+})
+
+test('diffDays: whole days back, across a clock change', () => {
+  assert.equal(diffDays('2026-11-25', '2026-11-25'), 0)
+  assert.equal(diffDays('2026-11-25', '2026-11-20'), 5)
+  assert.equal(diffDays('2026-11-03', '2026-10-30'), 4)
+  assert.equal(diffDays('2026-03-10', '2026-03-07'), 3)
 })
