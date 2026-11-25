@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AuthError } from '../api'
+import { NAV_ICONS } from '../navIcons'
 import type { NavTarget } from '../router'
 import { useAiUsageLive } from '../useAiUsageLive'
 import {
@@ -522,7 +523,7 @@ export default function CliproxyView({ onAuthError, onNavigate }: { onAuthError:
   const head = (
     <header className="cp-head">
       <div>
-        <h1><Hi icon={KeyIcon} size={20} /> CLIProxy</h1>
+        <h1><Hi icon={NAV_ICONS.cliproxy} size={20} /> CLIProxy</h1>
         <p className="muted">
           {overview?.configured
             ? `${accounts.length} login${accounts.length === 1 ? '' : 's'}${overview.url ? ` · ${(() => { try { return new URL(overview.url).host } catch { return overview.url } })()}` : ''}`

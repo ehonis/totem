@@ -1,6 +1,6 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import { ChatBubbleLeftRightIcon, Cog6ToothIcon } from '../icons'
+import { NAV_ICONS } from '../navIcons'
 import { MobileDrawer, SidePanel } from '../components/Shell'
 import { syncThreads } from './store'
 import { drafts } from './draftsWeb'
@@ -19,8 +19,8 @@ if (q.get('drafts')) {
   drafts.write('c1', { text: 'Fictional unsent reply' }, home)
 }
 const noop = () => {}
-const chat = { id: 'chat', label: 'Chat', icon: ChatBubbleLeftRightIcon }
-const settings = { id: 'settings', label: 'Settings', icon: Cog6ToothIcon }
+const chat = { id: 'chat', label: 'Chat', icon: NAV_ICONS.chat }
+const settings = { id: 'settings', label: 'Settings', icon: NAV_ICONS.settings }
 
 function Harness() {
   if (q.get('phone')) {

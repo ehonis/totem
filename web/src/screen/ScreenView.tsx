@@ -10,6 +10,7 @@ import {
   forgetLogin, openLogin, rememberChoice, saveLogin, savedLogin, screenEnabled, sealLogin, setRememberChoice,
   type MacLogin, type ScreenStatus,
 } from './api'
+import { NAV_ICONS } from '../navIcons'
 import './screen.css'
 
 // The desktop of the machine Totem runs on, through noVNC. The bridge only
@@ -38,7 +39,7 @@ interface Props {
 export default function ScreenView({ status, onRefreshStatus, narrow }: Props) {
   if (narrow) {
     return (
-      <StatePanel icon={ComputerDesktopIcon} title="Screen is for a computer">
+      <StatePanel icon={NAV_ICONS.screen} title="Screen is for a computer">
         <p>Open Totem on a laptop or desktop to see and control this machine's screen.</p>
       </StatePanel>
     )
@@ -46,7 +47,7 @@ export default function ScreenView({ status, onRefreshStatus, narrow }: Props) {
   if (!status) return <div className="scr-state"><p className="muted">Checking the screen…</p></div>
   if (!screenEnabled(status)) {
     return (
-      <StatePanel icon={ComputerDesktopIcon} title="Screen is off">
+      <StatePanel icon={NAV_ICONS.screen} title="Screen is off">
         <p>Totem shows its machine's screen only with <code>SCREEN_ENABLED=true</code> set.</p>
         {status.detail && <p className="muted">{status.detail}</p>}
       </StatePanel>
@@ -54,7 +55,7 @@ export default function ScreenView({ status, onRefreshStatus, narrow }: Props) {
   }
   if (status.viewer?.state !== 'ready') {
     return (
-      <StatePanel icon={ComputerDesktopIcon} title="Screen Sharing isn't on">
+      <StatePanel icon={NAV_ICONS.screen} title="Screen Sharing isn't on">
         {status.viewer?.detail && <p className="scr-state-fix">{status.viewer.detail}</p>}
         <RetryButton onRetry={onRefreshStatus} />
       </StatePanel>

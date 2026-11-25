@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { AuthError } from '../api'
+import { NAV_ICONS } from '../navIcons'
 import {
-  Hi, ArrowPathIcon, ChatBubbleOvalLeftIcon, LockClosedIcon, MagnifyingGlassIcon, PencilSquareIcon, XMarkIcon,
+  Hi, ArrowPathIcon, LockClosedIcon, MagnifyingGlassIcon, PencilSquareIcon, XMarkIcon,
 } from '../icons'
 import { AppleError, appleEnabled, listChats, searchMessages, type AppleStatus, type ChatSummary, type SearchResult } from './api'
 import { listTime, previewText } from './format'
@@ -45,7 +46,7 @@ export default function MessagesView({ status, onRefreshStatus, onAuthError, nar
   if (!status) return <div className="msgs-state"><p className="muted">Checking Messages on this Mac…</p></div>
   if (!appleEnabled(status)) {
     return (
-      <StatePanel icon={ChatBubbleOvalLeftIcon} title="Messages is off">
+      <StatePanel icon={NAV_ICONS.messages} title="Messages is off">
         <p>Totem reads Messages only when it runs on a Mac with <code>APPLE_ENABLED=true</code> set.</p>
         {status.detail && <p className="muted">{status.detail}</p>}
       </StatePanel>
@@ -55,7 +56,7 @@ export default function MessagesView({ status, onRefreshStatus, onAuthError, nar
   if (source?.state === 'no-access') return <NoAccess detail={source.detail} onRetry={onRefreshStatus} />
   if (source?.state === 'missing' || source?.state === 'error') {
     return (
-      <StatePanel icon={ChatBubbleOvalLeftIcon} title="Messages isn't readable">
+      <StatePanel icon={NAV_ICONS.messages} title="Messages isn't readable">
         <p>{source.detail || 'Totem could not open the Messages database on this Mac.'}</p>
         <RetryButton onRetry={onRefreshStatus} />
       </StatePanel>

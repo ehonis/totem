@@ -26,11 +26,11 @@ import { pushError, pushToast } from '../../lib/toast'
 import { DRIVER_LOGOS } from '../../lib/providers'
 import {
   IconArrowUp, IconChevronRight, IconRefresh, IconCalendarEvent, IconChecklist, IconFlame, IconTarget,
-  IconListCheck, IconBulb, IconMicrophone2, IconHistory, IconWand, IconSettings, IconInbox,
-  IconAlertTriangle, IconMapPin, IconPlus, IconCheck, IconBolt, IconServer2,
+  IconListCheck, IconBulb, IconMicrophone2, IconHistory, IconWand,
+  IconAlertTriangle, IconMapPin, IconPlus, IconCheck, IconBolt,
   IconPlane, IconBeach, IconLuggage,
 } from '../../lib/components/overview/icons'
-import IconSearch from '@tabler/icons-react-native/dist/esm/icons/IconSearch.mjs'
+import { NAV_ICONS } from '../../lib/navIcons'
 import { clock, dueDiff, dueLabel, periodTotal, startOfDay, until } from '../../lib/components/overview/time'
 import { ov, TI, Section, Quiet, Failed, Loading, Bar, Subhead, More } from './parts'
 import { HabitRow } from './HabitRow'
@@ -73,12 +73,12 @@ const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'lists', label: 'Lists', icon: IconListCheck, to: 'lists' },
   { id: 'recs', label: 'Recs', icon: IconBulb, to: 'recs' },
   { id: 'journal', label: 'Journal', icon: IconMicrophone2, to: 'journal' },
-  { id: 'inbox', label: 'Inbox', icon: IconInbox, to: 'inbox' },
-  { id: 'search', label: 'Search', icon: IconSearch, to: 'search' },
-  { id: 'fleet', label: 'Fleet', icon: IconServer2, to: 'fleet' },
+  { id: 'inbox', label: 'Inbox', icon: NAV_ICONS.inbox, to: 'inbox' },
+  { id: 'search', label: 'Search', icon: NAV_ICONS.search, to: 'search' },
+  { id: 'fleet', label: 'Fleet', icon: NAV_ICONS.fleet, to: 'fleet' },
   { id: 'logs', label: 'Logs', icon: IconHistory, to: { tab: 'settings', sub: 'logs' } },
   { id: 'studio', label: 'Skills', icon: IconWand, to: { tab: 'settings', sub: 'skills' } },
-  { id: 'settings', label: 'Settings', icon: IconSettings, to: 'settings' },
+  { id: 'settings', label: 'Settings', icon: NAV_ICONS.settings, to: 'settings' },
 ]
 
 // Stored priority is 1..4 with 4 meaning P1.
@@ -393,7 +393,7 @@ export default function OverviewScreen() {
   const B = ({ children }: { children: React.ReactNode }) => <T size={14} weight={600} color={colors.text}>{children}</T>
   const attention: { key: string; icon: Tabler; text: React.ReactNode; tone: 'warn' | 'info'; to: NavTarget }[] = []
   if (inboxOpen) attention.push({
-    key: 'inbox', icon: IconInbox, tone: 'info', to: 'inbox',
+    key: 'inbox', icon: NAV_ICONS.inbox, tone: 'info', to: 'inbox',
     text: <><B>{inboxOpen} {inboxOpen === 1 ? 'proposal' : 'proposals'}</B> waiting in your inbox</>,
   })
   for (const j of failing.slice(0, 2)) attention.push({

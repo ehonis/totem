@@ -232,6 +232,13 @@ row counts, ids and foreign keys, and run it twice.
   what Heroicons lacks. Confirm a name exists
   (`ls node_modules/@tabler/icons-react/dist/esm/icons | grep -i <term>`) and import it deep and
   per-icon as a default export so the package tree-shakes. See `web/src/goals/sportIcons.tsx`.
+  A rail page's glyph, wherever it is offered (the rail, the phone drawer, the Overview's app row,
+  the page's own heading and empty states), is Lucide,
+  T3 Code's set, from one table per client: `web/src/navIcons.tsx` and `mobile/src/lib/navIcons.tsx`
+  (`lucide-react/icons/<name>`, `lucide-react-native/icons/<name>`), pinned to the same exact
+  version; `mobile/src/lib/navIcons.test.mjs` checks the two tables and the rail agree. A Lucide
+  icon takes `strokeWidth`, never a numeric `stroke` (Tabler's), which it would read as a colour;
+  the web table's wrappers take either; in the app pass `strokeWidth`.
 - **Entry checks compare real paths.** Node resolves symlinks in `import.meta.url` but not in
   `process.argv[1]`, so a script launched through a symlinked checkout must use
   `isEntry(import.meta.url)` from `scripts/is-entry.mjs`. Otherwise it loads, decides it was
