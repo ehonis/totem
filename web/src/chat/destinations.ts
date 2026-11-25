@@ -1,6 +1,7 @@
 // Where a new chat goes, picked from the composer with `$`: `$harbor` puts the
 // chat being started in the harbor folder, `$expense` starts it for that task
-// (in the task's own folder, as "New chat for this task" does). Pure, so the
+// (in the task's own folder, as "New chat for this task" does), and `$task` makes
+// a new task right in the composer, then starts the chat for it. Pure, so the
 // composer's menu and its tests read the same rules.
 import type { Project } from './types'
 import type { WorkTask } from '../work/groups'
@@ -9,6 +10,12 @@ export type Destination =
   | { kind: 'home'; key: string; name: string }
   | { kind: 'project'; key: string; name: string; project: Project; parent?: Project }
   | { kind: 'task'; key: string; name: string; task: WorkTask }
+  | { kind: 'new-task'; key: 'new-task'; name: 'New task' }
+
+/** What `$` takes for "make a new task": `$task`, `$new`, `$newtask`, from two letters on. */
+const NEW_TASK_WORDS = ['task', 'new', 'new-task', 'newtask']
+export const wantsNewTask = (term: string) => term.length >= 2 && NEW_TASK_WORDS.some((w) => w.startsWith(term))
+const NEW_TASK: Destination = { kind: 'new-task', key: 'new-task', name: 'New task' }
 
 /** A name as `$` reaches it: lower case, every run of other characters one hyphen. */
 export const slug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
@@ -44,7 +51,8 @@ const PLACES_BARE = 4
 
 /**
  * The `$` menu's places (Home, projects, folders) then tasks, best matches first.
- * None for a price ("$40", "$4.99", "$1,000"): Enter should send it.
+ * "New task" leads when the term asks for it (`$task`) and sits between the places
+ * and the tasks for a bare `$`. None for a price ("$40", "$4.99", "$1,000"): Enter should send it.
  */
 export function rankDestinations(ctx: DestinationContext, term: string): Destination[] {
   if (/^\d[\d.,]*$/.test(term)) return []
@@ -79,10 +87,10 @@ export function rankDestinations(ctx: DestinationContext, term: string): Destina
       || dueOrder(a.task) - dueOrder(b.task)
       || b.task.updatedAt - a.task.updatedAt)
 
-  return [
-    ...places.slice(0, t ? PLACES : PLACES_BARE).map((x) => x.d),
-    ...tasks.slice(0, TASKS).map(({ task }): Destination => ({ kind: 'task', key: `t:${task.ref}`, name: task.title, task })),
-  ]
+  const found = tasks.slice(0, TASKS).map(({ task }): Destination => ({ kind: 'task', key: `t:${task.ref}`, name: task.title, task }))
+  const shown = places.slice(0, t ? PLACES : PLACES_BARE).map((x) => x.d)
+  if (wantsNewTask(t)) return [NEW_TASK, ...shown, ...found]
+  return [...shown, ...(t ? [] : [NEW_TASK]), ...found]
 }
 
 const dueOrder = (t: WorkTask) => (t.dueDate ? Date.parse(t.dueDate.slice(0, 10)) || Infinity : Infinity)
@@ -105,6 +113,8 @@ export function stripToken(value: string, start: number, end: number) {
  * being started for; a task takes its own folder, else stays where it is.
  */
 export function placeAfter(d: Destination, now: { taskId: string | null; projectId: string | null }, taskHome: (ref: string) => string | null) {
+  // "New task" moves nothing until the task exists (the composer makes it first).
+  if (d.kind === 'new-task') return now
   if (d.kind === 'home') return { taskId: now.taskId, projectId: null }
   if (d.kind === 'project') return { taskId: now.taskId, projectId: d.project.id }
   return { taskId: d.task.ref, projectId: taskHome(d.task.ref) ?? now.projectId }

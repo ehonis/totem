@@ -4,6 +4,7 @@ import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-libra
 import type { Editor } from '@tiptap/core'
 import type { Project } from './types'
 import type { Destination } from './destinations'
+import type { NewTaskFields } from './newTask'
 
 // The composer's `$` menu in a chat not started yet: folders and tasks first, and
 // picking one takes the `$…` out of the words and hands them to the chat view.
@@ -26,11 +27,14 @@ const { default: Composer } = await import('./Composer')
 
 afterEach(cleanup)
 
-function Harness({ onPick, destinations = true }: { onPick: (d: Destination, text: string) => void; destinations?: boolean }) {
+function Harness({ onPick, destinations = true, onNewTask, projectId = null, onSend = () => {} }: {
+  onPick: (d: Destination, text: string) => void; destinations?: boolean
+  onNewTask?: (fields: NewTaskFields) => Promise<boolean>; projectId?: string | null; onSend?: () => void
+}) {
   const [value, setValue] = useState('')
   return (
-    <Composer value={value} onChange={setValue} onSend={() => {}} onStop={() => {}} busy={false}
-      destinations={destinations ? { projectId: null, taskId: null, onPick: (d, text) => onPick(d, text) } : undefined} />
+    <Composer value={value} onChange={setValue} onSend={onSend} onStop={() => {}} busy={false}
+      destinations={destinations ? { projectId, taskId: null, onPick: (d, text) => onPick(d, text), onNewTask } : undefined} />
   )
 }
 
@@ -92,5 +96,60 @@ describe('composer $ destinations', () => {
     render(<Harness onPick={vi.fn()} destinations={false} />)
     await type('$harb')
     expect(screen.queryAllByRole('option')).toHaveLength(0)
+  })
+})
+
+describe('composer $task', () => {
+  it('turns the box into a task line, reads its hints and makes the task on Enter', async () => {
+    const onPick = vi.fn()
+    const onSend = vi.fn()
+    const onNewTask = vi.fn(async () => true)
+    render(<Harness onPick={onPick} onSend={onSend} onNewTask={onNewTask} projectId="harbor" />)
+    const box = await type('$task')
+    expect(screen.getAllByRole('option')[0].textContent).toContain('New task')
+    expect(screen.getAllByRole('option')[0].textContent).toContain('filed in harbor')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onPick).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('New task')).toBeTruthy()
+    // The folder chip says where it goes before anything is typed.
+    expect(screen.getByLabelText('New task').textContent).toContain('Work - Acme / harbor')
+    await type('Renew passport p1')
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    expect(screen.getByLabelText('New task').textContent).toContain('P1')
+    await act(async () => { fireEvent.keyDown(box, { key: 'Enter' }) })
+    expect(onSend).not.toHaveBeenCalled()
+    expect(onNewTask).toHaveBeenCalledWith({ title: 'Renew passport', dueDate: null, priority: 4, folderId: 'harbor' })
+    expect(screen.queryByLabelText('New task')).toBeNull()
+  })
+
+  it('takes the words already typed as the title, and a #folder over where the chat is', async () => {
+    const onNewTask = vi.fn(async () => true)
+    render(<Harness onPick={vi.fn()} onNewTask={onNewTask} />)
+    const box = await type('Fix the site map #harbor $new')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await act(async () => { fireEvent.keyDown(box, { key: 'Enter' }) })
+    expect(onNewTask).toHaveBeenCalledWith({ title: 'Fix the site map', dueDate: null, priority: null, folderId: 'harbor' })
+  })
+
+  it('keeps the task line when the bridge refuses it, and Escape makes it a message again', async () => {
+    const onSend = vi.fn()
+    const onNewTask = vi.fn(async () => false)
+    render(<Harness onPick={vi.fn()} onSend={onSend} onNewTask={onNewTask} />)
+    const box = await type('$task')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await type('Call the bank')
+    await act(async () => { fireEvent.keyDown(box, { key: 'Enter' }) })
+    expect(onNewTask).toHaveBeenCalledTimes(1)
+    expect(screen.getByLabelText('New task')).toBeTruthy()
+    fireEvent.keyDown(box, { key: 'Escape' })
+    expect(screen.queryByLabelText('New task')).toBeNull()
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers no New task where the chat view cannot make one', async () => {
+    render(<Harness onPick={vi.fn()} />)
+    await type('$task')
+    expect(screen.queryAllByRole('option').map((o) => o.textContent).join()).not.toContain('New task')
   })
 })

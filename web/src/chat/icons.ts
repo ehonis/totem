@@ -26,6 +26,7 @@ export { default as IconWorld } from '@tabler/icons-react/dist/esm/icons/IconWor
 export { default as IconHandClick } from '@tabler/icons-react/dist/esm/icons/IconHandClick.mjs'
 export { default as IconDeviceDesktop } from '@tabler/icons-react/dist/esm/icons/IconDeviceDesktop.mjs'
 export { default as IconChecklist } from '@tabler/icons-react/dist/esm/icons/IconChecklist.mjs'
+export { default as IconSquarePlus } from '@tabler/icons-react/dist/esm/icons/IconSquarePlus.mjs'
 export { default as IconTarget } from '@tabler/icons-react/dist/esm/icons/IconTarget.mjs'
 export { default as IconListCheck } from '@tabler/icons-react/dist/esm/icons/IconListCheck.mjs'
 export { default as IconBulb } from '@tabler/icons-react/dist/esm/icons/IconBulb.mjs'

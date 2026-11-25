@@ -11,7 +11,8 @@ import {
 } from './draftsShared'
 import { drafts, useDraftState, useMissingUploads, setShownDraft, takeOpenedDraft, openDraft } from './draftsWeb'
 import { placeAfter, type Destination } from './destinations'
-import { taskHome } from '../work/state'
+import { createTask, taskHome } from '../work/state'
+import type { NewTaskFields } from './newTask'
 import { pushToast } from '../toast'
 import type { ComposerHandle, FollowUpPayload } from './Composer'
 import type { Attachment, ChatThread, Project } from './types'
@@ -92,6 +93,23 @@ export function useChatDrafts({ activeId, active, scopeProject, draftTaskId, dra
     drafts.write(draftKey, { text }, at)
     placeDraft(placeAfter(d, { taskId: draftTaskId, projectId: scopeProject?.id ?? null }, taskHome))
     requestAnimationFrame(() => composer.current?.focus())
+  }
+
+  /**
+   * `$task`: the box's words were the task's title. Make the task, then start a chat
+   * for it with this draft (its files go along; its words are the task now, so the
+   * chat's box starts empty). False when the bridge refused it: the words stay.
+   */
+  const newTask = async (fields: NewTaskFields) => {
+    const key = draftKey
+    const task = await createTask(fields, fields.folderId)
+    if (!task) return false
+    drafts.write(key, { text: '' }, at)
+    // He moved on while it was being added: the task is made, and he stays where he is.
+    if (keyRef.current !== key) { pushToast(`Added “${task.title}” to your tasks.`, 'info'); return true }
+    placeDraft({ taskId: task.ref, projectId: fields.folderId })
+    requestAnimationFrame(() => composer.current?.focus())
+    return true
   }
 
   // --- sending ---------------------------------------------------------------
@@ -175,7 +193,7 @@ export function useChatDrafts({ activeId, active, scopeProject, draftTaskId, dra
   const keepEdit = (threadId: string, text: string, files: Attachment[]) => keepEditIn(drafts, threadId, text, files, atRef.current)
 
   return {
-    draftKey, input: rec?.text || '', setInput, askFresh, startIn, startForTask, pickDestination, takeForSend, fromDraft, onDiscarded,
+    draftKey, input: rec?.text || '', setInput, askFresh, startIn, startForTask, pickDestination, newTask, takeForSend, fromDraft, onDiscarded,
     onAttachmentsChange, showEditFiles, missingFiles, removeMissing, keepEdit,
   }
 }

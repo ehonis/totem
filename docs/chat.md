@@ -1911,6 +1911,29 @@ and reads tasks only while it is open. The composer's + menu has "Put it in a fo
 task", which types the `$`. ⌘/Ctrl+Shift+O (Settings → Keyboard › Hotkeys) starts a blank
 chat at Home from any page, ready for this (`docs/shortcuts.md` → Hotkeys).
 
+#### Making a task with `$task`
+
+`$task` (or `$new`, from `$ta`/`$ne` on) leads the menu with **New task**, under
+**Make a task**; a bare `$` lists it between the places and the tasks, and the + menu has
+"New task, then chat about it". Picking it takes the `$…` out and turns the box into the
+task's line: a **New task** strip above the words, a check where Send was, and whatever was
+already typed as the start of the title. The words are read as the Tasks page's quick-add
+line reads them (`web/src/todos/parse.ts`: "fri", "tomorrow", "p2", "#folder"), each shown
+as a chip whose × keeps the word as text, plus a chip naming the folder it will be filed in:
+the one the chat is being started in, unless a `#folder` says otherwise
+(`web/src/chat/newTask.ts`, `NewTaskBar.tsx`). Return adds it (on a phone too: it is one
+line), Escape or Backspace in an empty box makes the box a message again, and the menus for
+`/` and `$` stay shut meanwhile.
+
+Adding it creates the task (`createTask` in `web/src/work/state.ts`, so the Tasks page and
+the chats panel see it at once) and starts a new chat for it in its folder, the way picking
+a task with `$` does (`newTask` in `useChatDrafts.ts`): the draft's files go along, its
+words became the task, so the chat's box starts empty with the task strip above it. A task
+the bridge refuses leaves the words in the box. Leaving for another draft or chat while it
+is being added still adds it, says so, and stays where he went. Files still uploading hold
+it, as they hold a pick. It is offered wherever the `$` places are (a chat not started yet,
+not temporary); the iPhone app has no `$` menu.
+
 Nothing loads tasks until a chat card with a task, a task strip or the `$` menu is on screen; while one is, the
 store (`web/src/work/state.ts`) reads the board, the sheet feed (its own two-minute cache)
 and the filings every minute and on focus. Changes are drawn at once and put back if the

@@ -11,18 +11,21 @@ import { attachmentRef, editableRefs, formatSize, refIds, splitRefs } from './re
 import type { ChipInfo } from './RefChip'
 import type { PromptEditorHandle } from './editor/PromptEditor'
 import { rankDestinations, stripToken, type Destination } from './destinations'
+import { readNewTask, type NewTaskFields } from './newTask'
+import NewTaskBar from './NewTaskBar'
+import { folderNames } from '../todos/folders'
 import ProjectIcon from './ProjectIcon'
 import { useChat } from './store'
 import { getWork, subscribeWork } from '../work/state'
 import { dueLabel } from '../work/groups'
 import { micUnavailableReason, openMic, closeMic, recordUntilStopped } from './recorder'
-import type { Attachment, DraftAttachment } from './types'
+import type { Attachment, DraftAttachment, Project } from './types'
 import type { Answering } from './QuestionsPanel'
 import { TI, useDismiss } from './ui'
 import {
   IconArrowUp, IconPlayerStopFilled, IconPlus, IconPaperclip, IconPhoto, IconMicrophone, IconWaveSine,
   IconSparkles, IconX, IconCheck, IconLoader2, IconCornerUpRight, IconPuzzle, IconPlaylistAdd, IconPlayerPlayFilled,
-  IconHome, IconChecklist, IconTable, IconFolder, IconArrowsDiagonalMinimize2, IconArrowsDiagonal,
+  IconHome, IconChecklist, IconTable, IconFolder, IconArrowsDiagonalMinimize2, IconArrowsDiagonal, IconSquarePlus,
 } from './icons'
 import { formatContextTokens } from './context'
 import type { ChatCommand } from '../studio'
@@ -108,11 +111,16 @@ export interface ComposerProps {
    * A chat not started yet: `$` also offers where it goes (a project, a folder,
    * Home) and the tasks it can be for. Picking one takes the `$…` out of the
    * words and hands them over, since they move to the new place's draft.
+   * With `onNewTask`, `$task` also turns the box into a task line: Enter makes
+   * the task and resolves true once the chat for it has been started.
    */
   destinations?: {
     projectId: string | null
     taskId: string | null
     onPick: (d: Destination, text: string, caret: number) => void
+    onNewTask?: (fields: NewTaskFields) => Promise<boolean>
+    /** The draft on screen: a task line is that draft's, so another draft is a message again. */
+    draftKey?: string
   }
 }
 
@@ -141,10 +149,11 @@ const noSubscribe = () => () => {}
 
 type MenuItem = { kind: 'dest'; d: Destination } | { kind: 'cmd'; c: ChatCommand }
 const itemKey = (it: MenuItem) => (it.kind === 'dest' ? it.d.key : it.c.cmd)
-const itemGroup = (it: MenuItem) => (it.kind === 'dest' ? (it.d.kind === 'task' ? 'Start it for a task' : 'Start it in')
+const itemGroup = (it: MenuItem) => (it.kind === 'dest' ? (it.d.kind === 'new-task' ? 'Make a task' : it.d.kind === 'task' ? 'Start it for a task' : 'Start it in')
   : it.c.kind === 'agent' ? 'Your agent skills' : 'Totem skills')
 
-function destDesc(d: Destination, sheetName: string) {
+function destDesc(d: Destination, sheetName: string, here?: Project) {
+  if (d.kind === 'new-task') return here ? `Type it here, filed in ${here.name}, then chat about it` : 'Type it here, then start a chat for it'
   if (d.kind === 'home') return 'Chats in no project'
   if (d.kind === 'project') return d.parent ? `Folder in ${d.parent.name}` : 'Project'
   const due = d.task.dueDate ? dueLabel(d.task.dueDate, new Date()) : null
@@ -154,6 +163,7 @@ function destDesc(d: Destination, sheetName: string) {
 
 function DestIcon({ d }: { d: Destination }) {
   if (d.kind === 'home') return <TI icon={IconHome} size={16} />
+  if (d.kind === 'new-task') return <TI icon={IconSquarePlus} size={16} />
   if (d.kind === 'project') return d.project.icon || d.project.imageUrl ? <ProjectIcon p={d.project} size={16} /> : <TI icon={IconFolder} size={16} />
   return <TI icon={d.task.kind === 'sheet' ? IconTable : IconChecklist} size={16} />
 }
@@ -257,6 +267,15 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [menu, setMenu] = useState(false)
   const [sel, setSel] = useState(0)
+  // `$task`: the box is a new task's line until Enter makes it (newTask.ts).
+  const [taskMode, setTaskMode] = useState(false)
+  const [taskIgnore, setTaskIgnore] = useState<string[]>([])
+  const [taskBusy, setTaskBusy] = useState(false)
+  const projects = useChat((s) => s.projects)
+  const canMakeTask = !!destinations?.onNewTask && allowCommands
+  const inTask = taskMode && canMakeTask && !answering && !queueEdit
+  // Another draft on screen, or the chat started: the box is a message again.
+  useEffect(() => { setTaskMode(false); setTaskIgnore([]) }, [destinations?.draftKey, canMakeTask])
   const [dictation, setDictation] = useState<null | { state: 'recording' | 'transcribing'; startedAt: number; level: number }>(null)
   const dictRef = useRef<{ stop: () => Promise<Blob>; cancel: () => void; stream: MediaStream } | null>(null)
   const [, tick] = useState(0)
@@ -455,7 +474,9 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     return alternate ? (followUp === 'queue' ? 'steer' : 'queue') : followUp
   }
   const action = actionFor(useModifierHeld(followUps))
+  const here = destinations?.projectId ? projects.find((p) => p.id === destinations.projectId) : undefined
   const placeholder = answering ? answering.placeholder
+    : inTask ? (here ? `A task for ${here.name}, e.g. “Renew passport fri p1”` : 'A task, e.g. “Renew passport fri p1 #folder”')
     : followUps ? (actionFor(false) === 'steer' ? 'Steer this reply: add context or change course' : 'Queue a message for when this reply finishes')
     : idlePlaceholder
   const handing = useRef(false)
@@ -511,7 +532,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   // A message that is only a Totem command still runs that skill on its own.
   const catalog = useSyncExternalStore(subscribeChatCommands, getChatCommands, getChatCommands)
   const known = useMentionSet()
-  const token = allowCommands && !dictation ? mentionAtCaret(value, caret) : null
+  const token = allowCommands && !dictation && !inTask ? mentionAtCaret(value, caret) : null
   const query = token && token.start !== dismissed ? token : null
   // Only the token in an otherwise empty box can take a fill-mode skill's prefix.
   const alone = !!query && query.start === 0 && !value.slice(query.end).trim()
@@ -519,9 +540,9 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   // `$` in a chat not started yet: where it goes and which task it is for, before the `$` skills.
   const dollar = !!query && query.prefix === '$' && !!destinations
   const work = useSyncExternalStore(dollar ? subscribeWork : noSubscribe, getWork, getWork)
-  const projects = useChat((s) => s.projects)
   const places = dollar && destinations
     ? rankDestinations({ projects, tasks: work.tasks, projectId: destinations.projectId, taskId: destinations.taskId }, query!.term)
+      .filter((d) => d.kind !== 'new-task' || canMakeTask)
     : []
   const items: MenuItem[] = [...places.map((d): MenuItem => ({ kind: 'dest', d })), ...matches.map((c): MenuItem => ({ kind: 'cmd', c }))]
   useEffect(() => { setSel(0) }, [value])
@@ -551,7 +572,41 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
     if (!query || !destinations || placeHeld) return
     const { value: next, caret: pos } = stripToken(value, query.start, query.end)
     setDismissed(null)
+    if (it.d.kind === 'new-task') { placeCaret(next, pos); startTask(); return }
     destinations.onPick(it.d, next, pos)
+  }
+
+  // --- `$task`: a new task typed in the box ---------------------------------
+  // Whatever is in the box already is the start of its title. Enter makes the task
+  // where the chat is being started (or its #folder) and the chat view moves this
+  // draft to a new chat for it, files and all; the box is then the chat's first message.
+  const task = useMemo(() => (inTask
+    ? readNewTask(value, { now: new Date(), folders: folderNames(projects), ignore: taskIgnore, projectId: destinations?.projectId ?? null })
+    : null), [inTask, value, projects, taskIgnore, destinations?.projectId])
+  const taskHeld = placeHeld || (taskBusy ? 'Adding the task' : '')
+  const taskReady = !!task?.fields && !taskHeld
+
+  function startTask() {
+    setTaskIgnore([])
+    setTaskMode(true)
+    requestAnimationFrame(() => focusBox())
+  }
+
+  function leaveTask() {
+    setTaskMode(false)
+    setTaskIgnore([])
+    focusBox()
+  }
+
+  async function submitTask() {
+    if (!task?.fields || !destinations?.onNewTask) return
+    if (taskHeld) { if (placeHeld) pushError(`${placeHeld}, then add the task.`); return }
+    setTaskBusy(true)
+    try {
+      if (await destinations.onNewTask(task.fields)) { setTaskMode(false); setTaskIgnore([]) }
+    } finally {
+      setTaskBusy(false)
+    }
   }
 
   function startMention(prefix: '/' | '$' = '/') {
@@ -575,6 +630,12 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
 
   /** The editor's keys first; true when the composer used the key. */
   function onKeyDown(e: KeyboardEvent) {
+    if (inTask) {
+      // One line: Return adds it, on a phone too. Escape, or Backspace in an empty box, makes it a message again.
+      if (e.key === 'Enter' && !e.shiftKey) { void submitTask(); return true }
+      if (e.key === 'Escape') { leaveTask(); return true }
+      if (e.key === 'Backspace' && !value && !taskBusy) { leaveTask(); return true }
+    }
     if (items.length) {
       if (e.key === 'ArrowDown') { setSel((s) => (s + 1) % items.length); return true }
       if (e.key === 'ArrowUp') { setSel((s) => (s - 1 + items.length) % items.length); return true }
@@ -640,7 +701,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
 
   const secs = dictation ? Math.floor((Date.now() - dictation.startedAt) / 1000) : 0
   const compacting = !!compactSend && !compactSend.keep
-  const showVoice = !!onVoice && !busy && !value.trim() && !tray.length && !dictation && !onResume
+  const showVoice = !!onVoice && !busy && !value.trim() && !tray.length && !dictation && !onResume && !inTask
   const removing = drafts.find((d) => d.key === confirmRemove)
 
   return (
@@ -654,14 +715,14 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
             return (
               <React.Fragment key={itemKey(it)}>
                 {group !== prev && <div className="vc-menu-label">{group}</div>}
-                <button type="button" role="option" aria-selected={i === sel} aria-disabled={it.kind === 'dest' && !!placeHeld} className={`vc-cmd ${i === sel ? 'active' : ''}`}
+                <button type="button" role="option" aria-selected={i === sel} aria-disabled={it.kind === 'dest' && it.d.kind !== 'new-task' && !!placeHeld} className={`vc-cmd ${i === sel ? 'active' : ''}`}
                   onMouseDown={(e) => { e.preventDefault(); chooseItem(it) }} onMouseEnter={() => setSel(i)}>
                   {it.kind === 'dest' ? (
                     <>
                       <span className="vc-cmd-icon"><DestIcon d={it.d} /></span>
                       <span className="vc-cmd-text">
                         <span className="vc-cmd-place">{it.d.name}</span>
-                        <span className="vc-cmd-desc">{placeHeld || destDesc(it.d, work.sheetName)}</span>
+                        <span className="vc-cmd-desc">{(it.d.kind !== 'new-task' && placeHeld) || destDesc(it.d, work.sheetName, here)}</span>
                       </span>
                     </>
                   ) : (
@@ -679,7 +740,12 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
           })}
         </div>
       )}
-      <div className="vc-box">
+      <div className={`vc-box${inTask ? ' is-task' : ''}`}>
+        {inTask && (
+          <NewTaskBar hints={task?.parsed.hints ?? []} folderId={task?.fields?.folderId ?? destinations?.projectId ?? null}
+            typedFolder={!!task?.parsed.folderId} projects={projects} now={new Date()} busy={taskBusy}
+            onIgnore={(k) => setTaskIgnore((list) => [...list, k])} onLeave={leaveTask} />
+        )}
         {tray.length > 0 && (
           <div className="vc-tray">
             {tray.map((d) => (
@@ -758,6 +824,11 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
                       </button>
                     )}
                     {allowCommands && (catalog.length > 0 || destinations) && <div className="vc-menu-sep" />}
+                    {canMakeTask && !inTask && (
+                      <button type="button" role="menuitem" onClick={() => { setMenu(false); startTask() }}>
+                        <TI icon={IconSquarePlus} size={17} /><span>New task, then chat about it</span>
+                      </button>
+                    )}
                     {allowCommands && catalog.length > 0 && (
                       <button type="button" role="menuitem" onClick={() => { setMenu(false); startMention() }}>
                         <TI icon={IconSparkles} size={17} /><span>Use a skill</span>
@@ -827,6 +898,11 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
                       : action === 'queue' ? 'Queue message' : 'Steer message'}>
                     {uploading ? <TI icon={IconLoader2} size={18} className="vc-spin" />
                       : <span className="vc-morph" key={action}><TI icon={action === 'queue' ? IconPlaylistAdd : IconCornerUpRight} size={18} stroke={2.25} /></span>}
+                  </button>
+                ) : inTask ? (
+                  <button type="button" className="vc-send" onClick={() => void submitTask()} disabled={!taskReady}
+                    aria-label="Add the task and start a chat" title={taskHeld || 'Add the task and start a chat for it'}>
+                    {uploading || taskBusy ? <TI icon={IconLoader2} size={18} className="vc-spin" /> : <TI icon={IconCheck} size={18} stroke={2.25} />}
                   </button>
                 ) : busy ? (
                   <button type="button" className="vc-send stop" onClick={onStop} aria-label="Stop" title="Stop"><TI icon={IconPlayerStopFilled} size={14} /></button>

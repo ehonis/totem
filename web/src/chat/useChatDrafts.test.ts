@@ -18,10 +18,12 @@ vi.mock('./store', () => ({
 }))
 vi.mock('./api', () => ({ holdUploads: vi.fn(async () => ({ held: [], missing: [] })), deleteUpload: vi.fn() }))
 vi.mock('../toast', () => ({ pushToast: vi.fn(), pushError: vi.fn() }))
-vi.mock('../work/state', () => ({ taskHome: () => null }))
+const createTask = vi.fn()
+vi.mock('../work/state', () => ({ taskHome: () => null, createTask: (...args: unknown[]) => createTask(...args) }))
 
 const { useChatDrafts } = await import('./useChatDrafts')
 const { drafts } = await import('./draftsWeb')
+const store = await import('./store')
 
 const thread = (id: string, extra: Partial<ChatThread>): ChatThread => ({ id, kind: 'regular', messages: [], createdAt: 1, updatedAt: 1, ...extra }) as ChatThread
 const local = (id: string) => ({ id: `local-${id}`, role: 'user' as const, content: 'x', createdAt: 1 })
@@ -72,5 +74,30 @@ describe('a task picked from the new-chat page', () => {
     pickWith('c1').startForTask('t2')
     expect(drafts.get().drafts.c1.text).toBe('half a reply')
     expect(drafts.keyAt({ kind: 'task', id: 't2' })).not.toBe('c1')
+  })
+})
+
+describe('$task: a task made in the composer', () => {
+  const fields = { title: 'Renew passport', dueDate: null, priority: null, folderId: null }
+
+  it('makes the task and starts a chat for it with an empty box', async () => {
+    fake.threads = []
+    const home = drafts.keyAt({ kind: 'home' })
+    drafts.write(home, { text: 'Renew passport' }, { place: { kind: 'home' } })
+    createTask.mockResolvedValueOnce({ ref: 't9', title: 'Renew passport' })
+    expect(await hook().newTask(fields)).toBe(true)
+    expect(createTask).toHaveBeenLastCalledWith(fields, null)
+    expect(drafts.get().drafts[home]).toBeUndefined()
+    expect(store.startTaskDraft).toHaveBeenLastCalledWith('t9', null)
+  })
+
+  it('keeps the words when the bridge refuses the task', async () => {
+    const home = drafts.keyAt({ kind: 'home' })
+    drafts.write(home, { text: 'Renew passport' }, { place: { kind: 'home' } })
+    createTask.mockResolvedValueOnce(null)
+    vi.mocked(store.startTaskDraft).mockClear()
+    expect(await hook().newTask(fields)).toBe(false)
+    expect(drafts.get().drafts[home].text).toBe('Renew passport')
+    expect(store.startTaskDraft).not.toHaveBeenCalled()
   })
 })
