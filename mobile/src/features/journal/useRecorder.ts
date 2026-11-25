@@ -15,6 +15,7 @@ import {
 } from 'expo-audio'
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake'
 import { RECORDING_MIME, deleteLocalRecording } from './upload'
+import { holdReload } from '../../shell/otaUpdates'
 
 export type RecorderState = 'idle' | 'requesting' | 'recording' | 'paused' | 'stopped' | 'denied'
 
@@ -75,6 +76,9 @@ export function useRecorder(): Recorder {
   const durationMs = useRef(0)
   const stateRef = useRef(state)
   stateRef.current = state
+  // Recording, paused, or a take not yet saved: an over-the-air reload would lose it (shell/otaUpdates.tsx).
+  const unsaved = state === 'recording' || state === 'paused' || state === 'stopped'
+  useEffect(() => (unsaved ? holdReload() : undefined), [unsaved])
 
   const stopMeter = () => {
     if (meter.current) clearInterval(meter.current)

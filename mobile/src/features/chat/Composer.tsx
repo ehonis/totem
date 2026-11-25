@@ -35,6 +35,7 @@ import {
   IconArrowUp, IconPlayerStopFilled, IconPlus, IconMicrophone, IconWaveSine, IconX, IconCheck, IconCornerUpRight, IconPuzzle,
   IconPlaylistAdd, IconPlayerPlayFilled,
 } from './icons'
+import { holdReload } from '../../shell/otaUpdates'
 
 export interface ComposerHandle {
   /** An upload that already exists (Search's "Add to chat"). */
@@ -259,6 +260,9 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   const failed = drafts.some((d) => d.status === 'error')
   const ready = drafts.filter((d) => d.status === 'ready' && d.uploaded).map((d) => d.uploaded!)
   const unfinished = drafts.length - ready.length
+  // Files still uploading (or failed) live only here: they hold off an over-the-air reload (shell/otaUpdates.tsx).
+  const pendingFiles = unfinished > 0
+  useEffect(() => (pendingFiles ? holdReload() : undefined), [pendingFiles])
   const trayState = `${ready.map((a) => a.id).join(',')}|${unfinished}`
   const reported = useRef(trayState)
   useEffect(() => {

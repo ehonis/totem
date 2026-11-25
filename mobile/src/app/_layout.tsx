@@ -16,6 +16,7 @@ import ToastHost from '../ui/ToastHost'
 import { pushedOptions } from '../features/settings/ui'
 import { ScreenError } from '../shell/ScreenError'
 import { colors } from '../theme'
+import { GLASS } from '../ui/glass'
 
 SplashScreen.preventAutoHideAsync()
 
@@ -45,6 +46,12 @@ const sheet = (detents: Detents, background: string = colors.bg2) => ({
   contentStyle: { backgroundColor: background },
 })
 
+// iOS 26 draws a sheet in liquid glass when the screen under its content is clear
+// (it turns opaque at the full detent by itself). Without glass it stays a solid sheet.
+const glassSheet = (detents: Detents) => (GLASS
+  ? { presentation: 'formSheet' as const, sheetAllowedDetents: detents, sheetGrabberVisible: true, contentStyle: { backgroundColor: 'transparent' } }
+  : sheet(detents))
+
 /** One row per route under src/app, outside the drawer and Connect. */
 const ROUTES: { name: string; options: object }[] = [
   // Chat (features/chat, features/voice)
@@ -56,7 +63,7 @@ const ROUTES: { name: string; options: object }[] = [
   { name: 'chat/select', options: sheet([0.75, 1], colors.bg) },
   { name: 'chat/snooze', options: sheet([0.5]) },
   // A list's Snoozed or Settled chats, opened from the drawer's foot.
-  { name: 'chat/shelf', options: sheet([0.75, 1]) },
+  { name: 'chat/shelf', options: glassSheet([0.75, 1]) },
   // The task a chat works toward: picked, changed or unlinked (features/work/LinkTaskSheet.tsx).
   { name: 'chat/task', options: sheet([0.75, 1]) },
   // Voice takes the whole screen and stays until ended: no swipe-down to leave it live.

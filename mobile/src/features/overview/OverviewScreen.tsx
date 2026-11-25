@@ -7,6 +7,7 @@ import { Image } from 'expo-image'
 import { useFocusEffect } from 'expo-router'
 import { Screen, FAB_CLEARANCE } from '../../shell/Screen'
 import { navigateTo, openChat } from '../../shell/nav'
+import { holdReload } from '../../shell/otaUpdates'
 import { colors, alpha, fonts } from '../../theme'
 import { T } from '../../ui/Text'
 import { Badge, Press } from '../../ui/kit'
@@ -40,6 +41,7 @@ import { chatAboutMenu } from '../../ui/chatAbout'
 import { openAway } from './AwaySheet'
 import RecentChats from './RecentChats'
 import { isWakeNetworkError } from '../../lib/wake'
+import { useTotemReportWaiting } from '../chat/totemReport'
 
 type NavTarget = Parameters<typeof navigateTo>[0]
 type Tabler = React.ComponentType<any>
@@ -58,9 +60,11 @@ function TotemsGlyph({ size = 21, color }: { size?: number; color?: string }) {
 }
 
 // Everything Totem has, one tap away. The phone's drawer has no tabs, so this row
-// is the way to every screen: Inbox, Search and Totems sit where the web lists Code
-// and Brain, which the app has no screen for yet (left out rather than dead-ending).
+// is the way to every screen (Totems first: the drawer has no Totems row). Inbox and
+// Search sit where the web lists Code and Brain, which the app has no screen for yet (left out rather than dead-ending).
 const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
+  // First, since the drawer has no Totems row: its dot says a totem's report is waiting.
+  { id: 'totems', label: 'Totems', icon: TotemsGlyph, to: 'totems' },
   // Each Productivity tool opens its own page (#177), named as its top bar names it.
   { id: 'todos', label: 'Tasks', icon: IconChecklist, to: 'todos' },
   { id: 'calendar', label: 'Calendar', icon: IconCalendarEvent, to: 'calendar' },
@@ -71,7 +75,6 @@ const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'journal', label: 'Journal', icon: IconMicrophone2, to: 'journal' },
   { id: 'inbox', label: 'Inbox', icon: IconInbox, to: 'inbox' },
   { id: 'search', label: 'Search', icon: IconSearch, to: 'search' },
-  { id: 'totems', label: 'Totems', icon: TotemsGlyph, to: 'totems' },
   { id: 'fleet', label: 'Fleet', icon: IconServer2, to: 'fleet' },
   { id: 'logs', label: 'Logs', icon: IconHistory, to: { tab: 'settings', sub: 'logs' } },
   { id: 'studio', label: 'Skills', icon: IconWand, to: { tab: 'settings', sub: 'skills' } },
@@ -366,6 +369,7 @@ export default function OverviewScreen() {
     nextJob, requestsToday: data.assistant?.today,
   }))
   const inboxOpen: number = data.inbox?.open || 0
+  const totemReports = useTotemReportWaiting()
 
   const daily = useMemo(() => {
     const a: any[] = data.assistant?.daily || []
@@ -453,10 +457,11 @@ export default function OverviewScreen() {
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={st.apps} contentContainerStyle={st.appsInner}>
           {APPS.map((app) => (
-            <Press key={app.id} haptic onPress={() => navigateTo(app.to)} style={st.app} accessibilityRole="button" accessibilityLabel={app.label}>
+            <Press key={app.id} haptic onPress={() => navigateTo(app.to)} style={st.app} accessibilityRole="button" accessibilityLabel={app.id === 'totems' && totemReports ? 'Totems, a report is waiting' : app.label}>
               <View style={st.appIco}>
                 <TI icon={app.icon} size={21} color={ov.soft} />
                 {app.id === 'inbox' && inboxOpen ? <View style={st.appBadge}><Badge count={inboxOpen} /></View> : null}
+                {app.id === 'totems' && totemReports ? <View style={st.appDot} /> : null}
               </View>
               <T size={12.5} color={ov.soft} numberOfLines={1}>{app.label}</T>
             </Press>
@@ -784,6 +789,9 @@ function RefreshButton({ spinning, onPress }: { spinning: boolean; onPress: () =
 // Sending starts a new chat with the text and opens it.
 function AskBox({ onAsk }: { onAsk: (text: string) => void }) {
   const [text, setText] = useState('')
+  // Words not yet sent hold off an over-the-air reload (shell/otaUpdates.tsx).
+  const unsent = text.trim().length > 0
+  useEffect(() => (unsent ? holdReload() : undefined), [unsent])
   const ref = useRef<TextInput>(null)
   const submit = () => {
     const t = text.trim()
@@ -847,6 +855,7 @@ const st = StyleSheet.create({
     backgroundColor: ov.surface, borderWidth: 1, borderColor: ov.line,
   },
   appBadge: { position: 'absolute', top: -5, right: -6 },
+  appDot: { position: 'absolute', top: -2, right: -2, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent },
   askInput: {
     flex: 1, minWidth: 0, color: colors.text, fontFamily: fonts[400], fontSize: 16, lineHeight: 22,
     paddingTop: 9, paddingBottom: 9, maxHeight: 140,

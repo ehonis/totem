@@ -1,11 +1,13 @@
 // The phone sidebar (Shell.tsx MobileDrawer): TOTEM with Search (the Search page);
-// then Overview, Totems (a dot when a totem's report waits), the Productivity tools
-// and the chats (one list, T3 Code's way: features/chat/ChatsNav.tsx) in one scroll; and a foot
-// that stays put, with the chats' Snoozed and Settled buttons on the left and New
-// chat and Settings on the right, where the thumb is (the web drawer's foot has
-// Settings there too). New chat wears the corner button's light fill.
-// The drawer navigator slides the page aside to reveal it, the way the ChatGPT app
-// does; the scrim, a swipe or picking anything closes it.
+// then Overview (a dot when a totem's report waits), the Productivity tools and the chats (one list, T3 Code's way:
+// features/chat/ChatsNav.tsx) in one scroll; and a foot that floats over the scroll's
+// end, with the chats' Snoozed and Settled buttons on the left and New chat and
+// Settings on the right, where the thumb is (the web drawer's foot has Settings there
+// too). On iOS 26 the foot is liquid glass (ui/glass.tsx): neighbouring buttons melt
+// into one shape, the list slides under them, and New chat wears the corner button's
+// light tint. Totems is not here: it opens from the Overview's app row.
+// The drawer takes the whole screen (the page slides off to the right); the head's
+// close button, a swipe back or picking anything closes it.
 //
 // On the phone Totem is a chat app first, so the web's tab rail isn't here: the other
 // screens open from the Overview's app row. The Productivity tools are the exception
@@ -16,20 +18,21 @@
 // now lives in Settings. Search opens the Search page; the chat list has no search
 // box of its own.
 import React, { useEffect, useState } from 'react'
-import { Image as RNImage, LayoutAnimation, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
+import { LayoutAnimation, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { useReducedMotion } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, usePathname } from 'expo-router'
 import type { DrawerContentComponentProps } from 'expo-router/drawer'
-import { colors, textAlpha } from '../theme'
+import { LinearGradient } from 'expo-linear-gradient'
+import { alpha, colors, textAlpha } from '../theme'
 import { T } from '../ui/Text'
 import { Badge, IconBtn, Press } from '../ui/kit'
+import { FAB_TINT, GLASS, GlassButton, GlassGroup } from '../ui/glass'
 import { Hi, Squares2X2Icon, Cog6ToothIcon, ChevronRightIcon } from '../lib/icons'
 import IconChevronDown from '@tabler/icons-react-native/dist/esm/icons/IconChevronDown.mjs'
 import IconChevronUp from '@tabler/icons-react-native/dist/esm/icons/IconChevronUp.mjs'
 import { useSettings } from '../lib/settings'
-import { useChat } from '../lib/chat/store'
-import { IconEdit, IconSearch } from '../lib/chat/icons'
+import { IconEdit, IconLayoutSidebarLeftCollapse, IconSearch } from '../lib/chat/icons'
 import { useInboxCount } from '../lib/useInboxCount'
 import { useUnreadNotifications } from '../features/notifications/useUnread'
 import ChatsNav, { DockedShelfButtons } from '../features/chat/ChatsNav'
@@ -40,6 +43,7 @@ import { newChat, openChat } from './nav'
 import { PRODUCTIVITY_APPS, TAB_ROUTES, TOOL_LABELS, productivityPage, productivityPath } from './routes'
 import { ToolIcon } from './ToolIcon'
 import { tap } from '../ui/haptics'
+import { useTotemReportWaiting } from '../features/chat/totemReport'
 
 const FOLD_KEY = 'totem.drawer.toolsFolded'
 const readFolded = () => { try { return localStorage.getItem(FOLD_KEY) === '1' } catch { return false } }
@@ -71,9 +75,7 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
   const onOverview = path === '/' || path === ''
   const onSettings = path.startsWith('/settings')
   const onSearch = path.startsWith('/search')
-  const onTotems = path.startsWith(TAB_ROUTES.totems)
-  // A totem's report waiting in its chat: its chats are not in the list below, so the row says so.
-  const totemReports = useChat((s) => s.threads.some((t) => t.totemId && t.needsReply && !s.runs[t.id]))
+  const totemReports = useTotemReportWaiting()
   const onTool = productivityPage(path)
   const toolName = onToolName(path)
   // Highlighted on the hub, or folded away while one of its tools is open.
@@ -87,6 +89,8 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
   // A chat opened from the shelf sheet over the drawer closes the drawer too.
   useEffect(() => keepDrawerClose(() => navigation.closeDrawer()), [navigation])
   const go = (to: string) => { tap(); router.navigate(to as any); close() }
+  // The list scrolls under the floating foot, so its end clears the foot's height.
+  const [footH, setFootH] = useState(72)
   const openFromDrawer = (id: string | null) => { openChat(id); close() }
 
   return (
@@ -102,18 +106,16 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
           style={onSearch ? { backgroundColor: colors.drawerOn } : undefined}
           onPress={() => go(TAB_ROUTES.search)}
         />
+        {/* No page edge is left to tap, so the head closes it; a swipe left does too. */}
+        <IconBtn icon={IconLayoutSidebarLeftCollapse} size={21} box={44} label="Close menu" color={textAlpha(72)} onPress={close} />
       </View>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 16 }} keyboardShouldPersistTaps="handled">
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: footH + 12 }} scrollIndicatorInsets={{ bottom: footH }} keyboardShouldPersistTaps="handled">
         <View style={st.nav}>
-          <Press style={[st.item, onOverview && st.itemOn]} onPress={() => go(TAB_ROUTES.overview)} accessibilityRole="button">
+          <Press style={[st.item, onOverview && st.itemOn]} onPress={() => go(TAB_ROUTES.overview)} accessibilityRole="button" accessibilityLabel={`Overview${inboxOpen ? `, ${inboxOpen} in the inbox` : ''}${totemReports ? ", a totem's report is waiting" : ''}`}>
             <Hi icon={Squares2X2Icon} size={20} color={onOverview ? colors.text : textAlpha(86)} />
             <T size={15.5} color={onOverview ? colors.text : textAlpha(86)} style={{ flex: 1 }}>Overview</T>
             <Badge count={inboxOpen} />
-          </Press>
-          <Press style={[st.item, onTotems && st.itemOn]} onPress={() => go(TAB_ROUTES.totems)} accessibilityRole="button" accessibilityLabel={totemReports ? 'Totems, a report is waiting' : 'Totems'}>
-            {/* The web rail's Totems mark, tinted like a glyph. */}
-            <RNImage source={require('../../assets/images/totems-icon.png')} style={{ width: 20, height: 20, tintColor: onTotems ? colors.text : textAlpha(86) }} />
-            <T size={15.5} color={onTotems ? colors.text : textAlpha(86)} style={{ flex: 1 }}>Totems</T>
+            {/* A totem's report waits: its Totems tile on the Overview has the same dot. */}
             {totemReports ? <View style={st.dot} /> : null}
           </Press>
         </View>
@@ -173,23 +175,44 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
           drafts={(projectId, homeOnly) => <ChatsNavDrafts projectId={projectId} homeOnly={homeOnly} onOpen={close} />}
         />
       </ScrollView>
-      {/* A discarded draft's Undo, kept in sight whatever the scroll. */}
-      <DockedUndo />
-      <View style={[st.foot, { paddingBottom: Math.max(insets.bottom, 10) }]}>
-        <View style={{ flex: 1 }}><DockedShelfButtons /></View>
-        <Press haptic style={st.newChat} onPress={() => { newChat(); close() }} accessibilityRole="button" accessibilityLabel="New chat" hitSlop={4}>
-          <Hi icon={IconEdit} size={20} strokeWidth={2} color="#0f1115" />
-        </Press>
-        <IconBtn
-          icon={Cog6ToothIcon}
-          size={22}
-          box={44}
-          label={unread > 0 ? `Settings, ${unread} unread ${unread === 1 ? 'notification' : 'notifications'}` : 'Settings'}
-          badge={unread > 0}
-          color={onSettings ? colors.text : textAlpha(72)}
-          style={onSettings ? { backgroundColor: colors.drawerOn } : undefined}
-          onPress={() => go(TAB_ROUTES.settings)}
-        />
+      <View
+        style={[st.foot, !GLASS && st.footSolid, { paddingBottom: Math.max(insets.bottom, 10) }]}
+        onLayout={(e) => setFootH(Math.round(e.nativeEvent.layout.height))}
+        pointerEvents="box-none"
+      >
+        {/* The list fades out under the glass, as iOS 26's scroll edge does. */}
+        {GLASS ? <LinearGradient pointerEvents="none" colors={[alpha(colors.bg2, 0), alpha(colors.bg2, 0.85)]} locations={[0, 0.55]} style={st.fade} /> : null}
+        {/* A discarded draft's Undo, kept in sight whatever the scroll. */}
+        <DockedUndo />
+        <View style={st.footRow} pointerEvents="box-none">
+          <View style={{ flex: 1 }} pointerEvents="box-none"><DockedShelfButtons /></View>
+          <GlassGroup spacing={14} style={st.pair}>
+            <GlassButton
+              shape={st.round}
+              fallback={{ backgroundColor: colors.text }}
+              tint={FAB_TINT}
+              haptic
+              hitSlop={4}
+              accessibilityRole="button"
+              accessibilityLabel="New chat"
+              onPress={() => { newChat(); close() }}
+            >
+              <Hi icon={IconEdit} size={20} strokeWidth={2} color="#0f1115" />
+            </GlassButton>
+            <GlassButton
+              shape={st.round}
+              fallback={onSettings ? { backgroundColor: colors.drawerOn } : undefined}
+              tint={onSettings ? 'rgba(255,255,255,0.14)' : undefined}
+              hitSlop={4}
+              accessibilityRole="button"
+              accessibilityLabel={unread > 0 ? `Settings, ${unread} unread ${unread === 1 ? 'notification' : 'notifications'}` : 'Settings'}
+              onPress={() => go(TAB_ROUTES.settings)}
+            >
+              <Hi icon={Cog6ToothIcon} size={22} color={onSettings ? colors.text : textAlpha(82)} />
+              {unread > 0 ? <View style={st.badge} /> : null}
+            </GlassButton>
+          </GlassGroup>
+        </View>
       </View>
     </View>
   )
@@ -199,13 +222,20 @@ const st = StyleSheet.create({
   drawer: { flex: 1, backgroundColor: colors.bg2, paddingHorizontal: 8 },
   head: { height: 58, flexDirection: 'row', alignItems: 'center', gap: 2 },
   nav: { paddingTop: 2, paddingBottom: 6, gap: 2, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
-  // Pinned under the scroll: the shelves on the left, Settings on the right.
-  foot: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 8, paddingLeft: 4, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },
-  // Screen.tsx's new-chat corner button, smaller: the one light circle in the drawer.
-  newChat: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.text },
+  // Floating over the scroll's end: the shelves on the left, New chat and Settings on the right.
+  foot: { position: 'absolute', left: 8, right: 8, bottom: 0 },
+  // Without glass the foot is a solid band, as before.
+  footSolid: { backgroundColor: colors.bg2, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },
+  fade: { position: 'absolute', left: -8, right: -8, top: -18, bottom: 0 },
+  footRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 8, paddingLeft: 4, paddingRight: 2 },
+  // Close enough to melt into one shape under glass.
+  pair: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // Screen.tsx's new-chat corner button, smaller.
+  round: { width: 46, height: 46, borderRadius: 23 },
+  dot: { width: 7, height: 7, borderRadius: 4, marginRight: 6, backgroundColor: colors.accent },
+  badge: { position: 'absolute', top: 9, right: 10, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent },
   item: { flexDirection: 'row', alignItems: 'center', gap: 13, minHeight: 44, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 10 },
   itemOn: { backgroundColor: colors.drawerOn },
-  dot: { width: 7, height: 7, borderRadius: 4, marginRight: 6, backgroundColor: colors.accent },
   tools: { paddingTop: 6, paddingBottom: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
   toolsHead: { flexDirection: 'row', alignItems: 'center' },
   toolsOpen: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 10 },

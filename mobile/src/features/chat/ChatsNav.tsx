@@ -26,7 +26,7 @@ import React, { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { MenuView } from '@react-native-menu/menu'
 import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
-import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated'
+import Animated, { useAnimatedReaction, useAnimatedStyle, useSharedValue, withRepeat, withTiming, type SharedValue } from 'react-native-reanimated'
 import { useDrawerStatus } from 'expo-router/drawer'
 import { useChat, openProject, createProject, threadTitle } from '../../lib/chat/store'
 import { attentionOf, attentionBadge, attentionTitle, type Attention } from '../../lib/chat/attention'
@@ -40,6 +40,7 @@ import { pushError } from '../../lib/toast'
 import { colors, textAlpha } from '../../theme'
 import { T } from '../../ui/Text'
 import { Press } from '../../ui/kit'
+import { GlassButton, GlassGroup } from '../../ui/glass'
 import { impact, tap } from '../../ui/haptics'
 import { prompt, showActionTree } from '../../ui/menu'
 import { useNow } from './threadOps'
@@ -88,7 +89,7 @@ function CardStatus({ t, needs, live, woke, unread, settle, now }: { t: ChatThre
   return <T size={11.5} color={muted80} style={st.status}>{ago(activeAt(t, now), now)}</T>
 }
 
-export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now, beforeDiscard, card = false, place }: {
+export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now, beforeDiscard, card = false, place, glass = false }: {
   t: ChatThread
   active: boolean
   live: boolean
@@ -101,6 +102,8 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now, bef
   card?: boolean
   /** The chat's project or folder for a card's first line; a null project is Home. */
   place?: { project: Project | null; label: string }
+  /** On a glass sheet: the row is clear at rest and solid while swiped. */
+  glass?: boolean
 }) {
   const retitling = useChat((s) => !!s.retitling[t.id])
   const autoDays = useChat((s) => s.prefs.autoSettleDays ?? 3)
@@ -116,6 +119,11 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now, bef
   const menu = threadMenu(t, shelf, live, unsent)
   const run = (id: string) => { if (id === 'discard-draft') beforeDiscard?.(); menu.run(id) }
   const swipe = useRef<SwipeableMethods>(null)
+  // A clear row (glass) takes its solid fill the frame it starts to move, on the UI thread
+  // (Track below), so the actions behind it never show through its text.
+  const moved = useSharedValue(0)
+  const solid = colors.bg2
+  const fill = useAnimatedStyle(() => ({ backgroundColor: moved.value > 0 ? solid : 'transparent' }))
   // Every swipe action is one of the menu's own ids, so both run the same code.
   const act = (id: string) => { swipe.current?.close(); tap(); run(id) }
   const settle = offersSettle(t, shelf, live)
@@ -183,7 +191,7 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now, bef
       ) : null}
     </View>
   ) : (
-    <View style={[st.thread, active ? st.threadOn : st.threadOff]}>
+    <Animated.View style={[st.thread, active ? st.threadOn : glass ? fill : st.threadOff]}>
       {/* The open chat: a fill and an accent bar, so it is the first row the eye finds. */}
       {active ? <View style={st.activeBar} /> : null}
       <Press style={st.threadMain} {...press}>
@@ -205,7 +213,7 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now, bef
       </Press>
       {/* Marked done, or its task finished: Settle without a swipe. */}
       {settleChip}
-    </View>
+    </Animated.View>
   )
   return (
     // No long-press MenuView around the row: inside the drawer it swallowed the
@@ -218,8 +226,9 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now, bef
       rightThreshold={40}
       overshootRight={false}
       blocksExternalGesture={drawerPan()}
-      renderRightActions={() => (
+      renderRightActions={(progress) => (
         <View style={st.swipe}>
+          {glass ? <Track progress={progress} into={moved} /> : null}
           {shelf === 'snoozed' ? (
             <SwipeBtn label="Wake" icon={IconAlarm} fill={colors.accent} ink={colors.white} onPress={() => act('wake')} style={card && st.swipeTall} />
           ) : (
@@ -251,6 +260,12 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now, bef
       {row}
     </ReanimatedSwipeable>
   )
+}
+
+/** Copies a swiped row's progress to its own value on the UI thread, for its fill. */
+function Track({ progress, into }: { progress: SharedValue<number>; into: SharedValue<number> }) {
+  useAnimatedReaction(() => progress.value, (v) => { into.value = v })
+  return null
 }
 
 /** One action behind a swiped row (a chat's, a draft's). Without onPress it is the face of a MenuView. */
@@ -285,12 +300,14 @@ export function openShelf(kind: ShelfKind, scope: string, showing = true) {
   router.push({ pathname: '/chat/shelf', params: { kind, scope, showing: showing ? '1' : '0' } })
 }
 
-/** One shelf as a button: what it holds and how many. */
+/** One shelf as a glass capsule (ui/glass.tsx): what it holds and how many. */
 function ShelfBtn({ kind, count, scope, showing }: { kind: ShelfKind; count: number; scope: string; showing: boolean }) {
   const label = kind === 'snoozed' ? 'Snoozed' : 'Settled'
   return (
-    <Press
-      style={st.shelfBtn}
+    <GlassButton
+      shape={st.shelfBtn}
+      fallback={st.shelfSolid}
+      inner={st.shelfInner}
       hitSlop={4}
       onPress={() => openShelf(kind, scope, showing)}
       accessibilityRole="button"
@@ -299,7 +316,7 @@ function ShelfBtn({ kind, count, scope, showing }: { kind: ShelfKind; count: num
     >
       <T size={13} weight={500} color={kind === 'snoozed' ? colors.accent : textAlpha(86)}>{label}</T>
       <T size={12.5} color={colors.muted} style={{ fontVariant: ['tabular-nums'] }}>{count}</T>
-    </Press>
+    </GlassButton>
   )
 }
 
@@ -308,10 +325,11 @@ type ShelfCounts = { scope: string; snoozed: number; settled: number; showing: b
 export function ShelfButtons({ scope, snoozed, settled, showing, style }: ShelfCounts & { style?: object }) {
   if (!snoozed && !settled) return null
   return (
-    <View style={[st.shelfBtns, style]}>
+    // Side by side they melt into one glass shape.
+    <GlassGroup spacing={14} style={[st.shelfBtns, style]}>
       {snoozed ? <ShelfBtn kind="snoozed" count={snoozed} scope={scope} showing={showing} /> : null}
       {settled ? <ShelfBtn kind="settled" count={settled} scope={scope} showing={showing} /> : null}
-    </View>
+    </GlassGroup>
   )
 }
 
@@ -520,7 +538,9 @@ const st = StyleSheet.create({
   metaTime: { paddingLeft: 4, fontVariant: ['tabular-nums'] },
   doneBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 26, marginLeft: 'auto', marginRight: 8, paddingLeft: 6, paddingRight: 8, borderRadius: 7, backgroundColor: 'rgba(63, 185, 80, 0.15)' },
   shelfBtns: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-  shelfBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 36, paddingVertical: 6, paddingHorizontal: 11, borderRadius: 18, backgroundColor: colors.bg3 },
+  shelfBtn: { minHeight: 46, borderRadius: 23 },
+  shelfSolid: { backgroundColor: colors.bg3 },
+  shelfInner: { flexDirection: 'row', gap: 5, paddingVertical: 6, paddingHorizontal: 14 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.line, marginVertical: 6, marginHorizontal: 12 },
   scope: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingTop: 4, paddingBottom: 6, paddingHorizontal: 2 },
   scopeBtn: { flexDirection: 'row', alignItems: 'center', gap: 7, minHeight: 40, paddingHorizontal: 10, borderRadius: 10 },

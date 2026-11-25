@@ -67,6 +67,7 @@ import { useSettings } from '../../lib/settings'
 import { useLanding, useLandOn, useStill } from '../../ui/landing'
 import { farIndex } from '../../lib/landing'
 import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconFolder, IconFolderOff, IconSparkles, IconChevronDown, IconSettings, IconUsersGroup, IconUserPlus } from './icons'
+import { holdReload } from '../../shell/otaUpdates'
 
 function greeting(name: string) {
   const h = new Date().getHours()
@@ -202,6 +203,8 @@ export default function ChatScreen() {
   // draft waits in the store meanwhile and is back in the box once the edit ends.
   const [queueEdit, setQueueEdit] = useState<QueueEdit | null>(null)
   const editing = !!queueEdit && queueEdit.threadId === activeId
+  // A queued message being edited lives only here: it holds off an over-the-air reload (shell/otaUpdates.tsx).
+  useEffect(() => (editing ? holdReload() : undefined), [editing])
   const onEditFiles = useCallback((files: Attachment[]) => setQueueEdit((e) => (e ? { ...e, files } : e)), [])
   // What the composer shows: an open chat's own draft, or the new-chat draft its place shows now.
   const {

@@ -92,10 +92,14 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   on the step `shell/drawerKeyboard.ts` names. The composer rides the keyboard over the drawer, so a keyboard left up
   covered half of it. KeyboardController resigns whatever holds the keyboard, not only the input React Native's focus
   tracker knows, which is all `Keyboard.dismiss()` blurs. A new way to open the drawer needs nothing more.
-- `src/shell/` is the frame: `AppDrawer` (the sidebar: Search, which opens the Search page, by the wordmark; Overview, Totems
-  (a dot while a totem's report waits; totems' chats are not in the list), the Productivity tools as a
-  4 + 3 grid the heading's chevron folds away, remembered per device, then the chats, all in one scroll; a pinned foot
-  with the list's Snoozed and Settled buttons, which open `features/chat/ShelfSheet.tsx`, and New chat and Settings on the right), `Screen` (top bar with the AI usage pill on the right, where the web phone bar has new chat; plus the voice/new-chat buttons), `nav.ts` (`navigateTo` takes the
+- `src/shell/` is the frame: `AppDrawer` (the sidebar, the whole screen wide, with a close button in its head: Search,
+  which opens the Search page, by the wordmark; Overview (a dot while a totem's report waits, as on the Overview's
+  Totems tile), the Productivity tools as a
+  4 + 3 grid the heading's chevron folds away, remembered per device, then the chats, all in one scroll; a foot floating
+  over the scroll's end with the list's Snoozed and Settled buttons, which open `features/chat/ShelfSheet.tsx`, and New
+  chat and Settings on the right; no Totems row: totems' chats are not in the list, and the Totems page opens from the
+  Overview's app row), `Screen` (top bar with the AI usage pill on the right, where the web phone bar has new chat; plus
+  the corner new-chat button; voice mode starts from the home-screen quick action, not a corner button), `nav.ts` (`navigateTo` takes the
   web's tab/app ids, `openChat`, `newChat`, `startVoice`), `routes.ts` (where each id lands, pure and
   tested by `routes.test.mjs`), `ToolIcon` (each tool's mark), `quickActions.ts` (home-screen long-press).
 - `src/app/` holds routes only. `(app)/` is the drawer with one screen per web tab. Pushed screens and sheets
@@ -116,6 +120,28 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   `navigateTo('todos')`, `{ tab: 'productivity', app }`, notification links (`destination.ts`) and the
   landing-tab preference all go through `routes.ts`.
 
+- **Liquid glass** (`src/ui/glass.tsx`, `expo-glass-effect`, already in the build): the drawer's foot, the corner
+  new-chat button, the composer and the shelf sheet. `GlassButton` is a pressable glass shape with a solid `fallback`
+  for iOS before 26, and `GlassGroup` (a `GlassContainer`) melts shapes within `spacing` into one, so neighbouring
+  buttons read as one piece; keep a row of floating buttons in one group. A sheet is glass when its route uses
+  `glassSheet` in `src/app/_layout.tsx` (a formSheet over a clear screen, which iOS 26 draws in glass) and its content
+  is clear too; rows on it pass `glass` to `ThreadItem`, which is clear at rest and takes its solid fill the
+  frame it starts to move (its swipe progress copied on the UI thread), so the actions never show through its text.
+- **Over-the-air updates arrive without a cold start** (`shell/otaUpdates.tsx`, rules in `shell/otaPolicy.ts`):
+  expo-updates on its own checks only at launch and applies at the next launch, and iOS keeps the app suspended for
+  days, so a merge once seemed not to reach the phone. Coming back to the foreground checks (at most every 10 minutes)
+  and fetches an update or a rollback; a fetched one is applied on a return after 30 minutes away, only on the
+  Overview or an open chat (`safePage`: the pages whose every input saves as it changes or holds the reload; any other
+  page, sheet or editor may keep edits only in memory), with no input focused (a chat excepted: its drafts are flushed
+  just before, `onBeforeReload`), and only if nothing lands in the 1.5 s after (a
+  tapped notification, a quick action calling `noteArrival`, a link that moves the page or chat). Before reloading it
+  notes the page and chat, and the next launch goes back there (`resumedFromUpdate`) and skips the quick action the
+  app was first cold-launched from, which the native module never clears. Anything else a reload would lose takes
+  `holdReload()` while it lasts (voice mode, dictation, a journal take or typed entry, the Overview's ask box, a queued
+  message or sent message being edited, an inbox card's note, unsent answers to an agent's questions, an edited
+  LinkedIn draft); a chat not started yet is never reloaded under. An input added to the Overview or the chat screen
+  that keeps unsent words only in React state takes a hold too; widening `safePage` needs the same audit of that page. A build from
+  before this code needs two cold starts once to pick it up.
 - **The drawer's chats** (`features/chat/ChatsNav.tsx`, docs/chat.md → The chats panel): the web chats panel, T3 Code's
   flat list. Every chat in every project and folder on one list (unsent drafts, Pinned, the chats still in play latest
   first, then Working), each a card with its place, its status in words and its linked task (`features/work/TaskBadge.tsx`,

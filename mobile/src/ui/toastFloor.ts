@@ -1,6 +1,6 @@
 // What the toast deck has to sit above at the bottom of the screen. The open
-// chat registers its dock (composer and what rides on it), the floating voice and
-// new-chat buttons register themselves, each only while their screen is focused.
+// chat registers its dock (composer and what rides on it), the floating new-chat
+// button registers itself, each only while their screen is focused.
 // ToastHost adds the keyboard on top.
 import { useSyncExternalStore } from 'react'
 
@@ -9,7 +9,7 @@ export type ToastFloor = {
   dock: number
   /** How much of the keyboard the dock's own bottom gap already absorbs. */
   lift: number
-  /** The floating buttons are in the bottom-right corner. */
+  /** The floating new-chat button is in the bottom-right corner. */
   fab: boolean
 }
 

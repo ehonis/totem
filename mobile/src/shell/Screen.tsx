@@ -1,8 +1,10 @@
 // Every screen but the chat: ChatGPT's top bar (☰, the screen's name, the AI
-// usage pill), the content, and in the bottom-right corner the voice + new-chat pair
-// (shell.css .sh-mbar / .sh-fab). Mirrors Shell.tsx's MobileBar and NewChatFab,
-// except the bar's right slot: the web has new chat there, the app the usage pill
-// (new chat is the corner button), so that glance is on every page.
+// usage pill), the content, and in the bottom-right corner the new-chat button, in
+// liquid glass where iOS has it (shell.css .sh-mbar / .sh-fab). Voice mode starts from
+// the home-screen quick action and the chat's composer, not a second corner button.
+// Mirrors Shell.tsx's MobileBar and NewChatFab, except the bar's right slot: the web
+// has new chat there, the app the usage pill (new chat is the corner button), so that
+// glance is on every page.
 import React, { useEffect, useState, useSyncExternalStore } from 'react'
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -11,11 +13,12 @@ import { colors, textAlpha } from '../theme'
 import { T } from '../ui/Text'
 import { IconBtn, Press } from '../ui/kit'
 import { Hi } from '../lib/icons'
-import { IconEdit, IconMenu, IconWaveSine } from '../lib/chat/icons'
+import { IconEdit, IconMenu } from '../lib/chat/icons'
 import UsageChips from '../features/chat/UsageChips'
-import { newChat, openDrawer, startVoice } from './nav'
+import { newChat, openDrawer } from './nav'
 import { PageGlow, type GlowPage } from '../ui/PageGlow'
 import { impact } from '../ui/haptics'
+import { FAB_TINT, GlassButton } from '../ui/glass'
 import { setToastFloor } from '../ui/toastFloor'
 import { getCacheStatus, subscribeCacheStatus } from '../lib/api'
 import { ago } from '../lib/chat/settle'
@@ -60,15 +63,11 @@ function OfflineHint() {
 }
 
 const FAB_SIZE = 54
-const FAB_GAP = 14
 
-/**
- * The voice + new-chat buttons, stacked in the bottom-right corner: one size, so
- * they read as a pair; the voice one keeps its darker fill.
- */
+/** The new-chat button in the bottom-right corner: tinted light glass, or the solid light circle without glass. */
 export function NewChatFab({ bottomOffset = 0 }: { bottomOffset?: number }) {
   const insets = useSafeAreaInsets()
-  // Toasts at the bottom keep left of the pair.
+  // Toasts at the bottom keep left of it.
   const focused = useIsFocused()
   useEffect(() => {
     if (!focused) return
@@ -77,22 +76,18 @@ export function NewChatFab({ bottomOffset = 0 }: { bottomOffset?: number }) {
   }, [focused])
   const base = Math.max(insets.bottom, 14) + 8 + bottomOffset
   return (
-    <>
-      <Press
-        accessibilityLabel="Talk to Totem"
-        onPress={() => { impact(); startVoice() }}
-        style={[st.fab, st.fabVoice, { bottom: base + FAB_SIZE + FAB_GAP }]}
-      >
-        <Hi icon={IconWaveSine} size={22} strokeWidth={2} color={colors.text} />
-      </Press>
-      <Press
+    <View style={[st.fabSpot, { bottom: base }]} pointerEvents="box-none">
+      <GlassButton
+        shape={st.fab}
+        fallback={st.fabSolid}
+        tint={FAB_TINT}
+        accessibilityRole="button"
         accessibilityLabel="New chat"
         onPress={() => { impact(); newChat() }}
-        style={[st.fab, { bottom: base }]}
       >
         <Hi icon={IconEdit} size={22} strokeWidth={2} color="#0f1115" />
-      </Press>
-    </>
+      </GlassButton>
+    </View>
   )
 }
 
@@ -121,7 +116,7 @@ export function Screen({ title, children, fab = true, glow, style }: {
   )
 }
 
-/** Bottom padding a scrolling screen needs so its last item clears the FABs. */
+/** Bottom padding a scrolling screen needs so its last item clears the corner button. */
 export const FAB_CLEARANCE = 14 + 56 + 40
 
 const st = StyleSheet.create({
@@ -130,12 +125,10 @@ const st = StyleSheet.create({
   // shows; at a large text size the pill widens its side instead of covering the title.
   side: { minWidth: 76, justifyContent: 'center' },
   bar: { height: 52, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, backgroundColor: colors.bg, zIndex: 5 },
-  fab: {
-    position: 'absolute', right: 16, width: FAB_SIZE, height: FAB_SIZE, borderRadius: FAB_SIZE / 2,
-    alignItems: 'center', justifyContent: 'center', backgroundColor: colors.text,
-    shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 14, shadowOffset: { width: 0, height: 10 }, zIndex: 44,
-  },
-  fabVoice: { backgroundColor: colors.fabVoice, borderWidth: 1, borderColor: colors.fabVoiceBorder },
+  fabSpot: { position: 'absolute', right: 16, zIndex: 44 },
+  fab: { width: FAB_SIZE, height: FAB_SIZE, borderRadius: FAB_SIZE / 2 },
+  // Glass draws its own depth; the solid circle keeps its fill and drop shadow.
+  fabSolid: { backgroundColor: colors.text, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 14, shadowOffset: { width: 0, height: 10 } },
 })
 
 export { textAlpha }

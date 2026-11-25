@@ -3,7 +3,7 @@
 // leave half of it out of reach. `(app)/_layout.tsx` watches the drawer's progress
 // (0 shut, 1 open) on the UI thread and asks this at every step.
 
-// Below this the drawer counts as shut: a few points of a 330 pt drawer.
+// Below this the drawer counts as shut: a few points of the drawer.
 const SHUT = 0.01
 
 /** Whether this step is the drawer leaving shut: once per opening, never while closing. */

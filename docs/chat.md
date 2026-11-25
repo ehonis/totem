@@ -1649,8 +1649,8 @@ search box of their own: the Search tab finds any chat, parked or not.
 
 The iPhone app draws no Snoozed or Settled shelf in its drawer, which has one scroll: they
 are a button each with a count (a dot when the open chat is on it) in the drawer's foot
-beside Settings, for whatever the list is scoped to, and a button opens a three-quarter
-sheet of those chats with a switch between the two (`mobile/src/features/chat/ShelfSheet.tsx`). The app shows no toasts but errors,
+beside Settings, for whatever the list is scoped to (liquid glass on iOS 26, melted into one
+shape), and a button opens a three-quarter glass sheet of those chats with a switch between the two (`mobile/src/features/chat/ShelfSheet.tsx`). The app shows no toasts but errors,
 so its settle has no Undo toast; Un-settle in the sheet puts a chat back.
 
 - **Settle** (✓ on hover, the chat menu, or the leader shortcut `c s`) shelves a chat

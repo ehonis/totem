@@ -1,7 +1,9 @@
 // The signed-in app: the push drawer around every tab (ChatGPT's layout — the
-// page slides right to reveal the sidebar, and follows a finger from the edge).
+// page slides right to reveal the sidebar, which fills the screen, and follows a
+// finger from the edge).
 import React, { useEffect } from 'react'
 import { useWindowDimensions } from 'react-native'
+import { router } from 'expo-router'
 import { Drawer, useDrawerProgress, type DrawerContentComponentProps } from 'expo-router/drawer'
 import { KeyboardController } from 'react-native-keyboard-controller'
 import { useAnimatedReaction } from 'react-native-reanimated'
@@ -13,7 +15,8 @@ import { useQuickActions } from '../../shell/quickActions'
 import { usePush } from '../../shell/push'
 import { useAccessReauth } from '../../shell/accessReauth'
 import { useMorningCheckin } from '../../shell/morningCheckin'
-import { navigateTo } from '../../shell/nav'
+import { OtaUpdates, takeResumedFromUpdate } from '../../shell/otaUpdates'
+import { navigateTo, openChat } from '../../shell/nav'
 import { PRODUCTIVITY_APPS, TOOL_LABELS } from '../../shell/routes'
 import { getSettings } from '../../lib/settings'
 import { colors } from '../../theme'
@@ -39,17 +42,26 @@ export default function AppLayout() {
   // landing tab is one navigation on first mount. (A quick action, handled a tick
   // later, still wins.)
   useEffect(() => {
+    // Just reloaded into an update (shell/otaUpdates.tsx): back to the page and chat he was on.
+    const resume = takeResumedFromUpdate()
+    if (resume) {
+      if (resume.chatId) openChat(resume.chatId)
+      else if (resume.path !== '/') router.navigate(resume.path as any)
+      return
+    }
     const landing = getSettings().landingTab
     if (landing && landing !== 'overview') navigateTo(landing)
   }, [])
   return (
+    <>
+    <OtaUpdates />
     <Drawer
       drawerContent={(props) => <DrawerContent {...props} />}
       screenOptions={{
         headerShown: false,
         drawerType: 'slide',
-        // shell.css: --sh-w: min(84vw, 330px)
-        drawerStyle: { width: Math.min(width * 0.84, 330), backgroundColor: colors.bg2 },
+        // The whole screen: the page slides off to the right (the web drawer is min(84vw, 330px)).
+        drawerStyle: { width, backgroundColor: colors.bg2 },
         overlayColor: 'rgba(0,0,0,0.35)',
         swipeEnabled: true,
         swipeEdgeWidth: 40,
@@ -70,5 +82,6 @@ export default function AppLayout() {
       <Drawer.Screen name="fleet" options={{ title: 'Fleet' }} />
       <Drawer.Screen name="settings" options={{ title: 'Settings' }} />
     </Drawer>
+    </>
   )
 }

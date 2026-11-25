@@ -6,6 +6,7 @@ import { Platform } from 'react-native'
 import { router } from 'expo-router'
 import * as QuickActions from 'expo-quick-actions'
 import { newChat, startVoice } from './nav'
+import { noteArrival, resumedFromUpdate } from './otaUpdates'
 
 const ITEMS: QuickActions.Action[] = [
   { id: 'new-chat', title: 'New chat', icon: 'symbol:square.and.pencil' },
@@ -15,6 +16,7 @@ const ITEMS: QuickActions.Action[] = [
 ]
 
 function run(action: QuickActions.Action | null | undefined) {
+  if (action) noteArrival()
   switch (action?.id) {
     case 'new-chat': return newChat()
     case 'voice': return startVoice()
@@ -23,12 +25,19 @@ function run(action: QuickActions.Action | null | undefined) {
   }
 }
 
+// The launch's action runs once per JS launch: the layout can mount again (signing in again)
+// and the native module never clears it.
+let initialHandled = false
+
 export function useQuickActions() {
   useEffect(() => {
     if (Platform.OS === 'web') return
     QuickActions.setItems(ITEMS).catch(() => {})
     // Launched from an action: the navigator has just mounted, so defer a tick.
-    const initial = QuickActions.initial
+    // After a reload into an update, `initial` is still the action of the original cold
+    // launch (the native module never clears it): replaying it could open voice mode by itself.
+    const initial = initialHandled || resumedFromUpdate() ? null : QuickActions.initial
+    initialHandled = true
     if (initial) setTimeout(() => run(initial), 0)
     const sub = QuickActions.addListener(run)
     return () => sub.remove()
