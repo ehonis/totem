@@ -281,7 +281,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
   const onEditFiles = useCallback((files: Attachment[]) => setQueueEdit((e) => (e ? { ...e, files } : e)), [])
   // What the composer shows: an open chat's own draft, or the new-chat draft its place shows now.
   const {
-    draftKey, input, setInput, askFresh, startIn, startForTask, pickDestination, takeForSend, fromDraft, onDiscarded,
+    draftKey, input, setInput, askFresh, startIn, startForTask, pickDestination, newTask, takeForSend, fromDraft, onDiscarded,
     onAttachmentsChange, showEditFiles, missingFiles, removeMissing, keepEdit,
   } = useChatDrafts({
     activeId, active, scopeProject, draftTaskId, draftKind, setDraftKind, composer, visible, editing, onEditFiles,
@@ -613,7 +613,7 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
     displace: (text) => setInput(input.trim() ? `${input.replace(/\s+$/, '')}\n${text}` : text),
   })
 
-  const destinations = { projectId: scopeProject?.id ?? null, taskId: draftTaskId, onPick: pickDestination }
+  const destinations = { projectId: scopeProject?.id ?? null, taskId: draftTaskId, onPick: pickDestination, onNewTask: newTask, draftKey }
 
   const missingEl = missingFiles.length > 0 && !editing ? (
     <div className="vc-draft-missing" role="status">

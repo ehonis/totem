@@ -46,6 +46,7 @@ describe('rankDestinations', () => {
     // A bare `$` keeps to four places, so the tasks are in view under them.
     expect(keys(rankDestinations(ctx, ''))).toEqual([
       'p:lp', 'p:harbor', 'p:mn', 'p:wp',
+      'new-task',
       't:t2', 't:t1', 't:sheet:1:2:abcd',
     ])
     expect(keys(rankDestinations(ctx, 'r'))).toContain('p:gb')
@@ -84,6 +85,22 @@ describe('stripToken', () => {
     expect(stripToken('$cre fix it', 0, 4)).toEqual({ value: 'fix it', caret: 0 })
     expect(stripToken('fix it $cre', 7, 11)).toEqual({ value: 'fix it', caret: 6 })
     expect(stripToken('$', 0, 1)).toEqual({ value: '', caret: 0 })
+  })
+})
+
+describe('$task', () => {
+  const ctx = { projects, tasks, projectId: null, taskId: null }
+
+  it('leads with New task for $task, $new and $ta, and not for one letter or other words', () => {
+    for (const term of ['task', 'tas', 'ta', 'new', 'ne', 'newtask', 'new-task']) expect(keys(rankDestinations(ctx, term))[0]).toBe('new-task')
+    expect(keys(rankDestinations(ctx, 't'))).not.toContain('new-task')
+    expect(keys(rankDestinations(ctx, 'harb'))).not.toContain('new-task')
+    expect(keys(rankDestinations(ctx, 'tasks'))).not.toContain('new-task')
+  })
+
+  it('moves nothing when picked: the task is made first', () => {
+    const now = { taskId: null, projectId: 'harbor' }
+    expect(placeAfter(rankDestinations(ctx, 'task')[0], now, () => 'wp')).toEqual(now)
   })
 })
 
