@@ -1,0 +1,104 @@
+/* Productivity → Calendar (components/CalendarView.tsx) in the iPhone app's look
+   (mobile/src/features/productivity/CalendarView.tsx, features/calendar/): one toolbar
+   row (the period, ‹ ›, Today, the view as a menu), the grids and the agenda in
+   cards with a 16px corner. The desktop keeps its week grid; a phone opens on the
+   agenda. Palette variables only. */
+
+.view.cal-view {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 18px 24px 0;
+  box-sizing: border-box;
+}
+
+/* ---------- Toolbar ---------- */
+.cal-head { flex: none; display: flex; align-items: center; gap: 2px; min-height: 44px; margin-bottom: 12px; }
+.cal-head .cal-title {
+  flex: 1; min-width: 0; margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cal-title-short { display: none; }
+.cal-head .cal-loading { color: var(--muted); margin: 0 6px; animation: spin 0.9s linear infinite; }
+.cal-controls { display: flex; align-items: center; gap: 2px; flex: none; }
+.cal-controls .pk-icon-btn { color: var(--text); }
+.cal-today { margin-left: 4px; }
+.cal-view-btn { margin-left: 6px; gap: 5px; min-width: 104px; justify-content: space-between; background: var(--bg-2); }
+.cal-view-btn svg { width: 14px; height: 14px; color: var(--muted); }
+.cal-view-btn[aria-expanded='true'] { border-color: var(--line-strong); background: var(--bg-hover); }
+.cal-warn { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+
+/* ---------- Grids as cards ---------- */
+.cal-view .tg, .cal-view .month {
+  border-radius: 16px; background: var(--surface); margin-bottom: 22px;
+}
+.cal-view .tg-hour span { background: var(--surface); }
+.cal-view .tg-daycol-h { padding: 10px 4px 8px; }
+.cal-view .tg-dow { font-size: 11px; font-weight: 500; }
+.cal-view .tg-dnum { font-size: 20px; line-height: 30px; }
+.cal-view .tg-daycol-h.today .tg-dnum { width: 30px; height: 30px; line-height: 30px; font-size: 16px; }
+.cal-view .tg-event { border-radius: 6px; padding: 3px 6px; }
+/* Half an hour has room for one line: the title, then the time beside it. */
+.cal-view .tg-event.short { display: flex; align-items: baseline; gap: 5px; padding-top: 2px; padding-bottom: 0; }
+.cal-view .tg-event.short .tg-event-t { flex: 0 1 auto; min-width: 0; }
+.cal-view .tg-event.short .tg-event-time { flex: none; }
+.cal-view .month-cell.off { background: color-mix(in srgb, var(--bg) 60%, transparent); }
+.cal-view .year { padding: 2px 2px 22px; }
+.cal-view .mini-month { border-radius: 16px; background: var(--surface); padding: 12px; }
+.cal-view .mini-title { font-size: 14px; }
+
+/* ---------- Agenda ---------- */
+.cal-view .cal-agenda { padding: 0 0 28px; }
+/* The agenda reads as one column, its toolbar included. */
+.view.cal-view.cal-v-agenda { max-width: 808px; }
+.ag-day { margin-bottom: 18px; }
+.ag-day-h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; font-size: 16px; font-weight: 600; color: var(--text); }
+.ag-today { color: var(--accent); }
+.ag-date { font-size: 13px; font-weight: 400; color: var(--muted); }
+.ag-away {
+  margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--away) 16%, transparent);
+  color: var(--away); font-size: 12px; font-weight: 600;
+}
+.ag-card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.ag-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 10px 14px;
+  border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.ag-row:last-child { border-bottom: 0; }
+.ag-row:hover { background: var(--bg-3); }
+.ag-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ag-row.past { opacity: 0.5; }
+.ag-time { width: 70px; flex: none; display: flex; flex-direction: column; font-variant-numeric: tabular-nums; }
+.ag-time > span:first-child { font-size: 14px; font-weight: 600; }
+.ag-end { font-size: 12px; color: var(--muted); }
+.ag-bar { width: 3px; align-self: stretch; border-radius: 3px; flex: none; }
+.ag-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ag-title { font-size: 15px; font-weight: 500; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ag-loc { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-now-tag { flex: none; padding: 2px 6px; border-radius: 6px; background: color-mix(in srgb, var(--red) 14%, transparent); color: var(--red); font-size: 11px; font-weight: 700; }
+.ag-now { position: relative; height: 2px; margin: -1px 0; background: var(--red); z-index: 2; }
+.ag-now i { position: absolute; left: -2px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+.ag-free {
+  margin: 0; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 16px;
+  color: var(--muted); font-size: 14px;
+}
+.ag-more { display: flex; margin: 4px auto 0; min-height: 44px; }
+
+/* ---------- Phone: the app's toolbar ---------- */
+@media (max-width: 720px) {
+  .view.cal-view { padding: 10px 16px 0; }
+  /* The range takes its own line, so its end date is never cut off behind the controls. */
+  .cal-head { flex-wrap: wrap; row-gap: 4px; }
+  .cal-head .cal-title { font-size: 20px; flex: 1 0 100%; }
+  .cal-controls { flex: 1; }
+  .cal-today { margin-left: auto; }
+  .cal-title-full { display: none; }
+  .cal-title-short { display: inline; }
+  .cal-controls .pk-icon-btn { width: 36px; height: 44px; }
+  .cal-today, .cal-view-btn { min-height: 44px; padding: 0 12px; }
+  .cal-view-btn { min-width: 0; padding: 0 11px; }
+  .cal-view .year { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .cal-view .tg-gutter, .cal-view .tg-gutter-col { width: 44px; }
+}

@@ -1,0 +1,185 @@
+/* Productivity → Habits, drawn as the iPhone app draws it
+   (mobile/src/features/habits/{TodayPanel,HabitRow,Check}.tsx). The building blocks
+   are in productivity/kit.css; the check, stepper, quota and grid keep their
+   styles.css rules (the Overview shares them). */
+
+.hb-view { max-width: 880px; }
+
+/* ---- the Today card ---- */
+.hb-today { display: flex; flex-direction: column; gap: 14px; }
+.hb-today-line { display: flex; align-items: center; gap: 8px; }
+.hb-today-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.hb-today-title .pk-title { font-size: 24px; }
+.hb-today-back { color: var(--accent); font-weight: 600; }
+.hb-bar { display: flex; gap: 3px; height: 8px; }
+.hb-seg { flex: 1; border-radius: 4px; overflow: hidden; background: var(--bg-3); }
+.hb-seg > span { display: block; height: 100%; transform: scaleX(0); transform-origin: left; transition: transform 0.26s ease; }
+.hb-seg > span.on { transform: scaleX(1); }
+.hb-today-foot { display: flex; align-items: center; gap: 8px; }
+.hb-count { flex: 1; min-width: 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; font-size: 15px; color: var(--muted); }
+.hb-count strong { color: var(--text); font-weight: 600; }
+.hb-count svg { color: var(--green); }
+.hb-count .hb-all { color: var(--green); }
+
+/* ---- habit cards ---- */
+.hb-list { display: flex; flex-direction: column; gap: 10px; }
+.hb-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 12px 14px 12px 6px;
+  transition: border-color 0.2s;
+}
+.hb-card.done { border-color: color-mix(in srgb, var(--hc) 38%, var(--line)); }
+.hb-card.dragging { opacity: 0.45; }
+.hb-card.drop-target { border-color: var(--accent); box-shadow: 0 -2px 0 var(--accent); }
+.hb-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+/* The drag handle shows on hover and focus, so a resting card reads as the app's. */
+.hb-drag {
+  width: 22px; height: 40px; flex: none; padding: 0; border: 0; background: none; border-radius: 6px;
+  color: var(--muted); cursor: grab; display: inline-grid; place-items: center; opacity: 0;
+  transition: opacity 0.12s;
+}
+.hb-card:hover > .hb-row > .hb-drag, .hb-drag:focus-visible { opacity: 0.8; }
+.hb-drag:focus-visible { outline: 2px solid var(--accent); }
+@media (hover: none) { .hb-drag { display: none; } .hb-card { padding-left: 14px; } }
+
+.hb-main {
+  flex: 1; min-width: 0; align-self: stretch;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: center;
+  padding: 2px 4px; margin: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left;
+  cursor: pointer; border-radius: 10px;
+}
+.hb-main:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hb-head { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.hb-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hb-dot { width: 10px; height: 10px; border-radius: 3px; background: var(--hc, var(--accent)); flex: none; }
+.hb-name { font-size: 16px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.hb-when { color: var(--muted); display: inline-flex; flex: none; }
+.hb-streak {
+  display: inline-flex; align-items: center; gap: 3px; flex: none;
+  padding: 1px 7px; border-radius: 999px; border: 1px solid transparent;
+  font-size: 12px; font-weight: 700; color: var(--amber); font-variant-numeric: tabular-nums;
+}
+.hb-streak.proud { background: color-mix(in srgb, var(--amber) 14%, transparent); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+.hb-of { font-size: 12px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+.hb-chev { margin-left: auto; color: var(--muted); display: inline-flex; flex: none; padding-left: 4px; transition: transform 0.18s; }
+.hb-chev.up { transform: rotate(180deg); }
+.hb-sub { font-size: 13px; color: var(--muted); margin-left: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.hb-strip { display: flex; gap: 5px; margin-left: 18px; }
+.hb-strip-day { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.hb-strip-dot {
+  width: 14px; height: 14px; border-radius: 4px; background: var(--bg-3); box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.hb-strip-dot.on { border-color: transparent; }
+.hb-strip-dot.skipped { border-style: dashed; border-color: var(--muted); }
+.hb-strip-day.last .hb-strip-dot { border-color: color-mix(in srgb, var(--hc) 50%, var(--text)); }
+.hb-strip-day.last .hb-strip-dot.on { border-color: var(--text); }
+.hb-strip-letter { font-size: 10px; line-height: 12px; color: var(--muted); }
+.hb-strip-day.last .hb-strip-letter { color: var(--text); font-weight: 600; }
+
+/* Wide: the strip moves beside the name instead of under it. */
+@media (min-width: 760px) {
+  .hb-main { grid-template-columns: minmax(0, 1fr) auto; column-gap: 20px; }
+  .hb-main .hb-strip { margin-left: 0; align-self: center; }
+}
+
+.hb-controls { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.hb-note {
+  width: 36px; height: 40px; flex: none; padding: 0; border: 0; background: none; border-radius: 8px;
+  color: var(--muted); cursor: pointer; display: inline-grid; place-items: center;
+}
+.hb-note:hover { color: var(--text); background: var(--bg-3); }
+.hb-note.has-note { color: var(--accent); }
+.hb-note:focus-visible { outline: 2px solid var(--accent); }
+
+/* The big check, at the app's size: a ring in the habit's colour until it is done. */
+.hb-card .habit-check { width: 50px; height: 50px; border-width: 2.5px; border-color: color-mix(in srgb, var(--habit-color) 45%, var(--line)); background-color: var(--bg); }
+.hb-card .habit-check.on { border-color: var(--habit-color); background-color: var(--habit-color); }
+.hb-card .habit-check.pie { border-color: color-mix(in srgb, var(--habit-color) 45%, var(--line)); }
+.hb-card .habit-check.pie.full { border-color: var(--habit-color); }
+.hb-card .habit-check:hover:not(:disabled) { border-color: var(--habit-color); }
+.hb-card .habit-check svg { width: 24px; height: 24px; }
+.hb-card .habit-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hb-stepper .habit-step { width: 40px; height: 40px; }
+
+/* ---- a group: its sub-habits sit inside its card ---- */
+.hb-card.group { padding-bottom: 8px; }
+.hb-subs {
+  display: flex; flex-direction: column;
+  margin: 10px 0 2px 34px;
+  border-left: 2px solid color-mix(in srgb, var(--hc) 35%, var(--line));
+}
+.hb-card.nested {
+  background: none; border: 0; border-radius: 0; padding: 6px 0 6px 0;
+}
+.hb-card.nested + .hb-card.nested { border-top: 1px solid var(--line); }
+.hb-card.nested.done { border-color: var(--line); }
+.hb-card.nested .hb-name { font-size: 15px; font-weight: 500; }
+.hb-card.nested .habit-check { width: 42px; height: 42px; }
+.hb-card.nested .habit-check svg { width: 20px; height: 20px; }
+.hb-card.nested .hb-strip-dot { width: 12px; height: 12px; border-radius: 3px; }
+.hb-card.nested .hb-history { margin-right: 0; }
+.hb-card.nested.drop-target { box-shadow: 0 -2px 0 var(--accent); }
+@media (hover: none) { .hb-card.nested { padding-left: 10px; } }
+@media (max-width: 720px) { .hb-subs { margin-left: 4px; } }
+
+/* ---- a card's history, opened ---- */
+.hb-history { margin: 14px 2px 2px 28px; padding-top: 14px; border-top: 1px solid var(--line); }
+@media (hover: none) { .hb-history { margin-left: 0; } }
+.hb-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; max-width: 520px; }
+.hb-stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hb-stat-n { font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.15; }
+.hb-stat-n.hot { color: var(--amber); }
+.hb-stat-l { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hb-quota-line { margin-bottom: 10px; }
+.hb-hint { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
+.hb-history-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+
+.hb-footnote { margin: 2px 4px; font-size: 13px; color: var(--muted); }
+.hb-empty-title { color: var(--text); font-size: 16px; }
+
+/* ---- archived ---- */
+.hb-archived { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.hb-archived-head {
+  display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 4px;
+  border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; text-align: left;
+}
+.hb-archived-head > span:first-of-type { flex: 1; }
+.hb-archived-head .hb-chev { margin-left: 0; }
+.hb-archived-head:focus-visible { outline: 2px solid var(--accent); border-radius: 8px; }
+.hb-archived-list { padding: 0; }
+.hb-archived-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; }
+.hb-archived-row + .hb-archived-row { border-top: 1px solid var(--line); }
+.hb-archived-name {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 40px;
+  border: 0; background: none; color: var(--muted); font: inherit; font-size: 15px; font-weight: 500; text-align: left; cursor: pointer;
+}
+.hb-archived-name:focus-visible { outline: 2px solid var(--accent); border-radius: 6px; }
+
+/* The habit form's note for a group. */
+.habit-group-note {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 10px; background: var(--bg-3); color: var(--muted); font-size: 13px;
+}
+.habit-group-note > span { flex: 1; min-width: 200px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hb-seg > span, .hb-chev, .hb-card { transition: none; }
+}
+
+/* Wide: every card's controls take the same width, so the week strips line up down the page. */
+@media (min-width: 760px) {
+  .hb-controls { min-width: 178px; justify-content: flex-end; }
+}
+
+
+
+/* A phone: a name may take two lines rather than lose the words that say what it is. */
+@media (max-width: 720px) {
+  .hb-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25; }
+}

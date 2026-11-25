@@ -3,6 +3,7 @@
 // thermometer gauge. Everything works on the bridge's local "YYYY-MM-DD" strings —
 // the bridge decides what "today" is, so nothing here calls new Date() for a day key.
 import type { MetricConfig, MetricPart } from '../../lib/components/metricChart'
+import { groupProgress, type HabitNode } from '../../lib/habits/groups'
 
 export type Cadence = 'daily' | 'weekly' | 'monthly'
 
@@ -22,6 +23,8 @@ export interface Habit {
   appUrl?: string | null
   createdAt: string
   archived: boolean
+  /** The group it sits under (lib/habits/groups.ts); one level deep. */
+  parentId?: string | null
 }
 
 export type HabitWhen = 'any' | 'morning' | 'night'
@@ -196,11 +199,45 @@ export function doneOn(habit: Habit, entries: Entries, date: string): boolean {
   return count > 0 || periodTotal(habit, entries, date) >= Math.max(1, habit.target)
 }
 
+/**
+ * A group's streaks and totals count whole days only: a day with every sub-habit
+ * done. Reads entries already folded (foldGroups), where a group's count is its
+ * sub-habits done that day and its target is how many it has. (Its strip and grid
+ * still shade partial days.) Pair it with the group at target 1.
+ */
+export function wholeDays(group: Habit, entries: Entries): Entries {
+  const out: Entries = {}
+  for (const [date, day] of Object.entries(entries)) {
+    const count = day[group.id]?.count || 0
+    out[date] = { ...day, [group.id]: { count: count >= Math.max(1, group.target) ? 1 : 0 } }
+  }
+  return out
+}
+
+/** Whole days from `from` back to `to` (positive when `to` is earlier). */
+export function diffDays(from: string, to: string): number {
+  return Math.round((toDate(from).getTime() - toDate(to).getTime()) / 86_400_000)
+}
+
 export interface DayProgress { done: number; total: number; segments: { id: string; color: string; done: boolean }[] }
 
 /** The Today panel's bar: one segment per habit, in list order. */
 export function dayProgress(habits: Habit[], entries: Entries, date: string): DayProgress {
   const segments = habits.map((h) => ({ id: h.id, color: h.color, done: doneOn(h, entries, date) }))
+  return { done: segments.filter((s) => s.done).length, total: segments.length, segments }
+}
+
+/**
+ * The Today panel's bar over the page's rows (habitTree): a group is one segment,
+ * done once every sub-habit is. `entries` are the raw ones (taps folded in), not
+ * foldGroups' copy.
+ */
+export function rowsProgress(habits: Habit[], rows: HabitNode<Habit>[], entries: Entries, date: string): DayProgress {
+  const segments = rows.map(({ habit, children }) => {
+    if (!children.length) return { id: habit.id, color: habit.color, done: doneOn(habit, entries, date) }
+    const p = groupProgress(habits, habit.id, entries, date)
+    return { id: habit.id, color: habit.color, done: p.total > 0 && p.done >= p.total }
+  })
   return { done: segments.filter((s) => s.done).length, total: segments.length, segments }
 }
 

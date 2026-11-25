@@ -40,8 +40,13 @@ function shift(key: string, delta: number) {
   pending = next ? { ...rest, [key]: next } : rest
 }
 
+type Settle = { key: string; delta: number }
+
 /** Draw a tap now; `mutate(run, { key, delta })` takes it back out when it settles. */
 export function addPending(key: string, delta: number) { shift(key, delta); emit() }
+
+/** Several at once (a group's check moves each of its sub-habits), in one emit. */
+export function addPendings(list: Settle[]) { for (const p of list) shift(p.key, p.delta); emit() }
 
 /** A 401 means the stored secret is dead: back to Connect, as the web's onAuthError does. */
 export function failed(e: unknown): string {
@@ -68,15 +73,18 @@ export async function loadHabits(): Promise<void> {
 
 /**
  * Run a mutation that answers with the full payload. Throws the message on failure.
- * `settles` is a tap drawn with addPending, removed in the same emit as the answer.
+ * `settles` is a tap (or a group's taps) drawn with addPending(s), removed in the
+ * same emit as the answer.
  */
-export async function mutate(run: () => Promise<HabitsPayload>, settles?: { key: string; delta: number }): Promise<void> {
+export async function mutate(run: () => Promise<HabitsPayload>, settles?: Settle | Settle[]): Promise<void> {
+  const list = settles ? (Array.isArray(settles) ? settles : [settles]) : []
+  const settle = () => { for (const p of list) shift(p.key, -p.delta) }
   try {
     const next = await run()
-    if (settles) shift(settles.key, -settles.delta)
+    settle()
     setHabits(next)
   } catch (e) {
-    if (settles) { shift(settles.key, -settles.delta); emit() }
+    if (list.length) { settle(); emit() }
     throw new Error(failed(e))
   }
 }

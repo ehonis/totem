@@ -11,6 +11,8 @@ export interface CheckinItem {
   /** The day the answer is logged against. */
   date: string
   part: 'yesterday' | 'today'
+  /** The group a sub-habit sits in, so the sheet can say "Nightly routine · Stretch". */
+  group?: string
 }
 
 export function shiftDate(iso: string, days: number): string {
@@ -87,22 +89,29 @@ export function askable(h: any): boolean {
 export function checkinItems(payload: any, includeAnswered = false): { today: string; yesterday: string; items: CheckinItem[] } {
   const today: string = payload?.today || ''
   const yesterday = today ? shiftDate(today, -1) : ''
-  const habits: any[] = (payload?.habits || []).filter(askable)
+  const all: any[] = payload?.habits || []
+  // A group (a habit with active sub-habits) has no check of its own: its sub-habits are asked.
+  const groupIds = new Set(all.filter((h) => !h.archived && h.parentId).map((h) => h.parentId))
+  const names = new Map(all.map((h) => [h.id, h.name]))
+  const habits: any[] = all.filter((h) => askable(h) && !groupIds.has(h.id))
   const entries = payload?.entries || {}
   const items: CheckinItem[] = []
   if (!today) return { today, yesterday, items }
+  const item = (h: any, date: string, part: 'yesterday' | 'today'): CheckinItem => (
+    h.parentId && names.has(h.parentId) ? { habit: h, date, part, group: names.get(h.parentId) } : { habit: h, date, part }
+  )
   for (const h of habits) {
     // A morning habit belongs to its own morning, asked below; yesterday's was yesterday's question.
     if (h.when === 'morning') continue
     if (String(h.createdAt || '').slice(0, 10) > yesterday) continue
     // A weekly or monthly habit is asked about until its quota for the period is met.
     if (!stillOwed(h, entries, yesterday)) continue
-    if (includeAnswered || !answered(entries, yesterday, h.id)) items.push({ habit: h, date: yesterday, part: 'yesterday' })
+    if (includeAnswered || !answered(entries, yesterday, h.id)) items.push(item(h, yesterday, 'yesterday'))
   }
   for (const h of habits) {
     if (h.when !== 'morning') continue
     if (!stillOwed(h, entries, today)) continue
-    if (includeAnswered || !answered(entries, today, h.id)) items.push({ habit: h, date: today, part: 'today' })
+    if (includeAnswered || !answered(entries, today, h.id)) items.push(item(h, today, 'today'))
   }
   return { today, yesterday, items }
 }

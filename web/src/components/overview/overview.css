@@ -349,3 +349,10 @@
   border: 0; background: none; cursor: pointer; font-size: 12.5px; color: var(--ovx-faint);
 }
 .ovx-away-add:hover { color: var(--accent); }
+/* Sub-habits sit under their group, indented along a line in the group's colour. */
+.ovx-group-of { margin-left: 8px; font-size: 12px; font-weight: 600; color: var(--ovx-soft); font-variant-numeric: tabular-nums; }
+.ovx-habit.nested { margin-left: 3px; padding-left: 16px; border-left: 2px solid color-mix(in srgb, var(--ovx-line) 100%, transparent); min-height: 46px; }
+.ovx-habit.nested + .ovx-habit.nested { border-top-color: transparent; }
+.ovx-habit.nested .ovx-habit-name { font-size: 14px; }
+.ovx-habit.nested .habit-check { width: 30px; height: 30px; }
+.ovx-group .habit-check.pie { width: 34px; height: 34px; }

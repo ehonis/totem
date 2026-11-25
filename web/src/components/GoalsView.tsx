@@ -5,10 +5,13 @@ import {
   updateGoal, updateGoalMetric, getAppConfig,
 } from '../api'
 import type { AppConfig } from '../api'
-import { ArrowPathIcon, ChevronLeftIcon, ChevronRightIcon, Hi, PlusIcon, Squares2X2Icon, TrophyIcon } from '../icons'
+import { ArrowPathIcon, ExclamationCircleIcon, Hi, PlusIcon, Squares2X2Icon, TrophyIcon, XMarkIcon } from '../icons'
 import GoalCard from '../goals/GoalCard'
 import GoalComposer from '../goals/GoalComposer'
 import GoalsOverview from '../goals/GoalsOverview'
+import PeriodHero from '../goals/PeriodHero'
+import { periodSummary } from '../goals/summary'
+import '../goals/goals.css'
 import { PERIOD_LABELS } from '../goals/types'
 import { findLanding, goalAnchor, landKey, useLandOn } from '../landing'
 import { dateKey } from '../todos/format'
@@ -17,6 +20,8 @@ import type { Goal, GoalMetricChanges, GoalOptions, GoalPeriod, GoalPeriodQuery,
 // No quarter: weekly plans rarely use them in them, and a tab that is always empty is a tab
 // you learn to skip. The period type itself still exists in the schema and the API.
 const PERIODS: GoalPeriodShortcut[] = ['this_week', 'next_week', 'this_month', 'this_year']
+// The app's tab names (mobile GoalsView), shown at phone width where five must fit.
+const SHORT: Partial<Record<GoalTab, string>> = { overview: 'All', this_week: 'Week', next_week: 'Next wk', this_month: 'Month', this_year: 'Year' }
 
 /**
  * The strip across the top is one control, not two.
@@ -207,159 +212,173 @@ export default function GoalsView({ onAuthError }: { onAuthError: () => void }) 
    * place is the whole point: the decision is visible next to the week it was made
    * about, and it is one click to take back. It still is not counted among the done.
    */
-  const { open, done, stopped } = useMemo(() => ({
+  const { open, done } = useMemo(() => ({
     open: goals.filter((g) => !g.complete),
     done: goals.filter((g) => g.complete),
-    stopped: goals.filter((g) => g.abandoned && !g.complete),
   }), [goals])
 
   const unit = typeOf(period)
+  const summary = useMemo(() => periodSummary(goals), [goals])
+  const addGoal = useCallback(() => { setError(''); setComposing(true) }, [])
+  // A load that failed with nothing to show: say so in the body, with a retry,
+  // rather than drawing an empty week the error may not be about.
+  const failedEmpty = Boolean(error) && goals.length === 0 && !loading && showing && !composing
+
+  const card = (goal: Goal) => (
+    <GoalCard
+      key={goal.id} goal={goal} busy={busy} options={options}
+      onToggle={() => apply(() => setGoalComplete(goal.id, !goal.complete))}
+      onToggleStep={(id, complete) => apply(() => setGoalComplete(id, complete))}
+      onLog={(metricId, patch) => apply(() => logGoalMetric(metricId, patch))}
+      onPostpone={() => apply(async () => { await postponeGoal(goal.id); await load(); return {} })}
+      onDelete={() => apply(async () => { await deleteGoal(goal.id); await load(); return {} })}
+      onEdit={(patch) => apply(() => updateGoal(goal.id, patch))}
+      onAbandon={(abandoned) => apply(() => updateGoal(goal.id, { abandoned }))}
+      onAbandonStep={(id, abandoned) => apply(() => updateGoal(id, { abandoned }))}
+      onRenameStep={(id, title) => apply(() => updateGoal(id, { title }))}
+      onAddStep={(title) => apply(() => addGoalStep(goal.id, { title }))}
+      onSaveMetrics={(changes) => saveMetrics(goal.id, changes)}
+      onSaveStepMetrics={(stepId, changes) => saveMetrics(stepId, changes)}
+      onToggleBushido={bushido ? (current) => toggleBushido(goal, current) : undefined}
+      bushidoHosts={bushido?.hosts}
+    />
+  )
+
+  const tabButton = (value: GoalTab) => {
+    const on = value === tab
+    const long = value === 'overview' ? 'Overview' : PERIOD_LABELS[value]
+    return (
+      <button
+        key={value} type="button" role="tab" aria-selected={on} aria-label={long}
+        className={`pk-chip goals-tab${value === 'overview' ? ' overview' : ` period-${typeOf(value)}`}`}
+        onClick={() => pick(value)}
+      >
+        {value === 'overview'
+          ? <Hi icon={Squares2X2Icon} size={14} />
+          : <span className="pk-dot" aria-hidden="true" />}
+        {/* The app's short names fit five tabs across a phone; the desktop has room
+            for the full ones, which read better. */}
+        <span className="goals-tab-long" aria-hidden="true">{long}</span>
+        <span className="goals-tab-short" aria-hidden="true">{SHORT[value]}</span>
+      </button>
+    )
+  }
 
   return (
     <div className="view goals">
-      <div className="goals-head">
-        <div className="goals-periods" role="tablist" aria-label="Goal period">
-          <button
-            role="tab" aria-selected={tab === 'overview'}
-            className={`btn compact${tab === 'overview' ? ' on' : ''}`}
-            onClick={() => pick('overview')}
-          ><Hi icon={Squares2X2Icon} size={13} /> Overview</button>
-          {PERIODS.map((p) => (
-            <button
-              key={p} role="tab" aria-selected={p === tab}
-              className={`btn compact period-${typeOf(p)}${p === tab ? ' on' : ''}`}
-              onClick={() => pick(p)}
-            >{PERIOD_LABELS[p]}</button>
-          ))}
+      <div className="goals-tabs-band">
+        <div className="goals-tabs" role="tablist" aria-label="Goal period">
+          {tabButton('overview')}
+          {PERIODS.map(tabButton)}
         </div>
-        <span className="goals-head-actions">
-          <button
-            className="btn compact"
-            onClick={() => void refresh()}
-            disabled={syncing}
-            aria-label="Sync Strava and reload goals"
-            title="Pull new activities from Strava, then reload"
-          ><Hi icon={ArrowPathIcon} size={14} className={syncing ? 'spin' : ''} /></button>
-          <button className="btn compact primary" onClick={() => { setError(''); setComposing((v) => !v) }}><Hi icon={PlusIcon} size={13} /> Goal</button>
-        </span>
       </div>
 
-      {window && showing && (
-        <p className="goals-window muted">
-          {/* The arrows walk to any period of this type — last week, the week before,
-              the month before that — so a finished week stays somewhere it can be
-              read, not just somewhere it once was. */}
-          <button type="button" className="goals-window-step" onClick={() => step(-1)} aria-label={`Previous ${unit}`} title={`Previous ${unit}`}>
-            <Hi icon={ChevronLeftIcon} size={13} />
-          </button>
-          <span className={`goals-window-label${anchored ? ' anchored' : ''}`}>{window.label}</span>
-          <button type="button" className="goals-window-step" onClick={() => step(1)} aria-label={`Next ${unit}`} title={`Next ${unit}`}>
-            <Hi icon={ChevronRightIcon} size={13} />
-          </button>
-          {anchored && (
-            <button type="button" className="goals-window-reset" onClick={() => setAnchor(null)}>
-              Back to {PERIOD_LABELS[period].toLowerCase()}
+      <div className="pk-page goals-page">
+        {/* Not while a period loads for the first time: "Nothing set yet" would be a guess. */}
+        {showing && !failedEmpty && !(loading && goals.length === 0 && !window) && (
+          <PeriodHero
+            title={PERIOD_LABELS[period]}
+            unit={unit}
+            window={window}
+            anchored={anchored}
+            summary={summary}
+            daysLeft={goals[0]?.periodState === 'active' ? goals[0].daysLeft : null}
+            syncing={syncing}
+            onStep={step}
+            onReset={() => setAnchor(null)}
+            onRefresh={() => void refresh()}
+            onAdd={addGoal}
+            empty={!loading && goals.length === 0}
+          />
+        )}
+        {!showing && (
+          <div className="goals-overview-bar">
+            <p>Every horizon at once. Open one to log or tick.</p>
+            <button
+              type="button" className="pk-icon-btn goals-hero-btn"
+              onClick={() => void refresh()} disabled={syncing}
+              aria-label="Sync Strava and reload goals" title="Pull new activities from Strava, then reload"
+            ><Hi icon={ArrowPathIcon} size={17} className={syncing ? 'spin' : ''} /></button>
+            <button type="button" className="pk-btn pk-primary goals-hero-add" aria-haspopup="dialog" onClick={addGoal}>
+              <Hi icon={PlusIcon} size={16} /> Goal
             </button>
-          )}
-          {goals.length > 0 && <span>· {done.length} of {goals.length} done</span>}
-          {stopped.length > 0 && <span>· {stopped.length} not doing</span>}
-        </p>
-      )}
-
-      {error && <p className="goals-error">{error}</p>}
-
-      {composing && (
-        <GoalComposer
-          options={options} period={period} busy={busy} error={error}
-          onCancel={() => setComposing(false)}
-          onCreate={(input) => {
-            void (async () => {
-              setBusy(true); setError('')
-              try {
-                await createGoal(input)
-                setComposing(false)
-                setOverviewKey((n) => n + 1)
-                // Land on the period the goal was filed under, so it is visible rather
-                // than filed somewhere you have to go looking for it — which includes
-                // walking back from an older week the arrows had opened.
-                const target = input.period ?? period
-                if (anchored || target !== tab) pick(target)
-                else await load()
-              } catch (cause) {
-                if (cause instanceof AuthError) onAuthError()
-                else setError(cause instanceof Error ? cause.message : 'That goal could not be added.')
-              } finally { setBusy(false) }
-            })()
-          }}
-        />
-      )}
-
-      {!showing ? (
-        <GoalsOverview onOpenPeriod={pick} onAuthError={onAuthError} reloadKey={overviewKey} />
-      ) : loading ? <p className="empty">Loading…</p> : goals.length === 0 ? (
-        <div className="empty">
-          <Hi icon={TrophyIcon} size={26} />
-          <p>Nothing set for {anchored && window ? window.label : PERIOD_LABELS[period].toLowerCase()}.</p>
-        </div>
-      ) : (
-        <>
-          <div className="goals-list">
-            {open.map((goal) => (
-              <GoalCard
-                key={goal.id} goal={goal} busy={busy} options={options}
-                onToggle={() => apply(() => setGoalComplete(goal.id, !goal.complete))}
-                onToggleStep={(id, complete) => apply(() => setGoalComplete(id, complete))}
-                onLog={(metricId, patch) => apply(() => logGoalMetric(metricId, patch))}
-                onPostpone={() => apply(async () => { await postponeGoal(goal.id); await load(); return {} })}
-                onDelete={() => apply(async () => { await deleteGoal(goal.id); await load(); return {} })}
-                onEdit={(patch) => apply(() => updateGoal(goal.id, patch))}
-                onAbandon={(abandoned) => apply(() => updateGoal(goal.id, { abandoned }))}
-                onAbandonStep={(id, abandoned) => apply(() => updateGoal(id, { abandoned }))}
-                onRenameStep={(id, title) => apply(() => updateGoal(id, { title }))}
-                onAddStep={(title) => apply(() => addGoalStep(goal.id, { title }))}
-                onSaveMetrics={(changes) => saveMetrics(goal.id, changes)}
-                onSaveStepMetrics={(stepId, changes) => saveMetrics(stepId, changes)}
-                onToggleBushido={bushido ? (current) => toggleBushido(goal, current) : undefined}
-                bushidoHosts={bushido?.hosts}
-              />
-            ))}
           </div>
+        )}
 
-          {done.length > 0 && (
-            <div className="goals-done">
-              {/* "Achieved", not "Done": the same list, named after what it is worth
-                  rather than after the fact that it is no longer in the way. Only
-                  finished goals land here — one you stopped is not an achievement, and
-                  it stays up in the list crossed off. */}
-              <h4 className="goals-done-head">
-                <Hi icon={TrophyIcon} size={13} />
-                Achieved
-              </h4>
-              <div className="goals-list">
-                {done.map((goal) => (
-                  <GoalCard
-                    key={goal.id} goal={goal} busy={busy} options={options}
-                    onToggle={() => apply(() => setGoalComplete(goal.id, !goal.complete))}
-                    onToggleStep={(id, complete) => apply(() => setGoalComplete(id, complete))}
-                    onLog={(metricId, patch) => apply(() => logGoalMetric(metricId, patch))}
-                    onPostpone={() => apply(async () => { await postponeGoal(goal.id); await load(); return {} })}
-                    onDelete={() => apply(async () => { await deleteGoal(goal.id); await load(); return {} })}
-                    onEdit={(patch) => apply(() => updateGoal(goal.id, patch))}
-                    onAbandon={(abandoned) => apply(() => updateGoal(goal.id, { abandoned }))}
-                    onAbandonStep={(id, abandoned) => apply(() => updateGoal(id, { abandoned }))}
-                onRenameStep={(id, title) => apply(() => updateGoal(id, { title }))}
-                    onAddStep={(title) => apply(() => addGoalStep(goal.id, { title }))}
-                    onSaveMetrics={(changes) => saveMetrics(goal.id, changes)}
-                    onSaveStepMetrics={(stepId, changes) => saveMetrics(stepId, changes)}
-                    onToggleBushido={bushido ? (current) => toggleBushido(goal, current) : undefined}
-                bushidoHosts={bushido?.hosts}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      )}
+        {error && !failedEmpty && !composing && (
+          <div className="goals-error" role="alert">
+            <Hi icon={ExclamationCircleIcon} size={16} />
+            <span>{error}</span>
+            <button type="button" className="pk-icon-btn pk-ghost pk-compact" onClick={() => setError('')} aria-label="Dismiss">
+              <Hi icon={XMarkIcon} size={16} />
+            </button>
+          </div>
+        )}
+
+        {composing && (
+          <GoalComposer
+            options={options} period={period} busy={busy} error={error}
+            onCancel={() => { setComposing(false); setError('') }}
+            onCreate={(input) => {
+              void (async () => {
+                setBusy(true); setError('')
+                try {
+                  await createGoal(input)
+                  setComposing(false)
+                  setOverviewKey((n) => n + 1)
+                  // Land on the period the goal was filed under, so it is visible rather
+                  // than filed somewhere you have to go looking for it — which includes
+                  // walking back from an older week the arrows had opened.
+                  const target = input.period ?? period
+                  if (anchored || target !== tab) pick(target)
+                  else await load()
+                } catch (cause) {
+                  if (cause instanceof AuthError) onAuthError()
+                  else setError(cause instanceof Error ? cause.message : 'That goal could not be added.')
+                } finally { setBusy(false) }
+              })()
+            }}
+          />
+        )}
+
+        {!showing ? (
+          <GoalsOverview onOpenPeriod={pick} onAuthError={onAuthError} reloadKey={overviewKey} />
+        ) : loading && goals.length === 0 ? (
+          <p className="pk-empty" role="status">Loading goals…</p>
+        ) : failedEmpty ? (
+          <div className="pk-empty goals-state">
+            <Hi icon={ExclamationCircleIcon} size={30} className="goals-state-bad" />
+            <p className="goals-state-title">Goals didn’t load</p>
+            <p className="goals-state-sub">{error}</p>
+            <button type="button" className="pk-btn" onClick={() => void load()}><Hi icon={ArrowPathIcon} size={16} /> Try again</button>
+          </div>
+        ) : goals.length === 0 ? (
+          <div className={`pk-empty goals-state period-${unit}`}>
+            <Hi icon={TrophyIcon} size={30} className="goals-state-icon" />
+            <p className="goals-state-title">Nothing set for {anchored && window ? window.label : PERIOD_LABELS[period].toLowerCase()}</p>
+            <p className="goals-state-sub">Name what you want to be true by the end of it. A number is optional.</p>
+            <button type="button" className="pk-btn pk-primary" aria-haspopup="dialog" onClick={addGoal}><Hi icon={PlusIcon} size={16} /> Add a goal</button>
+          </div>
+        ) : (
+          <>
+            <div className="goals-list">{open.map(card)}</div>
+
+            {done.length > 0 && (
+              <section className="goals-done" aria-label="Achieved">
+                {/* "Achieved", not "Done": the same list, named after what it is worth
+                    rather than after the fact that it is no longer in the way. Only
+                    finished goals land here — one you stopped is not an achievement, and
+                    it stays up in the list crossed off. */}
+                <h3 className="goals-done-head">
+                  <Hi icon={TrophyIcon} size={15} />
+                  Achieved · {done.length}
+                </h3>
+                <div className="goals-list">{done.map(card)}</div>
+              </section>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }

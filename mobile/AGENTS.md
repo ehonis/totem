@@ -162,6 +162,14 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   `features/work/shared.test.mjs`). A task opens its page (`todo/[id]`), whose Chats section is the web card's;
   a chat's task strip and Link to task… sheet (`chat/task`) link chats to tasks through `linkTask`/`startTaskDraft`
   in `lib/chat/store.ts`. The drawer's Undo line is docked in its foot (`undoDock.tsx`).
+- **Sub-habits**: `lib/habits/groups.ts` is the web's file byte for byte
+  (`lib/habits/groups.test.mjs`). A habit with sub-habits is a group: every view reads the payload through
+  `foldGroups` (a group becomes a daily habit counting its sub-habits done) and lists rows with `habitTree`, so a group
+  is one row in every count (the Habits page's Today bar, `rowsProgress`; the Overview; the hub tile, `glance.ts`). Its
+  card holds its sub-habits' rows (`features/habits/HabitRow.tsx` `group`/`nested`), its check (`GroupCheck`) logs
+  `complete` and its undo line sends `groupToggle(...).undo`; its streaks count whole days (`wholeDays`), and a day
+  picked in its grid steps the page to that day. The form's "Part of" files a habit under one; `/habit/new?parentId=`
+  starts one there. The morning check-in asks a group's sub-habits, never the group.
 - **Settings** (`src/features/settings/`) is the web's sections in its groups and order (`lib/components/settings/sections.ts`
   and `searchIndex.ts` are byte-for-byte copies of the web's), drawn as iOS grouped lists from `features/settings/ui.tsx`
   (`Section`, `Row`, `Switch`, `Picker`, `Field`, `Notice`): a row keeps the web's id, so a search hit or a

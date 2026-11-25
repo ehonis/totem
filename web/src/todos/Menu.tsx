@@ -9,6 +9,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Hi, CheckIcon } from '../icons'
+import './menu.css'
 
 export interface MenuItem {
   key: string

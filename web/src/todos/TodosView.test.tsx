@@ -172,7 +172,7 @@ describe('Tasks page', () => {
     // The issue link carries its live state.
     await waitFor(() => expect(within(row('Sort the garage')).getByRole('link', { name: /#12/ })).toHaveClass('open'))
     // The live line counts the sheet's row too.
-    expect(screen.getByText('1 overdue · 2 today · 1 done today')).toBeVisible()
+    expect(document.querySelector('.tk-live')).toHaveTextContent('3 left today·1 done today')
   })
 
   it('completes in one click and puts the task back on Undo', async () => {
@@ -416,7 +416,7 @@ describe('Tasks page', () => {
     await waitFor(() => expect(screen.queryByRole('row', { name: /^Order banner stands, Team HQ, (?!done)/ })).toBeNull())
     expect(await screen.findByText(/Done: “Order banner stands”\. The sheet is unchanged\./)).toBeVisible()
     // It counts as done today beside the task the fixture finished today.
-    expect(await screen.findByText(/· 2 done today/)).toBeVisible()
+    await waitFor(() => expect(document.querySelector('.tk-live')).toHaveTextContent(/·2 done today$/))
     await user.click(screen.getByRole('button', { name: /^Completed/ }))
     const done = await screen.findByRole('row', { name: /Order banner stands, Team HQ, done for you/ })
     await user.click(within(done).getByRole('checkbox', { name: 'Put Order banner stands back on your list' }))
@@ -669,6 +669,6 @@ describe('Tasks page', () => {
       ],
     })
     // "Water plants" on the board plus the archived "filed"; "dropped" was not doing.
-    expect(await screen.findByText('1 overdue · 2 today · 2 done today')).toBeVisible()
+    await waitFor(() => expect(document.querySelector('.tk-live')).toHaveTextContent('3 left today·2 done today'))
   })
 })

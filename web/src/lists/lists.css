@@ -1,0 +1,183 @@
+/* Productivity → Lists (components/ListsView.tsx), drawn as the iPhone app draws it:
+   list rows with a thin bar and "1 of 5", Reminders-style round checks, an add line at
+   the foot. Sizes are the app's (features/productivity/ListsView.tsx,
+   features/lists/ListDetailScreen.tsx); colours are palette variables only. */
+
+.view.lv-view { padding: 0; }
+.pk-page.lv-page { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); align-items: start; gap: 16px; }
+
+/* ---- The lists (master) ---- */
+.pk-card.lv-master { padding: 6px 0; position: sticky; top: 20px; overflow: hidden; }
+.lv-rows { display: flex; flex-direction: column; }
+.lv-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 12px 16px;
+  border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text);
+  font: inherit; text-align: left; cursor: pointer; position: relative;
+}
+.lv-row:hover { background: var(--bg-hover); }
+.lv-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.lv-row.lv-active { background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.lv-row.lv-active::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+.lv-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.lv-row-title { display: flex; align-items: center; gap: 6px; font-size: 16px; font-weight: 600; min-width: 0; }
+.lv-row-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lv-row.lv-done .lv-row-title > span { color: var(--muted); }
+.lv-green { color: var(--green); flex: none; }
+.lv-row-meta { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.pk-bar.lv-row-bar { flex: 1; max-width: 140px; background: var(--bg-3); }
+.lv-row-linked { display: inline-flex; align-items: center; gap: 3px; }
+.lv-chevron { color: var(--muted); flex: none; }
+
+.lv-new {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 0 16px;
+  border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 16px; font-weight: 500;
+  text-align: left; cursor: pointer; box-sizing: border-box;
+}
+button.lv-new:hover { background: var(--bg-hover); }
+.lv-new:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.lv-plus {
+  width: 26px; height: 26px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+}
+.lv-plus svg { stroke-width: 2.4; }
+.lv-new-editing { gap: 10px; padding-right: 10px; }
+.lv-new input {
+  flex: 1; min-width: 0; min-height: 40px; padding: 0 2px; border: 0; border-bottom: 1px solid var(--accent);
+  background: transparent; color: var(--text); font: inherit; font-size: 16px; outline: none;
+}
+.lv-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 24px 12px; text-align: center; color: var(--muted); }
+.lv-empty strong { color: var(--text); font-size: 16px; font-weight: 600; }
+.lv-empty p { margin: 0; max-width: 280px; font-size: 14px; line-height: 20px; }
+
+/* ---- One list (detail) ---- */
+.pk-card.lv-detail { padding: 8px 0 0; overflow: hidden; display: flex; flex-direction: column; min-height: 320px; }
+.lv-detail-empty { justify-content: center; }
+.lv-head {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'title more' 'sub sub';
+  align-items: center; column-gap: 8px; padding: 8px 12px 0 16px;
+}
+.lv-back { display: none; grid-area: back; }
+.lv-title {
+  grid-area: title; min-width: 0; margin: 0 0 0 -6px; padding: 2px 6px; border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--text); font: inherit; font-size: 28px; line-height: 34px; font-weight: 700;
+  letter-spacing: -0.01em; outline: none;
+}
+.lv-title:hover { border-color: var(--line); }
+.lv-title:focus-visible, .lv-title:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 24%, transparent); }
+.lv-more { grid-area: more; }
+.lv-sub { grid-area: sub; color: var(--muted); font-size: 14px; margin-top: 2px; }
+
+.lv-chips { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 16px 6px; }
+.lv-chip {
+  display: inline-flex; align-items: center; min-height: 36px; max-width: 100%; border-radius: 999px; padding-left: 12px;
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--text); font: inherit; font-size: 14px; box-sizing: border-box;
+}
+.lv-chip-add { gap: 6px; padding-right: 14px; border-style: dashed; background: transparent; color: var(--muted); cursor: pointer; }
+.lv-chip-add:hover { color: var(--text); border-color: var(--line-strong); }
+.lv-chip-add:focus-visible, .lv-chip-open:focus-visible, .lv-chip-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lv-chip-open { display: inline-flex; align-items: center; gap: 7px; min-width: 0; min-height: 34px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; border-radius: 999px; }
+.lv-chip-open:hover .lv-chip-title { text-decoration: underline; text-underline-offset: 3px; }
+.lv-chip-title { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lv-chip-done .lv-chip-title { color: var(--muted); text-decoration: line-through; }
+.lv-chip-x { width: 34px; height: 34px; display: grid; place-items: center; flex: none; border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
+.lv-chip-x:hover { color: var(--text); background: var(--bg-3); }
+
+.lv-error {
+  display: flex; align-items: center; gap: 10px; margin: 8px 16px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent); background: color-mix(in srgb, var(--red) 8%, transparent);
+  color: var(--red); font-size: 14px; line-height: 19px;
+}
+.lv-error > span { flex: 1; min-width: 0; }
+.lv-error button { border: 0; background: none; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; padding: 4px; border-radius: 6px; }
+.lv-error button:focus-visible { outline: 2px solid var(--accent); }
+.lv-all-done { display: flex; align-items: center; gap: 8px; margin: 8px 16px 0; color: var(--green); font-size: 15px; font-weight: 600; }
+
+.lv-items { display: flex; flex-direction: column; padding: 4px 0 8px; flex: 1; }
+.lv-item { display: flex; align-items: center; min-height: 52px; padding-right: 10px; }
+.lv-check {
+  width: 56px; min-height: 52px; align-self: stretch; flex: none; display: grid; place-items: center;
+  border: 0; background: none; cursor: pointer; padding: 0;
+}
+.lv-check:focus-visible { outline: none; }
+.lv-check:focus-visible .lv-circle { outline: 2px solid var(--accent); outline-offset: 3px; }
+.lv-circle {
+  width: 24px; height: 24px; border-radius: 50%; box-sizing: border-box; display: grid; place-items: center;
+  border: 1.75px solid color-mix(in srgb, var(--muted) 75%, transparent); background: color-mix(in srgb, var(--text) 3%, transparent);
+  color: #fff; transition: background 0.16s, border-color 0.16s, transform 0.16s;
+}
+.lv-circle svg { stroke-width: 3; }
+.lv-check:hover .lv-circle { border-color: var(--accent); }
+.lv-checked .lv-circle { background: var(--accent); border-color: var(--accent); animation: lv-pop 0.22s ease-out; }
+@keyframes lv-pop { 40% { transform: scale(0.82); } 100% { transform: scale(1); } }
+.lv-item-text, .lv-item-edit {
+  flex: 1; min-width: 0; min-height: 52px; padding: 12px 0; box-sizing: border-box;
+  border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text);
+  font: inherit; font-size: 16px; line-height: 22px; text-align: left; overflow-wrap: anywhere; cursor: text;
+}
+.lv-item-text:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.lv-item-edit { outline: none; border-bottom-color: var(--accent); }
+.lv-checked .lv-item-text { color: var(--muted); text-decoration: line-through; text-decoration-thickness: 1px; }
+.lv-remove { margin-left: 6px; opacity: 0; color: var(--muted); }
+.lv-item:hover .lv-remove, .lv-remove:focus-visible { opacity: 1; }
+.lv-remove:hover:not(:disabled) { color: var(--red); }
+.lv-group {
+  display: flex; align-items: center; gap: 8px; min-height: 48px; margin-top: 12px; padding: 0 16px;
+  border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; text-align: left;
+}
+.lv-group .tnum { font-weight: 400; }
+.lv-group:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.lv-group-chevron { margin-left: auto; transition: transform 0.15s; }
+.lv-group-chevron.lv-folded { transform: rotate(-90deg); }
+.lv-items-empty { margin: 0; padding: 40px 24px; color: var(--muted); text-align: center; font-size: 15px; line-height: 21px; }
+
+.lv-add {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px 12px;
+  border-top: 1px solid var(--line); background: var(--surface);
+}
+.lv-add-field {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px;
+  border-radius: 22px; background: var(--bg-2); border: 1px solid var(--line); color: var(--muted); cursor: text;
+}
+.lv-add-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+.lv-add-field input { flex: 1; min-width: 0; min-height: 42px; border: 0; background: none; color: var(--text); font: inherit; font-size: 16px; outline: none; }
+.lv-send {
+  width: 44px; height: 44px; flex: none; border-radius: 50%; border: 0; display: grid; place-items: center;
+  background: var(--accent); color: #fff; cursor: pointer;
+}
+.lv-send svg { stroke-width: 2.4; }
+.lv-send:disabled { background: var(--bg-3); color: var(--muted); cursor: default; }
+.lv-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.lv-skeleton { animation: lv-pulse 1.2s ease-in-out infinite alternate; }
+.pk-card.lv-skeleton-side { height: 200px; }
+.pk-card.lv-skeleton-body { height: 360px; }
+@keyframes lv-pulse { from { opacity: .48; } to { opacity: .82; } }
+@media (prefers-reduced-motion: reduce) {
+  .lv-skeleton, .lv-checked .lv-circle { animation: none; }
+  .lv-circle, .lv-group-chevron { transition: none; }
+}
+
+@media (min-width: 721px) {
+  /* Side by side the open list carries any error, so the lists don't say it twice. */
+  .lv-page:has(.lv-detail:not(.lv-detail-empty)) .lv-error-master { display: none; }
+}
+
+/* ---- Phone: the lists, and a list opened over them with a back control ---- */
+@media (max-width: 720px) {
+  .view.lv-view { padding: 0 0 calc(var(--dock-clear, 0px) + 56px); }
+  .pk-page.lv-page { display: flex; align-items: stretch; }
+  .pk-card.lv-master { position: static; }
+  .lv-view:not(.lv-opened) .pk-card.lv-detail { display: none; }
+  .lv-view.lv-opened .pk-card.lv-master { display: none; }
+  .lv-row.lv-active { background: transparent; }
+  .lv-row.lv-active::before { display: none; }
+  .lv-head { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: 'back . more' 'title title title' 'sub sub sub'; padding: 0 6px 0 4px; }
+  .lv-back {
+    display: inline-flex; align-items: center; gap: 2px; min-height: 44px; padding: 0 8px 0 2px; justify-self: start;
+    border: 0; background: none; color: var(--accent); font: inherit; font-size: 17px; cursor: pointer; border-radius: 8px;
+  }
+  .lv-back:focus-visible { outline: 2px solid var(--accent); }
+  .lv-sub { margin-left: 10px; }
+  .lv-title { margin-left: 4px; }
+  .lv-remove { opacity: 1; }
+}

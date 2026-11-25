@@ -15,6 +15,7 @@ import listsIcon from '../assets/connection-icons/lists.svg'
 // Tabler, imported deep and per-icon: the other tabs' art is in-house, but nothing
 // here had a recommendation, and icons are found, never drawn (AGENTS.md § Gotchas).
 import IconBulb from '@tabler/icons-react/dist/esm/icons/IconBulb.mjs'
+import '../productivity/kit.css'
 
 // The productivity apps surfaced as manila-folder / browser-style tabs. This is the
 // single place that knows which apps exist - adding another todo or calendar

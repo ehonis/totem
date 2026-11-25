@@ -9,11 +9,12 @@ import AwayEditor from './AwayEditor'
 import { useAiUsageLive } from '../useAiUsageLive'
 import { OPEN_HABIT_CHECKIN } from './HabitCheckin'
 import { CHECKIN_FROM_HOUR, checkinItems } from '../habitCheckin'
-import { DayModal, HabitCheckButton, HabitMetricInput, HabitMetricSection, QuotaDots, isSyncedSleep, type DaySave } from './HabitsView'
+import { DayModal, GroupCheck, HabitCheckButton, HabitMetricInput, HabitMetricSection, QuotaDots, isSyncedSleep, type DaySave } from './HabitsView'
+import { foldGroups, groupProgress, groupToggle, groupWords, habitTree, handLogged, rowDone as habitRowDone } from '../habits/groups'
 import { networkText, send, setActive } from '../chat/store'
 import { TI, ProviderLogo } from '../chat/ui'
 import type { NavTarget } from '../router'
-import { pushError } from '../toast'
+import { pushError, pushToast } from '../toast'
 import {
   IconArrowUp, IconChevronRight, IconRefresh, IconCalendarEvent, IconChecklist, IconFlame, IconTarget,
   IconListCheck, IconBulb, IconMicrophone2, IconBrain, IconHistory, IconWand,
@@ -139,15 +140,17 @@ function AskBox({ onAsk }: { onAsk: (text: string) => void }) {
 }
 
 // One habit in the inline check-in: the same controls as the Habits tab.
-function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValue, onNote }: {
+function HabitRow({ habit, entry, count, periodCount, busy, nested, onLog, onValue, onNote }: {
   habit: any; entry: any; count: number; periodCount: number; busy: boolean
+  /** A sub-habit, drawn under its group. */
+  nested?: boolean
   onLog: (habit: any, delta: number) => void
   onValue: (habit: any, value: number | null) => void
   onNote: (habit: any) => void
 }) {
   const done = periodCount >= habit.target
   return (
-    <div className={`ovx-habit${done ? ' done' : ''}`}>
+    <div className={`ovx-habit${done ? ' done' : ''}${nested ? ' nested' : ''}`}>
       <span className="ovx-habit-dot" style={{ background: habit.color }} />
       <div className="ovx-habit-main">
         <div className="ovx-habit-name">{habit.name}</div>
@@ -179,6 +182,19 @@ function HabitRow({ habit, entry, count, periodCount, busy, onLog, onValue, onNo
       ) : (
         <HabitCheckButton habit={habit} count={count} periodCount={periodCount} busy={busy} onLog={onLog} />
       )}
+    </div>
+  )
+}
+
+// A group (a habit with sub-habits): its progress and one check that marks them all.
+function GroupRow({ habit, done, total, action, busy, onLog }: { habit: any; done: number; total: number; action: string; busy: boolean; onLog: () => void }) {
+  return (
+    <div className={`ovx-habit ovx-group${done >= total ? ' done' : ''}`}>
+      <span className="ovx-habit-dot" style={{ background: habit.color }} />
+      <div className="ovx-habit-main">
+        <div className="ovx-habit-name">{habit.name}<span className="ovx-group-of">{done}/{total}</span></div>
+      </div>
+      <GroupCheck habit={habit} done={done} total={total} action={action} busy={busy} onLog={onLog} />
     </div>
   )
 }
@@ -346,6 +362,17 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
   }, [habitBusy, onAuthError])
 
   const habitDay: string = data.habits?.today || ''
+  // A group's check marks its hand-logged sub-habits done, or clears them once all are.
+  const logGroup = useCallback(async (group: any) => {
+    if (!habitDay || !data.habits || habitBusy.has(group.id)) return
+    const t = groupToggle(data.habits.habits, group.id, data.habits.entries || {}, habitDay)
+    if (!t.changes) { pushToast(`Nothing logged for ${group.name} today to clear.`, 'info', { duration: 3000 }); return }
+    await habitWrite(group.id, { date: habitDay, complete: t.complete })
+    pushToast(groupWords(group.name, t, 0, 0).result, 'info', {
+      duration: 4000,
+      action: { label: 'Undo', onClick: () => { void habitWrite(group.id, t.undo) } },
+    })
+  }, [habitDay, data.habits, habitBusy, habitWrite])
   const logDelta = useCallback((h: any, delta: number) => habitDay && habitWrite(h.id, { date: habitDay, delta }), [habitDay, habitWrite])
   const logValue = useCallback((h: any, value: number | null) => habitDay && habitWrite(h.id, { date: habitDay, value, complete: value !== null }), [habitDay, habitWrite])
   const saveHabitDay = useCallback(async ({ count, note, value, parts }: DaySave) => {
@@ -396,10 +423,17 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
   const taskShown = (focus.length ? focus : upNext).slice(0, 6)
 
   // ---- habits ----------------------------------------------------------
-  const entries = data.habits?.entries || {}
-  const habits: any[] = (data.habits?.habits || []).filter((h: any) => !h.archived && !isSyncedSleep(h))
-  const habitsLeft = habits.filter((h) => periodTotal(h, entries, habitDay) < h.target && !(entries[habitDay]?.[h.id]?.count > 0))
-  const habitsDoneToday = habits.length - habitsLeft.length
+  const rawEntries = data.habits?.entries || {}
+  const rawHabits: any[] = data.habits?.habits || []
+  // Groups read as daily habits counting their sub-habits (web/src/habits/groups.ts).
+  const folded = foldGroups(rawHabits, rawEntries, data.habits?.today)
+  const entries = folded.entries
+  const habits: any[] = folded.habits.filter((h: any) => !h.archived && !isSyncedSleep(h))
+  const habitRows = habitTree(folded.habits).filter((r) => !isSyncedSleep(r.habit))
+  // Done as the Habits page counts it: a daily habit at its target, a weekly or
+  // monthly one logged today or with its quota met, a group with every sub-habit done.
+  const habitsLeft = habitRows.filter((r) => !habitRowDone(rawHabits, r, rawEntries, habitDay))
+  const habitsDoneToday = habitRows.length - habitsLeft.length
   // Habits the morning check-in still asks about (yesterday's, and this morning's), so a missed day can be filled in from here.
   // Before 4am yesterday's night is still tonight, as for the pop-up.
   const checkinLeft = data.habits && new Date().getHours() >= CHECKIN_FROM_HOUR ? checkinItems(data.habits).items.length : 0
@@ -661,7 +695,7 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
           <div className="ovx-col">
             <Section
               title="Habits"
-              meta={data.habits && habits.length ? `${habitsDoneToday} of ${habits.length} done` : null}
+              meta={data.habits && habitRows.length ? `${habitsDoneToday} of ${habitRows.length} done` : null}
               onOpen={() => onNavigate({ tab: 'productivity', app: 'habits' })}
               about={() => habits.length ? habitsContext(habits, entries, habitDay, (h) => periodTotal(h, entries, habitDay)) : null}
             >
@@ -670,22 +704,33 @@ export default function OverviewView({ onNavigate, onAuthError }: OverviewViewPr
                 : !habits.length ? <Quiet>No habits yet. Add one in Habits, or ask Totem.</Quiet>
                 : (
                   <div className="ovx-habits">
-                    {habits.slice(0, 8).map((h) => (
-                      <HabitRow
-                        key={h.id}
-                        habit={h}
-                        entry={entries[habitDay]?.[h.id]}
-                        count={entries[habitDay]?.[h.id]?.count || 0}
-                        periodCount={periodTotal(h, entries, habitDay)}
-                        busy={habitBusy.has(h.id)}
-                        onLog={logDelta}
-                        onValue={logValue}
-                        onNote={(habit) => setHabitNote({ habit, date: habitDay })}
-                      />
-                    ))}
-                    {habits.length > 8 && (
+                    {habitRows.slice(0, 8).map(({ habit: h, children }) => {
+                      const row = (x: any, nested = false) => (
+                        <HabitRow
+                          key={x.id}
+                          habit={x}
+                          nested={nested}
+                          entry={entries[habitDay]?.[x.id]}
+                          count={entries[habitDay]?.[x.id]?.count || 0}
+                          periodCount={periodTotal(x, entries, habitDay)}
+                          busy={habitBusy.has(x.id)}
+                          onLog={logDelta}
+                          onValue={logValue}
+                          onNote={(habit) => setHabitNote({ habit: rawHabits.find((r) => r.id === habit.id) || habit, date: habitDay })}
+                        />
+                      )
+                      if (!children.length) return row(h)
+                      const { done, total } = groupProgress(rawHabits, h.id, rawEntries, habitDay)
+                      return (
+                        <React.Fragment key={h.id}>
+                          <GroupRow habit={h} done={done} total={total} action={groupWords(h.name, groupToggle(rawHabits, h.id, rawEntries, habitDay), done, total).action} busy={habitBusy.has(h.id) || !children.some(handLogged)} onLog={() => { void logGroup(h) }} />
+                          {children.map((c) => row(c, true))}
+                        </React.Fragment>
+                      )
+                    })}
+                    {habitRows.length > 8 && (
                       <button type="button" className="ovx-more" onClick={() => onNavigate({ tab: 'productivity', app: 'habits' })}>
-                        {habits.length - 8} more
+                        {habitRows.length - 8} more
                       </button>
                     )}
                     {checkinLeft > 0 && (

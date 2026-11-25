@@ -5,6 +5,7 @@ import {
   PencilIcon, PencilSquareIcon, PlayIcon, PlusIcon, TrashIcon, TrophySolidIcon, XMarkIcon,
 } from '../icons'
 import GoalNumbers from './GoalNumbers'
+import Ring from '../productivity/Ring'
 import ChatAbout from '../chat/about/ChatAbout'
 import { goalContext } from '../chat/about/context'
 import MetricSourceWarning from '../sources/MetricSourceWarning'
@@ -164,9 +165,11 @@ function MetricRow({ metric, onLog, busy, percentAtEnd }: {
           )
           : (
             <span className="goal-metric-log">
-              <button className="btn compact" disabled={busy} onClick={() => onLog({ delta: 1 })} aria-label={`Add one ${metric.label}`}>+1</button>
+              <button className="pk-btn pk-compact goal-plus-one" disabled={busy} onClick={() => onLog({ delta: 1 })} aria-label={`Add one ${metric.label}`}>
+                <Hi icon={PlusIcon} size={14} />1{metric.unit ? ` ${metric.unit}` : ''}
+              </button>
               <input
-                type="number" inputMode="decimal" placeholder="log" value={draft} disabled={busy}
+                type="number" inputMode="decimal" placeholder="Log…" value={draft} disabled={busy}
                 aria-label={`Log ${metric.label}`}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -236,7 +239,7 @@ function SubGoalRow({ subGoal, onToggle, onAbandon, onRename, onLog, onEditNumbe
         onClick={onToggle}
         aria-label={subGoal.complete ? `Reopen ${name}` : `Mark ${name} done`}
       >
-        {subGoal.complete ? <Hi icon={CheckCircleIcon} size={20} /> : <span className="goal-check-empty" />}
+        {subGoal.complete ? <Hi icon={CheckCircleIcon} size={24} /> : <span className="goal-check-empty" />}
       </button>
       <div className="goal-step-body">
         {renaming ? (
@@ -421,7 +424,7 @@ export default function GoalCard({ goal, busy, options = null, onToggle, onToggl
         aria-haspopup="menu" aria-expanded={menuOpen}
         aria-label={`More actions for ${goal.title}`}
         onClick={() => setMenuOpen((open) => !open)}
-      ><Hi icon={EllipsisHorizontalIcon} size={17} /></button>
+      ><Hi icon={EllipsisHorizontalIcon} size={20} /></button>
       {menuOpen && (
         <div className="goal-menu" role="menu" aria-label={`Actions for ${goal.title}`}>
           <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setAdding(true) }}>
@@ -470,8 +473,19 @@ export default function GoalCard({ goal, busy, options = null, onToggle, onToggl
   return (
     <article className={`goal-card period-${goal.period.type}${goal.complete ? ' done' : ''}${celebrating ? ' celebrate' : ''}${goal.abandoned ? ' not-doing' : ''}${goal.periodState === 'expired' ? ' expired' : ''}`} data-land={`goal:${goal.id}`}>
       <header className="goal-card-head">
-        {/* Decoration, not information: everything it hints at is written out below it. */}
-        <span className="goal-icon" aria-hidden="true"><Hi icon={Glyph} size={17} /></span>
+        {/* The goal's icon inside its progress, as in the app: the card's state reads
+            without reading a number. Decoration, not information: everything it hints
+            at is written out below it. */}
+        <span className="goal-icon" aria-hidden="true">
+          <Ring
+            percent={goal.complete ? 100 : goal.progress.percent}
+            color={goal.complete ? 'var(--green)' : 'var(--period, var(--accent))'}
+            track={`color-mix(in srgb, ${goal.complete ? 'var(--green) 20%' : 'var(--period, var(--accent)) 18%'}, transparent)`}
+            size={46} stroke={4}
+          >
+            <Hi icon={Glyph} size={19} />
+          </Ring>
+        </span>
 
         <div className="goal-card-title">
           {editing ? (
@@ -499,12 +513,12 @@ export default function GoalCard({ goal, busy, options = null, onToggle, onToggl
                 }}
               />
               <span className="goal-edit-actions">
-                <button className="btn compact primary" disabled={busy || !draft.title.trim()} onClick={saveEdit}>Save</button>
-                <button className="btn compact" onClick={() => setEditing(null)}>Cancel</button>
+                <button className="pk-btn pk-compact pk-primary" disabled={busy || !draft.title.trim()} onClick={saveEdit}>Save</button>
+                <button className="pk-btn pk-compact" onClick={() => setEditing(null)}>Cancel</button>
                 {/* Editing a goal and editing what it counts are the same intention, so
                     the numbers are one click from here as well as from the menu. */}
                 {editing === 'all' && onSaveMetrics && (
-                  <button className="btn compact" onClick={() => setNumbersFor('')}>
+                  <button className="pk-btn pk-compact" onClick={() => setNumbersFor('')}>
                     <Hi icon={ChartBarIcon} size={13} /> Numbers
                   </button>
                 )}
@@ -567,7 +581,7 @@ export default function GoalCard({ goal, busy, options = null, onToggle, onToggl
             onClick={onToggle}
             aria-label={goal.complete ? `Reopen ${goal.title}` : `Mark ${goal.title} complete`}
           >
-            {goal.complete ? <Hi icon={TrophySolidIcon} size={20} /> : <span className="goal-check-empty" />}
+            {goal.complete ? <Hi icon={TrophySolidIcon} size={22} /> : <span className="goal-check-empty" />}
           </button>
         </div>
       </header>
@@ -641,7 +655,7 @@ export default function GoalCard({ goal, busy, options = null, onToggle, onToggl
                   setStepDraft(''); setAdding(false)
                 }}
               />
-              <button className="btn compact" onClick={() => { setAdding(false); setStepDraft('') }} aria-label="Cancel"><Hi icon={XMarkIcon} size={14} /></button>
+              <button className="pk-icon-btn pk-compact" onClick={() => { setAdding(false); setStepDraft('') }} aria-label="Cancel"><Hi icon={XMarkIcon} size={14} /></button>
             </span>
           )}
 
@@ -650,10 +664,10 @@ export default function GoalCard({ goal, busy, options = null, onToggle, onToggl
           {confirmPostpone && (
             <span className="goal-confirm">
               <span className="muted">Move to the next {goal.period.type}?</span>
-              <button className="btn compact primary" disabled={busy} onClick={() => { setConfirmPostpone(false); onPostpone() }}>
+              <button className="pk-btn pk-compact pk-primary" disabled={busy} onClick={() => { setConfirmPostpone(false); onPostpone() }}>
                 Move <Hi icon={ArrowRightIcon} size={13} />
               </button>
-              <button className="btn compact" onClick={() => setConfirmPostpone(false)}>Keep</button>
+              <button className="pk-btn pk-compact" onClick={() => setConfirmPostpone(false)}>Keep</button>
             </span>
           )}
         </footer>

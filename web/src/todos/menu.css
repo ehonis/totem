@@ -1,0 +1,31 @@
+/* The Tasks page's menu (Menu.tsx), also the Calendar's view picker. Imported by
+   Menu.tsx so any page that opens one gets its look. */
+.tk-menu {
+  position: fixed; z-index: 1000; max-height: min(70vh, 520px); overflow: auto; padding: 5px;
+  border: 1px solid var(--line-2); border-radius: 10px; background: var(--raise); color: var(--text);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .45);
+}
+.tk-menu-heading { padding: 6px 9px 4px; color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.tk-menu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 0 9px;
+  border: 0; border-radius: 7px; background: none; color: var(--text); font: inherit; font-size: 13px;
+  text-align: left; cursor: pointer;
+}
+.tk-menu-item:hover, .tk-menu-item:focus { outline: none; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.tk-menu-item:disabled { opacity: .45; cursor: default; background: none; }
+.tk-menu-item.danger { color: var(--red); }
+.tk-menu-icon { flex: none; display: grid; place-items: center; width: 16px; color: var(--muted); }
+.tk-menu-item.danger .tk-menu-icon { color: inherit; }
+.tk-menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-menu-detail { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tk-menu-check { flex: none; color: var(--accent); }
+.tk-menu-sep { height: 1px; margin: 4px 2px; background: var(--line); }
+.tk-menu-footer { margin-top: 4px; padding: 8px 6px 4px; border-top: 1px solid var(--line); }
+.tk-menu-custom { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; }
+.tk-menu-custom label { grid-column: 1 / -1; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11.5px; }
+.tk-menu-custom input, .tk-issue-form input {
+  min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; color-scheme: dark;
+}
+.tk-menu-custom input:focus, .tk-issue-form input:focus { outline: none; border-color: var(--accent); }
+

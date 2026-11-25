@@ -1,21 +1,53 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+// Productivity → Recs: the ledger of what agents advised, with the owner's decision and
+// how it turned out, drawn as the iPhone app draws it (mobile/src/features/productivity/RecsView.tsx):
+// the track record as three numbers and its line, what waits on the owner as full cards
+// with the decision buttons, and everything already decided as compact rows that open
+// in place. Agents record and measure; deciding happens only here (and in the app),
+// which is why these buttons exist at all. Everything still open always loads; decided
+// history comes a page at a time.
+//
+// Accept is one click ("Accept with a note…" is in the card's "…"); Decline asks why
+// (optional, agents read it before suggesting something like it again) and Cancel there
+// decides nothing; Defer picks its length from a menu ("Defer with a note…" is in "…").
+// Each decision moves the card at once and its toast offers Undo, the same "Decide again".
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AuthError, decideRec, getRecLedger, setRecOutcome } from '../api'
-import { ArrowUturnLeftIcon, CheckIcon, ClockIcon, Hi, XMarkIcon } from '../icons'
-import { DEFER_CHOICES, OUTCOME_LABELS, formatUsd, mergeLedger, outcomeLabel, recSections, recSourceLabel, recSourcePath } from '../recs/sections'
+import {
+  ArrowUturnLeftIcon, ChatBubbleLeftIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, ClockIcon,
+  EllipsisHorizontalIcon, ExclamationTriangleIcon, Hi, PencilSquareIcon,
+} from '../icons'
+import { DEFER_CHOICES, OUTCOME_LABELS, mergeLedger, outcomeLabel, recSections, recSourceLabel, recSourcePath } from '../recs/sections'
+import { decisionToast, recMeta, statTiles, whenLabel } from '../recs/card'
 import type { Rec, RecDecision, RecOutcome, RecStats } from '../recs/types'
+import { pushToast } from '../toast'
+import { followLink } from '../links'
+import Menu, { type MenuEntry } from '../todos/Menu'
+import IconBulb from '@tabler/icons-react/dist/esm/icons/IconBulb.mjs'
+import '../recs/recs.css'
 
-// Productivity → Recommendations: the ledger of what agents advised, with the
-// owner's decision and how it turned out. Agents record and measure; deciding
-// happens only here (and in the app), which is why these buttons exist at all.
-// Everything still open always loads; decided history comes a page at a time.
+type Extra = { note?: string; deferDays?: number }
+type Decide = (rec: Rec, decision: RecDecision, extra?: Extra) => void
+type Outcome = (rec: Rec, outcome: RecOutcome) => void
+
 export default function RecsView({ onAuthError }: { onAuthError: () => void }) {
   const [open, setOpen] = useState<Rec[]>([])
   const [history, setHistory] = useState<Rec[]>([])
   const [nextBefore, setNextBefore] = useState<string | null>(null)
   const [stats, setStats] = useState<RecStats | null>(null)
   const [loading, setLoading] = useState(true)
-  const [busy, setBusy] = useState('')
+  // What is saving, counted per rec id (and 'more' for an older page), so an Undo
+  // clicked while its decision is still refetching keeps the card saving.
+  const [busy, setBusy] = useState<ReadonlyMap<string, number>>(() => new Map())
+  const startBusy = useCallback((id: string) => setBusy((m) => new Map(m).set(id, (m.get(id) ?? 0) + 1)), [])
+  const endBusy = useCallback((id: string) => setBusy((m) => {
+    const n = new Map(m)
+    const left = (m.get(id) ?? 1) - 1
+    if (left > 0) n.set(id, left); else n.delete(id)
+    return n
+  }), [])
   const [error, setError] = useState('')
+  const ledger = useRef({ history, nextBefore })
+  ledger.current = { history, nextBefore }
 
   const fail = useCallback((cause: unknown, fallback: string) => {
     if (cause instanceof AuthError) onAuthError()
@@ -23,10 +55,10 @@ export default function RecsView({ onAuthError }: { onAuthError: () => void }) {
   }, [onAuthError])
 
   const load = useCallback(async () => {
-    setLoading(true); setError('')
+    setError('')
     try {
-      const ledger = await getRecLedger()
-      setOpen(ledger.open); setHistory(ledger.history); setNextBefore(ledger.nextBefore); setStats(ledger.stats)
+      const page = await getRecLedger()
+      setOpen(page.open); setHistory(page.history); setNextBefore(page.nextBefore); setStats(page.stats)
     } catch (cause) { fail(cause, 'Recommendations could not load.') }
     finally { setLoading(false) }
   }, [fail])
@@ -35,135 +67,333 @@ export default function RecsView({ onAuthError }: { onAuthError: () => void }) {
 
   async function more() {
     if (!nextBefore) return
-    setBusy('more'); setError('')
+    startBusy('more'); setError('')
     try {
-      const ledger = await getRecLedger(nextBefore)
-      setHistory((current) => [...current, ...ledger.history]); setNextBefore(ledger.nextBefore); setStats(ledger.stats)
+      const page = await getRecLedger(nextBefore)
+      setHistory((current) => [...current, ...page.history]); setNextBefore(page.nextBefore); setStats(page.stats)
     } catch (cause) { fail(cause, 'Older recommendations could not load.') }
-    finally { setBusy('') }
+    finally { endBusy('more') }
   }
 
-  // A change refetches the first page (open recs and the stats line move with it) and
-  // keeps the older pages already loaded (mergeLedger).
-  const run = useCallback(async (id: string, change: () => Promise<{ rec: Rec }>) => {
-    setBusy(id); setError('')
+  // A change moves the rec at once, then refetches the first page (open recs and the
+  // stats line move with it) and keeps the older pages already loaded (mergeLedger).
+  const run = useCallback(async (id: string, change: () => Promise<{ rec: Rec }>, after?: (rec: Rec) => void) => {
+    startBusy(id); setError('')
     try {
       const { rec } = await change()
-      const first = await getRecLedger()
-      const next = mergeLedger({ history, nextBefore }, first, rec)
-      setOpen(next.open); setHistory(next.history); setNextBefore(next.nextBefore); setStats(first.stats)
-    }
-    catch (cause) { fail(cause, 'That change could not be saved.') }
-    finally { setBusy('') }
-  }, [fail, history, nextBefore])
+      const stillOpen = rec.decision === 'pending' || rec.decision === 'deferred'
+      const others = (list: Rec[]) => list.filter((r) => r.id !== rec.id)
+      setOpen((list) => (stillOpen ? [...others(list), rec] : others(list)))
+      setHistory((list) => (stillOpen ? others(list) : [rec, ...others(list)]))
+      after?.(rec)
+      try {
+        const first = await getRecLedger()
+        const next = mergeLedger(ledger.current, first, rec)
+        setOpen(next.open); setHistory(next.history); setNextBefore(next.nextBefore); setStats(first.stats)
+      } catch (cause) { fail(cause, 'Saved, but the list could not refresh.') }
+    } catch (cause) { fail(cause, 'That change could not be saved.') }
+    finally { endBusy(id) }
+  }, [fail, startBusy, endBusy])
+
+  /** Decide, then say what happens next, with Undo (back to waiting) where it makes sense. */
+  const decide: Decide = useCallback((rec, decision, extra = {}) => {
+    void run(rec.id, () => decideRec(rec.id, { decision, ...extra }), (saved) => {
+      if (decision === 'pending') { pushToast(decisionToast(saved), 'success'); return }
+      pushToast(decisionToast(saved), 'success', {
+        duration: 5000,
+        action: { label: 'Undo', onClick: () => { void run(rec.id, () => decideRec(rec.id, { decision: 'pending' })) } },
+      })
+    })
+  }, [run])
+
+  const outcome: Outcome = useCallback((rec, value) => {
+    void run(rec.id, () => setRecOutcome(rec.id, { outcome: value }), () => pushToast('Outcome saved.', 'success'))
+  }, [run])
 
   const sections = useMemo(() => recSections([...open, ...history]), [open, history])
 
   return (
-    <div className="recs-view">
-      <header className="recs-head">
-        <h2>Recommendations</h2>
-        {stats && <p className="recs-line tnum">{stats.line}</p>}
-      </header>
-      {error && <div className="lists-error recs-error" role="alert"><span>{error}</span><button className="link-btn" onClick={() => void load()}>Retry</button></div>}
-      {!loading && !sections.length && (
-        <div className="lists-empty recs-empty">
-          <Hi icon={CheckIcon} size={26} />
-          <h2>Nothing recommended yet</h2>
-          <p>When an agent suggests something worth deciding, it lands here with its evidence.</p>
-        </div>
-      )}
-      {sections.map((section) => (
-        <section className="recs-section" key={section.id} aria-labelledby={`recs-${section.id}`}>
-          <div className="lists-todos-head"><h3 id={`recs-${section.id}`}>{section.title}</h3><span>{section.recs.length}</span></div>
-          {section.recs.map((rec) => (
-            <RecCard
-              key={rec.id}
-              rec={rec}
-              busy={busy === rec.id}
-              onDecide={(decision, extra) => run(rec.id, () => decideRec(rec.id, { decision, ...extra }))}
-              onOutcome={(outcome) => run(rec.id, () => setRecOutcome(rec.id, { outcome }))}
-            />
-          ))}
-        </section>
-      ))}
-      {nextBefore && (
-        <div className="recs-more">
-          <button className="btn compact" disabled={busy === 'more'} onClick={() => void more()}>Show older decisions</button>
-        </div>
-      )}
+    <div className="view rv-view" aria-busy={loading || undefined}>
+      <div className="pk-page rv-page">
+        {stats && stats.total > 0 && <TrackRecord stats={stats} />}
+        {error && (
+          <div className="rv-error" role="alert">
+            <Hi icon={ExclamationTriangleIcon} size={15} />
+            <span>{error}</span>
+            <button type="button" onClick={() => void load()}>Retry</button>
+          </div>
+        )}
+        {!loading && !sections.length && !error && (
+          <div className="rv-empty">
+            <IconBulb size={34} stroke={1.5} aria-hidden="true" />
+            <strong>Nothing to decide</strong>
+            <p>When an agent suggests something worth deciding, it lands here with its evidence, and you choose.</p>
+          </div>
+        )}
+        {sections.map((section) => (
+          <section className="rv-section" key={section.id} aria-labelledby={`recs-${section.id}`}>
+            <h3 className="pk-section" id={`recs-${section.id}`}>
+              {section.title}<span className="pk-count tnum">{section.recs.length}</span>
+            </h3>
+            {section.recs.map((rec) => rec.decision === 'pending'
+              ? <PendingCard key={rec.id} rec={rec} busy={busy.has(rec.id)} decide={decide} />
+              : <DecidedRow key={rec.id} rec={rec} busy={busy.has(rec.id)} decide={decide} outcome={outcome} />)}
+          </section>
+        ))}
+        {nextBefore && (
+          <div className="rv-more">
+            <button type="button" className="pk-btn" disabled={busy.has('more')} onClick={() => void more()}>
+              {busy.has('more') ? 'Loading…' : 'Show older decisions'}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
-interface CardProps {
-  rec: Rec
-  busy: boolean
-  onDecide: (decision: RecDecision, extra?: { note?: string; deferDays?: number }) => void
-  onOutcome: (outcome: RecOutcome) => void
+function TrackRecord({ stats }: { stats: RecStats }) {
+  const tiles = statTiles(stats)
+  return (
+    <div className="rv-record" role="group" aria-label={`Track record: ${stats.line}`}>
+      <div className="pk-stats rv-stats">
+        {tiles.map((tile) => (
+          <div key={tile.label} className="pk-stat">
+            <span className={`pk-stat-n${tile.label === 'Waiting' && stats.pending ? ' rv-amber' : ''}`}>{tile.value}</span>
+            <span className="pk-stat-l">{tile.label}</span>
+          </div>
+        ))}
+      </div>
+      {stats.line && <p className="rv-line tnum">{stats.line}</p>}
+    </div>
+  )
 }
 
-function RecCard({ rec, busy, onDecide, onOutcome }: CardProps) {
-  const [deferring, setDeferring] = useState(false)
-  const [deferDays, setDeferDays] = useState(DEFER_CHOICES[0].days)
-  const [note, setNote] = useState('')
-  const sourcePath = recSourcePath(rec.source)
-  const meta = [
-    sourcePath ? <a key="s" href={sourcePath}>{recSourceLabel(rec.source)}</a> : <span key="s">{recSourceLabel(rec.source)}</span>,
-    rec.costUsd ? <span key="c">{formatUsd(rec.costUsd)}</span> : null,
-    rec.actBy ? <span key="a">act by {rec.actBy}</span> : null,
-    rec.decision === 'deferred' && rec.reviewOn ? <span key="r">back {rec.reviewOn}</span> : null,
-    rec.decision === 'pending' && rec.resurfacedAt ? <span key="b">back from deferral</span> : null,
-  ].filter(Boolean)
-
+function Source({ rec }: { rec: Rec }) {
+  const path = recSourcePath(rec.source)
+  const label = recSourceLabel(rec.source)
+  if (!path) return <span>{label}</span>
   return (
-    <article className={`recs-card ${rec.decision}`}>
-      <div className="recs-card-top">
-        <h4>{rec.title}</h4>
-        {rec.decision !== 'pending' && <span className={`recs-badge ${rec.outcome ?? rec.decision}`}>{rec.outcome ? OUTCOME_LABELS[rec.outcome] : rec.decision}</span>}
-      </div>
-      <div className="recs-meta">{meta}</div>
-      {rec.body && <p className="recs-body">{rec.body}</p>}
-      {rec.changedNote && <p className="recs-note">What changed since you declined something like it: {rec.changedNote}</p>}
-      {rec.evidence && <details className="recs-evidence"><summary>Evidence</summary><p>{rec.evidence}</p></details>}
-      {rec.decisionNote && <p className="recs-note">“{rec.decisionNote}”</p>}
-      {rec.outcome && rec.outcomeBy === 'agent' && <p className="recs-note">{outcomeLabel(rec)}</p>}
-      {rec.outcomeNote && <p className="recs-note">{rec.outcomeNote}</p>}
+    <a className="rv-source" href={path} aria-label={`From ${label}, open the chat`}>
+      <Hi icon={ChatBubbleLeftIcon} size={13} />{label}
+    </a>
+  )
+}
 
-      {rec.decision === 'pending' && !deferring && (
-        <div className="recs-actions">
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" aria-label={`Note on ${rec.title}`} />
-          <button className="btn compact primary" disabled={busy} onClick={() => onDecide('accepted', { note })}><Hi icon={CheckIcon} size={14} /> Accept</button>
-          <button className="btn compact" disabled={busy} onClick={() => onDecide('declined', { note })}><Hi icon={XMarkIcon} size={14} /> Decline</button>
-          <button className="btn compact" disabled={busy} onClick={() => setDeferring(true)}><Hi icon={ClockIcon} size={14} /> Defer</button>
-        </div>
-      )}
-      {rec.decision === 'pending' && deferring && (
-        <form className="recs-actions" onSubmit={(e) => { e.preventDefault(); onDecide('deferred', { note, deferDays }) }}>
-          <label>Ask again
-            <select value={deferDays} onChange={(e) => setDeferDays(Number(e.target.value))}>
+function Meta({ rec }: { rec: Rec }) {
+  const meta = recMeta(rec)
+  return (
+    <div className="rv-meta">
+      <Source rec={rec} />
+      {meta && <span className="tnum">{meta}</span>}
+    </div>
+  )
+}
+
+function Evidence({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="rv-evidence">
+      <button type="button" className="rv-disclose" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <Hi icon={ChevronRightIcon} size={13} className={open ? 'rv-turned' : ''} /> Evidence
+      </button>
+      {open && <p className="rv-evidence-text">{text}</p>}
+    </div>
+  )
+}
+
+function Spinner() {
+  return <span className="rv-spinner" role="status" aria-label="Saving" />
+}
+
+/** A note before deciding: Decline always asks; Accept and Defer ask from "…". */
+type NoteMode = { decision: 'accepted' | 'declined' | 'deferred' }
+
+const NOTE_COPY = {
+  declined: { title: 'Why not?', hint: 'Optional. Agents read this before suggesting it again.', ok: 'Decline' },
+  accepted: { title: 'Accept', hint: 'Add a note (optional).', ok: 'Accept' },
+  deferred: { title: 'Defer', hint: 'Add a note (optional), and when to ask again.', ok: 'Defer' },
+} as const
+
+function NoteForm({ rec, mode, busy, onDone, decide }: { rec: Rec; mode: NoteMode; busy: boolean; onDone: () => void; decide: Decide }) {
+  const [note, setNote] = useState('')
+  const [deferDays, setDeferDays] = useState(DEFER_CHOICES[0].days)
+  const copy = NOTE_COPY[mode.decision]
+  const input = useRef<HTMLInputElement>(null)
+  useEffect(() => { input.current?.focus() }, [])
+  return (
+    <form
+      className="rv-note"
+      onSubmit={(event) => {
+        event.preventDefault()
+        const text = note.trim()
+        decide(rec, mode.decision, { ...(text ? { note: text } : {}), ...(mode.decision === 'deferred' ? { deferDays } : {}) })
+        onDone()
+      }}
+      onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); onDone() } }}
+    >
+      <label className="rv-note-label" htmlFor={`rv-note-${rec.id}`}>
+        <strong>{copy.title}</strong> <span>{copy.hint}</span>
+      </label>
+      <input
+        ref={input}
+        id={`rv-note-${rec.id}`}
+        className="rv-note-input"
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+        placeholder="Note (optional)"
+        aria-label={`Note on ${rec.title}`}
+      />
+      <div className="rv-note-actions">
+        {mode.decision === 'deferred' && (
+          <label className="rv-defer-pick">Ask again
+            <select value={deferDays} onChange={(event) => setDeferDays(Number(event.target.value))}>
               {DEFER_CHOICES.map((choice) => <option key={choice.days} value={choice.days}>{choice.label.toLowerCase()}</option>)}
             </select>
           </label>
-          <button className="btn compact primary" disabled={busy}>Defer</button>
-          <button type="button" className="btn compact" onClick={() => setDeferring(false)}>Cancel</button>
-        </form>
-      )}
-      {rec.decision === 'accepted' && (
-        <div className="recs-actions">
-          <span className="recs-ask">{rec.outcome ? 'Outcome' : 'How did it go?'}</span>
-          {(Object.keys(OUTCOME_LABELS) as RecOutcome[]).map((outcome) => (
-            <button key={outcome} className={`btn compact${rec.outcome === outcome && rec.outcomeBy === 'owner' ? ' primary' : ''}`} disabled={busy} onClick={() => onOutcome(outcome)}>
-              {OUTCOME_LABELS[outcome]}
-            </button>
-          ))}
+        )}
+        <button type="button" className="pk-btn" onClick={onDone}>Cancel</button>
+        <button className={`pk-btn ${mode.decision === 'declined' ? 'pk-danger' : 'pk-primary'}`} disabled={busy}>{copy.ok}</button>
+      </div>
+    </form>
+  )
+}
+
+function PendingCard({ rec, busy, decide }: { rec: Rec; busy: boolean; decide: Decide }) {
+  const [menu, setMenu] = useState<{ which: 'defer' | 'more'; anchor: HTMLElement } | null>(null)
+  const [noting, setNoting] = useState<NoteMode | null>(null)
+  const chat = recSourcePath(rec.source)
+  const toggleMenu = (which: 'defer' | 'more') => (event: React.MouseEvent<HTMLButtonElement>) => {
+    const anchor = event.currentTarget
+    setMenu((current) => (current?.which === which ? null : { which, anchor }))
+  }
+
+  const deferItems: MenuEntry[] = [
+    { heading: 'Ask again' },
+    ...DEFER_CHOICES.map((choice) => ({ key: String(choice.days), label: choice.label, onSelect: () => decide(rec, 'deferred', { deferDays: choice.days }) })),
+  ]
+  const moreItems: MenuEntry[] = [
+    { key: 'note', label: 'Accept with a note…', icon: PencilSquareIcon, onSelect: () => setNoting({ decision: 'accepted' }) },
+    { key: 'defer-note', label: 'Defer with a note…', icon: ClockIcon, onSelect: () => setNoting({ decision: 'deferred' }) },
+    ...(chat ? [{ key: 'chat', label: 'Open the chat it came from', icon: ChatBubbleLeftIcon, onSelect: () => followLink({ kind: 'app', to: chat }) }] : []),
+  ]
+
+  return (
+    <article className="pk-card rv-card">
+      <div className="rv-title-row">
+        <h4 className="rv-title">{rec.title}</h4>
+        {busy && <Spinner />}
+      </div>
+      <Meta rec={rec} />
+      {rec.body && <p className="rv-body">{rec.body}</p>}
+      {rec.decisionNote && <p className="rv-quiet">Your note: “{rec.decisionNote}”</p>}
+      {rec.changedNote && (
+        <div className="rv-changed">
+          <strong>What changed since you declined something like it</strong>
+          <span>{rec.changedNote}</span>
         </div>
       )}
-      {rec.decision !== 'pending' && (
-        <button className="link-btn recs-reopen" disabled={busy} onClick={() => onDecide('pending')}>
-          <Hi icon={ArrowUturnLeftIcon} size={13} /> Decide again
-        </button>
+      {rec.evidence && <Evidence text={rec.evidence} />}
+
+      {noting ? (
+        <NoteForm rec={rec} mode={noting} busy={busy} decide={decide} onDone={() => setNoting(null)} />
+      ) : (
+        <div className="rv-decide">
+          <button type="button" className="pk-btn pk-primary rv-accept" disabled={busy} onClick={() => decide(rec, 'accepted')}>
+            <Hi icon={CheckIcon} size={16} /> Accept
+          </button>
+          <button type="button" className="pk-btn rv-decline" disabled={busy} onClick={() => setNoting({ decision: 'declined' })}>Decline</button>
+          <button type="button" className="pk-btn rv-defer" disabled={busy} aria-haspopup="menu" aria-expanded={menu?.which === 'defer'} onClick={toggleMenu('defer')}>
+            Defer <Hi icon={ChevronDownIcon} size={12} className="rv-caret" />
+          </button>
+          <button type="button" className="pk-icon-btn rv-more-btn" disabled={busy} aria-haspopup="menu" aria-expanded={menu?.which === 'more'} aria-label="More for this recommendation" onClick={toggleMenu('more')}>
+            <Hi icon={EllipsisHorizontalIcon} size={18} />
+          </button>
+        </div>
+      )}
+      {menu && (
+        <Menu
+          anchor={menu.anchor}
+          label={menu.which === 'defer' ? 'Ask again' : 'More for this recommendation'}
+          items={menu.which === 'defer' ? deferItems : moreItems}
+          onClose={() => setMenu(null)}
+          width={menu.which === 'defer' ? 200 : 250}
+        />
       )}
     </article>
+  )
+}
+
+const WORD: Record<string, string> = { deferred: 'Deferred', accepted: 'Accepted', declined: 'Declined' }
+
+/** A decided, deferred or measured rec: one line until clicked, then everything and its actions. */
+function DecidedRow({ rec, busy, decide, outcome }: { rec: Rec; busy: boolean; decide: Decide; outcome: Outcome }) {
+  const [open, setOpen] = useState(false)
+  const [menu, setMenu] = useState<HTMLElement | null>(null)
+  const tone = rec.outcome ?? rec.decision
+  const word = rec.outcome ? OUTCOME_LABELS[rec.outcome] : WORD[rec.decision] ?? rec.decision
+  const when = rec.decision === 'deferred' && rec.reviewOn ? `back ${rec.reviewOn}` : whenLabel(rec.outcomeAt ?? rec.decidedAt)
+  const needsOutcome = rec.decision === 'accepted' && (!rec.outcome || rec.outcomeBy === 'agent')
+  const outcomes = Object.keys(OUTCOME_LABELS) as RecOutcome[]
+
+  return (
+    <div className={`rv-row${open ? ' rv-row-open' : ''}${rec.decision === 'declined' ? ' rv-row-declined' : ''}`}>
+      <button
+        type="button"
+        className="rv-row-head"
+        aria-expanded={open}
+        aria-label={`${rec.title}. ${word}${when ? `, ${when}` : ''}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={`rv-pill rv-tone-${tone}`}>{word}</span>
+        <span className="rv-row-title">{rec.title}</span>
+        {busy ? <Spinner /> : when ? <span className="rv-when">{when}</span> : null}
+        <Hi icon={ChevronDownIcon} size={14} className={`rv-row-chevron${open ? ' rv-flipped' : ''}`} />
+      </button>
+
+      {needsOutcome && (
+        <div className="rv-outcomes">
+          <span className="rv-ask">{rec.outcome ? `${outcomeLabel(rec)}. Is that right?` : 'How did it go?'}</span>
+          <div className="rv-outcome-btns">
+            {outcomes.map((value) => (
+              <button key={value} type="button" className="pk-btn pk-compact" disabled={busy} onClick={() => outcome(rec, value)}>{OUTCOME_LABELS[value]}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {open && (
+        <div className="rv-row-body">
+          <Meta rec={rec} />
+          {rec.body && <p className="rv-body rv-small">{rec.body}</p>}
+          {rec.changedNote && <p className="rv-quiet">What changed since you declined something like it: {rec.changedNote}</p>}
+          {rec.evidence && <Evidence text={rec.evidence} />}
+          {rec.decisionNote && <p className="rv-quiet">“{rec.decisionNote}”</p>}
+          {rec.outcome && rec.outcomeBy === 'owner' && <p className="rv-quiet">Outcome: {outcomeLabel(rec)}</p>}
+          {rec.outcomeNote && <p className="rv-quiet">{rec.outcomeNote}</p>}
+          <div className="rv-row-actions">
+            {rec.decision === 'accepted' && rec.outcome && rec.outcomeBy === 'owner' && (
+              <button type="button" className="pk-btn pk-compact" disabled={busy} aria-haspopup="menu" aria-expanded={!!menu} onClick={(event) => setMenu(menu ? null : event.currentTarget)}>
+                Change outcome <Hi icon={ChevronDownIcon} size={12} />
+              </button>
+            )}
+            <button type="button" className="pk-btn pk-compact" disabled={busy} onClick={() => decide(rec, 'pending')}>
+              <Hi icon={ArrowUturnLeftIcon} size={14} /> Decide again
+            </button>
+          </div>
+          {menu && (
+            <Menu
+              anchor={menu}
+              label="How did it go?"
+              items={[{ heading: 'How did it go?' }, ...outcomes.map((value) => ({
+                key: value, label: OUTCOME_LABELS[value], checked: rec.outcome === value, onSelect: () => outcome(rec, value),
+              }))]}
+              onClose={() => setMenu(null)}
+              width={200}
+            />
+          )}
+        </div>
+      )}
+    </div>
   )
 }

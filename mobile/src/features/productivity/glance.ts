@@ -7,7 +7,7 @@
 // a write made on Overview reaches a tool's store only when that page next loads,
 // and a calendar answer carries no date range, so a days-old one can't be told apart.
 // Pure, so glance.test.mjs can run it.
-import { periodTotal } from '../../lib/components/overview/time'
+import { habitTree, rowDone } from '../../lib/habits/groups'
 
 /** Local "YYYY-MM-DD" for a moment. */
 export function dayKeyOf(d: Date): string {
@@ -87,16 +87,22 @@ export function calendarGlance(payload: any, now: Date): CalendarGlance | null {
 
 export interface RatioGlance { done: number; total: number }
 
-/** Habits done today, of those the owner logs by hand (the WHOOP sleep habit fills itself). */
+/**
+ * Habits done today, of those the owner logs by hand (the WHOOP sleep habit fills
+ * itself), counted as rows: a group (lib/habits/groups.ts) is one, done once every
+ * one of its sub-habits is.
+ */
 export function habitsGlance(payload: any, now: Date): RatioGlance | null {
   if (!Array.isArray(payload?.habits)) return null
   // The bridge names its own today; an answer from an earlier day is not today's tally.
   if (payload.today && payload.today !== dayKeyOf(now)) return null
   const day: string = payload.today || dayKeyOf(now)
   const entries = payload.entries || {}
-  const habits = payload.habits.filter((h: any) => h && !h.archived && h.metric?.source !== 'whoop-sleep')
-  const left = habits.filter((h: any) => periodTotal(h, entries, day) < h.target && !(entries[day]?.[h.id]?.count > 0))
-  return { done: habits.length - left.length, total: habits.length }
+  const all = payload.habits.filter(Boolean)
+  const rows = habitTree<any>(all).filter((r) => r.habit.metric?.source !== 'whoop-sleep')
+  // The Habits page's rule (rowDone): a daily habit at its target, a group with every sub-habit done.
+  const done = rows.filter((row) => rowDone(all, row, entries, day)).length
+  return { done, total: rows.length }
 }
 
 /** This week's goals done, of those still in play; nothing if the answer is for another week. */

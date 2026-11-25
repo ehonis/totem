@@ -1,0 +1,161 @@
+/* The iPhone app's building blocks (mobile/src/ui/kit.tsx, features/overview/parts.tsx)
+   as web classes, so the Productivity tabs and the Overview look like the app at any
+   width. Values are the app's: cards are --surface with a --line border and a 16px
+   corner, buttons 40px tall with a 9px corner, chips are pills. Colours come only from
+   the palette variables (styles.css), so every Background in Settings recolours them. */
+
+.pk-page {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 20px 24px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-sizing: border-box;
+}
+@media (max-width: 720px) {
+  /* The shell floats two buttons over a phone's bottom right (shell.css): the page
+     scrolls far enough that the last card's controls clear them. */
+  .pk-page { padding: 14px 16px calc(var(--dock-clear, 14px) + 124px); gap: 12px; }
+}
+
+.pk-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  min-width: 0;
+}
+
+/* A page title, the line under it, and a row of actions. */
+.pk-title { font-size: 22px; font-weight: 700; color: var(--text); letter-spacing: -0.01em; line-height: 1.2; margin: 0; }
+.pk-sub { font-size: 14px; color: var(--muted); }
+.pk-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* A section head inside a page: "Waiting on you 2". */
+.pk-section {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 6px 2px 0;
+}
+.pk-section .pk-count { font-size: 13px; font-weight: 500; color: var(--muted); }
+
+/* Buttons: Btn in the app. */
+.pk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.pk-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--line-strong); }
+.pk-btn:disabled { opacity: 0.5; cursor: default; }
+.pk-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pk-btn svg { width: 16px; height: 16px; flex: none; }
+.pk-btn.pk-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.pk-btn.pk-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent), #fff 10%); border-color: transparent; }
+.pk-btn.pk-danger { border-color: color-mix(in srgb, var(--red) 34%, transparent); color: #f0879e; }
+.pk-btn.pk-ghost { background: transparent; border-color: transparent; }
+.pk-btn.pk-ghost:hover:not(:disabled) { background: var(--bg-3); }
+.pk-btn.pk-compact { min-height: 32px; padding: 0 10px; border-radius: 8px; font-size: 13px; }
+.pk-btn.pk-compact svg { width: 14px; height: 14px; }
+
+/* A square icon button: IconBtn bordered. */
+.pk-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+  cursor: pointer;
+  flex: none;
+  padding: 0;
+}
+.pk-icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.pk-icon-btn:disabled { opacity: 0.4; cursor: default; }
+.pk-icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pk-icon-btn svg { width: 20px; height: 20px; }
+.pk-icon-btn.pk-compact { width: 32px; height: 32px; border-radius: 8px; }
+.pk-icon-btn.pk-compact svg { width: 16px; height: 16px; }
+.pk-icon-btn.pk-ghost { border-color: transparent; background: transparent; }
+.pk-icon-btn.pk-ghost:hover:not(:disabled) { background: var(--bg-3); }
+
+/* Pills: Chip. A `.pk-dot` inside takes the colour from --dot. A page lays its row of them out itself. */
+.pk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+}
+.pk-chip:hover { color: var(--text); border-color: var(--line-strong); }
+.pk-chip[aria-pressed='true'], .pk-chip[aria-selected='true'], .pk-chip.pk-on {
+  color: var(--text);
+  font-weight: 600;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
+}
+.pk-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pk-chip svg { width: 15px; height: 15px; }
+.pk-chip .pk-n { font-size: 12px; color: var(--muted); font-weight: 500; }
+.pk-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dot, var(--accent)); flex: none; }
+
+/* A row of number tiles: the Recs ledger head, the Tasks summary. */
+.pk-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+}
+.pk-stat { padding: 14px 12px; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.pk-stat + .pk-stat { border-left: 1px solid var(--line); }
+.pk-stat-n { font-size: 22px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.pk-stat-l { font-size: 13px; color: var(--muted); }
+
+/* A thin progress bar. */
+.pk-bar { height: 4px; border-radius: 2px; background: var(--raise); overflow: hidden; flex: 1; min-width: 0; }
+.pk-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--bar, var(--accent)); transition: width 0.4s ease; }
+
+/* A quiet empty state. */
+.pk-empty { padding: 40px 16px; display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--muted); text-align: center; font-size: 15px; }
+.pk-empty > svg { width: 28px; height: 28px; opacity: 0.8; }
+
+/* The progress ring (Ring.tsx). */
+.pk-ring { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.pk-ring > svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.pk-ring circle { transition: stroke-dashoffset 0.6s cubic-bezier(0.33, 1, 0.68, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .pk-ring circle, .pk-bar > span { transition: none; }
+}
+.pk-ring-in { position: relative; display: flex; align-items: center; justify-content: center; }
