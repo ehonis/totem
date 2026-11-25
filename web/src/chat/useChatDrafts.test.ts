@@ -14,11 +14,13 @@ vi.mock('./store', () => ({
   listAnswered: () => 0,
   openProject: vi.fn(),
   startTaskDraft: vi.fn(),
+  createProject: (...args: unknown[]) => createProject(...args),
   projectById: () => undefined,
 }))
 vi.mock('./api', () => ({ holdUploads: vi.fn(async () => ({ held: [], missing: [] })), deleteUpload: vi.fn() }))
 vi.mock('../toast', () => ({ pushToast: vi.fn(), pushError: vi.fn() }))
 const createTask = vi.fn()
+const createProject = vi.fn()
 vi.mock('../work/state', () => ({ taskHome: () => null, createTask: (...args: unknown[]) => createTask(...args) }))
 
 const { useChatDrafts } = await import('./useChatDrafts')
@@ -99,5 +101,48 @@ describe('$task: a task made in the composer', () => {
     expect(await hook().newTask(fields)).toBe(false)
     expect(drafts.get().drafts[home].text).toBe('Renew passport')
     expect(store.startTaskDraft).not.toHaveBeenCalled()
+  })
+})
+
+describe('$ghost and a new folder, picked from the `$` menu', () => {
+  const withKind = (setDraftKind: (k: 'regular' | 'temporary') => void, scope?: { id: string }) => renderHook(() => useChatDrafts({
+    activeId: null, active: null, scopeProject: scope as any, draftTaskId: null, draftKind: 'regular', setDraftKind,
+    composer: { current: null }, slot: '', visible: false, editing: false, onEditFiles: () => {},
+  })).result.current
+
+  it('$ghost moves the words to a ghost chat’s draft at Home', () => {
+    fake.threads = []
+    fake.projects = [{ id: 'acme' }]
+    const set = vi.fn()
+    const here = drafts.keyAt({ kind: 'project', id: 'acme' })
+    drafts.write(here, { text: 'x' }, { place: { kind: 'project', id: 'acme' } })
+    withKind(set, { id: 'acme' }).pickDestination({ kind: 'ghost', key: 'ghost', name: 'Ghost chat' }, 'just between us', 0)
+    expect(set).toHaveBeenLastCalledWith('temporary')
+    const ghost = drafts.get().drafts[drafts.keyAt({ kind: 'home' }, true)]
+    expect(ghost?.text).toBe('just between us')
+    expect(ghost?.temporary).toBe(true)
+    expect(drafts.get().drafts[here]).toBeUndefined()
+    fake.projects = []
+  })
+
+  it('a new folder is made, then the words move into it', async () => {
+    fake.threads = []
+    const home = drafts.keyAt({ kind: 'home' })
+    drafts.write(home, { text: 'x' }, { place: { kind: 'home' } })
+    createProject.mockResolvedValueOnce({ id: 'tax', name: 'Tax returns' })
+    fake.projects = [{ id: 'tax' }]
+    withKind(() => {}).pickDestination({ kind: 'new-folder', key: 'new-project', name: 'Tax returns' }, 'sort the 1099s', 0)
+    await vi.waitFor(() => expect(drafts.get().drafts[drafts.keyAt({ kind: 'project', id: 'tax' })]?.text).toBe('sort the 1099s'))
+    expect(createProject).toHaveBeenLastCalledWith({ name: 'Tax returns' }, { open: false })
+    fake.projects = []
+  })
+
+  it('a folder the bridge refuses leaves the words where they were', async () => {
+    const home = drafts.keyAt({ kind: 'home' })
+    drafts.write(home, { text: 'x' }, { place: { kind: 'home' } })
+    createProject.mockRejectedValueOnce(new Error('nope'))
+    withKind(() => {}).pickDestination({ kind: 'new-folder', key: 'new-folder:acme', name: 'Receipts', parent: { id: 'acme' } as any }, 'keep me', 0)
+    await vi.waitFor(() => expect(createProject).toHaveBeenLastCalledWith({ name: 'Receipts', parentId: 'acme' }, { open: false }))
+    expect(drafts.get().drafts[home].text).toBe('keep me')
   })
 })

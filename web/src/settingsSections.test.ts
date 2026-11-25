@@ -61,6 +61,7 @@ describe('settings search', () => {
       skills: ['components/SkillsView.tsx'],
       connections: ['components/McpSettingsView.tsx', 'components/ClaudeToolsPanel.tsx', 'components/DataConnectionsPanel.tsx', 'sources/SourceHealthPanel.tsx'],
       tasks: ['components/TaskSettings.tsx'],
+      archive: ['components/settings/ArchivePane.tsx'],
       security: ['components/settings/SecurityPane.tsx'],
       logs: ['components/LogsView.tsx'],
     }

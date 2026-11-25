@@ -11,6 +11,7 @@ import IconChartBar from '@tabler/icons-react/dist/esm/icons/IconChartBar.mjs'
 import IconSparkles from '@tabler/icons-react/dist/esm/icons/IconSparkles.mjs'
 import IconPlugConnected from '@tabler/icons-react/dist/esm/icons/IconPlugConnected.mjs'
 import IconCircleCheck from '@tabler/icons-react/dist/esm/icons/IconCircleCheck.mjs'
+import IconArchive from '@tabler/icons-react/dist/esm/icons/IconArchive.mjs'
 import IconShieldLock from '@tabler/icons-react/dist/esm/icons/IconShieldLock.mjs'
 import IconActivity from '@tabler/icons-react/dist/esm/icons/IconActivity.mjs'
 import IconSearch from '@tabler/icons-react/dist/esm/icons/IconSearch.mjs'
@@ -26,6 +27,7 @@ import { searchSettings, type SettingsSearchItem } from './settings/searchIndex'
 import GeneralPane from './settings/GeneralPane'
 import AppearancePane from './settings/AppearancePane'
 import SecurityPane from './settings/SecurityPane'
+import ArchivePane from './settings/ArchivePane'
 import ChatSettings from './ChatSettings'
 import VoiceSettings from './VoiceSettings'
 import NotificationsSettings from './NotificationsSettings'
@@ -65,6 +67,7 @@ const ICONS: Record<SettingsSection, Parameters<typeof TI>[0]['icon']> = {
   skills: IconSparkles,
   connections: IconPlugConnected,
   tasks: IconCircleCheck,
+  archive: IconArchive,
   security: IconShieldLock,
   logs: IconActivity,
 }
@@ -154,6 +157,7 @@ function Pane({ id, onAuthError, onDisconnect, onNavigate }: {
     case 'skills': return <SettingsPage><SkillsView onAuthError={onAuthError} /></SettingsPage>
     case 'connections': return <SettingsPage><McpSettingsView onAuthError={onAuthError} /></SettingsPage>
     case 'tasks': return <TaskSettings onAuthError={onAuthError} />
+    case 'archive': return <ArchivePane onAuthError={onAuthError} />
     case 'security': return <SecurityPane onSignedOut={onDisconnect} />
     case 'logs': return <SettingsPage><LogsView onAuthError={onAuthError} /></SettingsPage>
   }

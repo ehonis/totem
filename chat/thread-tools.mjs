@@ -24,7 +24,7 @@ const iso = (ms) => (ms ? new Date(ms).toISOString() : null)
 export function threadTitle(t) {
   if (t.title) return t.title
   const first = clip(t.messages?.find((m) => m.role === 'user')?.content, 49)
-  return first || (t.kind === 'temporary' ? 'Temporary chat' : 'New chat')
+  return first || (t.kind === 'temporary' ? 'Ghost chat' : 'New chat')
 }
 
 /** "Work", or "Work / Hiring" for a folder; null for Home. */

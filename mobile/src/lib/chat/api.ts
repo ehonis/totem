@@ -3,7 +3,7 @@
 import { authHeaders, AuthError, api, getJSON, peekJSON } from '../api'
 import { bridgeFetch, bridgeUrl } from '../connection'
 import { PROJECTS_GET, PROJECTS_PATH } from './projectList'
-import type { ApprovalDecision, Attachment, ChatCapabilities, ChatMode, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
+import type { ApprovalDecision, ArchivedProject, Attachment, ChatCapabilities, ChatMode, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
 
 export interface SendArgs {
   threadId: string
@@ -178,7 +178,9 @@ export const peekProjects = () => peekJSON<{ projects: Project[] }>(PROJECTS_PAT
 export const getProject = (id: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`)
 export const createProjectApi = (body: Partial<Project>) => api<{ project: Project }>('/api/chat/projects', json('POST', body))
 export const patchProjectApi = (id: string, body: Record<string, unknown>) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('PATCH', body))
-export const deleteProjectApi = (id: string) => api<{ ok: boolean; movedChats: number; removedFolders?: number }>(`/api/chat/projects/${encodeURIComponent(id)}`, json('DELETE'))
+export const archiveProjectApi = (id: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/archive`, json('POST'))
+export const restoreProjectApi = (id: string) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/restore`, json('POST'))
+export const listArchivedProjects = () => api<{ projects: ArchivedProject[] }>('/api/chat/projects/archived')
 export const putProjectMemory = (id: string, memory: string) => api<{ memory: string }>(`/api/chat/projects/${encodeURIComponent(id)}/memory`, json('PUT', { memory }))
 export const addProjectFilesApi = (id: string, uploadIds: string[]) => api<{ project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/files`, json('POST', { uploadIds }))
 export const moveProjectMemoryApi = (id: string, entries: string[]) => api<{ moved: number; project: Project }>(`/api/chat/projects/${encodeURIComponent(id)}/memory/move`, json('POST', { entries }))

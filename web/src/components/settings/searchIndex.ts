@@ -90,6 +90,9 @@ const ENTRIES: Partial<Record<SettingsSection, Entry[]>> = {
     ['task-sheet', 'Task sheet', 'Tasks', 'spreadsheet action items sheet google drive read-only assignees'],
     ['task-retention', 'Retention', 'Tasks', 'archive completed finished recycle bin purge empty delete days time'],
   ],
+  archive: [
+    ['archived-folders', 'Archived folders', 'Archive', 'archive restore unarchive bring back folders projects deleted removed hidden'],
+  ],
   security: [
     ['approval-code', 'Approval code', 'Security', 'approve send second factor'],
     ['change-login', 'Change password', 'Sign-in', 'passphrase credentials'],

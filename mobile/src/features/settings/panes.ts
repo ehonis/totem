@@ -15,6 +15,7 @@ import IconChartBar from '@tabler/icons-react-native/dist/esm/icons/IconChartBar
 import IconSparkles from '@tabler/icons-react-native/dist/esm/icons/IconSparkles.mjs'
 import IconPlugConnected from '@tabler/icons-react-native/dist/esm/icons/IconPlugConnected.mjs'
 import IconCircleCheck from '@tabler/icons-react-native/dist/esm/icons/IconCircleCheck.mjs'
+import IconArchive from '@tabler/icons-react-native/dist/esm/icons/IconArchive.mjs'
 import IconShieldLock from '@tabler/icons-react-native/dist/esm/icons/IconShieldLock.mjs'
 import IconActivity from '@tabler/icons-react-native/dist/esm/icons/IconActivity.mjs'
 import type { IconType } from '../../lib/icons'
@@ -31,6 +32,7 @@ import UsagePane from './panes/UsagePane'
 import SkillsPane from './panes/SkillsPane'
 import ConnectionsPane from './panes/ConnectionsPane'
 import TasksPane from './panes/TasksPane'
+import ArchivePane from './panes/ArchivePane'
 import SecurityPane from './panes/SecurityPane'
 import ActivityPane from './panes/ActivityPane'
 
@@ -57,6 +59,7 @@ const PANE: Record<PaneId, Omit<Pane, 'id' | 'label'> & { label?: string }> = {
   skills: { icon: IconSparkles, component: SkillsPane },
   connections: { icon: IconPlugConnected, component: ConnectionsPane },
   tasks: { icon: IconCircleCheck, component: TasksPane },
+  archive: { icon: IconArchive, component: ArchivePane },
   security: { icon: IconShieldLock, component: SecurityPane },
   logs: { icon: IconActivity, component: ActivityPane },
 }

@@ -36,7 +36,7 @@ const SOURCES = {
     export const listProjects = async () => ({ projects: [] })
     export const peekProjects = () => undefined
     export const stopChat = none, steerChat = none, decideApproval = none, changeQueue = none, getCapabilities = none, probeCapabilities = none,
-      getProject = none, createProjectApi = none, patchProjectApi = none, deleteProjectApi = none, putProjectMemory = none,
+      getProject = none, createProjectApi = none, patchProjectApi = none, archiveProjectApi = none, restoreProjectApi = none, putProjectMemory = none,
       addProjectFilesApi = none, removeProjectFilesApi = none, moveProjectMemoryApi = none, moveProjectFilesApi = none`,
 }
 const hooks = `

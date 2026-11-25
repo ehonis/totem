@@ -20,9 +20,16 @@
 // folder's, so a side topic never leaks into the main project. The owner moves
 // what should be shared up by hand: memory entries (moveMemoryEntries) and files.
 //
+// Archiving: a project or folder is never deleted. Archiving one (`archivedAt`)
+// puts it away whole, with its files, memory and chats, and a project's folders
+// go with it; Settings → Archive brings it back as it was. `list()` is what is in
+// use (archived ones and the folders of an archived project left out), so every
+// picker, the chats panel and the agents' tools pass over it; `get()` still reads
+// it, so a chat inside one keeps its context if the owner opens it from search.
+//
 // Layout: <dir>/<id>/project.json + <dir>/<id>/memory.md. The memory is a file,
 // not a field, because the agent edits it with its own file tools.
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -82,6 +89,7 @@ function normalizeProject(raw, id) {
   if (validUploadId(raw?.image)) out.image = raw.image
   if (typeof raw?.provider === 'string' && /^[a-z0-9_-]{1,80}$/i.test(raw.provider)) out.provider = raw.provider
   if (validProjectId(raw?.parentId) && raw.parentId !== id) out.parentId = raw.parentId
+  if (num(raw?.archivedAt)) out.archivedAt = num(raw.archivedAt)
   const ms = normalizeModelSettings(raw?.modelSettings)
   if (ms) out.modelSettings = ms
   return out
@@ -205,7 +213,8 @@ export function createProjectStore({ dir } = {}) {
     return raw ? normalizeProject(raw, id) : null
   }
 
-  async function list() {
+  /** Every project and folder, archived ones included. */
+  async function listAll() {
     let names = []
     try { names = await readdir(dir) } catch { return [] }
     const out = []
@@ -214,6 +223,20 @@ export function createProjectStore({ dir } = {}) {
       if (p) out.push(p)
     }
     return out.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /** The projects and folders in use: not archived, nor inside an archived project. */
+  async function list() {
+    const all = await listAll()
+    return all.filter((p) => !archivedIn(all, p))
+  }
+
+  /** A project or folder that is in use, or null (missing or archived). */
+  async function active(id) {
+    const p = await get(id)
+    if (!p || p.archivedAt) return null
+    if (p.parentId && (await get(p.parentId))?.archivedAt) return null
+    return p
   }
 
   async function create(body = {}) {
@@ -280,22 +303,38 @@ export function createProjectStore({ dir } = {}) {
     await writeFile(memoryPath(id), String(text || '').slice(0, MEMORY_MAX))
   }
 
-  async function remove(id) {
-    const project = await get(id)
-    if (!project) return null
-    await rm(folder(id), { recursive: true, force: true })
-    return project
+  /** Put a project (with its folders) or a folder away. Refused when it is not in use. */
+  async function archive(id) {
+    if (!(await active(id))) throw Object.assign(new Error((await get(id)) ? 'that is already archived' : 'project not found'), { status: (await get(id)) ? 409 : 404 })
+    return update(id, (p) => { p.archivedAt = Date.now() })
   }
 
-  /** Every upload id any project holds, so thread cleanup and the orphan sweep leave them be. */
+  /** Bring an archived project or folder back. A folder whose project is archived waits for the project. */
+  async function restore(id) {
+    const p = await get(id)
+    if (!p) throw Object.assign(new Error('project not found'), { status: 404 })
+    if (!p.archivedAt) throw Object.assign(new Error('that is not archived'), { status: 409 })
+    if (p.parentId && (await get(p.parentId))?.archivedAt) throw Object.assign(new Error('its project is archived; restore the project first'), { status: 409 })
+    return update(id, (x) => { delete x.archivedAt })
+  }
+
+  /** Every upload id any project holds (archived ones too), so thread cleanup and the orphan sweep leave them be. */
   async function fileIds() {
     const ids = new Set()
-    for (const p of await list()) {
+    for (const p of await listAll()) {
       for (const f of p.files) ids.add(f.id)
       if (p.image) ids.add(p.image)
     }
     return ids
   }
 
-  return { list, get, create, patch, update, addFiles, removeFiles, readMemory, writeMemory, memoryPath, remove, fileIds }
+  return { list, listAll, get, active, create, patch, update, addFiles, removeFiles, readMemory, writeMemory, memoryPath, archive, restore, fileIds }
+}
+
+/** Is this project put away: archived itself, or a folder of an archived project? */
+export function archivedIn(projects, p) {
+  if (!p) return false
+  if (p.archivedAt) return true
+  const parent = p.parentId ? projects.find((x) => x.id === p.parentId) : null
+  return !!parent?.archivedAt
 }

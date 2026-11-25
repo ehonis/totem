@@ -1590,9 +1590,21 @@ chat's conclusions reach the next.
   folder chat's parent memory (`readOnlyPaths`). Without it the
   memory write is refused and Haiku still tells the owner it saved the note.
 - **Removing a file** drops it from the project; the bytes go only when no chat message
-  still shows it. **Deleting a project** deletes its files, instructions and memory (and
-  its folders') and moves its chats to Home. Thread deletion and the orphan sweep leave
-  project files alone.
+  still shows it. Thread deletion and the orphan sweep leave project files alone, an
+  archived project's included.
+- **Archiving, never deleting.** Nothing deletes a project or folder. The card's Settings →
+  Archive (`POST /api/chat/projects/<id>/archive`) sets `archivedAt` and puts it away whole:
+  its files, instructions, memory and chats stay as they are, and a project's folders go with
+  it. The store's `list()` leaves archived ones out (`listAll()` has them; `active(id)` is the
+  check every route that files or opens something into a project uses), so the chats panel,
+  pickers, `$`, agents' tools and task folders pass over it, and `GET /api/threads` leaves out
+  the chats inside it (each still opens by its id, from search). Its tasks stay filed there
+  and read as Personal until it is back. Settings → Archive (`GET /api/chat/projects/archived`,
+  `web/src/components/settings/ArchivePane.tsx`, the app's `panes/ArchivePane.tsx`) lists each
+  archived project with its folders, and each folder archived on its own under its project's
+  name; Restore (`/restore`) puts it back where it was. A folder archived on its own inside an
+  archived project stays archived when the project is restored, and cannot be restored before
+  it (409).
 - **A picture instead of an icon.** The card's Settings → Icon also takes an uploaded image or a
   website's own icon (`image`, an upload id; the bridge adds a signed `imageUrl`). "Use
   site icon" has the bridge read the page's `<link rel=icon>`/apple-touch-icon tags, then
@@ -1620,7 +1632,7 @@ never leaks into the project. The owner moves what should be shared up by hand:
   `memoryEntries` in `chat/projects.mjs`, twinned in `web/src/chat/memoryEntries.ts`).
   Picked entries land under the same heading in the parent and leave the folder.
 - **Files:** pick files under the folder card's Files row → "Move up" (to the project).
-- **Deleting a folder** moves its chats up to its project.
+- **Archiving a folder** puts it away with its chats until Settings → Archive restores it.
 
 A chat moves between Home, projects and folders with its menu's "Move to…" (T3 Code's
 project selector); each card names where it lives.
@@ -1656,6 +1668,13 @@ so its settle has no Undo toast; Un-settle in the sheet puts a chat back.
 - **Settle** (✓ on hover, the chat menu, or the leader shortcut `c s`) shelves a chat
   until the owner writes in it. Settling unpins it, ends its snooze, and clears
   "waiting on you". A toast offers Undo. A running chat can't be settled.
+- **A ghost chat never sits on the Settled shelf** (a `temporary` chat: Home only, gone at
+  midnight). Settled any way (by hand, or done from the agent or its task and read), it is
+  listed nowhere (`ghostGone` in `settle.ts`, used by `shelve` and `sidebarLists`, so the app's
+  drawer and sheet too). Settled by hand on the web, it leaves the screen if it was open and
+  is deleted once its "Ghost chat … is gone" toast has passed without Undo (`settleGhost` in
+  `chat/store.ts`); a tab closed before then, or a settle in the app, leaves it hidden until
+  the bridge drops it at midnight, as every ghost chat is (`expiresAt`, `chat/store.mjs`).
 - **Auto-settle**: a chat with no activity for `autoSettleDays` (Settings → Chat, default
   3, 0 = never) is shown as settled at its last activity. This is worked out on read and
   never written, so changing the setting re-sorts every list. Pinned chats, running
@@ -1828,8 +1847,8 @@ are added, edited and sorted.
   side, `data/task-folders.json` (`chat/task-folders.mjs`, `TASK_FOLDERS_FILE`;
   `PUT /api/chat/task-folders/<row id>` with `{ projectId }`, where `null` stores `none`,
   Personal on purpose), and every row arrives from `GET /api/todos/sheet` already filed: its
-  own filing, else the sheet's default folder (`docs/task-sheet.md`). Deleting a folder moves
-  its tasks up to its project, deleting a project makes them Personal, as with its chats.
+  own filing, else the sheet's default folder (`docs/task-sheet.md`). Tasks and rows filed in
+  an archived folder keep their filing and read as Personal until it is restored.
 - **The task card** (`web/src/work/TaskCard.tsx`, `card.ts`), T3 Code's thread card for a
   task: the check circle and title, then one row per setting with a dropdown (Folder, Due,
   Priority, Repeat, Snooze), the description, the chats working on it with New chat, Open
@@ -1906,7 +1925,7 @@ The draft moves to the new place, words and files, and opens there (the "Start i
 chips do the same, `moveDraft` in `web/src/chat/drafts.ts`); one already waiting there stays
 a row of its own (Drafts, below). While a
 file is still uploading or has failed, the places say so and a pick waits. The menu is only
-offered before the first send (an open chat moves with Move to…), never in a temporary chat,
+offered before the first send (an open chat moves with Move to…), never in a ghost chat,
 and reads tasks only while it is open. The composer's + menu has "Put it in a folder or
 task", which types the `$`. ⌘/Ctrl+Shift+O (Settings → Keyboard › Hotkeys) starts a blank
 chat at Home from any page, ready for this (`docs/shortcuts.md` → Hotkeys).
@@ -1932,7 +1951,50 @@ words became the task, so the chat's box starts empty with the task strip above 
 the bridge refuses leaves the words in the box. Leaving for another draft or chat while it
 is being added still adds it, says so, and stays where he went. Files still uploading hold
 it, as they hold a pick. It is offered wherever the `$` places are (a chat not started yet,
-not temporary); the iPhone app has no `$` menu.
+not a ghost chat); the iPhone app has no `$` menu.
+
+#### More `$` actions: `$ghost`, a new folder, `$opus`, `$pin` and `$snooze`
+
+The `$` menu's **Quick actions** are New task, **Ghost chat** and **Pin it**; a bare `$`
+lists the first two between the places and the tasks.
+
+- **`$ghost`** (from `$gh`; also `$temp…` and `$inco…` from four letters) makes the chat a
+  ghost chat: not kept, gone at midnight, and gone at once when settled (Settled and
+  snoozed). The words and files move to the ghost chat's draft at Home, out of any project
+  or task it was being started in (ghost chats live outside projects), as the header's ghost
+  switch does for a chat at Home (`placeDraft(…, ghost)` in `useChatDrafts.ts`). A ghost
+  chat's composer offers no `/` or `$` menu; the header's switch turns it back.
+- **A name nothing has yet** (`$tax-returns`, three letters on) ends the menu with
+  **New project “Tax returns”**, and, in a project or one of its folders, first **New
+  folder “Tax returns”** in that project (one level of folders). The name is the term as
+  typed with hyphens as spaces and a capital if none was typed (`nameFromTerm`). It is
+  offered only when no place matches and no project's name starts with the term
+  (`$harb` is on its way to harbor), never for a price or a word `$` keeps (task, ghost,
+  home, folder, project, …), and after any task the term matches, so Enter still picks the
+  task. Picking it makes the folder (`createProject`, not opened), then moves the draft there
+  as picking a place does, keeping a task it was being started for; a refusal leaves the
+  words in the box, and leaving for another draft meanwhile still makes it and says so.
+- **`$opus`, `$sonnet`, `$codex`, `$gpt-5`…** (two letters on) lists, under **Start on a
+  model**, up to five models whose name or id the term starts or starts a word of, on every
+  account (each account's catalogue is loaded as the model picker loads it, `ensureModels`),
+  and an account whose name or driver it names, as "<account> default". The account's own
+  row leads, then favourites; hidden models never show (`rankModels`). Picking one sets the
+  new chat's model as the picker would (`settingsForPick`, the draft's pick in `ChatView`),
+  takes the `$…` out and leaves the words where they are; the model chip shows it. A
+  matched model also counts as a name taken, so no "New project “Opus”".
+- **`$pin`** (from `$pi`) pins the chat from its first message; **`$snooze`** (from `$sn`;
+  also `$later`, `$remind` from three letters) lists the snooze times (`snoozePresets`:
+  in an hour, three hours, this evening, tomorrow, next week) under **Send it, back later**,
+  and `$snooze-tom` narrows to one. Either shows as a chip above the box (× takes it back)
+  and goes with the first message (`pinned`, `snoozeUntil` on `POST /api/chat`, read only
+  for a chat the bridge hasn't seen, a snooze at most a year off). A snoozed one is sent
+  and answered out of sight: the composer moves on to a fresh new chat with a "Back …"
+  toast (Open now wakes it), the chat waits in Snoozed, and its replies don't wake it
+  early or push (`snoozeHeld`, set by the bridge only; `startChatTurn` and the run's final
+  save in `bridge.mjs`, both stores' `done`). It comes back at its time marked Woke, as any
+  snooze does. A snooze or wake set afterwards is an ordinary one again (`applyMetadata`
+  drops `snoozeHeld`), and his next message clears it. None of these move the draft, so a
+  file still uploading doesn't hold them.
 
 Nothing loads tasks until a chat card with a task, a task strip or the `$` menu is on screen; while one is, the
 store (`web/src/work/state.ts`) reads the board, the sheet feed (its own two-minute cache)

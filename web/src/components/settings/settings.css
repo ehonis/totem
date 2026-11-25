@@ -295,3 +295,8 @@
 /* A skill's command badge stays on one line; the title gives way instead. */
 .stg .skill-command { white-space: nowrap; flex: none; }
 .stg .skill-card strong, .stg .skill-card h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Archive: an archived project's name beside its own icon or picture. */
+.stg .stg-archive-name { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.stg .stg-archive-name .vc-proj-icon { flex: none; color: var(--muted); }
+.stg .stg-archive-name .vc-proj-img { border-radius: 4px; object-fit: cover; }

@@ -14,7 +14,7 @@ import { announceTasks, onTasksChanged } from '../todos/bus'
 import { applyEvent } from './reduce'
 import {
   sendChat, attachRun, stopChat, steerChat, decideApproval, changeQueue, getRuns, getCapabilities, probeCapabilities, listProjects, getProject, createProjectApi, patchProjectApi, projectFaviconApi,
-  deleteProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
+  archiveProjectApi, restoreProjectApi, putProjectMemory, addProjectFilesApi, removeProjectFilesApi, moveProjectMemoryApi, moveProjectFilesApi, type SendArgs, type StreamHandle,
 } from './api'
 import type { QueueAction } from './api'
 import { defaultSettingsFor, fromPreset, normalizeModelSettings, parseModelSpec, visibleModels, wireModel } from './models'
@@ -645,37 +645,34 @@ export async function removeProjectFiles(id: string, ids: string[]) {
   }
 }
 
-/** Delete a project (and its folders) or a folder. Chats move to Home, or a folder's up to its project; returns how many did. */
-export async function deleteProject(id: string) {
+/**
+ * Put a project (with its folders) or a folder away. Nothing is deleted: its files,
+ * memory and chats wait in Settings → Archive, and the lists leave them out until
+ * it is restored. A folder's page goes back to its project; a project's to Home.
+ */
+export async function archiveProject(id: string) {
   const parentId = projectById(id)?.parentId
-  const { movedChats } = await deleteProjectApi(id)
-  if (parentId) {
-    set((s) => {
-      const detail = { ...s.projectDetail }
-      delete detail[id]
-      return {
-        projects: s.projects.filter((p) => p.id !== id),
-        projectDetail: detail,
-        projectId: s.projectId === id ? parentId : s.projectId,
-        threads: s.threads.map((t) => (t.projectId === id ? { ...t, projectId: parentId } : t)),
-      }
-    })
-    loadProject(parentId)
-    loadProjects()
-    return movedChats
-  }
-  const gone = new Set([id, ...foldersOf(state.projects, id).map((f) => f.id)])
+  await archiveProjectApi(id)
+  const gone = new Set([id, ...(parentId ? [] : foldersOf(state.projects, id).map((f) => f.id))])
   set((s) => {
     const detail = { ...s.projectDetail }
     for (const g of gone) delete detail[g]
     return {
       projects: s.projects.filter((p) => !gone.has(p.id)),
       projectDetail: detail,
-      projectId: s.projectId && gone.has(s.projectId) ? null : s.projectId,
-      threads: s.threads.map((t) => (t.projectId && gone.has(t.projectId) ? { ...t, projectId: undefined } : t)),
+      projectId: s.projectId && gone.has(s.projectId) ? (parentId || null) : s.projectId,
+      // Its chats go with it (the bridge's list leaves them out); one answering stays until it ends.
+      threads: s.threads.filter((t) => !t.projectId || !gone.has(t.projectId) || t.id === s.activeId || !!s.runs[t.id]),
     }
   })
-  return movedChats
+  if (parentId) loadProject(parentId)
+  return gone.size
+}
+
+/** Bring an archived project or folder back, with its chats. */
+export async function restoreProject(id: string) {
+  await restoreProjectApi(id)
+  await Promise.all([loadProjects(), syncThreads()])
 }
 
 /** Move a folder's memory entries (by text) up into its project. */
@@ -722,7 +719,25 @@ export function settleThread(id: string) {
   if (!t || state.runs[id]) return
   const before = settleFieldsOf(t)
   writeSettle(id, settleChange(now()))
+  if (t.kind === 'temporary') { settleGhost(id, threadTitle(t), before); return }
   undoable(id, `Settled “${threadTitle(t)}”`, before)
+}
+
+/**
+ * A ghost chat settled is gone: off every list at once (settle.ts ghostGone), off the
+ * screen if it was open, and deleted once the toast's Undo has passed. A tab closed
+ * before then leaves it settled, so hidden, until the bridge drops it at midnight.
+ */
+function settleGhost(id: string, title: string, before: SettleFields) {
+  if (state.activeId === id) set({ activeId: null })
+  pushToast(`Ghost chat “${title}” is gone`, 'info', {
+    duration: 6000,
+    action: { label: 'Undo', onClick: () => writeSettle(id, before) },
+    onExpire: () => {
+      const t = state.threads.find((x) => x.id === id)
+      if (t?.kind === 'temporary' && t.settledOverride === 'settled') void removeThread(id)
+    },
+  })
 }
 
 export function unsettleThread(id: string) {
@@ -1292,7 +1307,7 @@ function handleEvent(threadId: string, e: StreamEvent) {
       patchAssistant(threadId, (m) => ({ ...e.message, parts: e.message.parts?.length ? e.message.parts : m.parts }))
       // The bridge marks it waiting on him too; this shows it without a sync.
       // Not after a compaction (`/compact`, context.ts): housekeeping is nothing to read.
-      if (e.message.status !== 'stopped') patchThread(threadId, (t) => (t.totemId || isCompactionTurn(t.messages[t.messages.findIndex((m) => m.id === e.message.id) - 1]) ? t : { ...t, needsReply: true, ...(t.snoozedUntil && t.snoozedUntil > now() ? { snoozedUntil: now() } : {}) }))
+      if (e.message.status !== 'stopped') patchThread(threadId, (t) => (t.totemId || isCompactionTurn(t.messages[t.messages.findIndex((m) => m.id === e.message.id) - 1]) ? t : { ...t, needsReply: true, ...(t.snoozedUntil && t.snoozedUntil > now() && !t.snoozeHeld ? { snoozedUntil: now() } : {}) }))
       break
     case 'error':
       patchAssistant(threadId, (m) => ({ ...m, status: 'error', error: e.text }))
@@ -1377,6 +1392,10 @@ export interface SendInput {
   taskId?: string
   /** "Compact and send" (context.ts): the chat compacts first and the message waits right behind it. */
   compactFirst?: boolean
+  /** A new chat pinned from the start (`$pin`). */
+  pinned?: boolean
+  /** A new chat out of the way until then (`$snooze`), even once its reply lands. */
+  snoozeUntil?: number
   /** The bridge refused the message before starting it (not a message that never reached it, which stays as "Not sent"). */
   onRefused?: () => void
 }
@@ -1413,10 +1432,13 @@ export function send(input: SendInput): string {
   }
   const contextOff = !!projectId && !thread && !!input.projectContextOff
   const taskId = !thread && input.taskId ? input.taskId : undefined
+  const pinned = !thread && !!input.pinned
+  const snoozeUntil = !thread && input.snoozeUntil && input.snoozeUntil > t0 ? input.snoozeUntil : undefined
   if (!thread) {
     thread = {
       id: threadId, kind, provider: kind === 'regular' ? provider : undefined, modelSettings: settings,
       ...(projectId ? { projectId } : {}), ...(contextOff ? { projectContextOff: true } : {}), ...(taskId ? { taskId } : {}),
+      ...(pinned ? { pinned: true } : {}), ...(snoozeUntil ? { snoozedUntil: snoozeUntil, snoozedAt: t0, snoozeHeld: true } : {}),
       messages: [], createdAt: t0, updatedAt: t0, ...(kind === 'temporary' ? { expiresAt: endOfToday() } : {}),
     }
   }
@@ -1433,6 +1455,8 @@ export function send(input: SendInput): string {
     ...(contextOff ? { projectContextOff: true } : {}),
     ...(taskId ? { taskId } : {}),
     ...(compactFirst ? { compactFirst: true } : {}),
+    ...(pinned ? { pinned: true } : {}),
+    ...(snoozeUntil ? { snoozeUntil } : {}),
   }
   const { messages: _m, needsReply: _n, keepUnread: _k, ...meta } = thread
   // Unsent, Retry and Discard work on what he wrote; a compact-first send carries it in its args.
@@ -1653,7 +1677,7 @@ export function threadTitle(t: ChatThread | null | undefined): string {
   const first = plainRefs(t.firstUserText || (t.summary || t.history?.hasMore ? '' : t.messages.find((m) => m.role === 'user')?.content || '')).replace(/\s+/g, ' ').trim()
     || plainRefs(t.messages.find((m) => m.role === 'user')?.content || '').replace(/\s+/g, ' ').trim()
   if (first) return first.length > 48 ? `${first.slice(0, 48)}…` : first
-  return t.kind === 'temporary' ? 'Temporary chat' : 'New chat'
+  return t.kind === 'temporary' ? 'Ghost chat' : 'New chat'
 }
 
 /** Sidebar buckets, newest first, the way ChatGPT and T3 group history. */

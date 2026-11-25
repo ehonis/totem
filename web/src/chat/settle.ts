@@ -13,6 +13,10 @@
 // it is opened (opening clears the fields). A reply that finishes while the chat
 // is snoozed wakes it early (the bridge sets `snoozedUntil` to that moment).
 //
+// A ghost chat (kind 'temporary': not kept, gone at midnight) never sits on the
+// Settled shelf: settled, it is off every list (`ghostGone`), and Settle by hand
+// deletes it once its Undo has passed (settleThread in store.ts).
+//
 // The bridge stores the fields (chat/store.mjs) and clears them whenever he
 // writes in the chat (wakeOnOwnerMessage there, ownerMessageChange here);
 // everything else about them lives in this file.
@@ -88,6 +92,9 @@ export const offersSettle = (t: ChatThread, shelf: Shelf, live = false) =>
  */
 export const keptOpenId = (activeId: string | null, openedSettled: string | null) => (activeId && activeId !== openedSettled ? activeId : null)
 
+/** A ghost chat that has settled: listed nowhere, and deleted at midnight if not before. */
+export const ghostGone = (t: ChatThread, settled: number) => t.kind === 'temporary' && settled > 0
+
 /** Snoozed wins over settled, as in T3. `waiting` as for settledAt. */
 export function shelfOf(t: ChatThread, now: number, autoDays: number, live = false, open = false, waiting = false): Shelf {
   if (isSnoozed(t, now)) return 'snoozed'
@@ -102,6 +109,7 @@ export function shelve(threads: ChatThread[], now: number, autoDays: number, liv
   for (const t of threads) {
     if (isSnoozed(t, now)) { snoozed.push(t); continue }
     const at = settledAt(t, now, autoDays, live(t.id), t.id === openId, waiting(t))
+    if (ghostGone(t, at)) continue
     if (at) settled.push({ t, at })
     else active.push(t)
   }

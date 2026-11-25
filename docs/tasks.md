@@ -105,8 +105,10 @@ Tasks used to be Personal or Ventures with a venture tag. Migration 013 adds `fo
 named like its venture tag (`folderAdoption` in `todos/folders.mjs`); everything else is
 Personal. `area` and `venture_tag` stay in the database and the API for older clients and
 exports, and nothing draws them. The bridge refuses a `folderId` that is not an existing
-chat project (`UNKNOWN_FOLDER`); a task whose project is deleted later moves to that
-folder's project, or becomes Personal (`refileFolder`). Agents read and set the folder by
+chat project in use (`UNKNOWN_FOLDER`; an archived one counts as gone). A task filed in a
+project or folder that is archived later keeps its `folderId` and reads as Personal until
+Settings → Archive restores it (projects are never deleted; `refileFolder` is left for a
+caller that needs it). Agents read and set the folder by
 name (`totem_get_tasks`, `totem_create_task`, `totem_update_task`; `totem_get_projects`
 lists the folders), and a task an agent creates from a chat in a project lands in that
 project and is linked to the chat (`docs/chat.md` → Linked tasks).

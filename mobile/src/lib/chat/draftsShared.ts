@@ -181,7 +181,7 @@ export function draftRows(s: DraftState, { projects, projectId, shown, listedOnA
     return {
       key: d.key,
       preview: draftPreview(d),
-      place: project?.name || (d.temporary ? 'Temporary chat' : 'Home'),
+      place: project?.name || (d.temporary ? 'Ghost chat' : 'Home'),
       icon: d.place.kind === 'task' ? 'task' : project ? 'project' : d.temporary ? 'temporary' : 'home',
       ...(project ? { project } : {}),
       active: d.key === shown,

@@ -286,7 +286,7 @@ export default function ModelPicker({ provider, settings, onChange, started = fa
         </div>
         {lockedTo && (
           <div className="vc-picker-lock">
-            {`A temporary chat stays on ${providerById(lockedTo)?.name || lockedTo}. Start a regular chat to use another account.`}
+            {`A ghost chat stays on ${providerById(lockedTo)?.name || lockedTo}. Start a regular chat to use another account.`}
           </div>
         )}
         {started && !lockedTo && shown[sel] && shown[sel].provider !== provider && (

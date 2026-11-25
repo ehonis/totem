@@ -322,6 +322,8 @@ export interface ChatThread {
   /** Hidden in Snoozed until then. A past time that's still set means it woke and hasn't been opened since. */
   snoozedUntil?: number
   snoozedAt?: number
+  /** Snoozed as he started it (`$snooze`): its replies don't wake it early. Set by the bridge only. */
+  snoozeHeld?: boolean
   /** The agent marked the request finished (mark_chat_done): Settle is offered, and it settles once read. Cleared by his next message. */
   doneAt?: number
   /**
@@ -381,6 +383,8 @@ export interface Project {
   modelSettings?: Partial<ModelSettings>
   /** A folder: the top-level project it sits in. */
   parentId?: string
+  /** Put away (Settings → Archive); the lists never carry one. */
+  archivedAt?: number
   fileCount: number
   chatCount: number
   createdAt: number
@@ -388,6 +392,14 @@ export interface Project {
   /** Only on a project fetched on its own. */
   files?: ProjectFile[]
   memory?: string
+}
+
+/** Settings → Archive: an archived project with its folders, or an archived folder on its own. */
+export interface ArchivedProject extends Project {
+  archivedAt: number
+  /** A folder's project, by name. */
+  parentName?: string | null
+  folders: { id: string; name: string; icon?: string; archivedAt?: number; chatCount: number }[]
 }
 
 export interface ProviderRow {

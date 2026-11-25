@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  useChat, updateProject, saveProjectMemory, addProjectFiles, removeProjectFiles, deleteProject, openArtifact,
+  useChat, updateProject, saveProjectMemory, addProjectFiles, removeProjectFiles, archiveProject, restoreProject, openArtifact,
   setActive, threadTitle, threadChoice, foldersOf, moveMemoryUp, moveFilesUp, setProjectFavicon,
 } from './store'
 import { memoryEntries } from './memoryEntries'
@@ -12,7 +12,7 @@ import { THREAD_ICONS } from './threadIcons.gen'
 import type { Project, ProjectFile } from './types'
 import { TI, formatBytes, when } from './ui'
 import {
-  IconUpload, IconTrash, IconExternalLink, IconPaperclip, IconFolderUp, IconWorld, IconX,
+  IconUpload, IconTrash, IconArchive, IconExternalLink, IconPaperclip, IconFolderUp, IconWorld, IconX,
   IconBrain, IconChevronDown, IconChevronUp, IconFiles, IconFileText, IconSettings, IconSparkles,
 } from './icons'
 import { usePinFold } from './pins'
@@ -478,16 +478,15 @@ function SettingsSection({ project }: { project: Project }) {
   useEffect(() => setName(project.name), [project.name])
   const parent = useChat((s) => (project.parentId ? s.projects.find((p) => p.id === project.parentId) : undefined))
   const folderCount = useChat((s) => foldersOf(s.projects, project.id).length)
-  const where = parent ? parent.name : 'Home'
-  async function remove() {
-    const chats = project.chatCount
-    const folders = folderCount ? ` Its ${folderCount} folder${folderCount === 1 ? ' is' : 's are'} deleted the same way, and their chats move to Home.` : ''
-    const ok = window.confirm(`Delete “${project.name}”?\n\nIts ${project.fileCount} file${project.fileCount === 1 ? '' : 's'}, instructions and memory are deleted.${chats ? ` Its ${chats} chat${chats === 1 ? '' : 's'} move to ${where}.` : ''}${folders}`)
-    if (!ok) return
+  const kind = parent ? 'folder' : 'project'
+  async function archive() {
     try {
-      const moved = await deleteProject(project.id)
-      pushToast(`Deleted ${project.name}${moved ? `; ${moved} chat${moved === 1 ? '' : 's'} moved to ${where}` : ''}`, 'info')
-    } catch (e: any) { pushError(`Couldn't delete it: ${e.message}`) }
+      await archiveProject(project.id)
+      pushToast(`Archived ${project.name}`, 'info', {
+        duration: 8000,
+        action: { label: 'Undo', onClick: async () => { try { await restoreProject(project.id) } catch (e: any) { pushError(`Couldn't restore it: ${e.message}`) } } },
+      })
+    } catch (e: any) { pushError(`Couldn't archive it: ${e.message}`) }
   }
 
   return (
@@ -511,9 +510,9 @@ function SettingsSection({ project }: { project: Project }) {
         <PictureField project={project} />
       </div>
       <div className="vc-proj-field">
-        <span>Delete {parent ? 'folder' : 'project'}</span>
-        <p className="vc-proj-hint">Deletes the {parent ? 'folder' : 'project'}’s files, instructions and memory{folderCount ? ', and its folders' : ''}. Its chats are kept and move to {where}.{parent ? ` To keep a file or a note, move it to ${parent.name} first.` : ''}</p>
-        <div><button type="button" className="vc-btn sm danger" onClick={remove}><TI icon={IconTrash} size={15} />Delete {parent ? 'folder' : 'project'}</button></div>
+        <span>Archive {kind}</span>
+        <p className="vc-proj-hint">Puts the {kind} away with its chats, files and memory{folderCount ? ', and its folders' : ''}. Bring it back from Settings → Archive. Tasks filed here show under Personal until then.</p>
+        <div><button type="button" className="vc-btn sm" onClick={archive}><TI icon={IconArchive} size={15} />Archive {kind}</button></div>
       </div>
     </div>
   )

@@ -15,17 +15,17 @@ import { readNewTask, type NewTaskFields } from './newTask'
 import NewTaskBar from './NewTaskBar'
 import { folderNames } from '../todos/folders'
 import ProjectIcon from './ProjectIcon'
-import { useChat } from './store'
+import { ensureModels, useChat } from './store'
 import { getWork, subscribeWork } from '../work/state'
 import { dueLabel } from '../work/groups'
 import { micUnavailableReason, openMic, closeMic, recordUntilStopped } from './recorder'
-import type { Attachment, DraftAttachment, Project } from './types'
+import type { Attachment, DraftAttachment, ModelRow, Project, ProviderRow } from './types'
 import type { Answering } from './QuestionsPanel'
-import { TI, useDismiss } from './ui'
+import { TI, ProviderLogo, useDismiss } from './ui'
 import {
   IconArrowUp, IconPlayerStopFilled, IconPlus, IconPaperclip, IconPhoto, IconMicrophone, IconWaveSine,
   IconSparkles, IconX, IconCheck, IconLoader2, IconCornerUpRight, IconPuzzle, IconPlaylistAdd, IconPlayerPlayFilled,
-  IconHome, IconChecklist, IconTable, IconFolder, IconArrowsDiagonalMinimize2, IconArrowsDiagonal, IconSquarePlus,
+  IconHome, IconChecklist, IconTable, IconFolder, IconFolderPlus, IconGhost2, IconPinned, IconZzz, IconArrowsDiagonalMinimize2, IconArrowsDiagonal, IconSquarePlus,
 } from './icons'
 import { formatContextTokens } from './context'
 import type { ChatCommand } from '../studio'
@@ -119,6 +119,12 @@ export interface ComposerProps {
     taskId: string | null
     onPick: (d: Destination, text: string, caret: number) => void
     onNewTask?: (fields: NewTaskFields) => Promise<boolean>
+    /** `$opus`: start on this model (the composer's model chip shows it). */
+    onModel?: (d: Extract<Destination, { kind: 'model' }>) => void
+    /** `$pin`, `$snooze`: how the chat starts, sent with its first message. */
+    onStartOption?: (d: Extract<Destination, { kind: 'pin' | 'snooze' }>) => void
+    /** Pinned by `$pin` already. */
+    pinned?: boolean
     /** The draft on screen: a task line is that draft's, so another draft is a message again. */
     draftKey?: string
   }
@@ -149,11 +155,21 @@ const noSubscribe = () => () => {}
 
 type MenuItem = { kind: 'dest'; d: Destination } | { kind: 'cmd'; c: ChatCommand }
 const itemKey = (it: MenuItem) => (it.kind === 'dest' ? it.d.key : it.c.cmd)
-const itemGroup = (it: MenuItem) => (it.kind === 'dest' ? (it.d.kind === 'new-task' ? 'Make a task' : it.d.kind === 'task' ? 'Start it for a task' : 'Start it in')
+const NO_PROVIDERS: ProviderRow[] = []
+const NO_CATALOGS: Record<string, ModelRow[]> = {}
+const QUICK = new Set(['new-task', 'ghost', 'pin'])
+/** Picks that leave the draft where it is, so a file still uploading doesn't hold them. */
+const STAYS = new Set(['new-task', 'model', 'pin', 'snooze'])
+const itemGroup = (it: MenuItem) => (it.kind === 'dest' ? (QUICK.has(it.d.kind) ? 'Quick actions' : it.d.kind === 'snooze' ? 'Send it, back later' : it.d.kind === 'model' ? 'Start on a model' : it.d.kind === 'new-folder' ? 'Make a folder' : it.d.kind === 'task' ? 'Start it for a task' : 'Start it in')
   : it.c.kind === 'agent' ? 'Your agent skills' : 'Totem skills')
 
-function destDesc(d: Destination, sheetName: string, here?: Project) {
+function destDesc(d: Destination, sheetName: string, here?: Project, forTask = false) {
   if (d.kind === 'new-task') return here ? `Type it here, filed in ${here.name}, then chat about it` : 'Type it here, then start a chat for it'
+  if (d.kind === 'ghost') return here || forTask ? 'Not kept: moves to Home, gone at midnight' : 'Not kept: gone at midnight, or as soon as you settle it'
+  if (d.kind === 'new-folder') return d.parent ? `New folder in ${d.parent.name}, then start the chat in it` : 'New project, then start the chat in it'
+  if (d.kind === 'model') return d.note ? `${d.provider.name} · ${d.note}` : d.provider.name
+  if (d.kind === 'pin') return 'Pinned to the top of your chats once it starts'
+  if (d.kind === 'snooze') return `Sends now; stays in Snoozed until ${d.when}, even once answered`
   if (d.kind === 'home') return 'Chats in no project'
   if (d.kind === 'project') return d.parent ? `Folder in ${d.parent.name}` : 'Project'
   const due = d.task.dueDate ? dueLabel(d.task.dueDate, new Date()) : null
@@ -164,6 +180,11 @@ function destDesc(d: Destination, sheetName: string, here?: Project) {
 function DestIcon({ d }: { d: Destination }) {
   if (d.kind === 'home') return <TI icon={IconHome} size={16} />
   if (d.kind === 'new-task') return <TI icon={IconSquarePlus} size={16} />
+  if (d.kind === 'ghost') return <TI icon={IconGhost2} size={16} />
+  if (d.kind === 'new-folder') return <TI icon={IconFolderPlus} size={16} />
+  if (d.kind === 'model') return <ProviderLogo driver={d.provider.driver} name={d.provider.name} size={16} />
+  if (d.kind === 'pin') return <TI icon={IconPinned} size={16} />
+  if (d.kind === 'snooze') return <TI icon={IconZzz} size={16} />
   if (d.kind === 'project') return d.project.icon || d.project.imageUrl ? <ProjectIcon p={d.project} size={16} /> : <TI icon={IconFolder} size={16} />
   return <TI icon={d.task.kind === 'sheet' ? IconTable : IconChecklist} size={16} />
 }
@@ -540,8 +561,17 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   // `$` in a chat not started yet: where it goes and which task it is for, before the `$` skills.
   const dollar = !!query && query.prefix === '$' && !!destinations
   const work = useSyncExternalStore(dollar ? subscribeWork : noSubscribe, getWork, getWork)
+  const providers = useChat((s) => s.providers) || NO_PROVIDERS
+  const catalogs = useChat((s) => s.models) || NO_CATALOGS
+  const wantModels = dollar && !!destinations?.onModel && query!.term.length >= 2
+  // Every account's models, so `$opus` finds a model on any of them (the picker loads them the same way).
+  useEffect(() => { if (wantModels) for (const p of providers) ensureModels(p.id) }, [wantModels, providers])
+  const accounts = useMemo(() => providers.map((provider) => ({ provider, models: catalogs[provider.id] || [] })), [providers, catalogs])
   const places = dollar && destinations
-    ? rankDestinations({ projects, tasks: work.tasks, projectId: destinations.projectId, taskId: destinations.taskId }, query!.term)
+    ? rankDestinations({
+      projects, tasks: work.tasks, projectId: destinations.projectId, taskId: destinations.taskId,
+      models: destinations.onModel ? accounts : [], startOptions: !!destinations.onStartOption, pinned: destinations.pinned,
+    }, query!.term, value.slice(query!.start + 1, query!.end))
       .filter((d) => d.kind !== 'new-task' || canMakeTask)
     : []
   const items: MenuItem[] = [...places.map((d): MenuItem => ({ kind: 'dest', d })), ...matches.map((c): MenuItem => ({ kind: 'cmd', c }))]
@@ -569,10 +599,15 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
 
   function chooseItem(it: MenuItem) {
     if (it.kind === 'cmd') { chooseCommand(it.c); return }
-    if (!query || !destinations || placeHeld) return
+    if (!query || !destinations) return
+    // Only a move waits for uploads: a model, pin or snooze leaves the files where they are.
+    if (placeHeld && !STAYS.has(it.d.kind)) return
     const { value: next, caret: pos } = stripToken(value, query.start, query.end)
     setDismissed(null)
     if (it.d.kind === 'new-task') { placeCaret(next, pos); startTask(); return }
+    // These change how the chat starts, not where: the words stay in this draft.
+    if (it.d.kind === 'model') { placeCaret(next, pos); destinations.onModel?.(it.d); return }
+    if (it.d.kind === 'pin' || it.d.kind === 'snooze') { placeCaret(next, pos); destinations.onStartOption?.(it.d); return }
     destinations.onPick(it.d, next, pos)
   }
 
@@ -715,14 +750,14 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
             return (
               <React.Fragment key={itemKey(it)}>
                 {group !== prev && <div className="vc-menu-label">{group}</div>}
-                <button type="button" role="option" aria-selected={i === sel} aria-disabled={it.kind === 'dest' && it.d.kind !== 'new-task' && !!placeHeld} className={`vc-cmd ${i === sel ? 'active' : ''}`}
+                <button type="button" role="option" aria-selected={i === sel} aria-disabled={it.kind === 'dest' && !STAYS.has(it.d.kind) && !!placeHeld} className={`vc-cmd ${i === sel ? 'active' : ''}`}
                   onMouseDown={(e) => { e.preventDefault(); chooseItem(it) }} onMouseEnter={() => setSel(i)}>
                   {it.kind === 'dest' ? (
                     <>
                       <span className="vc-cmd-icon"><DestIcon d={it.d} /></span>
                       <span className="vc-cmd-text">
-                        <span className="vc-cmd-place">{it.d.name}</span>
-                        <span className="vc-cmd-desc">{(it.d.kind !== 'new-task' && placeHeld) || destDesc(it.d, work.sheetName, here)}</span>
+                        <span className="vc-cmd-place">{it.d.kind === 'new-folder' ? `New ${it.d.parent ? 'folder' : 'project'} “${it.d.name}”` : it.d.kind === 'snooze' ? `Snooze · ${it.d.name}` : it.d.name}</span>
+                        <span className="vc-cmd-desc">{(!STAYS.has(it.d.kind) && placeHeld) || destDesc(it.d, work.sheetName, here, !!destinations?.taskId)}</span>
                       </span>
                     </>
                   ) : (

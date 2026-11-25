@@ -118,6 +118,20 @@ describe('shelves', () => {
 
 })
 
+describe('ghost chats', () => {
+  it('are on no shelf once settled, by hand or on their own; in play they list as usual', () => {
+    const ghost = (id: string, extra: Partial<ChatThread> = {}) => chat(id, { kind: 'temporary', expiresAt: NOW + HOUR_MS, ...extra })
+    const { active, settled } = shelve([
+      ghost('by-hand', { settledOverride: 'settled', settledAt: NOW }),
+      ghost('done', { doneAt: NOW - 60_000 }),
+      ghost('live'),
+      chat('kept', { settledOverride: 'settled', settledAt: NOW }),
+    ], NOW, 3)
+    expect(active.map((t) => t.id)).toEqual(['live'])
+    expect(settled.map((t) => t.id)).toEqual(['kept'])
+  })
+})
+
 describe('writing in a chat', () => {
   const written = (t: ChatThread) => ({ ...t, ...ownerMessageChange(t, NOW) })
   it('brings a settled chat back to the top', () => {
