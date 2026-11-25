@@ -50,6 +50,7 @@ import {
   IconAlertCircle, IconCopy, IconCheck, IconRefresh, IconFileText, IconFileTypePdf, IconClipboardText,
   IconBolt, IconDeviceDesktop, IconMicrophone, IconX, IconArrowForwardUp, IconWorld, IconPencil,
 } from './icons'
+import { holdReload } from '../../shell/otaUpdates'
 
 // A pasted URL has no spaces to wrap at; iOS breaks it anywhere already, the web preview needs telling.
 const WRAP = Platform.OS === 'web' ? ({ wordBreak: 'break-word', overflowWrap: 'anywhere' } as any) : undefined
@@ -234,6 +235,9 @@ export const UserMessage = React.memo(function UserMessage({ m, canEdit, onEdit,
   // The edit box is plain text: each attached file shows as [name] and keeps its reference on save.
   const editable = useMemo(() => editableRefs(m.content), [m.content])
   const [draft, setDraft] = useState(editable.text)
+  // An edit not yet sent holds off an over-the-air reload (shell/otaUpdates.tsx).
+  const rewriting = editing && draft !== editable.text
+  useEffect(() => (rewriting ? holdReload() : undefined), [rewriting])
   const [lightbox, setLightbox] = useState<{ uri: string; headers?: Record<string, string> } | null>(null)
   const [copied, setCopied] = useState(false)
   const badge = m.mode ? MODE_BADGE[m.mode] : null

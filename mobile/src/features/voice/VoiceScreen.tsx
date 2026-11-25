@@ -25,6 +25,7 @@ import { RealtimeVoice } from './realtime'
 import { MicError, type RtPhase, type VoiceStatus } from './types'
 import { Orb, type OrbPhase } from './Orb'
 import { handToDictation } from './handoff'
+import { holdReload } from '../../shell/otaUpdates'
 
 const RT_CAPTION: Record<RtPhase, string> = {
   connecting: 'Connecting…',
@@ -177,6 +178,8 @@ function RealtimeVoiceMode({ threadId, kind, status }: { threadId: string | null
 /** Voice mode: realtime when the bridge has a key (and it isn't turned off), dictation otherwise. */
 export default function VoiceScreen() {
   useKeepAwake('totem-voice')
+  // A call in progress is never cut off by an over-the-air update (shell/otaUpdates.tsx).
+  useEffect(() => holdReload(), [])
   const params = useLocalSearchParams<{ threadId?: string; kind?: string }>()
   const threadId = params.threadId || null
   const kind = params.kind === 'temporary' ? 'temporary' : 'regular'

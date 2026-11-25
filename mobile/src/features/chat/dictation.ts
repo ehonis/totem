@@ -8,6 +8,7 @@ import {
 } from 'expo-audio'
 import { pushError } from '../../lib/toast'
 import { transcribeFile } from './upload'
+import { holdReload } from '../../shell/otaUpdates'
 
 export type DictationState = null | { state: 'recording' | 'transcribing'; startedAt: number; level: number }
 
@@ -17,6 +18,8 @@ export function useDictation(onText: (text: string) => void) {
   const [phase, setPhase] = useState<null | { state: 'recording' | 'transcribing'; startedAt: number }>(null)
   const onTextRef = useRef(onText)
   onTextRef.current = onText
+  // A clip being recorded or transcribed holds off an over-the-air reload (shell/otaUpdates.tsx).
+  useEffect(() => (phase ? holdReload() : undefined), [phase !== null]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const start = useCallback(async () => {
     try {

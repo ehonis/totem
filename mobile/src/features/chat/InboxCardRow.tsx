@@ -20,6 +20,7 @@ import { success, tap } from '../../ui/haptics'
 import { alpha, colors } from '../../theme'
 import { TI, vc } from './ui'
 import { IconArrowBackUp, IconChevronRight, IconShield, IconShieldCheck, IconShieldX } from './icons'
+import { holdReload } from '../../shell/otaUpdates'
 
 // One listing shared by every card on screen, refreshed when it is a few seconds old.
 let listing: { at: number; items: Promise<any[]> } | null = null
@@ -48,6 +49,9 @@ export default function InboxCardRow({ part, messageId }: { part: InboxPart; mes
   const [missing, setMissing] = useState(false)
   const [open, setOpen] = useState(false)
   const [note, setNote] = useState('')
+  // A note not yet sent holds off an over-the-air reload (shell/otaUpdates.tsx).
+  const noted = pending && note.trim().length > 0
+  useEffect(() => (noted ? holdReload() : undefined), [noted])
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {

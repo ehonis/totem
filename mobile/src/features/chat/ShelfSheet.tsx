@@ -1,4 +1,5 @@
-// Sheet detents: [0.75, 1] (formSheet, grabber, corner radius 22; registered in src/app/_layout.tsx).
+// Sheet detents: [0.75, 1] (formSheet, grabber; liquid glass on iOS 26, else solid with
+// corner radius 22; registered in src/app/_layout.tsx as glassSheet).
 //
 // The drawer list's parked chats: Snoozed or Settled, switched at the top, for the
 // scope the list shows (every chat, Home's, or one project's with its folders; one
@@ -19,6 +20,7 @@ import type { ChatThread } from '../../lib/chat/types'
 import { colors } from '../../theme'
 import { T } from '../../ui/Text'
 import { Segmented } from '../../ui/kit'
+import { GLASS } from '../../ui/glass'
 import { closeDrawer } from '../../shell/drawerGesture'
 import { openChat } from '../../shell/nav'
 import { useNow } from './threadOps'
@@ -86,7 +88,7 @@ export default function ShelfSheet() {
         ref={list}
         data={rows}
         keyExtractor={(t) => t.id}
-        renderItem={({ item }) => <ThreadItem t={item} shelf={kind} now={now} active={item.id === activeId} live={!!runs[item.id]} onOpen={open} beforeDiscard={() => router.back()} place={{ project: null, label: placeLabel(item, projects) || 'Home' }} />}
+        renderItem={({ item }) => <ThreadItem t={item} glass={GLASS} shelf={kind} now={now} active={item.id === activeId} live={!!runs[item.id]} onOpen={open} beforeDiscard={() => router.back()} place={{ project: null, label: placeLabel(item, projects) || 'Home' }} />}
         onScrollToIndexFailed={({ index, averageItemLength }) => list.current?.scrollToOffset({ offset: index * averageItemLength, animated: false })}
         contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: insets.bottom + 16 }}
         ListEmptyComponent={<T size={14} muted style={st.empty}>{kind === 'snoozed' ? 'Nothing snoozed here.' : 'Nothing settled here.'}</T>}
@@ -97,7 +99,8 @@ export default function ShelfSheet() {
 }
 
 const st = StyleSheet.create({
-  sheet: { flex: 1, backgroundColor: colors.bg2 },
+  // Clear over the system's glass sheet; solid without it.
+  sheet: { flex: 1, backgroundColor: GLASS ? 'transparent' : colors.bg2 },
   head: { paddingTop: 22, paddingBottom: 12, paddingHorizontal: 20 },
   note: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 6 },
   empty: { paddingVertical: 28, textAlign: 'center' },

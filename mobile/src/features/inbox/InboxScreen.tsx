@@ -23,6 +23,7 @@ import { T } from '../../ui/Text'
 import { Empty, IconBtn, Press, ViewHead } from '../../ui/kit'
 import { confirm } from '../../ui/menu'
 import { success, tap, warn } from '../../ui/haptics'
+import { holdReload } from '../../shell/otaUpdates'
 
 // Per-kind glyph for the destination chip, so "where is this going" reads at a
 // glance. Unknown kinds (future sources) fall back to the generic inbox icon.
@@ -61,6 +62,9 @@ export function LinkedinCard({ card }: { card: { action: string; url: string; au
   const [draft, setDraft] = useState(card.draft || '')
   const [copied, setCopied] = useState(false)
   useEffect(() => { setDraft(card.draft || '') }, [card.draft])
+  // His edits to the draft live only here: they hold off an over-the-air reload (shell/otaUpdates.tsx).
+  const edited = draft !== (card.draft || '')
+  useEffect(() => (edited ? holdReload() : undefined), [edited])
   const what = ({ like: 'Like this post', repost: 'Repost this', comment: 'Comment on this post', reply: 'Reply', connect: 'Send a connection request' } as Record<string, string>)[card.action] || card.action
   const copy = async () => {
     try {

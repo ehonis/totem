@@ -5,7 +5,7 @@
 //
 // The panel owns the recorder, so the once-a-second clock re-renders this card
 // and not the whole list of entries under it.
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Linking, StyleSheet, TextInput, View } from 'react-native'
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated'
 import { LinearGradient } from 'expo-linear-gradient'
@@ -21,6 +21,7 @@ import { fmtClock } from '../../lib/journal/format'
 import { useRecorder, type RecorderResult } from './useRecorder'
 import Waveform from './Waveform'
 import { AudioBar, Spin } from './bits'
+import { holdReload } from '../../shell/otaUpdates'
 
 interface RecorderPanelProps {
   engineReady: boolean
@@ -37,6 +38,9 @@ export default function RecorderPanel({ engineReady, delayMinutes, onSave, onSav
   const [saving, setSaving] = useState(false)
   const [typing, setTyping] = useState(false)
   const [text, setText] = useState('')
+  // A typed entry not yet saved holds off an over-the-air reload (shell/otaUpdates.tsx).
+  const unsaved = text.trim().length > 0
+  useEffect(() => (unsaved ? holdReload() : undefined), [unsaved])
   const halo = useSharedValue(0)
   const haloStyle = useAnimatedStyle(() => ({
     opacity: withTiming(live ? 1 : 0, { duration: 150 }),

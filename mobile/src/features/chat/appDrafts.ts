@@ -15,9 +15,23 @@ import { getBaseUrl, subscribeConnection } from '../../lib/connection'
 import { pushError } from '../../lib/toast'
 import { taskHome } from '../work/state'
 import { showUndo } from '../work/undoDock'
+import { onBeforeReload } from '../../shell/otaUpdates'
+
+// Whether the drafts reached storage, for the reload into an update (below): any read or
+// write that throws counts as not saved, and the save's last step is the drafts' own write.
+let wrote = false
+const storage = {
+  getItem: (k: string) => {
+    try { return localStorage.getItem(k) } catch (e) { wrote = false; throw e }
+  },
+  setItem: (k: string, v: string) => {
+    try { localStorage.setItem(k, v); wrote = true } catch (e) { wrote = false; throw e }
+  },
+  removeItem: (k: string) => localStorage.removeItem(k),
+}
 
 export const drafts = createAppDrafts({
-  storage: localStorage,
+  storage,
   appState: AppState,
   bridge: getBaseUrl,
   onBridgeChange: (fn) => { subscribeConnection(fn) },
@@ -25,6 +39,11 @@ export const drafts = createAppDrafts({
   mint: newId,
   onSaveError: () => pushError('This phone won’t save drafts right now. They stay until the app is closed.'),
 })
+
+// A reload into an update (shell/otaUpdates.tsx) saves the drafts first: a keystroke still
+// waiting on the save timer would otherwise be lost.
+// A failed write calls the reload off, so the words stay in memory until they can be saved.
+onBeforeReload(() => { wrote = false; drafts.flush(); return wrote })
 
 export const useDraftState = () => useSyncExternalStore(drafts.subscribe, drafts.get, drafts.get)
 export const useHasDraft = (key: string) => useSyncExternalStore(drafts.subscribe, () => hasContent(drafts.get().drafts[key]), () => false)

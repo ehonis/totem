@@ -16,6 +16,7 @@ import { success, tap } from '../../ui/haptics'
 import { alpha, colors } from '../../theme'
 import { TI, vc } from './ui'
 import { IconCheck, IconChevronDown, IconChevronUp, IconMessageCircleQuestion, IconX } from './icons'
+import { holdReload } from '../../shell/otaUpdates'
 
 const ADVANCE_MS = 200
 
@@ -54,6 +55,9 @@ export function useQuestionFlow({ threadId, pending, sendText, displace }: {
   const last = index === questions.length - 1
   const draft = q ? flow.drafts[q.id] : undefined
   const answered = q ? draftAnswer(q, draft).length > 0 : false
+  // Answers not yet sent hold off an over-the-air reload (shell/otaUpdates.tsx).
+  const unsent = questions.some((x) => draftAnswer(x, flow.drafts[x.id]).length > 0)
+  useEffect(() => (unsent ? holdReload() : undefined), [unsent])
 
   const setDraft = useCallback((id: string, d: Draft) => setFlow((f) => ({ ...f, drafts: { ...f.drafts, [id]: d } })), [])
 

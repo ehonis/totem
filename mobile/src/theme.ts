@@ -48,8 +48,6 @@ const base = {
   // Shell (shell.css) shades that are not tokens on the web.
   rail: '#0b0c10',
   drawerOn: '#252a37',
-  fabVoice: '#2a2f3c',
-  fabVoiceBorder: '#3a4152',
   // Toast fills (ToastHost.tsx): white text clears 5.4:1 on each.
   toastError: '#c42d4c',
   toastSuccess: '#1f7a34',
