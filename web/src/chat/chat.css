@@ -871,8 +871,11 @@ button.vc-ref:focus-visible { outline: 2px solid currentColor; outline-offset: 1
 /* Read, and not waiting on anything: it recedes, as T3's read threads do. */
 .vc-thread.sb-card.receded:not(:hover):not(:focus-within):not(.menu-open) .sb-title-line { font-weight: 400; color: color-mix(in srgb, var(--text) 74%, transparent); }
 .sb-meta { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 21px; }
-.sb-meta-gap { flex: 1; }
-.sb-meta .vc-thread-done { margin-left: auto; height: 20px; }
+/* Settle on a card: at the title line's right end, over the card's button (a button can't
+   hold one). It stays on hover, so the card never changes height under the pointer. */
+.sb-card.has-settle .sb-title-line { padding-right: 66px; }
+.sb-card .vc-thread-done { position: absolute; top: 26px; right: 8px; height: 20px; margin: 0; }
+.vc-thread.sb-card:hover .vc-thread-done, .vc-thread.sb-card.menu-open .vc-thread-done { display: inline-flex; }
 /* The hover actions and "…" sit over the first line's right end, where the status was. */
 .sb-card .vc-thread-actions { position: absolute; top: 3px; right: 32px; }
 .sb-card .vc-thread-more { position: absolute; top: 2px; right: 2px; width: 26px; height: 26px; margin: 0; }

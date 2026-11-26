@@ -698,6 +698,8 @@ export default function ChatView({ onAuthError, visible = true, onOpenMenu, pane
       placeholder={waitingApproval ? DECLINE_PLACEHOLDER : !active && draftTaskId ? 'What should we do about it?' : temporary ? 'Ghost chat — gone at midnight' : project && empty ? `New chat in ${project.name}` : 'Ask Totem anything'}
       allowCommands={!temporary}
       destinations={active ? undefined : destinations}
+      // `$regular` / `$back` / `$keep`: out of a ghost chat, before it starts or after.
+      ghost={temporary ? { started: !!active, onKeep: active ? () => keepThread(active.id) : undefined } : undefined}
       maxUploadBytes={caps?.maxUploadBytes}
       onAuthError={onAuthError}
     />

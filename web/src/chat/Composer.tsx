@@ -10,7 +10,7 @@ import { insertMention, mentionAtCaret } from './mentions'
 import { attachmentRef, editableRefs, formatSize, refIds, splitRefs } from './refs'
 import type { ChipInfo } from './RefChip'
 import type { PromptEditorHandle } from './editor/PromptEditor'
-import { rankDestinations, stripToken, type Destination } from './destinations'
+import { ghostDestinations, rankDestinations, stripToken, type Destination } from './destinations'
 import { readNewTask, type NewTaskFields } from './newTask'
 import NewTaskBar from './NewTaskBar'
 import { folderNames } from '../todos/folders'
@@ -25,7 +25,7 @@ import { TI, ProviderLogo, useDismiss } from './ui'
 import {
   IconArrowUp, IconPlayerStopFilled, IconPlus, IconPaperclip, IconPhoto, IconMicrophone, IconWaveSine,
   IconSparkles, IconX, IconCheck, IconLoader2, IconCornerUpRight, IconPuzzle, IconPlaylistAdd, IconPlayerPlayFilled,
-  IconHome, IconChecklist, IconTable, IconFolder, IconFolderPlus, IconGhost2, IconPinned, IconZzz, IconArrowsDiagonalMinimize2, IconArrowsDiagonal, IconSquarePlus,
+  IconHome, IconChecklist, IconTable, IconFolder, IconFolderPlus, IconGhost2, IconGhostOff, IconPinned, IconZzz, IconArrowsDiagonalMinimize2, IconArrowsDiagonal, IconSquarePlus,
 } from './icons'
 import { formatContextTokens } from './context'
 import type { ChatCommand } from '../studio'
@@ -128,6 +128,12 @@ export interface ComposerProps {
     /** The draft on screen: a task line is that draft's, so another draft is a message again. */
     draftKey?: string
   }
+  /**
+   * A ghost chat. Its `/` and `$` menus are off (`allowCommands` false) but for one
+   * row, the way out: `$regular`, `$back`, `$keep`. Not started yet, it goes through
+   * `destinations.onPick` (the words move to Home's regular draft); started, `onKeep`.
+   */
+  ghost?: { started: boolean; onKeep?: () => void }
 }
 
 const coarse = () => window.matchMedia?.('(pointer: coarse)').matches
@@ -157,15 +163,17 @@ type MenuItem = { kind: 'dest'; d: Destination } | { kind: 'cmd'; c: ChatCommand
 const itemKey = (it: MenuItem) => (it.kind === 'dest' ? it.d.key : it.c.cmd)
 const NO_PROVIDERS: ProviderRow[] = []
 const NO_CATALOGS: Record<string, ModelRow[]> = {}
-const QUICK = new Set(['new-task', 'ghost', 'pin'])
+const QUICK = new Set(['new-task', 'ghost', 'leave-ghost', 'pin'])
 /** Picks that leave the draft where it is, so a file still uploading doesn't hold them. */
 const STAYS = new Set(['new-task', 'model', 'pin', 'snooze'])
+const stays = (d: Destination) => STAYS.has(d.kind) || (d.kind === 'leave-ghost' && d.started)
 const itemGroup = (it: MenuItem) => (it.kind === 'dest' ? (QUICK.has(it.d.kind) ? 'Quick actions' : it.d.kind === 'snooze' ? 'Send it, back later' : it.d.kind === 'model' ? 'Start on a model' : it.d.kind === 'new-folder' ? 'Make a folder' : it.d.kind === 'task' ? 'Start it for a task' : 'Start it in')
   : it.c.kind === 'agent' ? 'Your agent skills' : 'Totem skills')
 
 function destDesc(d: Destination, sheetName: string, here?: Project, forTask = false) {
   if (d.kind === 'new-task') return here ? `Type it here, filed in ${here.name}, then chat about it` : 'Type it here, then start a chat for it'
   if (d.kind === 'ghost') return here || forTask ? 'Not kept: moves to Home, gone at midnight' : 'Not kept: gone at midnight, or as soon as you settle it'
+  if (d.kind === 'leave-ghost') return d.started ? 'Kept after midnight, like any other chat' : 'Kept: an ordinary chat at Home'
   if (d.kind === 'new-folder') return d.parent ? `New folder in ${d.parent.name}, then start the chat in it` : 'New project, then start the chat in it'
   if (d.kind === 'model') return d.note ? `${d.provider.name} · ${d.note}` : d.provider.name
   if (d.kind === 'pin') return 'Pinned to the top of your chats once it starts'
@@ -181,6 +189,7 @@ function DestIcon({ d }: { d: Destination }) {
   if (d.kind === 'home') return <TI icon={IconHome} size={16} />
   if (d.kind === 'new-task') return <TI icon={IconSquarePlus} size={16} />
   if (d.kind === 'ghost') return <TI icon={IconGhost2} size={16} />
+  if (d.kind === 'leave-ghost') return <TI icon={IconGhostOff} size={16} />
   if (d.kind === 'new-folder') return <TI icon={IconFolderPlus} size={16} />
   if (d.kind === 'model') return <ProviderLogo driver={d.provider.driver} name={d.provider.name} size={16} />
   if (d.kind === 'pin') return <TI icon={IconPinned} size={16} />
@@ -273,7 +282,7 @@ const PlainBox = forwardRef<HTMLTextAreaElement, {
 })
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(props, ref) {
-  const { value, onChange, onAttachmentsChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, rightSlot, leftSlot, compactSend, answering, above, destinations } = props
+  const { value, onChange, onAttachmentsChange, onSend, onStop, onSteer, onQueue, followUp = 'queue', queueEdit, onResume, onVoice, busy, placeholder: idlePlaceholder = 'Ask Totem anything', autoFocus, compact, allowCommands = true, maxUploadBytes = 25 * 1024 * 1024, rightSlot, leftSlot, compactSend, answering, above, destinations, ghost } = props
   const ed = useRef<PromptEditorHandle>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const photoInput = useRef<HTMLInputElement>(null)
@@ -553,13 +562,16 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   // A message that is only a Totem command still runs that skill on its own.
   const catalog = useSyncExternalStore(subscribeChatCommands, getChatCommands, getChatCommands)
   const known = useMentionSet()
-  const token = allowCommands && !dictation && !inTask ? mentionAtCaret(value, caret) : null
+  // A ghost chat reads only `$`, for its way out (no skills, no places).
+  const ghostOnly = !allowCommands && !!ghost
+  const rawToken = (allowCommands || ghostOnly) && !dictation && !inTask ? mentionAtCaret(value, caret) : null
+  const token = rawToken && (!ghostOnly || rawToken.prefix === '$') ? rawToken : null
   const query = token && token.start !== dismissed ? token : null
   // Only the token in an otherwise empty box can take a fill-mode skill's prefix.
   const alone = !!query && query.start === 0 && !value.slice(query.end).trim()
-  const matches: ChatCommand[] = query ? rankCommands(catalog, query.prefix, query.term, alone) : []
+  const matches: ChatCommand[] = query && !ghostOnly ? rankCommands(catalog, query.prefix, query.term, alone) : []
   // `$` in a chat not started yet: where it goes and which task it is for, before the `$` skills.
-  const dollar = !!query && query.prefix === '$' && !!destinations
+  const dollar = !!query && query.prefix === '$' && !!destinations && !ghostOnly
   const work = useSyncExternalStore(dollar ? subscribeWork : noSubscribe, getWork, getWork)
   const providers = useChat((s) => s.providers) || NO_PROVIDERS
   const catalogs = useChat((s) => s.models) || NO_CATALOGS
@@ -567,7 +579,9 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
   // Every account's models, so `$opus` finds a model on any of them (the picker loads them the same way).
   useEffect(() => { if (wantModels) for (const p of providers) ensureModels(p.id) }, [wantModels, providers])
   const accounts = useMemo(() => providers.map((provider) => ({ provider, models: catalogs[provider.id] || [] })), [providers, catalogs])
-  const places = dollar && destinations
+  const places = ghostOnly && query?.prefix === '$'
+    ? ghostDestinations(query.term, ghost!.started)
+    : dollar && destinations
     ? rankDestinations({
       projects, tasks: work.tasks, projectId: destinations.projectId, taskId: destinations.taskId,
       models: destinations.onModel ? accounts : [], startOptions: !!destinations.onStartOption, pinned: destinations.pinned,
@@ -599,9 +613,17 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
 
   function chooseItem(it: MenuItem) {
     if (it.kind === 'cmd') { chooseCommand(it.c); return }
-    if (!query || !destinations) return
-    // Only a move waits for uploads: a model, pin or snooze leaves the files where they are.
-    if (placeHeld && !STAYS.has(it.d.kind)) return
+    if (!query) return
+    // Only a move waits for uploads: a model, pin, snooze or Keep leaves the files where they are.
+    if (placeHeld && !stays(it.d)) return
+    if (it.d.kind === 'leave-ghost' && it.d.started) {
+      const { value: next, caret: pos } = stripToken(value, query.start, query.end)
+      setDismissed(null)
+      placeCaret(next, pos)
+      ghost?.onKeep?.()
+      return
+    }
+    if (!destinations) return
     const { value: next, caret: pos } = stripToken(value, query.start, query.end)
     setDismissed(null)
     if (it.d.kind === 'new-task') { placeCaret(next, pos); startTask(); return }
@@ -757,7 +779,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(pro
                       <span className="vc-cmd-icon"><DestIcon d={it.d} /></span>
                       <span className="vc-cmd-text">
                         <span className="vc-cmd-place">{it.d.kind === 'new-folder' ? `New ${it.d.parent ? 'folder' : 'project'} “${it.d.name}”` : it.d.kind === 'snooze' ? `Snooze · ${it.d.name}` : it.d.name}</span>
-                        <span className="vc-cmd-desc">{(!STAYS.has(it.d.kind) && placeHeld) || destDesc(it.d, work.sheetName, here, !!destinations?.taskId)}</span>
+                        <span className="vc-cmd-desc">{(!stays(it.d) && placeHeld) || destDesc(it.d, work.sheetName, here, !!destinations?.taskId)}</span>
                       </span>
                     </>
                   ) : (

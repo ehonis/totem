@@ -139,13 +139,14 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
         : woke ? <span className="sb-status sb-woke" title={`Woke ${wakeDescription(wokeAt(t, now), now)}`}><TI icon={IconAlarmOff} size={12} />Woke</span>
           : unread && !offersSettle(t, shelf, live) ? <span className="sb-status sb-done" title="Finished: waiting for you to read it"><TI icon={IconCircleCheck} size={12} />Done</span>
             : <span className="sb-status sb-time" title={new Date(activeAt(t, now)).toLocaleString()}>{ago(activeAt(t, now), now)}</span>
-  const settleChip = offersSettle(t, shelf, live) && (
+  const offered = offersSettle(t, shelf, live)
+  const settleChip = offered && (
     <button type="button" className="vc-thread-done" onClick={stop(() => settleThread(t.id))} aria-label={`Settle ${title}`} title="Done: settles by itself once you've read it">
       <TI icon={IconCheck} size={12} />Settle
     </button>
   )
   return (
-    <div ref={setRow} className={`vc-thread shelf-${shelf} ${card ? 'sb-card' : ''} ${active ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''} ${unread || woke ? 'waiting' : ''} ${card && !active && !unread && !woke && !needs ? 'receded' : ''}`}>
+    <div ref={setRow} className={`vc-thread shelf-${shelf} ${card ? 'sb-card' : ''} ${card && offered ? 'has-settle' : ''} ${active ? 'active' : ''} ${menu || snoozing ? 'menu-open' : ''} ${unread || woke ? 'waiting' : ''} ${card && !active && !unread && !woke && !needs ? 'receded' : ''}`}>
       {card ? (
         <button type="button" className="vc-thread-main sb-card-main" onClick={() => onOpen(t.id)} title={place?.label ? `${title}\n${place.label}` : title}>
           <span className="sb-line sb-place">
@@ -179,18 +180,15 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
         </button>
       )}
       {/* The chat's task, as T3 Code shows a thread's pull request: under the title, one click to its card. */}
-      {card && (t.taskId || settleChip) && (
+      {card && t.taskId && (
         <div className="sb-meta">
-          {t.taskId ? <TaskBadge taskRef={t.taskId} /> : <span className="sb-meta-gap" />}
-          {settleChip}
+          <TaskBadge taskRef={t.taskId} />
         </div>
       )}
-      {/* The agent called the request finished (mark_chat_done): Settle in plain sight. */}
-      {!card && offersSettle(t, shelf, live) && (
-        <button type="button" className="vc-thread-done" onClick={stop(() => settleThread(t.id))} aria-label={`Settle ${title}`} title="Done: settles by itself once you've read it">
-          <TI icon={IconCheck} size={12} />Settle
-        </button>
-      )}
+      {/* The agent called the request finished (mark_chat_done): Settle in plain sight.
+          On a card it sits at the end of the title line (over it, since the card is a button)
+          and stays put on hover, standing in for the hover actions' own Settle. */}
+      {settleChip}
       <div className="vc-thread-actions">
         {unsent && (
           <button type="button" className="vc-thread-act" aria-label={`Discard draft in ${title}`} title="Discard draft" onClick={(e) => {
@@ -208,9 +206,11 @@ export function ThreadItem({ t, active, live, onOpen, shelf = 'active', now = Da
             <button type="button" className="vc-thread-act" onClick={stop(() => { setMenu(false); setSnoozing((v) => !v) })} aria-label={`Snooze ${title}`} title="Snooze">
               <TI icon={IconClock} size={15} />
             </button>
-            <button type="button" className="vc-thread-act" onClick={stop(() => settleThread(t.id))} disabled={live} aria-label={`Settle ${title}`} title={live ? 'Settle once the reply finishes' : 'Settle'}>
-              <TI icon={IconCheck} size={15} />
-            </button>
+            {!(card && offered) && (
+              <button type="button" className="vc-thread-act" onClick={stop(() => settleThread(t.id))} disabled={live} aria-label={`Settle ${title}`} title={live ? 'Settle once the reply finishes' : 'Settle'}>
+                <TI icon={IconCheck} size={15} />
+              </button>
+            )}
           </>
         )}
         {shelf === 'snoozed' && (

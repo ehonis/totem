@@ -48,6 +48,7 @@ export { default as IconEdit } from '@tabler/icons-react/dist/esm/icons/IconEdit
 export { default as IconLayoutSidebar } from '@tabler/icons-react/dist/esm/icons/IconLayoutSidebar.mjs'
 export { default as IconPinned } from '@tabler/icons-react/dist/esm/icons/IconPinned.mjs'
 export { default as IconGhost2 } from '@tabler/icons-react/dist/esm/icons/IconGhost2.mjs'
+export { default as IconGhostOff } from '@tabler/icons-react/dist/esm/icons/IconGhostOff.mjs'
 export { default as IconPuzzle } from '@tabler/icons-react/dist/esm/icons/IconPuzzle.mjs'
 export { default as IconMessageCircleQuestion } from '@tabler/icons-react/dist/esm/icons/IconMessageCircleQuestion.mjs'
 export { default as IconBolt } from '@tabler/icons-react/dist/esm/icons/IconBolt.mjs'
