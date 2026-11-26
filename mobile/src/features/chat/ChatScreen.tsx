@@ -1,6 +1,7 @@
 // The Chat (web components/ChatView.tsx, phone layout): ChatGPT's top bar (☰,
-// the chat's title, the usage pill, temporary-chat ghost, new chat), the
-// conversation, and the composer docked at the bottom riding the keyboard.
+// the chat's title, the usage pill, temporary-chat ghost; new chat is in the
+// drawer), the conversation, and the composer docked at the bottom riding the
+// keyboard.
 // Everything about a chat's data lives in lib/chat/store (one sync loop shared
 // with the drawer); this screen only renders it and turns taps into store calls.
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -66,7 +67,7 @@ import { chatGlow } from '../../lib/chat/glow'
 import { useSettings } from '../../lib/settings'
 import { useLanding, useLandOn, useStill } from '../../ui/landing'
 import { farIndex } from '../../lib/landing'
-import { IconArrowDown, IconEdit, IconGhost2, IconMenu, IconFolder, IconFolderOff, IconSparkles, IconChevronDown, IconSettings, IconUsersGroup, IconUserPlus } from './icons'
+import { IconArrowDown, IconGhost2, IconMenu, IconFolder, IconFolderOff, IconSparkles, IconChevronDown, IconSettings, IconUsersGroup, IconUserPlus } from './icons'
 import { holdReload } from '../../shell/otaUpdates'
 
 function greeting(name: string) {
@@ -648,9 +649,6 @@ export default function ChatScreen() {
               <TI icon={IconGhost2} size={21} color={temporary ? colors.text : vc.soft} />
             </Press>
           ) : null}
-          <Press style={st.iconBtn} onPress={() => newChat()} accessibilityLabel="New chat">
-            <TI icon={IconEdit} size={21} color={vc.soft} />
-          </Press>
         </View>
       </View>
 
