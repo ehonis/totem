@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { matchScore, nameFromTerm, placeAfter, rankDestinations, slug, stripToken } from './destinations'
+import { ghostDestinations, matchScore, nameFromTerm, placeAfter, rankDestinations, slug, stripToken } from './destinations'
 import type { Project } from './types'
 import type { WorkTask } from '../work/groups'
 
@@ -213,5 +213,25 @@ describe('$opus, $pin and $snooze', () => {
   it('none of them move the chat', () => {
     const now = { taskId: 't1', projectId: 'harbor' }
     for (const term of ['opus', 'pin', 'snooze-tom']) expect(placeAfter(rankDestinations(ctx, term)[0], now, () => 'wp')).toEqual(now)
+  })
+})
+
+describe('ghostDestinations', () => {
+  it('offers only the way out, for a bare $ or a word that asks for it', () => {
+    expect(ghostDestinations('', false)).toEqual([{ kind: 'leave-ghost', key: 'leave-ghost', name: 'Regular chat', started: false }])
+    for (const t of ['re', 'regular', 'back', 'ba', 'keep', 'normal', 'exit', 'unghost', 'leave', 'gh', 'off']) {
+      expect(ghostDestinations(t, false).map((d) => d.kind)).toEqual(['leave-ghost'])
+    }
+    expect(ghostDestinations('back', true)[0]).toMatchObject({ name: 'Keep this chat', started: true })
+  })
+
+  it('offers nothing for a price or any other word, so Enter sends it', () => {
+    expect(ghostDestinations('40', false)).toEqual([])
+    expect(ghostDestinations('r', false)).toEqual([])
+    expect(ghostDestinations('harbor', false)).toEqual([])
+  })
+
+  it('leaves to Home, out of any task', () => {
+    expect(placeAfter(ghostDestinations('back', false)[0], { taskId: 't1', projectId: 'wp' }, () => 'wp')).toEqual({ taskId: null, projectId: null })
   })
 })

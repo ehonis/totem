@@ -1963,7 +1963,13 @@ lists the first two between the places and the tasks.
   snoozed). The words and files move to the ghost chat's draft at Home, out of any project
   or task it was being started in (ghost chats live outside projects), as the header's ghost
   switch does for a chat at Home (`placeDraft(…, ghost)` in `useChatDrafts.ts`). A ghost
-  chat's composer offers no `/` or `$` menu; the header's switch turns it back.
+  chat's composer offers no `/` skills and no places, but its `$` menu has one row, the way
+  out: **`$regular`** (also `$back`, `$keep`, `$normal`, `$exit`, `$unghost`, `$leave`,
+  `$off` and `$ghost` again, from two letters; a bare `$` shows it too;
+  `ghostDestinations` in `destinations.ts`). Before the first send it is **Regular chat**,
+  which moves the words and files to Home's ordinary draft, as the header's switch does; once
+  the chat has started it is **Keep this chat**, the header's Keep (`keepThread`), and the
+  words stay in the box. A price (`$40`) or any other word offers nothing, so Enter sends it.
 - **A name nothing has yet** (`$tax-returns`, three letters on) ends the menu with
   **New project “Tax returns”**, and, in a project or one of its folders, first **New
   folder “Tax returns”** in that project (one level of folders). The name is the term as

@@ -33,14 +33,16 @@ const { default: Composer } = await import('./Composer')
 
 afterEach(cleanup)
 
-function Harness({ onPick, destinations = true, onNewTask, projectId = null, onSend = () => {}, onModel, onStartOption, valueSpy }: {
+function Harness({ onPick, destinations = true, onNewTask, projectId = null, onSend = () => {}, onModel, onStartOption, valueSpy, ghost }: {
   onPick: (d: Destination, text: string) => void; destinations?: boolean
   onNewTask?: (fields: NewTaskFields) => Promise<boolean>; projectId?: string | null; onSend?: () => void
   onModel?: (d: any) => void; onStartOption?: (d: any) => void; valueSpy?: (v: string) => void
+  ghost?: { started: boolean; onKeep?: () => void }
 }) {
   const [value, setValue] = useState('')
   return (
     <Composer value={value} onChange={(v) => { valueSpy?.(v); setValue(v) }} onSend={onSend} onStop={() => {}} busy={false}
+      allowCommands={!ghost} ghost={ghost}
       destinations={destinations ? { projectId, taskId: null, onPick: (d, text) => onPick(d, text), onNewTask, onModel, onStartOption } : undefined} />
   )
 }
@@ -107,6 +109,38 @@ describe('composer $ destinations', () => {
     fireEvent.keyDown(box, { key: 'Enter' })
     expect(onPick.mock.calls[0][0]).toMatchObject({ kind: 'ghost' })
     expect(onPick.mock.calls[0][1]).toBe('just between us')
+  })
+
+  it('in a ghost chat not started, $regular is the only row and moves the words to a regular chat', async () => {
+    const onPick = vi.fn()
+    render(<Harness onPick={onPick} ghost={{ started: false }} />)
+    const box = await type('on second thought $regu')
+    const options = screen.getAllByRole('option').map((o) => o.textContent)
+    expect(options).toHaveLength(1)
+    expect(options[0]).toContain('Regular chat')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onPick.mock.calls[0][0]).toMatchObject({ kind: 'leave-ghost', started: false })
+    expect(onPick.mock.calls[0][1]).toBe('on second thought')
+  })
+
+  it('in a started ghost chat, $back keeps it and leaves the words in the box', async () => {
+    const onPick = vi.fn()
+    const onKeep = vi.fn()
+    const valueSpy = vi.fn()
+    render(<Harness onPick={onPick} destinations={false} ghost={{ started: true, onKeep }} valueSpy={valueSpy} />)
+    const box = await type('one more thing $back')
+    expect(screen.getAllByRole('option')[0].textContent).toContain('Keep this chat')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onKeep).toHaveBeenCalledTimes(1)
+    expect(onPick).not.toHaveBeenCalled()
+    expect(valueSpy).toHaveBeenLastCalledWith('one more thing')
+  })
+
+  it('a ghost chat still offers no places, tasks or skills', async () => {
+    const onPick = vi.fn()
+    render(<Harness onPick={onPick} ghost={{ started: false }} />)
+    await type('$harb')
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
   })
 
   it('offers a new folder in the project, and a new project, for a name nothing has, with his capitals', async () => {

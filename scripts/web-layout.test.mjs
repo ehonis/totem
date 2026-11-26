@@ -564,6 +564,58 @@ test('the chats panel scrolls to its last chat, its cards fit, and the phone dra
   }
 })
 
+// A chat its agent marked done (doneAt) offers Settle at the end of its title line, and
+// keeps it under the pointer. It once sat on a row of its own that hid on hover, so the
+// card shrank under the mouse, unhovered, grew back and flickered.
+test('a done chat\'s Settle sits on its title line and stays put on hover', { skip: !executablePath || !esbuild }, async () => {
+  const api = (url) => {
+    const got = panelApi(url)
+    if (url.split('?')[0] !== '/api/threads') return got
+    // c0 is linked to a task, c1 is not.
+    for (const t of got.threads.slice(0, 2)) Object.assign(t, { doneAt: t.updatedAt, needsReply: true })
+    return got
+  }
+  const served = await serveHarness({ entry: 'chat/ChatsPanel.harness.tsx', styles: ['styles.css', 'shell.css', 'chat/chat.css', 'work/work.css', 'tasksnav/tasksnav.css'], api })
+  const browser = await chromium.launch({ executablePath })
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 600 } })
+    await page.addInitScript(() => localStorage.setItem('totem.chats.order', 'recent'))
+    await page.goto(served.url)
+    await page.waitForFunction(() => document.querySelectorAll('.sh-panel .sb-card .vc-thread-done').length === 2, null, { timeout: 10000 })
+      .catch(() => assert.fail('the two done chats never offered Settle'))
+    await page.waitForFunction(() => !!document.querySelector('.sh-panel .sb-task-title'), null, { timeout: 10000 })
+    const measure = (title) => page.evaluate((title) => {
+      const card = [...document.querySelectorAll('.sh-panel .sb-card')].find((c) => c.querySelector('.vc-thread-title')?.textContent === title)
+      const r = (e) => e && e.getBoundingClientRect()
+      const chip = card.querySelector('.vc-thread-done')
+      const line = r(card.querySelector('.sb-title-line'))
+      const text = r(card.querySelector('.vc-thread-title'))
+      const c = r(chip)
+      return {
+        height: r(card).height, shown: !!chip && getComputedStyle(chip).display !== 'none' && c.width > 0,
+        onLine: !!c && c.top >= line.top - 1 && c.bottom <= line.bottom + 1, clear: !!c && text.right <= c.left,
+        inside: !!c && c.right <= r(card).right, hoverSettles: card.querySelectorAll('.vc-thread-actions [aria-label^="Settle"]').length,
+      }
+    }, title)
+    for (const title of ['Fictional chat 0', 'Fictional chat 1']) {
+      const before = await measure(title)
+      assert.ok(before.shown && before.onLine && before.clear && before.inside, `${title}: Settle on the title line, clear of the title (${JSON.stringify(before)})`)
+      const card = page.locator('.sh-panel .sb-card', { has: page.locator('.vc-thread-title', { hasText: new RegExp(`^${title}$`) }) })
+      await card.hover()
+      await page.waitForTimeout(50)
+      const after = await measure(title)
+      assert.equal(after.height, before.height, `${title}: the card keeps its height on hover`)
+      assert.ok(after.shown && after.onLine, `${title}: Settle stays on hover`)
+      assert.equal(after.hoverSettles, 0, `${title}: no second Settle among the hover actions`)
+    }
+    assert.equal(await page.locator('.sh-panel .sb-card', { has: page.locator('.vc-thread-title', { hasText: /^Fictional chat 1$/ }) }).locator('.sb-meta').count(), 0, 'a done chat with no task has no meta row')
+    await page.close()
+  } finally {
+    await browser.close()
+    served.close()
+  }
+})
+
 // Unsent drafts (chat/ChatsPanelDrafts.tsx) are a block at the top of the chats
 // panel's scrolling list, above the chats and under a rule, and a chat with unsent
 // words wears the pencil. With no drafts there is no block at all.

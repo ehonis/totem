@@ -5,7 +5,9 @@
 // a ghost chat (not kept: gone at midnight), and a name no place has yet
 // (`$tax-returns`) offers a new folder or project by that name, `$opus` (any model
 // or account name) picks the chat's model, `$pin` pins it from the start, and
-// `$snooze` sends it now and keeps it out of the way until a time. Pure, so the
+// `$snooze` sends it now and keeps it out of the way until a time. In a ghost chat
+// `$` offers one thing, the way out: `$regular` (or `$back`, `$keep`) makes it a
+// chat that is kept, as the header's switch or Keep does. Pure, so the
 // composer's menu and its tests read the same rules.
 import type { ModelRow, Project, ProviderRow } from './types'
 import type { WorkTask } from '../work/groups'
@@ -18,6 +20,8 @@ export type Destination =
   | { kind: 'task'; key: string; name: string; task: WorkTask }
   | { kind: 'new-task'; key: 'new-task'; name: 'New task' }
   | { kind: 'ghost'; key: 'ghost'; name: 'Ghost chat' }
+  /** Out of a ghost chat: a kept chat at Home (not started yet), or Keep (started). */
+  | { kind: 'leave-ghost'; key: 'leave-ghost'; name: string; started: boolean }
   /** A folder (in `parent`) or a top-level project, made by that name, then the chat starts in it. */
   | { kind: 'new-folder'; key: string; name: string; parent?: Project }
   /** A model to start on (no `modelId`: the account's own default). */
@@ -35,6 +39,20 @@ const NEW_TASK: Destination = { kind: 'new-task', key: 'new-task', name: 'New ta
 const GHOST_WORDS: Array<[string, number]> = [['ghost', 2], ['temporary', 4], ['incognito', 4]]
 export const wantsGhost = (term: string) => GHOST_WORDS.some(([w, min]) => term.length >= min && w.startsWith(term))
 const GHOST: Destination = { kind: 'ghost', key: 'ghost', name: 'Ghost chat' }
+
+/** The way out of a ghost chat: `$regular`, `$back`, `$keep`, `$normal`, `$exit`, `$unghost`, `$leave`, `$ghost` again, from two letters. */
+const LEAVE_GHOST_WORDS = ['regular', 'back', 'keep', 'normal', 'exit', 'unghost', 'leave', 'ghost', 'off']
+export const wantsLeaveGhost = (term: string) => term.length >= 2 && LEAVE_GHOST_WORDS.some((w) => w.startsWith(term))
+
+/**
+ * A ghost chat's `$` menu: only the way out, for a bare `$` or a term that asks for it.
+ * `started`: the chat has messages, so it is kept where it is (Keep) rather than moved.
+ */
+export function ghostDestinations(term: string, started: boolean): Destination[] {
+  const t = term.toLowerCase()
+  if (t && !wantsLeaveGhost(t)) return []
+  return [{ kind: 'leave-ghost', key: 'leave-ghost', name: started ? 'Keep this chat' : 'Regular chat', started }]
+}
 
 /** `$pin` from `$pi`. */
 export const wantsPin = (term: string) => term.length >= 2 && 'pin'.startsWith(term)
@@ -223,8 +241,8 @@ export function placeAfter(d: Destination, now: { taskId: string | null; project
   // "New task" and "New folder" move nothing until the task or folder exists (made first);
   // a model, a pin or a snooze changes how it starts, not where.
   if (d.kind === 'new-task' || d.kind === 'new-folder' || d.kind === 'model' || d.kind === 'pin' || d.kind === 'snooze') return now
-  // A ghost chat lives at Home, outside any project or task.
-  if (d.kind === 'ghost') return { taskId: null, projectId: null }
+  // A ghost chat lives at Home, outside any project or task, and leaving one stays there.
+  if (d.kind === 'ghost' || d.kind === 'leave-ghost') return { taskId: null, projectId: null }
   if (d.kind === 'home') return { taskId: now.taskId, projectId: null }
   if (d.kind === 'project') return { taskId: now.taskId, projectId: d.project.id }
   return { taskId: d.task.ref, projectId: taskHome(d.task.ref) ?? now.projectId }
