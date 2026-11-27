@@ -15,6 +15,8 @@ import { Press } from '../../ui/kit'
 import { tap } from '../../ui/haptics'
 import { ProviderLogo, TI, vc } from './ui'
 import { IconRefresh } from './icons'
+import { navigateTo } from '../../shell/nav'
+import { useCliproxyConfigured } from '../cliproxy/useCliproxyConfigured'
 
 function pick(meters: any[]) {
   const usable = (meters || []).filter((m) => typeof m.remainingPct === 'number')
@@ -86,6 +88,7 @@ export function UsageSheet() {
   }, [])
   const refresh = () => { if (!busy) { tap(); void live.forceRefresh() } }
   const newest = Math.max(0, ...accounts.map((a) => a.fetchedAt || 0))
+  const proxy = useCliproxyConfigured()
 
   return (
     <ScrollView
@@ -111,6 +114,16 @@ export function UsageSheet() {
           </View>
         ) : null}
         {accounts.map((a) => <QuotaCard key={a.id} account={a} />)}
+        {proxy ? (
+          // The web panel's "Manage accounts": the CLIProxy page, with the pool's forecast.
+          <Press
+            onPress={() => { tap(); router.back(); navigateTo('cliproxy') }}
+            accessibilityRole="button"
+            style={st.manage}
+          >
+            <T size={14.5} weight={500} color={vc.text}>Forecast and logins</T>
+          </Press>
+        ) : null}
       </View>
     </ScrollView>
   )
@@ -154,6 +167,7 @@ const st = StyleSheet.create({
   plan: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: vc.raise },
   meter: { gap: 7 },
   meterTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 },
+  manage: { height: 46, borderRadius: 14, borderWidth: 1, borderColor: vc.line, alignItems: 'center', justifyContent: 'center', backgroundColor: vc.raise },
   chip: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 26, paddingHorizontal: 9, borderRadius: 999, borderWidth: 1, marginRight: 4 },
   bar: { height: 8, borderRadius: 4, backgroundColor: '#2a2f3c', overflow: 'hidden' },
   fill: { height: '100%', borderRadius: 4 },

@@ -33,35 +33,28 @@ import {
   type PoolSettings,
   type PoolWindow,
 } from "./poolSettings";
-import type { WindowRatio } from "./poolLinked";
-import { DAY_MS, type PoolLimitEventKind, type PoolModel, type RoutingStrategy } from "./poolModel";
+import type { RoutingStrategy } from "./poolModel";
 import {
   bandOpacity,
   EVENT_LONG_KEY,
-  formatClock,
   formatHourOfDay,
-  formatMonthDay,
   formatPercent,
-  formatRate,
-  formatWhen,
 } from "./poolFormat";
-import type { PoolProvider } from "./poolInputs";
+import {
+  ACCENTS,
+  EVENT_KINDS,
+  FABLE_ACCENT,
+  poolCardStats,
+  poolHeadline,
+  poolLegendText,
+  poolRangeText,
+  shownEventKinds,
+  shownFable,
+  type PoolCardData,
+} from "./poolCards";
 import styles from "./QuotaPoolPanel.module.css";
 
-export interface PoolCardData {
-  /** A provider, or 'all' for every provider added into one pool. */
-  type: PoolProvider | "all";
-  /** The model for the selected view. */
-  model: PoolModel;
-  /** The weekly model, for the combined view's "weekly runs out" figure. */
-  weekly: PoolModel;
-  /** Full 5-hour windows the remaining weekly limit still buys. */
-  windowsLeft: number | null;
-  /** Weekly-to-5-hour exchange rate per provider. */
-  ratios: { type: PoolProvider; ratio: WindowRatio }[];
-  /** Claude's weekly Fable cap as its own pool, when any seat reports one. */
-  fable?: PoolModel | null;
-}
+export type { PoolCardData };
 
 export interface QuotaPoolPanelProps {
   settings: PoolSettings;
@@ -84,21 +77,6 @@ export interface QuotaPoolPanelProps {
 }
 
 const ROUTING: readonly RoutingStrategy[] = ["soonest-reset", "fill-first", "round-robin"];
-
-/** Limit markers per view: 5-hour run-outs repeat too often for the two-week chart. */
-const EVENT_KINDS: Record<PoolWindow, readonly PoolLimitEventKind[]> = {
-  weekly: ["weekly-out", "weekly-reset"],
-  "five-hour": ["five-out", "weekly-out", "weekly-reset"],
-  combined: ["five-out", "weekly-out", "weekly-reset"],
-};
-
-const ACCENTS: Record<PoolProvider | "all", { dark: string; light: string }> = {
-  claude: { dark: "#ef7f63", light: "#d4593b" },
-  codex: { dark: "#9b95ff", light: "#5b54e0" },
-  all: { dark: "#5cc8b2", light: "#1d8572" },
-};
-/** The Fable line: blue, which no other line or marker on the chart uses. */
-const FABLE_ACCENT = { dark: "#6cb4ff", light: "#1f6fd1" };
 
 function Segmented<T extends string | number>({
   value,
@@ -184,9 +162,6 @@ function OffDayToggles({
   );
 }
 
-const providerLabel = (type: string) =>
-  type === "claude" ? "Claude" : type === "codex" ? "Codex" : type;
-
 function ProviderIcon({
   type,
 }: {
@@ -245,56 +220,21 @@ function PoolCard({
   const { t, i18n } = poolText;
   const locale = i18n.resolvedLanguage;
   const { model } = card;
-  const name =
-    card.type === "all"
-      ? t("quota_management.pool_all_providers")
-      : providerLabel(card.type);
+  const { name, stats } = poolCardStats(card, {
+    window: settings.window,
+    now,
+    historyLoading,
+    locale,
+  });
+  const headline = poolHeadline(model);
   const combinedView = settings.window === "combined";
   const accent =
     ACCENTS[card.type][resolvedTheme === "dark" ? "dark" : "light"];
   const eventKinds = EVENT_KINDS[settings.window];
   // Fable's cap is weekly, so it shares the weekly and combined views only.
-  const fable =
-    card.fable && settings.window !== "five-hour" && settings.mode === "remaining"
-      ? card.fable
-      : null;
-  const shownEvents = eventKinds.filter((kind) =>
-    model.limitEvents.some(
-      (e) =>
-        e.kind === kind &&
-        (e.recorded ? e.t <= now : e.t > now) &&
-        e.t >= view.startMs &&
-        e.t <= view.endMs,
-    ),
-  );
-
-  const poolEmpty = model.poolEmptyAtMs
-    ? formatWhen(model.poolEmptyAtMs, now, locale)
-    : t("quota_management.pool_not_by", {
-        date: formatMonthDay(model.horizonEndMs, locale),
-      });
-  const firstEmpty = model.firstEmpty
-    ? `${model.firstEmpty.label} · ${formatWhen(model.firstEmpty.t, now, locale)}`
-    : t("quota_management.pool_none_before_reset");
-  const weeklyEmpty = card.weekly.poolEmptyAtMs
-    ? formatWhen(card.weekly.poolEmptyAtMs, now, locale)
-    : t("quota_management.pool_not_by", {
-        date: formatMonthDay(card.weekly.horizonEndMs, locale),
-      });
-  const ratioNote = card.ratios
-    .map(({ type, ratio }) =>
-      t(
-        ratio.source === "history"
-          ? "quota_management.pool_ratio_history"
-          : "quota_management.pool_ratio_assumed",
-        {
-          name: card.ratios.length > 1 ? `${providerLabel(type)}: ` : "",
-          value:
-            ratio.value < 10 ? ratio.value.toFixed(1) : Math.round(ratio.value),
-        },
-      ),
-    )
-    .join(" · ");
+  const fable = shownFable(card, settings);
+  const shownEvents = shownEventKinds(model, settings.window, view, now);
+  const legend = poolLegendText(card, settings);
 
   return (
     <article
@@ -317,80 +257,23 @@ function PoolCard({
         </div>
         <div className={styles.cardBody}>
           <div className={styles.bigValue}>
-            <span className={styles.big}>{formatPercent(model.current)}</span>
-            <span className={styles.of}>
-              {t("quota_management.pool_of", {
-                total: formatPercent(model.capacity),
-              })}
-            </span>
+            <span className={styles.big}>{headline.current}</span>
+            <span className={styles.of}>{headline.of}</span>
           </div>
-          {combinedView ? (
-            <dl className={styles.stats}>
-              <Stat label={t("quota_management.pool_locked_out")}>
-                <span className={model.poolEmptyAtMs ? styles.warn : undefined}>
-                  {poolEmpty}
-                </span>
-              </Stat>
-              <Stat label={t("quota_management.pool_first_lockout")}>
-                <span className={model.firstEmpty ? styles.warn : undefined}>
-                  {model.firstEmpty
-                    ? `${model.firstEmpty.label} · ${formatWhen(model.firstEmpty.t, now, locale)}`
-                    : t("quota_management.pool_no_lockout")}
-                </span>
-              </Stat>
-              <Stat label={t("quota_management.pool_weekly_runs_out")}>
-                <span
-                  className={
-                    card.weekly.poolEmptyAtMs ? styles.warn : undefined
-                  }
-                >
-                  {weeklyEmpty}
-                </span>
-              </Stat>
-              <Stat label={t("quota_management.pool_windows_left")}>
-                {card.windowsLeft === null
-                  ? "--"
-                  : t("quota_management.pool_windows_left_value", {
-                      value:
-                        card.windowsLeft < 10
-                          ? card.windowsLeft.toFixed(1)
-                          : Math.round(card.windowsLeft),
-                    })}
-              </Stat>
-            </dl>
-          ) : (
-            <dl className={styles.stats}>
-              <Stat label={t("quota_management.pool_empty")}>
-                <span className={model.poolEmptyAtMs ? styles.warn : undefined}>
-                  {poolEmpty}
-                </span>
-              </Stat>
-              <Stat label={t("quota_management.pool_first_empty")}>
-                <span className={model.firstEmpty ? styles.warn : undefined}>
-                  {firstEmpty}
-                </span>
-              </Stat>
-              <Stat label={t("quota_management.pool_next_reset")}>
-                {model.nextReset ? (
+          <dl className={styles.stats}>
+            {stats.map((stat) => (
+              <Stat key={stat.label} label={stat.label}>
+                {stat.lead && (
                   <>
-                    <strong>+{Math.round(model.nextReset.delta)}%</strong>{" "}
-                    {formatWhen(model.nextReset.t, now, locale)}
+                    <strong>{stat.lead}</strong>{" "}
                   </>
-                ) : (
-                  t("quota_management.pool_no_reset")
                 )}
+                <span className={stat.warn ? styles.warn : undefined}>
+                  {stat.value}
+                </span>
               </Stat>
-              <Stat
-                label={t("quota_management.pool_burn", {
-                  hours: model.burnWindowHours,
-                })}
-              >
-                {historyLoading && model.burnPerHour === null
-                  ? "…"
-                  : formatRate(model.burnPerHour)}
-              </Stat>
-            </dl>
-          )}
+            ))}
+          </dl>
         </div>
       </header>
 
@@ -416,13 +299,7 @@ function PoolCard({
       />
 
       <footer className={styles.legend}>
-        <span className={styles.legendTitle}>
-          {settings.mode === "rate"
-            ? t("quota_management.pool_legend_rate")
-            : combinedView
-              ? t("quota_management.pool_legend_usable")
-              : t("quota_management.pool_legend_pool")}
-        </span>
+        <span className={styles.legendTitle}>{legend.title}</span>
         <span className={styles.legendItem}>
           <span className={styles.swatchSolid} />
           {t("quota_management.pool_legend_recorded")}
@@ -462,14 +339,7 @@ function PoolCard({
               {account.label}
             </span>
           ))}
-        <span className={styles.legendNote}>
-          {t("quota_management.pool_linked_note")}
-          {!combinedView || settings.mode === "rate" || !model.burnPerHour
-            ? ""
-            : ` · ${t("quota_management.pool_burn", { hours: model.burnWindowHours })} ${formatRate(model.burnPerHour)}`}
-          {" · "}
-          {ratioNote}
-        </span>
+        <span className={styles.legendNote}>{legend.note}</span>
       </footer>
     </article>
   );
@@ -499,22 +369,13 @@ export function QuotaPoolPanel({
     : t("quota_management.pool_settings");
 
   const limits = OFFSET_LIMITS[settings.window];
-  const stamp = (ms: number) =>
-    `${formatMonthDay(ms, locale)} ${formatClock(ms, locale)}`;
-  const rangeText = zoomed
-    ? t("quota_management.pool_range", {
-        from: stamp(view.startMs),
-        to: stamp(view.endMs),
-      })
-    : settings.window === "five-hour"
-      ? t("quota_management.pool_range", {
-          from: `${formatMonthDay(range.startMs, locale)} ${formatClock(range.startMs, locale)}`,
-          to: `${formatMonthDay(range.endMs, locale)} ${formatClock(range.endMs, locale)}`,
-        })
-      : t("quota_management.pool_range", {
-          from: formatMonthDay(range.startMs, locale),
-          to: formatMonthDay(range.endMs - DAY_MS, locale),
-        });
+  const rangeText = poolRangeText({
+    window: settings.window,
+    range,
+    view,
+    zoomed,
+    locale,
+  });
 
   const setZoom = (zoom: TimeView | null) => onSettingsChange({ zoom });
   // Unzoomed, the arrows page; zoomed, they slide a whole view and page on past the edge.

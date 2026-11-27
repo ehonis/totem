@@ -31,3 +31,30 @@ test('old proxies report unsupported history; scope refusals remain actionable',
   assert.deepEqual(await harness(404).manager.history(), { supported: false, samples: [] })
   await assert.rejects(harness(403).manager.history(), (e) => e.code === 'scope_refused')
 })
+
+test('a large history goes gzipped to a client that takes it, and plain to one that does not', async () => {
+  const { gunzipSync } = await import('node:zlib')
+  const samples = Array.from({ length: 400 }, (_, i) => ({ t: now - i * 60_000, auth_index: 'idx', provider: 'claude', windows: { five_hour: { used: i % 100 }, seven_day: { used: 40 } } }))
+  const client = createCliproxyClient({ url: () => 'http://proxy.example.net', key: () => 'test-key', fetch: async (url) => {
+    if (new URL(url).pathname.endsWith('/credentials')) return Response.json({ files: [{ name: 'a.json', provider: 'claude', auth_index: 'idx' }] })
+    return Response.json({ samples })
+  } })
+  const handler = createCliproxyHttpHandler({ manager: createCliproxyManager({ client, now: () => now }), configured: () => true })
+  const url = new URL('http://totem.example/api/cliproxy/history')
+  const fetchOnce = async (headers) => {
+    let head
+    let body
+    await handler({ method: 'GET', headers }, { writeHead: (status, h) => { head = { status, ...h } }, end: (b) => { body = b } }, url, url.pathname)
+    return { head, body }
+  }
+  const packed = await fetchOnce({ 'accept-encoding': 'gzip, deflate, br' })
+  assert.equal(packed.head.status, 200)
+  assert.equal(packed.head['content-encoding'], 'gzip')
+  assert.equal(packed.head.vary, 'accept-encoding')
+  const unpacked = JSON.parse(gunzipSync(packed.body).toString('utf8'))
+  assert.equal(unpacked.samples.length, 400)
+  const plain = await fetchOnce({})
+  assert.equal(plain.head['content-encoding'], undefined)
+  assert.equal(packed.body.length < Buffer.byteLength(plain.body) / 4, true)
+  assert.deepEqual(JSON.parse(plain.body), unpacked)
+})

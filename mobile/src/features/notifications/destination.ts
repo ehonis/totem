@@ -7,7 +7,7 @@
 import { originOf } from '../../lib/links.ts'
 
 /** web/src/router.ts TAB_IDS. */
-const WEB_TABS = ['overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'fleet', 'inbox', 'logs', 'brain', 'settings']
+const WEB_TABS = ['overview', 'search', 'chat', 'messages', 'screen', 'productivity', 'totems', 'code', 'dev', 'fleet', 'cliproxy', 'inbox', 'logs', 'brain', 'settings']
 /** web/src/router.ts PRODUCTIVITY_APPS. */
 const PRODUCTIVITY = ['todos', 'calendar', 'habits', 'goals', 'lists', 'recs', 'journal']
 /** Tabs the app doesn't have: they open on the web dashboard. */
@@ -17,7 +17,7 @@ export type Destination =
   | { kind: 'external'; url: string }
   | { kind: 'web'; path: string }
   | { kind: 'landing' }
-  | { kind: 'tab'; tab: 'overview' | 'search' | 'totems' | 'fleet' }
+  | { kind: 'tab'; tab: 'overview' | 'search' | 'totems' | 'fleet' | 'cliproxy' }
   | { kind: 'chat'; thread: string | null; project: string | null }
   | { kind: 'totem'; id: string }
   | { kind: 'device'; id: string }
@@ -107,7 +107,7 @@ export function notificationDestination(url: string, bridgeOrigins: (string | nu
     case 'settings': return { kind: 'settings', pane: sub, row: hash }
     // A machine's notification names it in the hash (fleet/store.mjs).
     case 'fleet': return hash ? { kind: 'device', id: hash } : { kind: 'tab', tab }
-    case 'overview': case 'search': return { kind: 'tab', tab }
+    case 'overview': case 'search': case 'cliproxy': return { kind: 'tab', tab }
     default: return { kind: 'landing' }
   }
 }

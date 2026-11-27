@@ -64,3 +64,8 @@ test('productivityPath and productivityPage agree, and only on real pages', () =
   assert.equal(productivityPage('/'), null)
   assert.equal(productivityPage('/todo/abc'), null)
 })
+
+test('the CLIProxy page has its own drawer page, as on the web', () => {
+  assert.deepEqual(resolveNav('cliproxy'), { pathname: '/cliproxy' })
+  assert.deepEqual(resolveNav({ tab: 'cliproxy' }), { pathname: '/cliproxy' })
+})
