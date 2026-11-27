@@ -47,6 +47,7 @@ test('links that are not Productivity are unchanged', () => {
   assert.deepEqual(dest('/settings/providers#usage'), { kind: 'settings', pane: 'providers', row: 'usage' })
   assert.deepEqual(dest('/'), { kind: 'landing' })
   assert.deepEqual(dest('/fleet#mini'), { kind: 'device', id: 'mini' })
+  assert.deepEqual(dest('/cliproxy'), { kind: 'tab', tab: 'cliproxy' })
   assert.deepEqual(dest('/dev'), { kind: 'web', path: '/dev' })
   assert.deepEqual(dest('https://github.com/x'), { kind: 'external', url: 'https://github.com/x' })
   // A query on another tab never turns into a tool.

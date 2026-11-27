@@ -170,6 +170,18 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   `complete` and its undo line sends `groupToggle(...).undo`; its streaks count whole days (`wholeDays`), and a day
   picked in its grid steps the page to that day. The form's "Part of" files a habit under one; `/habit/new?parentId=`
   starts one there. The morning check-in asks a group's sub-habits, never the group.
+- **CLIProxy** (`src/features/cliproxy/`, docs/cliproxy.md → On the iPhone): the web's `/cliproxy` page as a drawer page, reached
+  from the Overview's app row and the usage sheet's "Forecast and logins", both only once the bridge has a proxy set up
+  (`useCliproxyConfigured`). The graphs first, then each login's windows; **read only**: every change to a login is an
+  approval route the app does not send, so the foot opens the dashboard. The pool model, the chart's layout and the cards'
+  figures are the web's files byte for byte (`lib/cliproxy/pool/`, `lib/usagePools.ts`; `features/cliproxy/shared.test.mjs`):
+  change them on the web and copy them. `PoolChart.tsx` draws that layout with react-native-svg. In the page a press-and-hold
+  then drag walks the crosshair (so a swipe still scrolls; the page stops scrolling while a finger works a chart), a tap reads
+  a moment, two fingers pinch and slide (`chartGestures.ts`), a double tap shows the whole range. Each card's corner button
+  opens `LandscapeGraphs.tsx`: the chart a quarter turn round, full screen, where a drag walks the crosshair at once. The app is
+  portrait-only, so nothing native rotates: the view is drawn turned and the owner turns the phone (which way is a button,
+  kept per phone), so it ships over the air and no other screen can end up sideways. History is read on focus and every five
+  minutes in view (the web: two), gzipped by the bridge.
 - **Settings** (`src/features/settings/`) is the web's sections in its groups and order (`lib/components/settings/sections.ts`
   and `searchIndex.ts` are byte-for-byte copies of the web's), drawn as iOS grouped lists from `features/settings/ui.tsx`
   (`Section`, `Row`, `Switch`, `Picker`, `Field`, `Notice`): a row keeps the web's id, so a search hit or a

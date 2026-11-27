@@ -80,6 +80,7 @@ export default function AppLayout() {
       ))}
       <Drawer.Screen name="inbox" options={{ title: 'Inbox' }} />
       <Drawer.Screen name="fleet" options={{ title: 'Fleet' }} />
+      <Drawer.Screen name="cliproxy" options={{ title: 'CLIProxy' }} />
       <Drawer.Screen name="settings" options={{ title: 'Settings' }} />
     </Drawer>
     </>

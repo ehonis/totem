@@ -4,7 +4,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Animated, AppState, Easing, Image as RNImage, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { Image } from 'expo-image'
-import { useFocusEffect } from 'expo-router'
+import { useFocusEffect, useIsFocused } from 'expo-router'
 import { Screen, FAB_CLEARANCE } from '../../shell/Screen'
 import { navigateTo, openChat } from '../../shell/nav'
 import { holdReload } from '../../shell/otaUpdates'
@@ -44,6 +44,7 @@ import { openAway } from './AwaySheet'
 import RecentChats from './RecentChats'
 import { isWakeNetworkError } from '../../lib/wake'
 import { useTotemReportWaiting } from '../chat/totemReport'
+import { useCliproxyConfigured } from '../cliproxy/useCliproxyConfigured'
 
 type NavTarget = Parameters<typeof navigateTo>[0]
 type Tabler = React.ComponentType<any>
@@ -78,6 +79,8 @@ const APPS: { id: string; label: string; icon: Tabler; to: NavTarget }[] = [
   { id: 'inbox', label: 'Inbox', icon: NAV_ICONS.inbox, to: 'inbox' },
   { id: 'search', label: 'Search', icon: NAV_ICONS.search, to: 'search' },
   { id: 'fleet', label: 'Fleet', icon: NAV_ICONS.fleet, to: 'fleet' },
+  // Only once a CLIProxy is set up, as the web's rail does.
+  { id: 'cliproxy', label: 'CLIProxy', icon: NAV_ICONS.cliproxy, to: 'cliproxy' },
   { id: 'logs', label: 'Logs', icon: IconHistory, to: { tab: 'settings', sub: 'logs' } },
   { id: 'studio', label: 'Skills', icon: IconWand, to: { tab: 'settings', sub: 'skills' } },
   { id: 'settings', label: 'Settings', icon: NAV_ICONS.settings, to: 'settings' },
@@ -202,6 +205,7 @@ export default function OverviewScreen() {
   // whatever was true when it first opened. Refresh then, if it has gone stale.
   const loadIfStale = useCallback(() => { if (Date.now() - loadedAt.current > STALE_MS) load() }, [load])
   useFocusEffect(loadIfStale)
+  const cliproxyOn = useCliproxyConfigured(useIsFocused())
   useEffect(() => {
     let timers: ReturnType<typeof setTimeout>[] = []
     const sub = AppState.addEventListener('change', (st) => {
@@ -485,7 +489,7 @@ export default function OverviewScreen() {
         )}
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={st.apps} contentContainerStyle={st.appsInner}>
-          {APPS.map((app) => (
+          {APPS.filter((app) => app.id !== 'cliproxy' || cliproxyOn).map((app) => (
             <Press key={app.id} haptic onPress={() => navigateTo(app.to)} style={st.app} accessibilityRole="button" accessibilityLabel={app.id === 'totems' && totemReports ? 'Totems, a report is waiting' : app.label}>
               <View style={st.appIco}>
                 <TI icon={app.icon} size={21} color={ov.soft} />

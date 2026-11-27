@@ -12,6 +12,7 @@ export const TAB_ROUTES = {
   productivity: '/productivity',
   inbox: '/inbox',
   fleet: '/fleet',
+  cliproxy: '/cliproxy',
   settings: '/settings',
 } as const
 

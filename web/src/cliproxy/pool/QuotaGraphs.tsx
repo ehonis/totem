@@ -1,35 +1,18 @@
 import { useMemo, useState, useEffect } from 'react'
 import type { ProxyAccount } from '../api'
-import { poolInputsFor, POOL_PROVIDERS, type PooledLimit } from './poolInputs'
-import { buildLinkedPoolModels, fiveHourWindowsLeft } from './poolLinked'
-import { mergePoolModels } from './poolMerge'
-import { buildPoolModel, DAY_MS, poolViewRange, type PoolModel } from './poolModel'
+import { poolViewRange } from './poolModel'
 import {
   FORECAST_DEFAULTS,
-  FUTURE_FACTOR,
-  quietHoursOf,
   readQuietHours,
   readOffDays,
   writeOffDays,
   writeQuietHours,
   type PoolSettings,
 } from './poolSettings'
-import { QuotaPoolPanel, type PoolCardData } from './QuotaPoolPanel'
+import { QuotaPoolPanel } from './QuotaPoolPanel'
+import { poolCards, providerPoolCards, type PoolCardData } from './poolCards'
 import { useQuotaHistory } from './useQuotaHistory'
 import { clampView } from './poolZoom'
-
-function withoutRecordedHistory(model: PoolModel): PoolModel {
-  return {
-    ...model,
-    recorded: [],
-    recordedByAccount: {},
-    recordedRate: [],
-    burnPerHour: null,
-    resets: model.resets.filter((r) => r.projected),
-    limitEvents: model.limitEvents.filter((e) => !e.recorded),
-    windowsByAccount: model.windowsByAccount && { ...model.windowsByAccount, recorded: {} },
-  }
-}
 
 export function QuotaGraphs({
   accounts,
@@ -69,44 +52,7 @@ export function QuotaGraphs({
   )
   const view = zoomed ?? range
   const providerCards = useMemo<PoolCardData[]>(
-    () =>
-      POOL_PROVIDERS.map((type) => {
-        const inputs = (limit: PooledLimit) => poolInputsFor(type, accounts, history.samples, limit)
-        const options = {
-          now,
-          burnWindowHours: settings.burnWindow,
-          futureFactor: FUTURE_FACTOR[settings.future],
-          quietHours: quietHoursOf(settings.quiet),
-          offDays: settings.offDays,
-          strategy: settings.strategy,
-          recordedFromMs: Math.min(range.startMs, now),
-          projectToMs: Math.min(range.endMs, now + 21 * DAY_MS),
-        }
-        const linked = buildLinkedPoolModels(inputs('weekly'), inputs('five-hour'), options)
-        // Fable's own weekly cap, projected at its own burn rate.
-        const fableInputs = type === 'claude' ? inputs('fable') : []
-        const fable = fableInputs.some((a) => a.remaining !== null || a.samples.length > 0)
-          ? buildPoolModel(fableInputs, options)
-          : null
-        const display = (model: PoolModel): PoolModel =>
-          history.samples.some((s) => s.provider === type)
-            ? model
-            : withoutRecordedHistory(model)
-        return {
-          type,
-          model: display(
-            settings.window === 'weekly'
-              ? linked.weekly
-              : settings.window === 'five-hour'
-                ? linked.fiveHour
-                : linked.combined,
-          ),
-          weekly: display(linked.weekly),
-          windowsLeft: fiveHourWindowsLeft(linked),
-          ratios: [{ type, ratio: linked.ratio }],
-          fable: fable && display(fable),
-        }
-      }).filter((card) => card.model.accountCount > 0),
+    () => providerPoolCards({ accounts, samples: history.samples, now, settings, range }),
     [
       accounts,
       history.samples,
@@ -120,32 +66,10 @@ export function QuotaGraphs({
       settings.strategy,
     ],
   )
-  const cards = useMemo<PoolCardData[]>(() => {
-    if (settings.providers !== 'combined' || providerCards.length < 2) return providerCards
-    const combine = (pick: (c: PoolCardData) => PoolModel) => {
-      const parts = providerCards.map((c) => ({
-        key: c.type,
-        label: c.type === 'claude' ? 'Claude' : 'Codex',
-        model: pick(c),
-      }))
-      const combined = mergePoolModels(parts, now)
-      return parts.some((p) => !p.model.recorded.length)
-        ? withoutRecordedHistory(combined)
-        : combined
-    }
-    const windows = providerCards.map((c) => c.windowsLeft)
-    return [
-      {
-        type: 'all',
-        model: combine((c) => c.model),
-        weekly: combine((c) => c.weekly),
-        windowsLeft: windows.every((w) => w === null)
-          ? null
-          : windows.reduce<number>((sum, w) => sum + (w ?? 0), 0),
-        ratios: providerCards.flatMap((c) => c.ratios),
-      },
-    ]
-  }, [providerCards, settings.providers, now])
+  const cards = useMemo<PoolCardData[]>(
+    () => poolCards(providerCards, settings.providers === 'combined', now),
+    [providerCards, settings.providers, now],
+  )
   return (
     <div className="cp-graphs">
       <h2 className="cp-graph-title">Quota history and forecast</h2>

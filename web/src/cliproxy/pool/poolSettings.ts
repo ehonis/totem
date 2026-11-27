@@ -1,6 +1,6 @@
 /** Chart settings owned by the quota page and shared by the panel. */
 
-import type { PoolChartMode } from './PoolChart';
+import type { PoolChartMode } from './poolChartLayout';
 import type { QuietHours, RoutingStrategy } from './poolModel';
 import type { TimeView } from './poolZoom';
 

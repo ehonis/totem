@@ -241,3 +241,21 @@ offered when Anthropic says the grant is usable now; its request id is kept in
 with the same id and grant within ten minutes, and cannot be spent twice. A Codex credit is
 spent the same way: its redeem id is kept for ten minutes after an attempt with no answer, and
 only one spend per login runs at a time.
+
+## On the iPhone
+
+The app has the page too, at `/cliproxy` (Overview's app row, or "Forecast and logins" under the
+top bar's usage pill), once a proxy is set up. It shows the same graphs, settings and figures as
+the web, computed by the web's own files, then each login's windows and cooldowns. It only reads:
+switching logins, signing in, cooldown resets and reset grants are approval routes, done from the
+dashboard.
+
+The charts are made for a finger. Touch and hold, then drag, to walk the crosshair (a plain swipe
+still scrolls the page); tap to read a moment; pinch with two fingers to zoom and slide; double tap
+to see the whole range. Each card's corner button turns its chart sideways, full screen: the long
+side of the phone for the time axis, a drag to read it. The app stays portrait-only; the view is
+drawn turned and you turn the phone to match (the rotate button flips which way).
+
+`GET /api/cliproxy/history` is gzipped for any client that accepts it: three weeks of readings
+from a few logins is about 10 MB of JSON and about 0.5 MB gzipped. The app reads it when the page
+comes into view and every five minutes while it stays there.
