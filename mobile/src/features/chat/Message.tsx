@@ -544,7 +544,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ m, live, 
     <View style={{ gap: 10, minWidth: 0 }}>
       {list.map((b, i) => {
         if (b.kind === 'work') return <WorkLog key={b.key} items={b.items} live={live && i === list.length - 1} onOpenImage={setLightbox} />
-        if (b.kind === 'agents') return <AgentGroup key={b.key} tools={b.tools} />
+        if (b.kind === 'agents') return <AgentGroup key={b.key} tools={b.tools} live={live} />
         if (b.kind === 'proposal') return <TotemProposal key={b.key} part={b.part} messageId={m.id} />
         if (b.kind === 'change') return <ChangeCard key={b.key} part={b.part} />
         if (b.kind === 'visual') return <VisualCard key={b.key} part={b.part} />

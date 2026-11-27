@@ -348,7 +348,10 @@ export const getThreadSummaries = () => getJSON<{ threads: any[] }>('/api/thread
 // One chat, a window at a time (lib/chat/history.ts): the latest turns, or the page before `before`.
 const threadPageUrl = (id: string, before?: string | null, turns = 10) =>
   `/api/threads/${encodeURIComponent(id)}?turns=${turns}${before ? `&before=${encodeURIComponent(before)}` : ''}`
-export const getThreadPage = (id: string, before?: string | null) => getJSON(threadPageUrl(id, before))
+// The latest window never answers with the stored copy: that is a window from some earlier
+// read (often mid-reply), and taken over the chat held it rolled a finished reply back to
+// its middle. The store paints the stored copy itself (peekThreadPage) when it has none.
+export const getThreadPage = (id: string, before?: string | null) => getJSON(threadPageUrl(id, before), before ? undefined : { stored: false, deadlineMs: 45_000 })
 export const peekThreadPage = (id: string) => peekJSON(threadPageUrl(id))
 
 export async function putThread(thread: any) {

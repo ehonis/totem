@@ -37,7 +37,12 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   stored copy is what the store starts from (`lib/chat/projectList.ts`, `seed()` in `initChat`), so the drawer's
   projects and folders, and the chats filed in them, are there on a cold start before a weak connection answers.
   A list asked for before the phone's own change to a project (made, renamed, deleted: `takeChange`) is dropped,
-  and one that is not a list (a captive page) keeps what the store has.
+  and one that is not a list (a captive page) keeps what the store has. A chat's latest window
+  (`getThreadPage` without `before`) does too, 45 s: a window with sub-agents runs to hundreds of KB, missed
+  the 8 s on a phone connection every time, and each read answered the copy stored when the chat was opened
+  mid-reply, so a finished reply showed its sub-agents "running" for hours. The store paints the stored
+  window itself (`peekThreadPage`) only when it holds none, and `mergeSummary` keeps an opened chat stale
+  (it keeps its own `updatedAt` and count, and a reply it holds `streaming` that the summary shows finished counts too) until a window is actually taken.
   Every caller gets its own parsed copy. Screens draw the stored
   body first through the `peek*` twins beside the getters (`peekTodos`, `peekHabits`, …; Overview and the
   todos, habits, lists and goals stores), then revalidate. While any screen shows a stored answer, the top bar
