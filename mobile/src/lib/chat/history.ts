@@ -54,7 +54,10 @@ export function mergeEarlier(existing: ChatThread, page: ThreadPage): ChatThread
 /**
  * A summary from the list. A chat not opened yet takes it whole. An opened one
  * keeps its messages and takes the rest; `stale` says its latest window must be
- * read again because the chat changed on the bridge since.
+ * read again because the chat changed on the bridge since, or the summary shows
+ * finished a reply the copy held still has `streaming` (its end was missed here;
+ * callers never ask while a reply runs here). A reply the bridge itself left
+ * `streaming` matches and is not stale, or the chat would be read on every sync.
  */
 export function mergeSummary(existing: ChatThread | undefined, summary: ChatThread): { thread: ChatThread; stale: boolean } {
   if (!isLoaded(existing)) return { thread: summary, stale: false }
@@ -62,13 +65,18 @@ export function mergeSummary(existing: ChatThread | undefined, summary: ChatThre
   // An unsent message is this device's own, never the bridge's.
   const lastLocal = existing.messages.filter((m) => !m.unsent).pop()
   const lastRemote = summary.messages[summary.messages.length - 1]
+  const streaming = new Set(existing.messages.filter((m) => m.status === 'streaming' && !m.unsent).map((m) => m.id))
   const stale = summary.updatedAt !== existing.updatedAt
     || (summary.messageCount ?? -1) !== (existing.messageCount ?? -2)
     || (lastRemote?.id ?? null) !== (lastLocal?.id ?? null)
+    || summary.messages.some((m) => streaming.has(m.id) && !!m.status && m.status !== 'streaming')
   // What the bridge works out on each read (when the chat's task was finished) is the summary's,
   // there or not: a task reopened since takes it away without the chat itself changing.
   const { taskDoneAt: _read, ...kept } = existing
-  return { thread: { ...kept, ...meta, messages: existing.messages, history: existing.history }, stale }
+  // Stale, it keeps its own clock and count until a window replaces its messages, so a
+  // read that fails or never lands leaves it stale for the next sync to read again.
+  const held = stale ? { updatedAt: existing.updatedAt, messageCount: existing.messageCount } : {}
+  return { thread: { ...kept, ...meta, ...held, messages: existing.messages, history: existing.history }, stale }
 }
 
 /** How much of a message's text a summary keeps: the bridge's SUMMARY_TEXT. */

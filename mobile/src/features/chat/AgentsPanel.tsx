@@ -22,13 +22,15 @@ import Spark, { Shimmer } from './Spark'
 import { TI, ProviderLogo, toolApp, toolIcon, formatDuration, agentName, vc } from './ui'
 import { IconCheck, IconChevronRight, IconChevronDown, IconChevronUp, IconBrain, IconRobot, IconX } from './icons'
 
-export interface AgentEntry { toolId: string; agent: AgentInfo; part: ToolPart }
+/** `latest`: in the chat's last message, the only reply a run here can be writing. */
+export interface AgentEntry { toolId: string; agent: AgentInfo; part: ToolPart; latest: boolean }
 
 function collect(thread?: ChatThread): AgentEntry[] {
   const out: AgentEntry[] = []
-  for (const m of thread?.messages || []) {
-    for (const p of m.parts || []) if (p.type === 'tool' && p.agent) out.push({ toolId: p.id, agent: p.agent, part: p })
-  }
+  const msgs = thread?.messages || []
+  msgs.forEach((m, i) => {
+    for (const p of m.parts || []) if (p.type === 'tool' && p.agent) out.push({ toolId: p.id, agent: p.agent, part: p, latest: i === msgs.length - 1 })
+  })
   return out
 }
 
@@ -50,7 +52,14 @@ function useTick(on: boolean) {
   }, [on])
 }
 
-const elapsedOf = (a: AgentInfo) => (a.startedAt ? (a.endedAt || Date.now()) - a.startedAt : 0)
+/** The last moment this device saw an agent at work. */
+const lastSeen = (a: AgentInfo) => Math.max(a.startedAt || 0, ...a.steps.map((s) => s.endedAt || s.at || 0))
+/**
+ * How long it has run. In a reply that is not live here, an agent still marked running is
+ * one whose end this copy missed (the bridge settles every agent when a run ends), so its
+ * clock stops at the last step seen rather than counting on until the window is read again.
+ */
+const elapsedOf = (a: AgentInfo, live: boolean) => (a.startedAt ? (a.endedAt || (live ? Date.now() : lastSeen(a))) - a.startedAt : 0)
 const compact = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
 const firstLine = (s?: string) => (s || '').split('\n').map((l) => l.trim()).find(Boolean) || ''
 
@@ -77,8 +86,9 @@ export default function AgentsSheet() {
   const threadId = useChat((s) => s.activeId)
   const focus = useChat((s) => s.agentFocus)
   const agents = useThreadAgents(threadId)
+  const live = useChat((s) => !!(threadId && s.runs[threadId]))
   const running = agents.filter((e) => e.agent.status === 'running').length
-  useTick(running > 0)
+  useTick(live && agents.some((e) => e.latest && e.agent.status === 'running'))
   const scroller = useRef<ScrollView>(null)
   const atBottom = useRef(true)
   // The store's panel flag follows the sheet: closed when it goes.
@@ -118,7 +128,7 @@ export default function AgentsSheet() {
       ) : (
         <View style={{ gap: 8 }}>
           {agents.map((e) => (
-            <AgentRow key={e.toolId} entry={e} open={shown?.toolId === e.toolId} onToggle={() => { tap(); focusAgent(shown?.toolId === e.toolId ? '' : e.toolId) }} />
+            <AgentRow key={e.toolId} entry={e} live={live && e.latest} open={shown?.toolId === e.toolId} onToggle={() => { tap(); focusAgent(shown?.toolId === e.toolId ? '' : e.toolId) }} />
           ))}
         </View>
       )}
@@ -126,9 +136,9 @@ export default function AgentsSheet() {
   )
 }
 
-function AgentRow({ entry, open, onToggle }: { entry: AgentEntry; open: boolean; onToggle: () => void }) {
+function AgentRow({ entry, live, open, onToggle }: { entry: AgentEntry; live: boolean; open: boolean; onToggle: () => void }) {
   const a = entry.agent
-  const ms = elapsedOf(a)
+  const ms = elapsedOf(a, live)
   const meta = [
     agentHeading(a),
     a.model,
@@ -250,14 +260,14 @@ function AgentAvatar({ a, dot, overlap }: { a: AgentInfo; dot?: boolean; overlap
  * since the first started, folding open to one row per agent. A row opens the
  * sheet on it.
  */
-export function AgentGroup({ tools }: { tools: ToolPart[] }) {
+export function AgentGroup({ tools, live }: { tools: ToolPart[]; live: boolean }) {
   const agents = tools.map((t) => t.agent!)
   const running = agents.filter((a) => a.status === 'running').length
   const failed = agents.filter((a) => a.status === 'error').length
   const [open, setOpen] = useState(true)
-  useTick(running > 0)
+  useTick(running > 0 && live)
   const starts = agents.map((a) => a.startedAt).filter((n): n is number => !!n)
-  const ends = agents.map((a) => (a.status === 'running' ? Date.now() : a.endedAt)).filter((n): n is number => !!n)
+  const ends = agents.map((a) => (a.status === 'running' ? (live ? Date.now() : lastSeen(a)) : a.endedAt)).filter((n): n is number => !!n)
   const ms = starts.length && ends.length ? Math.max(...ends) - Math.min(...starts) : 0
   const state = running ? `${running} working` : failed ? `${failed} failed` : 'Finished'
   const label = `${agents.length} ${agents.length === 1 ? 'subagent' : 'subagents'}`
@@ -276,17 +286,17 @@ export function AgentGroup({ tools }: { tools: ToolPart[] }) {
       </Press>
       {open ? (
         <View style={st.rows}>
-          {tools.map((t) => <GroupRow key={t.id} tool={t} />)}
+          {tools.map((t) => <GroupRow key={t.id} tool={t} live={live} />)}
         </View>
       ) : null}
     </View>
   )
 }
 
-function GroupRow({ tool }: { tool: ToolPart }) {
+function GroupRow({ tool, live }: { tool: ToolPart; live: boolean }) {
   const a = tool.agent!
   const running = a.status === 'running'
-  const ms = elapsedOf(a)
+  const ms = elapsedOf(a, live)
   const name = a.title || firstLine(a.prompt) || tool.title || agentHeading(a)
   const now = running ? `Running ${agentNow(a)}` : firstLine(a.summary) || agentHeading(a)
   return (

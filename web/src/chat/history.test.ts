@@ -61,6 +61,27 @@ describe('history', () => {
     expect(done.thread.taskDoneAt).toBe(9)
   })
 
+  it('a stale chat stays stale until a window replaces it, so a failed read is tried again', () => {
+    const loaded = mergeLatest(undefined, page(['u1', 'a1']))
+    const remote: ChatThread = { ...loaded, updatedAt: 3, messageCount: 12, summary: true, messages: [m('a2')] }
+    const first = mergeSummary(loaded, remote)
+    expect(first.stale).toBe(true)
+    expect(first.thread.updatedAt).toBe(2)
+    // The read failed: the next sync still sees it as behind.
+    expect(mergeSummary(first.thread, remote).stale).toBe(true)
+    // The window landed: caught up.
+    const read = mergeLatest(first.thread, page(['u1', 'a1', 'u2', 'a2'], undefined, { updatedAt: 3, messageCount: 12 }))
+    expect(mergeSummary(read, remote).stale).toBe(false)
+  })
+
+  it('a reply held as streaming that the bridge shows finished makes the chat stale', () => {
+    const loaded = mergeLatest(undefined, page(['u1', 'a1']))
+    const cut = { ...loaded, messages: [loaded.messages[0], { ...loaded.messages[1], status: 'streaming' as const }] }
+    expect(mergeSummary(cut, { ...loaded, summary: true, messages: [{ ...m('a1', 'cut'), status: 'done' }] }).stale).toBe(true)
+    // The bridge left it streaming too (a restart cut its run off): the same, so not read on every sync.
+    expect(mergeSummary(cut, { ...loaded, summary: true, messages: [{ ...m('a1', 'cut'), status: 'streaming' }] }).stale).toBe(false)
+  })
+
   it('an unsent message here does not make an opened chat stale', () => {
     const loaded = mergeLatest(undefined, page(['u1', 'a1']))
     const withUnsent = { ...loaded, messages: [...loaded.messages, { ...m('local-x'), unsent: true }] }
