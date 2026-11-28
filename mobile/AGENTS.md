@@ -238,6 +238,11 @@ npm run start:tailscale                            # Metro on the Tailscale IP, 
 - **Over-the-air:** `npx eas-cli update --channel production -m "…"` ships JS-only changes to installed
   TestFlight builds. `runtimeVersion` uses the fingerprint policy, so an update only reaches binaries
   whose native code matches. If native code changed, build again instead.
+- **Which update is running:** the drawer shows the version and merge date beside TOTEM, as the web
+  rail does (`<major>.<minor>.<commits on main>`, `web/build-version.mjs`). The deploy stamps
+  `src/lib/buildVersion.ts` with `node scripts/stamp-version.mjs` (full history needed) right before
+  `eas update`; the committed copy is unstamped and shows "dev". A hand-run `eas update` should stamp
+  first too, and not commit the stamped file.
 - The EAS project's slug is `vesper-mobile` (from before the rename). Keep it; the project id is bound to it.
 - Web preview (layouts only): `npx expo export --platform web`, served beside a proxy to the bridge
   (it sends no CORS headers). Native-only modules need a Platform guard or a `.web.tsx` fallback.
