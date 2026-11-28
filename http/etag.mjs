@@ -8,7 +8,10 @@
 // whole JSON body it hashes that body and answers from the result. Anything
 // streamed with write() passes straight through.
 import { createHash } from 'node:crypto'
-import { gzipSync } from 'node:zlib'
+import { gzip, gzipSync } from 'node:zlib'
+import { promisify } from 'node:util'
+
+const gzipAsync = promisify(gzip)
 
 // The read routes a client may keep. Every one answers a single JSON body, and
 // none streams, changes on every poll (usage meters, /api/jobs' generatedAt),
@@ -60,6 +63,25 @@ export function acceptsGzip(header) {
   // gzip named outright wins over the wildcard.
   const q = weights.has('gzip') ? weights.get('gzip') : weights.get('*')
   return q > 0
+}
+
+/**
+ * A JSON answer gzipped (off the bridge's one thread) when it is big and the client
+ * takes gzip; `no-store` unless `headers` says otherwise. For bodies that are not
+ * ETag-cached: an agent's log, the quota history.
+ */
+export async function sendJsonGzip(req, res, status, body, headers = {}) {
+  const text = JSON.stringify(body)
+  const head = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers }
+  if (Buffer.byteLength(text) >= GZIP_MIN_BYTES && acceptsGzip(req.headers?.['accept-encoding'])) {
+    // Packed before the head goes out, so a failure never leaves a gzip header on a plain body.
+    const packed = await gzipAsync(text)
+    res.writeHead(status, { ...head, 'content-encoding': 'gzip', vary: 'accept-encoding' })
+    res.end(packed)
+    return
+  }
+  res.writeHead(status, head)
+  res.end(text)
 }
 
 export function etagEligible(method, path) {

@@ -337,6 +337,93 @@ export function normalizeAgent(a) {
   return out
 }
 
+// --- The brief form, for the phone --------------------------------------------------
+//
+// A sub-agent's log is most of a chat that used them (555 KB of a 667 KB window,
+// four agents' steps), and every step is its own event on the run's stream. T3 Code
+// keeps a child's work in the child's own thread and the parent's feed holds one
+// row per agent: status, title, what it is doing, what it handed back. A client
+// that asks for `agents=brief` gets that: each agent without its steps, with how
+// many there were and its latest one in a line, and the log itself read on demand
+// (GET /api/threads/<id>/agents/<tool id>).
+
+const BRIEF_PROMPT = 300
+const firstOf = (s) => String(s || '').split('\n').map((l) => l.trim()).find(Boolean) || ''
+
+/** What an agent is doing now, in one line (the app's AgentsPanel used to work this out from the steps). */
+export function agentNow(a) {
+  const steps = Array.isArray(a?.steps) ? a.steps : []
+  const last = steps[steps.length - 1]
+  if (last?.kind === 'tool') return truncate([last.title, last.detail].filter(Boolean).join(' · '), 200)
+  if (last?.kind === 'thinking') return 'Thinking'
+  if (last?.kind === 'text') return truncate(firstOf(last.text), 200)
+  return truncate(String(a?.progress || ''), 200)
+}
+
+/** The few facts of an agent's log a row needs, worked out where the steps are. */
+export function agentBrief(a) {
+  const steps = Array.isArray(a?.steps) ? a.steps : []
+  const lastAt = steps.reduce((n, s) => Math.max(n, s.endedAt || 0, s.at || 0), 0)
+  return { stepCount: steps.length + (a?.dropped || 0), now: agentNow(a), ...(lastAt ? { lastAt } : {}) }
+}
+
+/** An agent without its steps, for a row. A part already brief is left alone. */
+export function briefAgent(a) {
+  if (!a || typeof a !== 'object' || a.brief) return a
+  const { steps: _steps, prompt, ...rest } = a
+  return { ...rest, ...(prompt ? { prompt: truncate(prompt, BRIEF_PROMPT) } : {}), ...agentBrief(a), brief: true }
+}
+
+/** A message with every agent in it brief. The same object when it has none. */
+export function briefMessage(m) {
+  if (!m || !Array.isArray(m.parts) || !m.parts.some((p) => p?.agent)) return m
+  return { ...m, parts: m.parts.map((p) => (p?.agent ? { ...p, agent: briefAgent(p.agent) } : p)) }
+}
+
+/**
+ * A run's event as a brief viewer sees it. An agent's event loses its step and carries
+ * the row's facts as the reply holds them now (`agentOf(toolId)`, the running reply's
+ * agent); the reply's first and final messages lose their agents' steps. Anything else
+ * passes as it is.
+ */
+export function briefEvent(event, agentOf = () => null) {
+  if (event?.type === 'agent') {
+    const { step: _step, agent, ...rest } = event
+    const current = agentOf(event.toolId)
+    return { ...rest, agent: { ...(agent || {}), ...(current ? agentBrief(current) : {}) } }
+  }
+  if (event?.type === 'done' && event.message) return { ...event, message: briefMessage(event.message) }
+  if (event?.type === 'start' && event.assistantMessage) return { ...event, assistantMessage: briefMessage(event.assistantMessage) }
+  return event
+}
+
+/**
+ * The replayed events a brief viewer can skip: an agent's step (an event with a step
+ * and nothing else) that a later event of the same agent makes old, since each brief
+ * event carries the row's facts as they are now. A re-attach to a reply whose agents
+ * took a thousand steps then sends a few events per agent, not every step.
+ */
+export function supersededSteps(events, since = 0) {
+  const out = new Set()
+  const lastStep = new Map() // tool id -> seq of its latest step-only event
+  for (const e of events) {
+    if (!(e?.seq > since) || e.type !== 'agent' || !e.toolId) continue
+    const prev = lastStep.get(e.toolId)
+    if (prev !== undefined) out.add(prev)
+    const stepOnly = !!e.step && !Object.keys(e.agent || {}).length
+    lastStep.set(e.toolId, stepOnly ? e.seq : undefined)
+  }
+  return out
+}
+
+/** One agent of a stored or live chat, by the id of the tool card that started it. */
+export function findAgent(messages, toolId) {
+  for (const m of messages || []) {
+    for (const p of m?.parts || []) if (p?.type === 'tool' && p.id === toolId && p.agent) return { messageId: m.id, part: p }
+  }
+  return null
+}
+
 // --- Tailing another CLI's session log -------------------------------------------
 
 const POLL_MS = 900

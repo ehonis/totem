@@ -58,6 +58,8 @@ const ROUTES: { name: string; options: object }[] = [
   { name: 'chat/model', options: sheet([0.5, 1]) },
   { name: 'chat/usage', options: sheet([0.6, 1]) },
   { name: 'chat/agents', options: sheet([0.6, 1]) },
+  // One sub-agent's log, pushed over the chat from its row or the Agents sheet.
+  { name: 'chat/agent', options: pushedOptions('', 'Chat') },
   { name: 'chat/file', options: sheet([0.75, 1], colors.bg) },
   { name: 'chat/view', options: sheet([1], colors.bg) },
   { name: 'chat/select', options: sheet([0.75, 1], colors.bg) },

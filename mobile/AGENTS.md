@@ -38,7 +38,8 @@ Use `npx expo install <pkg>` for dependencies so versions match the SDK.
   projects and folders, and the chats filed in them, are there on a cold start before a weak connection answers.
   A list asked for before the phone's own change to a project (made, renamed, deleted: `takeChange`) is dropped,
   and one that is not a list (a captive page) keeps what the store has. A chat's latest window
-  (`getThreadPage` without `before`) does too, 45 s: a window with sub-agents runs to hundreds of KB, missed
+  (`getThreadPage` without `before`) does too, 45 s: a window with sub-agents ran to hundreds of KB (it is read
+  `agents=brief` now, below), missed
   the 8 s on a phone connection every time, and each read answered the copy stored when the chat was opened
   mid-reply, so a finished reply showed its sub-agents "running" for hours. The store paints the stored
   window itself (`peekThreadPage`) only when it holds none, and `mergeSummary` keeps an opened chat stale

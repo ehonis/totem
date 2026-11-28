@@ -3,7 +3,7 @@
 import { authHeaders, AuthError, api, getJSON, peekJSON } from '../api'
 import { bridgeFetch, bridgeUrl } from '../connection'
 import { PROJECTS_GET, PROJECTS_PATH } from './projectList'
-import type { ApprovalDecision, ArchivedProject, Attachment, ChatCapabilities, ChatMode, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
+import type { AgentInfo, ApprovalDecision, ArchivedProject, Attachment, ChatCapabilities, ChatMode, ModelSettings, Project, QueuedMessage, StreamEvent } from './types'
 
 export interface SendArgs {
   threadId: string
@@ -88,18 +88,25 @@ function stream(url: string, init: RequestInit, onEvent: (e: StreamEvent) => voi
   return handle
 }
 
+// Runs are read with `agents=brief`: a sub-agent's step comes as its row's facts, never
+// the step, and a re-attach skips the steps a later event makes old (thousands in a reply
+// that used a few, every one a store update).
 export function sendChat(args: SendArgs, onEvent: (e: StreamEvent) => void, onError: (e: Error) => void): StreamHandle {
   return stream('/api/chat', {
     method: 'POST',
     headers: authHeaders({ 'content-type': 'application/json' }),
-    body: JSON.stringify(args),
+    body: JSON.stringify({ ...args, agents: 'brief' }),
   }, onEvent, onError)
 }
 
 /** Re-attach to a run already going on the bridge (after a reload, or from another device). */
 export function attachRun(threadId: string, since: number, onEvent: (e: StreamEvent) => void, onError: (e: Error) => void): StreamHandle {
-  return stream(`/api/chat/runs/${encodeURIComponent(threadId)}/stream?since=${since}`, { headers: authHeaders() }, onEvent, onError)
+  return stream(`/api/chat/runs/${encodeURIComponent(threadId)}/stream?since=${since}&agents=brief`, { headers: authHeaders() }, onEvent, onError)
 }
+
+/** One sub-agent's whole log: what it was asked, every step, what it handed back. `live` while the reply runs. */
+export const getAgentLog = (threadId: string, toolId: string) =>
+  api<{ messageId: string; toolId: string; live: boolean; agent: AgentInfo }>(`/api/threads/${encodeURIComponent(threadId)}/agents/${encodeURIComponent(toolId)}`)
 
 export const stopChat = (threadId: string) =>
   api('/api/chat/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId }) })

@@ -78,7 +78,20 @@ export interface AgentInfo {
   endedAt?: number
   /** Earlier steps not kept (the list is capped). */
   dropped?: number
-  steps: AgentStep[]
+  /**
+   * Its log. Absent on a `brief` agent: the app reads chats and runs with
+   * `agents=brief` (chat/subagents.mjs), so a row has only the facts below, and
+   * the agent's page reads the log on its own (getAgentLog).
+   */
+  steps?: AgentStep[]
+  /** Sent without its steps. */
+  brief?: boolean
+  /** How many steps its log has (dropped ones counted). */
+  stepCount?: number
+  /** What it is doing now, in a line. */
+  now?: string
+  /** When its latest step happened. */
+  lastAt?: number
 }
 export interface FilePart { type: 'file'; uploadId: string; name: string; mime: string; size?: number; path?: string; url?: string }
 /** A change to a totem the agent proposed; applied only when the owner accepts. */

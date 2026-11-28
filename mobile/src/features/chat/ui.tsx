@@ -79,6 +79,9 @@ const KINDS: Record<string, IconType> = {
   web_search: IconWorld,
   webSearch: IconWorld,
   webFetch: IconWorld,
+  // Claude's own names, as its sub-agents' steps carry them.
+  WebSearch: IconWorld,
+  WebFetch: IconWorld,
   read: IconFileText,
   edit: IconPencil,
   write: IconPencil,

@@ -1257,7 +1257,12 @@ function handleEvent(threadId: string, e: StreamEvent) {
         const msgs = t.messages.slice()
         const ai = msgs.length - 1
         const ui = ai - 1
-        if (msgs[ai]?.role === 'assistant' && msgs[ai].status === 'streaming') {
+        if (msgs[ai]?.role === 'assistant' && msgs[ai].id === e.assistantMessage.id) {
+          // The bridge's own copy, from a window read mid-reply: this is a replay from the run's
+          // start, which rebuilds the reply, so it starts over rather than doubling its text.
+          msgs[ai] = e.assistantMessage
+          if (msgs[ui]?.role === 'user') msgs[ui] = e.userMessage
+        } else if (msgs[ai]?.role === 'assistant' && msgs[ai].status === 'streaming') {
           const live = msgs[ai]
           // Compact and send's stand-in divider gives way to the bridge's own (same compaction, real id).
           const kept = (live.parts || []).filter((p) => !(p.type === 'compaction' && p.id.startsWith('local-')))
