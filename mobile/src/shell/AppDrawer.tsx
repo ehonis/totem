@@ -45,6 +45,7 @@ import { PRODUCTIVITY_APPS, TAB_ROUTES, TOOL_LABELS, productivityPage, productiv
 import { ToolIcon } from './ToolIcon'
 import { tap } from '../ui/haptics'
 import { useTotemReportWaiting } from '../features/chat/totemReport'
+import { BUILD_VERSION } from '../lib/buildVersion'
 
 const FOLD_KEY = 'totem.drawer.toolsFolded'
 const readFolded = () => { try { return localStorage.getItem(FOLD_KEY) === '1' } catch { return false } }
@@ -53,6 +54,24 @@ const readFolded = () => { try { return localStorage.getItem(FOLD_KEY) === '1' }
 function onToolName(path: string): string | null {
   const page = productivityPage(path)
   return page && page !== 'hub' ? TOOL_LABELS[page] : null
+}
+
+// The running update's version and merge date beside the wordmark, as the web rail shows them
+// (Version in web/src/components/Shell.tsx), so a glance says whether the latest OTA has landed.
+// A dev client runs the unstamped copy and shows "dev".
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+function shortDate(iso: string): string {
+  const [, m, d] = iso.split('-').map(Number)
+  return m && d ? `${MONTHS[m - 1]} ${d}` : iso
+}
+
+function Version() {
+  const { version, date } = BUILD_VERSION
+  return (
+    <T size={11} numberOfLines={1} style={{ color: textAlpha(45), fontVariant: ['tabular-nums'], flexShrink: 1 }}>
+      {version ? `${version} · ${shortDate(date)}` : 'dev'}
+    </T>
+  )
 }
 
 export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
@@ -97,7 +116,10 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
   return (
     <View style={[st.drawer, { paddingTop: insets.top }]}>
       <View style={st.head}>
-        <T brand size={17} style={{ flex: 1, letterSpacing: 2, textTransform: 'uppercase', paddingLeft: 10 }}>Totem</T>
+        <View style={st.brand}>
+          <T brand size={17} style={{ letterSpacing: 2, textTransform: 'uppercase' }}>Totem</T>
+          <Version />
+        </View>
         <IconBtn
           icon={NAV_ICONS.search}
           size={20}
@@ -222,6 +244,7 @@ export default function AppDrawer({ navigation }: DrawerContentComponentProps) {
 const st = StyleSheet.create({
   drawer: { flex: 1, backgroundColor: colors.bg2, paddingHorizontal: 8 },
   head: { height: 58, flexDirection: 'row', alignItems: 'center', gap: 2 },
+  brand: { flex: 1, flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingLeft: 10, minWidth: 0 },
   nav: { paddingTop: 2, paddingBottom: 6, gap: 2, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
   // Floating over the scroll's end: the shelves on the left, New chat and Settings on the right.
   foot: { position: 'absolute', left: 8, right: 8, bottom: 0 },
