@@ -8,8 +8,13 @@
 // drawer's own (ChatsNav ThreadItem): tap opens the chat and closes the sheet and
 // the drawer; swipe left for Wake, Snooze or Un-settle; long-press for the rest
 // (Discard draft closes the sheet first, so its Undo line in the drawer is in sight).
+//
+// The root is collapsable={false}: on glass it is clear, and flattened away it would
+// let react-native-screens stretch the list over the heading (mobile/AGENTS.md → Gotchas).
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { FlatList, StyleSheet, View } from 'react-native'
+import AlarmClockOff from 'lucide-react-native/icons/alarm-clock-off'
+import Archive from 'lucide-react-native/icons/archive'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useChat } from '../../lib/chat/store'
@@ -66,34 +71,46 @@ export default function ShelfSheet() {
   }
 
   return (
-    <View style={st.sheet}>
+    <View collapsable={false} style={st.sheet}>
       <View style={st.head}>
-        <T size={17} weight={600} numberOfLines={1} accessibilityRole="header">{place}</T>
+        <T size={20} weight={700} numberOfLines={1} accessibilityRole="header" style={st.title}>{place}</T>
+        <Segmented
+          style={[st.switch, GLASS && st.switchGlass]}
+          value={kind}
+          onChange={setKind}
+          options={[
+            { value: 'snoozed', label: 'Snoozed', count: snoozed.length },
+            { value: 'settled', label: 'Settled', count: settled.length },
+          ]}
+        />
+        <T size={12.5} muted style={st.note}>
+          {kind === 'snoozed'
+            ? 'Back in your list when they wake. Swipe left on one to wake it now.'
+            : `Settled by you, done and read, or quiet for ${autoDays} ${autoDays === 1 ? 'day' : 'days'}. Swipe left on one to bring it back.`}
+        </T>
       </View>
-      <Segmented
-        style={{ marginHorizontal: 16 }}
-        value={kind}
-        onChange={setKind}
-        options={[
-          { value: 'snoozed', label: 'Snoozed', count: snoozed.length },
-          { value: 'settled', label: 'Settled', count: settled.length },
-        ]}
-      />
-      <T size={12.5} muted style={st.note}>
-        {kind === 'snoozed'
-          ? 'Back in your list when they wake. Swipe one to wake it now.'
-          : `Chats you settled, finished ones you've read (marked done, or their task done), or ones left quiet for ${autoDays} ${autoDays === 1 ? 'day' : 'days'}. Swipe one to bring it back.`}
-      </T>
+      <View style={st.rule} />
       <FlatList
         ref={list}
+        style={st.list}
         data={rows}
         keyExtractor={(t) => t.id}
         renderItem={({ item }) => <ThreadItem t={item} glass={GLASS} shelf={kind} now={now} active={item.id === activeId} live={!!runs[item.id]} onOpen={open} beforeDiscard={() => router.back()} place={{ project: null, label: placeLabel(item, projects) || 'Home' }} />}
         onScrollToIndexFailed={({ index, averageItemLength }) => list.current?.scrollToOffset({ offset: index * averageItemLength, animated: false })}
-        contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: insets.bottom + 16 }}
-        ListEmptyComponent={<T size={14} muted style={st.empty}>{kind === 'snoozed' ? 'Nothing snoozed here.' : 'Nothing settled here.'}</T>}
+        contentContainerStyle={[st.rows, { paddingBottom: insets.bottom + 16 }, rows.length === 0 && st.rowsEmpty]}
+        ListEmptyComponent={<Empty kind={kind} />}
         initialNumToRender={16}
       />
+    </View>
+  )
+}
+
+function Empty({ kind }: { kind: Kind }) {
+  const Icon = kind === 'snoozed' ? AlarmClockOff : Archive
+  return (
+    <View style={st.empty}>
+      <Icon size={28} color={colors.muted} strokeWidth={1.75} />
+      <T size={14} muted style={{ textAlign: 'center' }}>{kind === 'snoozed' ? 'Nothing snoozed here.' : 'Nothing settled here.'}</T>
     </View>
   )
 }
@@ -101,7 +118,15 @@ export default function ShelfSheet() {
 const st = StyleSheet.create({
   // Clear over the system's glass sheet; solid without it.
   sheet: { flex: 1, backgroundColor: GLASS ? 'transparent' : colors.bg2 },
-  head: { paddingTop: 22, paddingBottom: 12, paddingHorizontal: 20 },
-  note: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 6 },
-  empty: { paddingVertical: 28, textAlign: 'center' },
+  head: { paddingTop: 24, paddingHorizontal: 20, paddingBottom: 10 },
+  title: { marginBottom: 14 },
+  switch: { alignSelf: 'stretch' },
+  // The switch's solid well reads as a hole in the glass; a faint wash keeps it part of the sheet.
+  switchGlass: { backgroundColor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.08)' },
+  note: { paddingTop: 10, lineHeight: 17 },
+  rule: { height: StyleSheet.hairlineWidth, marginHorizontal: 20, backgroundColor: GLASS ? 'rgba(255,255,255,0.1)' : colors.line },
+  list: { flex: 1 },
+  rows: { paddingHorizontal: 8, paddingTop: 6 },
+  rowsEmpty: { flexGrow: 1 },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, paddingBottom: 48 },
 })

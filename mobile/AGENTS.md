@@ -323,6 +323,13 @@ npm run start:tailscale                            # Metro on the Tailscale IP, 
   only moves the sheet once the scroll view is at its top, so a header inside the scroller (sticky or
   not) left nothing to grab halfway down a document. `FileSheet` and `SearchResultSheet` put the title,
   buttons and Close above a `flex: 1` ScrollView, as `SheetFrame` does.
+- **A clear sheet's root view needs `collapsable={false}`.** react-native-screens resizes a formSheet's scroll
+  view itself when it is the screen's first child, or its second after one header (`RNSScreenContentWrapper`'s
+  `coerceChildScrollViewComponentSizeToSize`); anywhere else among the screen's children it is stretched over
+  the whole sheet from the top. A glass sheet (`glassSheet`) and its root are transparent, so React Native
+  flattens the root away and its children become the screen's own: the shelf sheet's list was drawn under its
+  heading, switch and note on iOS 26 only, since the solid fallback's root is kept. `ShelfSheet` keeps its root,
+  so flexbox alone lays the list out; do the same for any new clear sheet with a header above a list.
 - **A message's text is selected in a sheet, not in place.** A press on a message opens its menu (the bubble's
   `MessageMenu`, the reply's `ReplyMenu`), and RN's `<Text selectable>` on iOS offers only Copy for the whole
   block, so both menus have **Select text**: `features/chat/selectText.ts` hands the text to
