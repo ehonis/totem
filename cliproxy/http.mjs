@@ -14,28 +14,13 @@
 //   accounts/refresh { name } | { all }     accounts/cooldown { name }      accounts/delete { name }
 //   login { provider }    login/callback { state, url }    login/cancel { state }
 //   grants/claim { name, grantId? }  (high)    credits/consume { name }  (high)
-import { gzip } from 'node:zlib'
-import { promisify } from 'node:util'
 import { readJson } from '../dev/http.mjs'
-import { acceptsGzip, GZIP_MIN_BYTES } from '../http/etag.mjs'
-
-const gzipAsync = promisify(gzip)
-const JSON_TYPE = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
+import { sendJsonGzip } from '../http/etag.mjs'
 
 // Three weeks of quota history is megabytes of JSON, re-read by the graphs every
 // few minutes, and on a phone over a cellular link. It shrinks about 25x, so a
 // client that takes gzip gets it gzipped, off the bridge's one thread.
-async function send(req, res, status, body) {
-  const text = JSON.stringify(body)
-  if (Buffer.byteLength(text) >= GZIP_MIN_BYTES && acceptsGzip(req.headers?.['accept-encoding'])) {
-    const packed = await gzipAsync(text)
-    res.writeHead(status, { ...JSON_TYPE, 'content-encoding': 'gzip', vary: 'accept-encoding' })
-    res.end(packed)
-    return
-  }
-  res.writeHead(status, JSON_TYPE)
-  res.end(text)
-}
+const send = (req, res, status, body) => sendJsonGzip(req, res, status, body)
 
 export function createCliproxyHttpHandler({ manager, configured }) {
   const POSTS = {

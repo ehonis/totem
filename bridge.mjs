@@ -108,7 +108,7 @@ import { planHistory, renderTranscript, attachmentBlock, projectBlock, applyEven
 import { createTaskDone } from './chat/task-done.mjs'
 import { listThreads as listOtherThreads, readThread as readOtherThread, threadsRule, findChatPlace, listChatPlaces, projectPath as chatProjectPath } from './chat/thread-tools.mjs'
 import { describeMcpCall, describeCommand, humanizeTool, stringifyInput, resultText, genericToolDetail, chatToolFromClaude, connectorLook } from './chat/tools.mjs'
-import { claudeRecordSteps, createCliAgentWatch, isClaudeAgentTool, watchSessionLog, agentLabel } from './chat/subagents.mjs'
+import { claudeRecordSteps, createCliAgentWatch, isClaudeAgentTool, watchSessionLog, agentLabel, briefEvent, briefMessage, findAgent, supersededSteps } from './chat/subagents.mjs'
 import { manualModelFor, newChatChoice, turnModelFields } from './chat/route.mjs'
 import { chatReach, limitReach, reachRules, browserRules, WORK_RULES, COMPUTER_RULES } from './chat/reach.mjs'
 import { THREAD_ICONS, parseTitleReply, cleanIcon } from './chat/thread-icons.mjs'
@@ -167,7 +167,7 @@ import { createAuthHttpHandler } from './auth/http.mjs'
 import { createApprovalCode, ApprovalRefused } from './auth/approval-code.mjs'
 import { approvalRouteFor, inboxApprovalRisk, normalizeApiPath } from './auth/approval-routes.mjs'
 import { guardRequest, upgradeOriginAllowed } from './auth/guard.mjs'
-import { etagResponse } from './http/etag.mjs'
+import { etagResponse, sendJsonGzip } from './http/etag.mjs'
 import { createAiSettings, createEnvBackedSettings, authFailureMessage } from './ai/settings.mjs'
 import { isExistingInstall } from './ai/install.mjs'
 import {
@@ -3396,7 +3396,16 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
   const readPaths = new Map() // tool_use id → the file a Read opened, so a picture it looked at can be shown later
   // Sub-agents launched in the background: their card stays open until Claude
   // reports the task finished (`task_notification`), not when the launch returns.
+  //
+  // Claude wakes the reply when one reports (a new turn and another `result`), but
+  // only while it is still running: with its input closed, `claude -p` waits ten
+  // minutes after its last turn, then stops every background task and exits. The
+  // reply that said "I'll put it in a table once they report back" ended there,
+  // its agents cut off and the table never written. So input stays open while any
+  // is out, as T3 Code keeps the process for background work.
   const backgroundAgents = new Set()
+  let wakeTimer = null
+  let idleAfterResult = false // the last turn ended and nothing has started since
   let child = null
   let written = 1 // the prompt itself is echoed too
   let echoed = 0
@@ -3461,6 +3470,9 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
         }
         return
       }
+      // A turn of the reply's own has begun (a wake from a sub-agent, or a steer): its
+      // first partial message or its first message, never a sub-agent's (those return above).
+      if (event.type === 'assistant' || event.type === 'stream_event') idleAfterResult = false
       // Claude Code reports every background task this way, a Bash command run in
       // the background as much as an Agent call; only an Agent call is a sub-agent.
       if (event.type === 'system' && event.tool_use_id && /^task_/.test(event.subtype || '')) {
@@ -3471,7 +3483,17 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
         if (event.subtype === 'task_notification') {
           const ok = event.status === 'completed'
           emitSafe(onAgent, { toolId, agent: { status: ok ? 'done' : event.status === 'stopped' ? 'stopped' : 'error', summary: event.summary || '', endedAt: Date.now(), ...counts } }, 'agent')
-          if (backgroundAgents.delete(toolId)) emitSafe(onTool, { id: toolId, phase: 'end', status: ok ? 'done' : 'error', output: resultText(event.summary || '') }, 'tool')
+          if (backgroundAgents.delete(toolId)) {
+            emitSafe(onTool, { id: toolId, phase: 'end', status: ok ? 'done' : 'error', output: resultText(event.summary || '') }, 'tool')
+            // The last one back wakes the reply, whose turn ends in a `result` that
+            // closes the input. Should no turn follow, it is closed here instead.
+            if (!backgroundAgents.size && steering && idleAfterResult) {
+              // Keyed on no turn having started, not on silence: Claude sends status lines around a report.
+              clearTimeout(wakeTimer)
+              wakeTimer = setTimeout(() => { if (idleAfterResult && !backgroundAgents.size) finishInput() }, 60_000)
+              wakeTimer.unref?.()
+            }
+          }
         }
         return
       }
@@ -3479,6 +3501,8 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
       const comp = claudeCompactionEvent(event)
       if (comp) {
         if (comp.status === 'running') {
+          // A turn that compacts first has begun, even before its first message.
+          idleAfterResult = false
           // Claude repeats the status while it works: one divider per compaction (T3).
           if (compaction) return
           compaction = { id: `cmp-${randomUUID().slice(0, 8)}`, startedAt: Date.now() }
@@ -3511,12 +3535,15 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
         // A turn a steer cut short: the run goes on with the steer.
         if (/^aborted/.test(String(event.terminal_reason || ''))) return
         if (event.result) result = event.result
+        idleAfterResult = true
+        // Sub-agents still out in the background: wait for them to wake it.
+        if (backgroundAgents.size) return
         if (echoed >= written) finishInput()
         // A steer still unread starts its own turn; if nothing at all follows, the
         // count was off and waiting would hold the run open until its timeout.
         else {
           const at = lastEvent
-          setTimeout(() => { if (lastEvent === at) finishInput() }, 20_000).unref?.()
+          setTimeout(() => { if (lastEvent === at && !backgroundAgents.size) finishInput() }, 20_000).unref?.()
         }
         return
       }
@@ -3585,7 +3612,7 @@ async function spawnClaudeStream(text, { label = 'request', onActivity, onTool, 
         }
       }
     },
-  }).then((res) => ({ ...res, result, sessionId }))
+  }).then((res) => ({ ...res, result, sessionId, agentsOut: backgroundAgents.size }))
 }
 
 // The web chat card for a Codex `item.*` event; null for item types that are
@@ -9765,18 +9792,24 @@ function chatSse(res) {
 }
 
 // Attach a viewer to a thread's run and stream until it ends or the viewer leaves.
-function streamChatRun(req, res, threadId, since = 0) {
+// `brief`: the viewer takes agents as rows, not their steps (chat/subagents.mjs › briefEvent):
+// each agent event carries the row's facts as the reply holds them now, and the replay
+// sends only the latest of an agent's steps (thousands in a reply that used a few).
+function streamChatRun(req, res, threadId, since = 0, { brief = false } = {}) {
   const sse = chatSse(res)
   let unsubscribe = null
   const finish = () => { unsubscribe?.(); if (!res.writableEnded) res.end() }
+  const run = chatRuns.get(threadId)
+  const agentOf = (toolId) => (run?.liveMessage ? findAgent([run.liveMessage], toolId)?.part.agent : null)
+  const replaced = brief ? supersededSteps(run?.events || [], since) : null
   unsubscribe = chatRuns.subscribe(threadId, since, (event) => {
-    sse(event)
+    if (replaced?.has(event.seq)) return
+    sse(brief ? briefEvent(event, agentOf) : event)
     if (event.type === 'end') setImmediate(finish)
   })
   if (!unsubscribe) { sse({ type: 'end', status: 'none' }); return res.end() }
   // Closing the tab detaches; it does not stop the work.
   req.on('close', () => unsubscribe?.())
-  const run = chatRuns.get(threadId)
   if (run && run.status !== 'running') setImmediate(finish)
 }
 
@@ -10073,11 +10106,11 @@ async function handleChatSend(req, res) {
         if (!q.status) throw q
         return send(res, q.status, { error: q.message })
       }
-      return streamChatRun(req, res, body.threadId, 0)
+      return streamChatRun(req, res, body.threadId, 0, { brief: body.agents === 'brief' })
     }
     return send(res, e.status, { error: e.message })
   }
-  return streamChatRun(req, res, body.threadId, 0)
+  return streamChatRun(req, res, body.threadId, 0, { brief: body.agents === 'brief' })
 }
 
 /**
@@ -10250,6 +10283,8 @@ async function startChatTurn(body, { idle = null } = {}) {
       const leftOver = browserHandoffs.get(threadId)
       if (leftOver) { dropHandoff(threadId); handoffWaits.dismiss(leftOver.id); push({ type: 'handoff', handoff: null }) }
       const assistant = { ...thread.messages[thread.messages.length - 1], parts: [] }
+      // The reply as it stands, for an agent's log read mid-run (GET /api/threads/<id>/agents/<tool>).
+      run.liveMessage = assistant
       let pending = null
       const save = (extra) => threadStore.update(threadId, (t) => {
         const i = t.messages.findIndex((m) => m.id === assistant.id)
@@ -10264,7 +10299,10 @@ async function startChatTurn(body, { idle = null } = {}) {
         if (live) push(event)
         saveSoon()
       }
-      push({ type: 'start', threadId, runId: run.id, userMessage: signMessage(userMessage), assistantMessage: { ...assistant }, provider, ...(body.queuedId ? { queuedId: body.queuedId } : {}) })
+      // A snapshot, not a shallow copy: the event is kept for replays, and the reply's parts
+      // array fills as it runs, so a replay's `start` came with every part already in it and
+      // its deltas then wrote the text a second time.
+      push({ type: 'start', threadId, runId: run.id, userMessage: signMessage(userMessage), assistantMessage: structuredClone(assistant), provider, ...(body.queuedId ? { queuedId: body.queuedId } : {}) })
 
       if (needsTitle && text) {
         generateChatTitle(text)
@@ -10667,7 +10705,16 @@ async function startChatTurn(body, { idle = null } = {}) {
           push({ type: 'delta', text: assistant.content || finalText })
         }
         if (r.stopped) status = 'stopped'
-        else if (!finalText && !assistant.content.trim() && !shownCharts()) {
+        else if (r.agentsOut) {
+          // Its sub-agents were still out when the CLI ended (the run's clock, or a crash): they
+          // were cut off, and what the reply was waiting on them for never came. Not a finished reply.
+          const out = r.agentsOut === 1 ? 'a sub-agent was' : `${r.agentsOut} sub-agents were`
+          status = 'error'
+          error = r.timedOut
+            ? `${providerLabel(provider)} ran out of time after ${Math.round(timeoutMs / 60_000)} minutes while ${out} still working.`
+            : truncate([`${providerLabel(provider)} exited while ${out} still working.`, failureText(r.turnError, providerLabel(provider)) || r.stderr?.trim().split('\n').filter((l) => !/rmcp::transport|AuthRequired/.test(l)).slice(-2).join('\n')].filter(Boolean).join('\n'), 600)
+          for (const p of assistant.parts) if (p.type === 'tool' && p.agent?.status === 'running') forward({ type: 'agent', toolId: p.id, agent: { status: 'stopped', endedAt: Date.now() } })
+        } else if (!finalText && !assistant.content.trim() && !shownCharts()) {
           status = 'error'
           error = r.timedOut
             ? `${providerLabel(provider)} ran out of time after ${Math.round(timeoutMs / 60_000)} minutes without answering.`
@@ -11074,8 +11121,8 @@ async function handleChatApi(req, res, path) {
   if (req.method === 'GET' && path === '/api/chat/runs') return send(res, 200, { runs: chatRuns.list() })
   const runMatch = /^\/api\/chat\/runs\/([A-Za-z0-9_-]{1,128})\/stream$/.exec(path)
   if (req.method === 'GET' && runMatch) {
-    const since = Number(new URL(req.url, 'http://x').searchParams.get('since')) || 0
-    return streamChatRun(req, res, runMatch[1], since)
+    const q = new URL(req.url, 'http://x').searchParams
+    return streamChatRun(req, res, runMatch[1], Number(q.get('since')) || 0, { brief: q.get('agents') === 'brief' })
   }
   if (req.method === 'POST' && path === '/api/chat/title') {
     const { threadId } = await readJsonBody(req)
@@ -16898,6 +16945,19 @@ const server = http.createServer(async (req, res) => {
         if (new URL(req.url, 'http://x').searchParams.get('view') === 'summary') return send(res, 200, { threads: await listThreadSummaries(), view: 'summary' })
         return send(res, 200, { threads: await listThreads() })
       }
+      // One agent's whole log (its steps), for a client that read the chat brief.
+      // Mid-run it comes from the reply as it stands, else from the saved chat.
+      const agentLog = /^\/api\/threads\/([A-Za-z0-9_-]{1,128})\/agents\/([^/]{1,600})$/.exec(path)
+      if (req.method === 'GET' && agentLog) {
+        const threadId = agentLog[1]
+        let toolId = ''
+        try { toolId = decodeURIComponent(agentLog[2]) } catch {}
+        if (!/^[A-Za-z0-9_:.~-]{1,200}$/.test(toolId)) return send(res, 400, { error: 'bad tool id' })
+        const live = chatRuns.active(threadId)?.liveMessage
+        const found = (live && findAgent([live], toolId)) || findAgent((await readThread(threadId))?.messages, toolId)
+        if (!found) return send(res, 404, { error: 'not found' })
+        return sendJsonGzip(req, res, 200, { messageId: found.messageId, toolId, live: !!(live && found.messageId === live.id), agent: found.part.agent })
+      }
       if (path.startsWith('/api/threads/')) {
         const id = path.slice('/api/threads/'.length)
         if (!validThreadId(id)) return send(res, 400, { error: 'bad thread id' })
@@ -16907,7 +16967,9 @@ const server = http.createServer(async (req, res) => {
           const paged = q.has('turns') || q.has('before')
           const turns = Math.min(50, Math.max(1, Number(q.get('turns')) || 10))
           const t = paged ? await readThreadPage(id, { turns, before: q.get('before') || undefined }) : await readThread(id)
-          return t ? send(res, 200, t) : send(res, 404, { error: 'not found' })
+          if (!t) return send(res, 404, { error: 'not found' })
+          // `agents=brief`: each agent as a row, its log read on its own (chat/subagents.mjs).
+          return send(res, 200, q.get('agents') === 'brief' ? { ...t, messages: (t.messages || []).map(briefMessage) } : t)
         }
         if (req.method === 'PUT') {
           const body = await readJsonBody(req)

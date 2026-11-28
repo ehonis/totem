@@ -346,8 +346,10 @@ export const removeMcpConnection = (id: string) => sendJSON('/api/mcp/remove', '
 // It may take its time (hundreds of KB over a relayed link), but not iOS's whole minute.
 export const getThreadSummaries = () => getJSON<{ threads: any[] }>('/api/threads?view=summary', { stored: false, deadlineMs: 45_000 })
 // One chat, a window at a time (lib/chat/history.ts): the latest turns, or the page before `before`.
+// `agents=brief`: each sub-agent as its row, without its log, which is most of a chat that
+// used them (chat/subagents.mjs). Its page reads the log on its own (chat/api.ts › getAgentLog).
 const threadPageUrl = (id: string, before?: string | null, turns = 10) =>
-  `/api/threads/${encodeURIComponent(id)}?turns=${turns}${before ? `&before=${encodeURIComponent(before)}` : ''}`
+  `/api/threads/${encodeURIComponent(id)}?turns=${turns}${before ? `&before=${encodeURIComponent(before)}` : ''}&agents=brief`
 // The latest window never answers with the stored copy: that is a window from some earlier
 // read (often mid-reply), and taken over the chat held it rolled a finished reply back to
 // its middle. The store paints the stored copy itself (peekThreadPage) when it has none.

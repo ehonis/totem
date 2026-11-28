@@ -200,3 +200,47 @@ test('watchSessionLog fromEnd skips a resumed rollout\'s earlier turns, not a li
     assert.deepEqual(seen.map((r) => r.payload.info.last_token_usage.total_tokens), [2, 3])
   } finally { await home.done() }
 })
+
+test('brief agents: a row without its steps, the count and the latest step kept', async () => {
+  const { briefAgent, briefMessage, briefEvent, agentBrief, findAgent, supersededSteps } = await import('./subagents.mjs')
+  const steps = Array.from({ length: 5 }, (_, i) => ({ id: `s${i}`, kind: 'tool', title: 'Fetched a page', detail: `shop${i}.test`, at: 100 + i, endedAt: 200 + i }))
+  const agent = { provider: 'claude', status: 'running', title: 'Find deals', prompt: 'x'.repeat(5000), dropped: 10, steps }
+  const brief = briefAgent(agent)
+  assert.equal(brief.steps, undefined)
+  assert.equal(brief.brief, true)
+  assert.equal(brief.stepCount, 15)
+  assert.equal(brief.now, 'Fetched a page · shop4.test')
+  assert.equal(brief.lastAt, 204)
+  assert.ok(brief.prompt.length <= 300)
+  assert.equal(briefAgent(brief), brief, 'already brief: left alone')
+  assert.deepEqual(agentBrief({ steps: [{ id: 't', kind: 'thinking', text: 'hmm' }] }), { stepCount: 1, now: 'Thinking' })
+
+  const plain = { id: 'm1', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] }
+  assert.equal(briefMessage(plain), plain, 'a message with no agents is the same object')
+  const msg = { id: 'm2', role: 'assistant', parts: [{ type: 'text', text: 'hi' }, { type: 'tool', id: 'toolu_1', agent }] }
+  const out = briefMessage(msg)
+  assert.equal(out.parts[1].agent.steps, undefined)
+  assert.equal(msg.parts[1].agent.steps.length, 5, 'the stored message is not touched')
+
+  const stepEvent = { type: 'agent', toolId: 'toolu_1', step: steps[0], seq: 7 }
+  const agentOf = (id) => (id === 'toolu_1' ? agent : null)
+  assert.deepEqual(briefEvent(stepEvent, agentOf), { type: 'agent', toolId: 'toolu_1', seq: 7, agent: { stepCount: 15, now: 'Fetched a page · shop4.test', lastAt: 204 } })
+  const patchEvent = { type: 'agent', toolId: 'toolu_1', agent: { status: 'done', summary: 'ok' } }
+  assert.deepEqual(briefEvent(patchEvent, () => null).agent, { status: 'done', summary: 'ok' })
+  assert.equal(briefEvent({ type: 'done', message: msg }).message.parts[1].agent.brief, true)
+  const delta = { type: 'delta', text: 'a' }
+  assert.equal(briefEvent(delta), delta)
+
+  // A re-attach skips every step an agent's later event makes old, never a fact.
+  const ev = (seq, toolId, extra) => ({ seq, type: 'agent', toolId, ...extra })
+  const replay = [
+    ev(1, 'a', { agent: { provider: 'claude', status: 'running' } }),
+    ev(2, 'a', { step: { id: 's1' } }), ev(3, 'b', { step: { id: 't1' } }), ev(4, 'a', { step: { id: 's2' } }),
+    ev(5, 'a', { agent: { progress: 'x' } }), ev(6, 'a', { step: { id: 's3' } }), { seq: 7, type: 'delta', text: 'hi' },
+    ev(8, 'a', { step: { id: 's4' } }), ev(9, 'b', { agent: { status: 'done' } }),
+  ]
+  assert.deepEqual([...supersededSteps(replay)].sort((x, y) => x - y), [2, 3, 4, 6])
+  assert.deepEqual([...supersededSteps(replay, 5)], [6], 'only what is replayed')
+  assert.deepEqual(findAgent([plain, msg], 'toolu_1').messageId, 'm2')
+  assert.equal(findAgent([plain, msg], 'nope'), null)
+})

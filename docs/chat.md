@@ -1785,8 +1785,16 @@ back. The log is live while the agent runs and is saved with the reply.
   sub-agent produces carries `parent_tool_use_id`, so `spawnClaudeStream` routes it to the
   card that started it instead of the reply. A background launch (`async_launched`) keeps the
   card open until Claude's `task_notification`. `task_progress` gives the progress line and
-  token count. Codex's collab tools (`spawn_agent`, …) name the child thread, and its rollout
-  file is tailed by thread id.
+  token count. While a background sub-agent is out, Claude's input stays open even after its
+  turn ends: the agent's report wakes the reply for another turn (the answer it promised),
+  and only then is the input closed. With its input closed, `claude -p` waits ten minutes
+  after its last turn, then stops every background task and exits, which once ended a reply
+  on "I'll put it in a table once they report back" with its three agents cut off.
+  `chat/subagents-bridge.test.mjs` holds this against a fake CLI that behaves that way. If no
+  turn starts within a minute of the last report, the input is closed anyway. A reply whose run
+  times out with agents still out is an error, its agents marked stopped, never a finished
+  reply with agents "completed". Codex's collab tools (`spawn_agent`, …) name the child thread,
+  and its rollout file is tailed by thread id.
 - **Another CLI run from a shell.** For example, Claude running `codex exec "make an icon"` to
   use Codex's image generation. Every command card is checked with `detectAgentCli` (`codex
   exec`, `claude -p`, `cursor-agent`, `opencode run`, `gemini -p`, including inside
@@ -1800,6 +1808,26 @@ back. The log is live while the agent runs and is saved with the reply.
 Each part is a tool part with an `agent` field (steps capped at 400). `agent` stream events
 fold into it through `foldAgent`, which has a browser twin in `web/src/chat/reduce.ts`. Each
 delegation writes one `agent.delegate` line to the action log when it ends.
+
+**Brief agents (the iPhone app).** An agent's log is most of a chat that used a few (555 KB of
+a 667 KB window with four), and every step is its own event on the run's stream. T3 Code keeps
+a child's work in the child's own thread, and its parent's feed holds one row per agent. A
+client that asks for `agents=brief` gets that: on a window (`GET /api/threads/<id>?turns=…&agents=brief`),
+on a run's stream (`?agents=brief`, or `agents: 'brief'` in the `POST /api/chat` body) and in
+the `done` message, each agent comes without its steps (`briefAgent`), with `brief: true`,
+`stepCount`, `now` (its latest step in a line) and `lastAt`, and its prompt cut to 300
+characters. On the stream a step becomes those facts as the running reply holds them when
+the event is sent (`briefEvent`), and a re-attach skips every step a later event of the same
+agent makes old (`supersededSteps`), so it costs a few events per agent, not one per step. The
+log is read on its own:
+`GET /api/threads/<id>/agents/<tool id>` answers the whole agent, from the running reply
+mid-run or the saved chat, gzipped. The saved chat always keeps the whole log, and the web
+reads chats as before. The app draws agents T3 Code's way: in the reply one row per agent
+(status dot and label, title, time, model, one line of what it is doing or handed back),
+several started together folded under "N subagents · 2 working · 1 done" (folded at first, as
+T3 has it); a row, or one in the header chip's Agents sheet, pushes that agent's page
+(`mobile/src/features/chat/AgentScreen.tsx`), which reads the log and reads it again every
+3 s while the agent works; what a finished agent handed back is at the top of its page.
 
 ### Running chats panel
 

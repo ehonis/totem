@@ -7,11 +7,13 @@ import type { AgentInfo, AgentStep, ChatMessage, ToolPart } from './types'
 const MAX_AGENT_STEPS = 400
 /** Twin of MAX_TOOL_IMAGES in chat/store.mjs: the pictures one call's card keeps. */
 const MAX_TOOL_IMAGES = 20
-const AGENT_KEYS = ['provider', 'via', 'name', 'title', 'prompt', 'model', 'status', 'progress', 'summary', 'tokens', 'toolUses', 'log', 'startedAt', 'endedAt'] as const
+// The app reads runs with `agents=brief`: an agent's steps arrive as its row's facts
+// (stepCount, now, lastAt), never the steps themselves (chat/subagents.mjs › briefEvent).
+const AGENT_KEYS = ['provider', 'via', 'name', 'title', 'prompt', 'model', 'status', 'progress', 'summary', 'tokens', 'toolUses', 'log', 'startedAt', 'endedAt', 'stepCount', 'now', 'lastAt'] as const
 
 /** Twin of foldAgent in chat/subagents.mjs: one `agent` event into a card's agent. */
 export function foldAgent(current: AgentInfo | undefined, event: { agent?: Partial<AgentInfo>; step?: AgentStep }): AgentInfo {
-  const next: AgentInfo = { status: 'running', steps: [], provider: '', ...(current || {}) } as AgentInfo
+  const next: AgentInfo = { status: 'running', provider: '', ...(current || {}) } as AgentInfo
   const patch = event.agent || {}
   for (const k of AGENT_KEYS) {
     const v = patch[k]
@@ -19,7 +21,7 @@ export function foldAgent(current: AgentInfo | undefined, event: { agent?: Parti
   }
   const step = event.step
   if (step?.id || step?.kind) {
-    const steps = next.steps.slice()
+    const steps = (next.steps || []).slice()
     const at = step.id ? steps.findIndex((s) => s.id === step.id) : -1
     if (at >= 0) steps[at] = { ...steps[at], ...step }
     else if (step.kind) steps.push({ ...step, id: step.id || `s${steps.length}` })
